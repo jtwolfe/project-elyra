@@ -1,8 +1,13 @@
 """Sandbox path jail: resolve user paths under a fixed root.
 
 Scope: join + resolve under root; deny escapes and symlink escapes.
-In scope: relative/absolute user paths, symlink target re-check.
-Out of scope: FS I/O, process execution.
+In scope: relative/absolute user paths, symlink target re-check, empty reject.
+Out of scope: FS I/O, process execution, hard-link inode isolation, O_NOFOLLOW
+open races (callers may re-resolve before open).
+
+Known limitations (path jail, not a mount namespace):
+- Hard links created inside the root to outside inodes (same UID) resolve
+  *under* root and are not detected as escapes. Symlinks are checked.
 """
 
 from __future__ import annotations
@@ -18,10 +23,17 @@ def resolve(root: Path, user_path: str) -> Path:
     """Resolve ``user_path`` under ``root``; raise PathEscapeError if outside jail.
 
     Algorithm (persistent sandbox jail):
+    - Reject empty / whitespace-only paths (use ``"."`` for root).
     - Join and resolve; deny if not under root.
     - Reject absolute paths that escape.
     - If the path is a symlink, re-check the resolved target under root.
     """
+    if not isinstance(user_path, str):
+        raise TypeError(f"user_path must be str, got {type(user_path).__name__}")
+    # "." is the sandbox root; empty/whitespace is not a useful path.
+    if user_path != "." and not user_path.strip():
+        raise ValueError("path must be non-empty")
+
     root_r = root.resolve()
     raw = Path(user_path)
     if raw.is_absolute():

@@ -210,6 +210,88 @@ def test_run_stdout_cap(sandbox: Sandbox) -> None:
     assert len(result.stdout.encode("utf-8")) <= OUTPUT_CAP_BYTES
 
 
+def test_run_stream_cap_retains_only_cap_bytes(sandbox: Sandbox) -> None:
+    """Chunked collection: retained stdout length equals cap, not full producer."""
+    cap = 4096
+    # Multi-chunk write well above cap (not a single tiny buffer).
+    n = 2_000_000
+    result = sandbox.run(
+        [
+            sys.executable,
+            "-c",
+            f"import sys; sys.stdout.write('y' * {n}); sys.stdout.flush()",
+        ],
+        timeout=30,
+        output_cap=cap,
+    )
+    assert result.stdout_truncated is True
+    retained = result.stdout.encode("utf-8")
+    assert len(retained) == cap
+    assert retained == b"y" * cap
+
+
+def test_run_negative_output_cap_rejected(sandbox: Sandbox) -> None:
+    with pytest.raises(ValueError, match="output_cap"):
+        sandbox.run([sys.executable, "-c", "pass"], output_cap=-1)
+
+
+def test_run_timeout_returns_promptly(sandbox: Sandbox) -> None:
+    """Post-timeout path must not hang (bounded drain after kill)."""
+    import time
+
+    t0 = time.monotonic()
+    result = sandbox.run(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        timeout=0.2,
+    )
+    elapsed = time.monotonic() - t0
+    assert result.timed_out is True
+    # grace + join slack; must be far below the 60s child sleep
+    assert elapsed < 8.0
+
+
+def test_run_env_blocks_ld_preload(sandbox: Sandbox) -> None:
+    result = sandbox.run(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(repr(os.environ.get('LD_PRELOAD')))",
+        ],
+        env={"LD_PRELOAD": "/tmp/evil.so", "PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 0
+    assert "None" in result.stdout
+
+
+def test_run_env_blocks_pythonpath_and_home_override(sandbox: Sandbox) -> None:
+    result = sandbox.run(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('PYTHONPATH', '')); "
+            "print(os.environ.get('HOME', ''))",
+        ],
+        env={
+            "PYTHONPATH": "/tmp/evil_py",
+            "HOME": "/tmp",
+            "BASH_ENV": "/tmp/evil",
+        },
+    )
+    assert result.returncode == 0
+    lines = result.stdout.splitlines()
+    assert lines[0] == ""
+    assert lines[1] == str(sandbox.root)
+
+
+def test_empty_path_rejected(sandbox: Sandbox, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        resolve(tmp_path, "")
+    with pytest.raises(ValueError, match="non-empty"):
+        sandbox.write_text("", "x")
+    with pytest.raises(ValueError, match="non-empty"):
+        sandbox.write_text("   ", "x")
+
+
 def test_run_cwd_is_sandbox_root(sandbox: Sandbox) -> None:
     sandbox.write_text("here.txt", "yes\n")
     result = sandbox.run(

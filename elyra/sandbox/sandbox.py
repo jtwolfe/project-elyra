@@ -1,8 +1,24 @@
 """Persistent sandbox FS and process runner.
 
 Scope: one jail under data/sandbox/; text FS ops + shell=False run.
-In scope: read/write/list/grep/search_replace, capped run with timeout.
-Out of scope: network isolation, cgroups, multi-sandbox, tool registry.
+In scope: read/write/list/grep/search_replace, stream-capped run with timeout.
+Out of scope: network isolation, cgroups, multi-sandbox, tool registry,
+container/namespace FS isolation for ``run``.
+
+Trust boundary
+--------------
+- **FS methods** (``read_text``, ``write_text``, ``list_dir``, ``grep``,
+  ``search_replace``) are path-jailed under ``$ELYRA_HOME/data/sandbox/``.
+  Symlink targets outside the root are denied. Hard links to outside inodes
+  (same UID) are a known path-jail limitation (not mount isolation).
+- **``run`` is process-level only**: same UID as Elyra, ``cwd`` pinned to the
+  sandbox root, scrubbed env (no host secret inherit), ``shell=False``.
+  It is **not** a chroot, container, or seccomp jail. Child argv can open
+  absolute host paths and use the network. Local-operator trust boundary;
+  do not treat ``run`` as host-escape prevention until OS isolation exists.
+- Timeout kill is process-group scoped (``start_new_session`` + killpg). A
+  child that ``setsid`` / double-forks into a new session can outlive killpg
+  without cgroups (S1 residual).
 """
 
 from __future__ import annotations
@@ -13,18 +29,50 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import IO, Mapping, Sequence
 
 from elyra.config import ElyraPaths
 from elyra.sandbox.paths import PathEscapeError, resolve
 
 DEFAULT_RUN_TIMEOUT_SECONDS = 60
-OUTPUT_CAP_BYTES = 256 * 1024  # 256 KiB per stream
+OUTPUT_CAP_BYTES = 256 * 1024  # 256 KiB retained per stream
+# After killpg, bound how long we wait for pipes/process to finish.
+_POST_KILL_DRAIN_SECONDS = 2.0
+_PIPE_READ_CHUNK = 65_536
 
 # Minimal env for child processes: no host secrets (no API keys, tokens, etc.).
 _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
+
+# Keys/prefixes that must not be injected via optional ``env=`` (loader/hijack).
+_BLOCKED_ENV_KEYS = frozenset(
+    {
+        "HOME",
+        "BASH_ENV",
+        "ENV",
+        "IFS",
+        "SHELLOPTS",
+        "PS4",
+        "PROMPT_COMMAND",
+        "SSLKEYLOGFILE",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+    }
+)
+_BLOCKED_ENV_PREFIXES = (
+    "LD_",
+    "DYLD_",
+    "PYTHON",
+    "PERL",
+    "BASH_",
+    "RUBYOPT",
+    "NODE_OPTIONS",
+)
 
 
 @dataclass(frozen=True)
@@ -64,8 +112,13 @@ class Sandbox:
     # --- FS ops ---
 
     def read_text(self, user_path: str, *, encoding: str = "utf-8") -> str:
-        """Read a text file under the sandbox."""
+        """Read a text file under the sandbox.
+
+        Path-jailed only (see module trust boundary). Uncapped file size in S1.
+        """
         path = self.resolve(user_path)
+        # Re-check immediately before open (mitigate resolve→use TOCTOU).
+        path = resolve(self._root, user_path)
         if not path.is_file():
             raise FileNotFoundError(f"not a file: {user_path!r}")
         return path.read_text(encoding=encoding)
@@ -89,6 +142,8 @@ class Sandbox:
                 raise PathEscapeError(
                     f"parent escapes sandbox: {user_path!r}"
                 ) from exc
+        # Re-resolve before write (symlink swap between check and use).
+        path = resolve(self._root, user_path)
         path.write_text(content, encoding=encoding)
         return path
 
@@ -109,7 +164,8 @@ class Sandbox:
     ) -> list[dict[str, object]]:
         """Simple content search under a path (files only; recursive).
 
-        Returns list of ``{path, line, text}`` (path relative to sandbox root).
+        Streams each file line-by-line (no full-file buffer). Returns list of
+        ``{path, line, text}`` (path relative to sandbox root).
         """
         base = self.resolve(user_path)
         if base.is_file():
@@ -124,23 +180,26 @@ class Sandbox:
         for fpath in files:
             # Skip anything that escaped (symlink race); re-check under root.
             try:
-                fpath.resolve().relative_to(self._root)
+                resolved = fpath.resolve()
+                resolved.relative_to(self._root)
             except ValueError:
                 continue
+            rel = str(resolved.relative_to(self._root))
             try:
-                text = fpath.read_text(encoding="utf-8", errors="replace")
+                with fpath.open("r", encoding="utf-8", errors="replace") as fh:
+                    for i, line in enumerate(fh, start=1):
+                        # strip only the trailing newline for display parity
+                        text = line.rstrip("\n\r")
+                        if matcher is not None:
+                            if not matcher.search(text):
+                                continue
+                        elif pattern not in text:
+                            continue
+                        hits.append({"path": rel, "line": i, "text": text})
+                        if len(hits) >= max_matches:
+                            return hits
             except OSError:
                 continue
-            rel = str(fpath.resolve().relative_to(self._root))
-            for i, line in enumerate(text.splitlines(), start=1):
-                if matcher is not None:
-                    if not matcher.search(line):
-                        continue
-                elif pattern not in line:
-                    continue
-                hits.append({"path": rel, "line": i, "text": line})
-                if len(hits) >= max_matches:
-                    return hits
         return hits
 
     def search_replace(
@@ -160,6 +219,7 @@ class Sandbox:
         if not old:
             raise ValueError("old must be non-empty")
         path = self.resolve(user_path)
+        path = resolve(self._root, user_path)
         if not path.is_file():
             raise FileNotFoundError(f"not a file: {user_path!r}")
         original = path.read_text(encoding=encoding)
@@ -208,12 +268,19 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         output_cap: int = OUTPUT_CAP_BYTES,
     ) -> RunResult:
-        """Run a command inside the sandbox with shell=False.
+        """Run a command with shell=False, cwd=sandbox, scrubbed env.
 
         Prefer an argv list. If ``command`` is a string, it is split with
         ``shlex.split`` (never passed to a shell). Timeout kills the process
-        group. stdout/stderr are capped at ``output_cap`` bytes each.
+        group (best-effort). stdout/stderr are read in chunks and **retained**
+        only up to ``output_cap`` bytes each (excess discarded while still
+        draining pipes).
+
+        Trust: process-level only (cwd + env + shell=False). Not a container;
+        child code can touch host FS/network. See module docstring.
         """
+        if output_cap < 0:
+            raise ValueError(f"output_cap must be >= 0, got {output_cap!r}")
         self.ensure_root()
         argv = self._normalize_argv(command)
         child_env = self._scrubbed_env(env)
@@ -229,23 +296,19 @@ class Sandbox:
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-        timed_out = False
-        try:
-            raw_out, raw_err = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_process_group(proc)
-            raw_out, raw_err = proc.communicate()
+        raw_out, raw_err, out_trunc, err_trunc, timed_out = _collect_capped(
+            proc,
+            timeout=timeout,
+            output_cap=output_cap,
+        )
         returncode = proc.returncode if proc.returncode is not None else -1
         if timed_out and returncode == 0:
             returncode = -1
 
-        stdout, out_trunc = _cap_bytes(raw_out or b"", output_cap)
-        stderr, err_trunc = _cap_bytes(raw_err or b"", output_cap)
         return RunResult(
             returncode=returncode,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=raw_out.decode("utf-8", errors="replace"),
+            stderr=raw_err.decode("utf-8", errors="replace"),
             timed_out=timed_out,
             stdout_truncated=out_trunc,
             stderr_truncated=err_trunc,
@@ -267,7 +330,11 @@ class Sandbox:
     def _scrubbed_env(
         self, extra: Mapping[str, str] | None
     ) -> dict[str, str]:
-        """Minimal environment: PATH + HOME=sandbox; no host secrets."""
+        """Minimal environment: PATH + HOME=sandbox; no host secrets.
+
+        Host env is never merged. Optional ``extra`` may override ``PATH``
+        only (e.g. verify_tool); dangerous loader/interpreter keys are dropped.
+        """
         env: dict[str, str] = {
             "PATH": _MINIMAL_PATH,
             "HOME": str(self._root),
@@ -275,29 +342,131 @@ class Sandbox:
             "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
             "TERM": "dumb",
         }
-        # Preserve locale-ish only; never copy API keys / tokens from host.
-        if extra:
-            for k, v in extra.items():
-                if k.upper() in ("PATH", "LD_PRELOAD", "LD_LIBRARY_PATH"):
-                    # Allow PATH override only via explicit extra if needed;
-                    # still never inherit host PATH by default.
-                    if k.upper() == "PATH":
-                        env["PATH"] = v
-                    continue
-                env[str(k)] = str(v)
+        if not extra:
+            return env
+        for k, v in extra.items():
+            key = str(k)
+            upper = key.upper()
+            if upper == "PATH":
+                # Intentional override for controlled callers (e.g. verify).
+                env["PATH"] = str(v)
+                continue
+            if _is_blocked_env_key(upper):
+                continue
+            env[key] = str(v)
         return env
 
 
-def _cap_bytes(data: bytes, cap: int) -> tuple[str, bool]:
-    truncated = len(data) > cap
-    if truncated:
-        data = data[:cap]
-    text = data.decode("utf-8", errors="replace")
-    return text, truncated
+def _is_blocked_env_key(upper_key: str) -> bool:
+    if upper_key in _BLOCKED_ENV_KEYS:
+        return True
+    return any(upper_key.startswith(p) for p in _BLOCKED_ENV_PREFIXES)
+
+
+def _collect_capped(
+    proc: subprocess.Popen[bytes],
+    *,
+    timeout: float,
+    output_cap: int,
+) -> tuple[bytes, bytes, bool, bool, bool]:
+    """Wait for ``proc`` with stream caps; never retain more than cap per stream.
+
+    Reads stdout/stderr on background threads in chunks. Excess bytes are
+    discarded (still drained so writers do not block). On timeout: killpg,
+    then drain with a bounded post-kill wait — never unbounded ``communicate``.
+    """
+    out_buf = bytearray()
+    err_buf = bytearray()
+    out_trunc = False
+    err_trunc = False
+    trunc_lock = threading.Lock()
+
+    def reader(stream: IO[bytes] | None, buf: bytearray, which: str) -> None:
+        nonlocal out_trunc, err_trunc
+        if stream is None:
+            return
+        try:
+            while True:
+                chunk = stream.read(_PIPE_READ_CHUNK)
+                if not chunk:
+                    break
+                with trunc_lock:
+                    room = output_cap - len(buf)
+                    if room > 0:
+                        buf.extend(chunk[:room])
+                        if len(chunk) > room:
+                            if which == "out":
+                                out_trunc = True
+                            else:
+                                err_trunc = True
+                    else:
+                        if which == "out":
+                            out_trunc = True
+                        else:
+                            err_trunc = True
+                    # Excess: intentionally not retained (still loop to drain).
+        except ValueError:
+            # Pipe closed while reading.
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    t_out = threading.Thread(
+        target=reader, args=(proc.stdout, out_buf, "out"), daemon=True
+    )
+    t_err = threading.Thread(
+        target=reader, args=(proc.stderr, err_buf, "err"), daemon=True
+    )
+    t_out.start()
+    t_err.start()
+
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_process_group(proc)
+        try:
+            proc.wait(timeout=_POST_KILL_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            # Stuck descendant or uninterruptible state: force-close pipes so
+            # reader threads unblock; never await without a deadline.
+            _force_close_pipes(proc)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=_POST_KILL_DRAIN_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+
+    # Readers should exit after EOF/close; bound the join.
+    t_out.join(timeout=_POST_KILL_DRAIN_SECONDS)
+    t_err.join(timeout=_POST_KILL_DRAIN_SECONDS)
+    if t_out.is_alive() or t_err.is_alive():
+        _force_close_pipes(proc)
+        t_out.join(timeout=1.0)
+        t_err.join(timeout=1.0)
+
+    return bytes(out_buf), bytes(err_buf), out_trunc, err_trunc, timed_out
+
+
+def _force_close_pipes(proc: subprocess.Popen[bytes]) -> None:
+    for stream in (proc.stdout, proc.stderr, proc.stdin):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
 
 
 def _kill_process_group(proc: subprocess.Popen[bytes]) -> None:
-    """Kill the child's process group; best-effort on all platforms."""
+    """Kill the child's process group; best-effort (not tree-wide if setsid)."""
     if proc.pid is None:
         return
     try:
