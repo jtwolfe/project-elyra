@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from elyra.config import resolve_paths
-from elyra.llm.client import HttpChatClient, StubChatClient
+from elyra.llm.client import ChatCompletionResult, HttpChatClient, StubChatClient
 from elyra.llm.config import LlamaServerConfig
 from elyra.llm.server import build_server_command, validate_model_paths
 from elyra.loop.context import assemble_outer_meal
@@ -217,6 +217,146 @@ def test_tool_result_to_content_includes_ok_and_error():
     assert body["ok"] is False
     assert body["error_reason"] == "nope"
     assert body["x"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Ingress channel hygiene (PR6) — sanitize before beat/chain
+# ---------------------------------------------------------------------------
+
+_CHANNEL_FLOOD = "\n".join(["<|channel>thought"] * 20)
+
+
+class _CapturingStubClient:
+    """Wrap StubChatClient; record messages seen on each hop (for chain asserts)."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self._inner = StubChatClient.scripted(responses)
+        self.seen_messages: list[list[dict[str, Any]]] = []
+
+    def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+        self.seen_messages.append([dict(m) for m in messages])
+        return self._inner.chat_completion(messages, **kwargs)
+
+
+def test_ingress_sanitize_flooded_completion_cleaned_beat_and_chain(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Prose + channel flood RC is stripped before model beat and chain re-feed."""
+    mid = moments.open_moment(why_now="hygiene flood", moment_id="mhygiene")
+    ctx.moment_id = mid
+    prose = "Plan: list files then greet."
+    flooded_rc = prose + "\n" + _CHANNEL_FLOOD
+    # Hop 1: tool call with flooded reasoning; hop 2: no tools stop.
+    hop1 = {
+        "content": "hello\n" + _CHANNEL_FLOOD,
+        "reasoning_content": flooded_rc,
+        "tool_calls": [
+            {
+                "id": "c_list",
+                "name": "list_dir",
+                "arguments": {"path": "."},
+            }
+        ],
+        "finish_reason": "tool_calls",
+    }
+    client = _CapturingStubClient([hop1, _text("done")])
+    with caplog.at_level("WARNING", logger="elyra.loop.doloop"):
+        result = _run(client, ctx, registry, moments=moments)
+    assert result.stop_reason == "no_tools"
+    assert result.hop_count == 2
+
+    model_beats = [b for b in moments.list_beats(mid) if b.get("type") == "model"]
+    assert len(model_beats) >= 1
+    beat0 = model_beats[0]
+    assert beat0["content"] == "hello"
+    assert beat0["reasoning"] == prose
+    assert "<|channel>" not in beat0["content"]
+    assert "<|channel>" not in beat0["reasoning"]
+    assert beat0.get("finish_reason") == "tool_calls"
+    hyg = beat0.get("hygiene") or {}
+    assert hyg.get("c_markers", 0) >= 5
+    assert hyg.get("r_markers", 0) >= 5
+    assert hyg.get("flood") is True
+
+    # Second completion must re-feed cleaned assistant row (no markers).
+    assert len(client.seen_messages) >= 2
+    chain_msgs = client.seen_messages[1]
+    assistant_rows = [m for m in chain_msgs if m.get("role") == "assistant"]
+    assert assistant_rows, "expected cleaned assistant on multi-hop chain"
+    asst = assistant_rows[0]
+    assert asst.get("content") == "hello" or asst.get("content") is None or "hello" in (
+        asst.get("content") or ""
+    )
+    rc = asst.get("reasoning_content") or ""
+    assert "<|channel>" not in rc
+    assert "Plan: list files" in rc
+    assert any("channel hygiene" in r.message for r in caplog.records)
+
+
+def test_ingress_sanitize_pure_flood_empty_rc(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Pure channel flood → empty reasoning on beat; omit/empty on chain re-feed."""
+    mid = moments.open_moment(why_now="pure flood", moment_id="mpureflood")
+    ctx.moment_id = mid
+    hop1 = {
+        "content": "",
+        "reasoning_content": _CHANNEL_FLOOD,
+        "tool_calls": [
+            {
+                "id": "c_list",
+                "name": "list_dir",
+                "arguments": {"path": "."},
+            }
+        ],
+        "finish_reason": "length",
+    }
+    client = _CapturingStubClient([hop1, _text("done")])
+    result = _run(client, ctx, registry, moments=moments)
+    assert result.stop_reason == "no_tools"
+
+    model_beats = [b for b in moments.list_beats(mid) if b.get("type") == "model"]
+    beat0 = model_beats[0]
+    assert beat0["reasoning"] == ""
+    assert beat0["content"] == ""
+    assert beat0.get("finish_reason") == "length"
+    hyg = beat0.get("hygiene") or {}
+    assert hyg.get("r_markers", 0) >= 5
+    assert hyg.get("flood") is True
+
+    # Chain assistant must not re-feed pure flood RC (empty → key omitted or "").
+    chain_msgs = client.seen_messages[1]
+    assistant_rows = [m for m in chain_msgs if m.get("role") == "assistant"]
+    assert assistant_rows
+    rc = assistant_rows[0].get("reasoning_content")
+    assert not rc  # None / missing / ""
+    assert "<|channel>" not in json.dumps(assistant_rows[0], ensure_ascii=False)
+
+
+def test_ingress_sanitize_finish_reason_on_no_tools_beat(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """finish_reason from ChatCompletionResult is recorded on model beats."""
+    mid = moments.open_moment(why_now="finish reason", moment_id="mfinish")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            ChatCompletionResult(
+                content="orphan thoughts",
+                reasoning_content="private",
+                raw_json="{}",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments)
+    assert result.stop_reason == "no_tools"
+    beat = next(b for b in moments.list_beats(mid) if b.get("type") == "model")
+    assert beat.get("finish_reason") == "stop"
+    assert beat["content"] == "orphan thoughts"
+    assert beat["reasoning"] == "private"
+    assert "hygiene" not in beat  # no markers → no hygiene field
 
 
 # ---------------------------------------------------------------------------

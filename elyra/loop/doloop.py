@@ -1,10 +1,14 @@
 """Multi-hop do-loop: model ↔ tools with ToolResult contracts.
 
 Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak nudge.
-In scope: ToolContext wiring hooks, beat appends, continue inject prechecks.
+In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
+          completion-ingress channel hygiene (sanitize before beat/chain).
 Out of scope: registry discovery, sandbox FS, presence phase machine, glass writes.
 
 Trust: loop uses ToolResult.ends_moment / counts_as_speak only — never tool names.
+
+Channel hygiene at completion ingress is **boundary defense** (tape + chain fuel),
+not a claim that generation is cured — floods remain stochastic at the model.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
 
 from elyra.llm.client import ChatClient, ChatCompletionResult, ToolCall as LlmToolCall
+from elyra.llm.reasoning_hygiene import sanitize_completion
 from elyra.loop.context import assemble_outer_meal, estimate_tokens
 from elyra.loop.continue_policy import (
     continue_host_message,
@@ -578,20 +583,38 @@ def _run_loop_body(
             max_tokens=gen_max,
             tools=openai_tools,
         )
+        # Ingress sanitize: strip channel-marker floods before beat tape + chain
+        # re-feed. Boundary defense only — does not cure generation floods.
+        result, hygiene = sanitize_completion(result)
+        if hygiene.any_markers:
+            _LOG.warning(
+                "channel hygiene hop=%s content_markers=%s reasoning_markers=%s "
+                "content_flood=%s reasoning_flood=%s",
+                state.hop + 1,
+                hygiene.original_content_markers,
+                hygiene.original_reasoning_markers,
+                hygiene.content_flood,
+                hygiene.reasoning_flood,
+            )
         state.hop += 1
-        _append_beat(
-            moments,
-            moment_id,
-            {
-                "type": "model",
-                "content": result.content or "",
-                "reasoning": result.reasoning_content or "",
-                "tool_calls": [
-                    {"id": tc.id, "name": tc.name} for tc in result.tool_calls
-                ],
-                "hop": state.hop,
-            },
-        )
+        model_beat: dict[str, Any] = {
+            "type": "model",
+            "content": result.content or "",
+            "reasoning": result.reasoning_content or "",
+            "tool_calls": [
+                {"id": tc.id, "name": tc.name} for tc in result.tool_calls
+            ],
+            "hop": state.hop,
+        }
+        if result.finish_reason is not None:
+            model_beat["finish_reason"] = result.finish_reason
+        if hygiene.any_markers:
+            model_beat["hygiene"] = {
+                "c_markers": hygiene.original_content_markers,
+                "r_markers": hygiene.original_reasoning_markers,
+                "flood": hygiene.any_flood,
+            }
+        _append_beat(moments, moment_id, model_beat)
 
         if result.tool_calls:
             stop = _handle_tool_batch(
