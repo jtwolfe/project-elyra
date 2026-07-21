@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "prompt": {
+      "type": "string",
+      "description": "Question or wait prompt for the user"
+    },
+    "choices": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional multi-choice options; omit or empty for free text"
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Seconds before wait_timeout wake (default settings.wait, 120)"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "User to wait on (defaults to active wake user or operator)"
+    }
+  },
+  "required": ["prompt"],
+  "additionalProperties": false
+}
