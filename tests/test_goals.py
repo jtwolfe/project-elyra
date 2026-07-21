@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -181,3 +182,46 @@ def test_invalid_status_rejected(store):
         store.update_goal(g["id"], status="nope")
     with pytest.raises(ValueError, match="invalid task status"):
         store.create_task(g["id"], "T", status="nope")
+
+
+def test_create_goal_rejects_closed(store):
+    """Close must go through update_goal so soft-close path always applies."""
+    with pytest.raises(ValueError, match="cannot create goal with status=closed"):
+        store.create_goal("Already done", status="closed")
+    assert store.list_goals() == []
+    assert store.goal_close_without_review == 0
+
+
+def test_force_must_be_bool(store):
+    g = store.create_goal("G")
+    with pytest.raises(TypeError, match="force must be bool"):
+        store.update_goal(g["id"], status="closed", force="yes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="force must be bool"):
+        store.update_goal(g["id"], status="closed", force=1)  # type: ignore[arg-type]
+    # Goal still open — no partial close on bad force.
+    assert store.get_goal(g["id"])["status"] == "open"
+    assert store.goal_close_without_review == 0
+
+
+def test_concurrent_creates_same_store(tmp_path):
+    """RLock + unique temp: concurrent creates on one store retain all goals."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    s = GoalsStore(paths)
+    n = 40
+    errors: list[BaseException] = []
+
+    def worker(i: int) -> None:
+        try:
+            s.create_goal(f"G{i}")
+        except BaseException as exc:  # noqa: BLE001 — collect for assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(s.list_goals()) == n
