@@ -4,8 +4,9 @@ Fixed scenarios + product-path orchestration for **full-stack real-LLM**
 gates (Gemma via llama-server). Stage go/no-go is human-reviewed 3-attempt
 scorecards — not green pytest alone.
 
-See `docs/design-gemma-sampling-hygiene-staged.md` § Stage 0 and Adaptive
-Execution Protocol.
+Operator protocol (3-attempt rule, A/B modes, P0 exit): **`docs/live-eval.md`**.  
+Design stages + Adaptive Execution Protocol:
+`docs/design-gemma-sampling-hygiene-staged.md`. Ship knobs: `docs/inference.md`.
 
 ## Layout
 
