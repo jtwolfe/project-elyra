@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
 
 from elyra.llm.client import ChatClient, ChatCompletionResult, ToolCall as LlmToolCall
-from elyra.llm.reasoning_hygiene import sanitize_completion
+from elyra.llm.reasoning_hygiene import is_channel_flood, sanitize_completion
 from elyra.loop.context import assemble_outer_meal, estimate_tokens
 from elyra.loop.continue_policy import (
     continue_host_message,
@@ -146,8 +146,18 @@ def tool_result_to_content(tr: ToolResult, max_chars: int) -> str:
     return truncate_tool_content(raw, max_chars)
 
 
-def assistant_message_from_result(result: ChatCompletionResult) -> dict[str, Any]:
-    """OpenAI-style assistant row carrying tool_calls (and optional content)."""
+def assistant_message_from_result(
+    result: ChatCompletionResult,
+    *,
+    include_reasoning: bool = True,
+) -> dict[str, Any]:
+    """OpenAI-style assistant row carrying tool_calls (and optional content).
+
+    Prefer a **post-sanitize** ``result`` (ingress already strips channel markers).
+    ``reasoning_content`` is re-fed only when non-empty **and** not a channel
+    flood — defense in depth so pure floods never re-enter the multi-hop chain
+    even if sanitize is skipped or residual flood text remains.
+    """
     msg: dict[str, Any] = {
         "role": "assistant",
         "content": result.content if result.content else None,
@@ -166,8 +176,12 @@ def assistant_message_from_result(result: ChatCompletionResult) -> dict[str, Any
             }
             for tc in result.tool_calls
         ]
-    if result.reasoning_content:
-        msg["reasoning_content"] = result.reasoning_content
+    if include_reasoning:
+        rc = (result.reasoning_content or "").strip()
+        # Flood-aware omit: pure floods are long non-empty marker strings —
+        # bare truthiness would re-feed them and reinfect later hops.
+        if rc and not is_channel_flood(rc):
+            msg["reasoning_content"] = result.reasoning_content
     return msg
 
 

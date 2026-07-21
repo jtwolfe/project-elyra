@@ -22,11 +22,13 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.llm.client import ChatCompletionResult, HttpChatClient, StubChatClient
 from elyra.llm.config import LlamaServerConfig
+from elyra.llm.reasoning_hygiene import sanitize_completion
 from elyra.llm.server import build_server_command, validate_model_paths
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.doloop import (
     NO_SPEAK_NUDGE,
     DoLoopResult,
+    assistant_message_from_result,
     enforce_in_turn_budget,
     run_do_loop,
     tool_result_to_content,
@@ -220,10 +222,90 @@ def test_tool_result_to_content_includes_ok_and_error():
 
 
 # ---------------------------------------------------------------------------
-# Ingress channel hygiene (PR6) — sanitize before beat/chain
+# Flood-safe reasoning_content re-feed (PR7) — assistant_message_from_result
 # ---------------------------------------------------------------------------
 
 _CHANNEL_FLOOD = "\n".join(["<|channel>thought"] * 20)
+
+
+def test_assistant_message_omits_empty_reasoning_content() -> None:
+    """Empty / whitespace RC → omit key entirely (no reinfection fuel)."""
+    msg = assistant_message_from_result(
+        ChatCompletionResult(content="hi", reasoning_content="", raw_json="{}")
+    )
+    assert "reasoning_content" not in msg
+    msg_ws = assistant_message_from_result(
+        ChatCompletionResult(content="hi", reasoning_content="   \n", raw_json="{}")
+    )
+    assert "reasoning_content" not in msg_ws
+
+
+def test_assistant_message_omits_nonempty_pure_flood_rc() -> None:
+    """Non-empty pure channel flood must never appear on the chain assistant row.
+
+    Pure floods are long non-empty marker strings — bare truthiness would re-feed
+    them. Defense in depth even without prior sanitize (Path B).
+    """
+    assert _CHANNEL_FLOOD  # non-empty
+    msg = assistant_message_from_result(
+        ChatCompletionResult(
+            content="",
+            reasoning_content=_CHANNEL_FLOOD,
+            raw_json="{}",
+            tool_calls=[],
+        )
+    )
+    assert "reasoning_content" not in msg
+    assert "<|channel>" not in json.dumps(msg, ensure_ascii=False)
+
+
+def test_assistant_message_refeeds_cleaned_prose_after_sanitize() -> None:
+    """Prose + flood after sanitize → cleaned prose only on chain re-feed (Path A)."""
+    prose = "Plan: list files then greet."
+    raw = ChatCompletionResult(
+        content="hello\n" + _CHANNEL_FLOOD,
+        reasoning_content=prose + "\n" + _CHANNEL_FLOOD,
+        raw_json="{}",
+        tool_calls=[],
+    )
+    cleaned, report = sanitize_completion(raw)
+    assert report.reasoning_flood is True
+    assert cleaned.reasoning_content == prose
+    assert "<|channel>" not in cleaned.reasoning_content
+
+    msg = assistant_message_from_result(cleaned)
+    assert msg["reasoning_content"] == prose
+    assert "<|channel>" not in msg["reasoning_content"]
+    assert msg["content"] == "hello"
+
+
+def test_assistant_message_include_reasoning_false_omits_even_good_rc() -> None:
+    msg = assistant_message_from_result(
+        ChatCompletionResult(
+            content="x",
+            reasoning_content="private plan",
+            raw_json="{}",
+        ),
+        include_reasoning=False,
+    )
+    assert "reasoning_content" not in msg
+    assert msg["content"] == "x"
+
+
+def test_assistant_message_refeeds_clean_nonflood_rc() -> None:
+    msg = assistant_message_from_result(
+        ChatCompletionResult(
+            content="ok",
+            reasoning_content="step 1 then step 2",
+            raw_json="{}",
+        )
+    )
+    assert msg["reasoning_content"] == "step 1 then step 2"
+
+
+# ---------------------------------------------------------------------------
+# Ingress channel hygiene (PR6) — sanitize before beat/chain
+# ---------------------------------------------------------------------------
 
 
 class _CapturingStubClient:
