@@ -272,3 +272,76 @@ def test_rehydrate_fires_due_timers_and_waits(tmp_path):
     fired = svc2.rehydrate(now="2021-01-01T00:00:00Z")
     kinds = sorted(i.kind for i in fired)
     assert kinds == ["timer", "wait_timeout"]
+
+
+def test_orphan_timed_out_wait_reconciled_on_rehydrate(tmp_path):
+    """Snapshot terminal + missing wake event → one enqueue (mark-before crash)."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    svc = TimerService(paths, q)
+    wait = svc.arm_wait(
+        prompt="lost",
+        user_id="operator",
+        moment_id="M",
+        expires_at="2020-01-01T00:00:00Z",
+        choices=["A"],
+    )
+    # Simulate: mark+persist timed_out with wake_id, never enqueued.
+    orphan_wake_id = "orphan-wait-wake"
+    raw = json.loads(svc.waits_path.read_text(encoding="utf-8"))
+    for row in raw:
+        if row["id"] == wait.id:
+            row["status"] = STATUS_TIMED_OUT
+            row["wake_id"] = orphan_wake_id
+    svc.waits_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
+    assert q.get(orphan_wake_id) is None
+    q2 = WakeQueue(paths)
+    svc2 = TimerService(paths, q2)
+    recovered = svc2.rehydrate_waits(now="2021-01-01T00:00:00Z")
+    assert len(recovered) == 1
+    assert recovered[0].id == orphan_wake_id
+    assert recovered[0].kind == "wait_timeout"
+    assert recovered[0].payload["wait_id"] == wait.id
+    assert q2.get(orphan_wake_id) is not None
+
+    # Second rehydrate is a no-op (wake exists).
+    again = svc2.rehydrate_waits(now="2021-01-01T00:00:00Z")
+    assert again == []
+    pending = [
+        p
+        for p in q2.pending()
+        if p.kind == "wait_timeout" and p.payload.get("wait_id") == wait.id
+    ]
+    assert len(pending) == 1
+
+
+def test_orphan_fired_timer_reconciled_on_rehydrate(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    svc = TimerService(paths, q)
+    t = svc.schedule_timer("2020-01-01T00:00:00Z", reason="lost-fire", goal_id="G")
+    orphan_wake_id = "orphan-timer-wake"
+    raw = json.loads(svc.timers_path.read_text(encoding="utf-8"))
+    for row in raw:
+        if row["id"] == t.id:
+            row["status"] = STATUS_FIRED
+            row["wake_id"] = orphan_wake_id
+    svc.timers_path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
+    assert q.get(orphan_wake_id) is None
+    q2 = WakeQueue(paths)
+    svc2 = TimerService(paths, q2)
+    recovered = svc2.rehydrate_timers(now="2021-01-01T00:00:00Z")
+    assert len(recovered) == 1
+    assert recovered[0].id == orphan_wake_id
+    assert recovered[0].kind == "timer"
+    assert recovered[0].payload["timer_id"] == t.id
+    assert recovered[0].payload["reason"] == "lost-fire"
+
+    again = svc2.rehydrate_timers(now="2021-01-01T00:00:00Z")
+    assert again == []
+    pending = [p for p in q2.pending() if p.payload.get("timer_id") == t.id]
+    assert len(pending) == 1

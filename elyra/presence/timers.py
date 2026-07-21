@@ -6,8 +6,11 @@ In scope: pure store layer over data/wakes/{timers,waits}.json + WakeQueue.
 Out of scope: worker phases, wait_user tool, full presence state machine.
 
 Crash safety: mark snapshot terminal (fired/timed_out) and persist **before**
-enqueue so a restart cannot double-fire the same wait/timer. Startup should
-call ``rehydrate()`` (or ``rehydrate_waits`` + ``rehydrate_timers``).
+enqueue so a restart cannot double-fire the same wait/timer. On rehydrate,
+reconcile the inverse window: if status is terminal with a pre-assigned
+``wake_id`` but that wake never landed in events.jsonl, enqueue once
+(at-least-once for timers/waits). Startup should call ``rehydrate()``
+(or ``rehydrate_waits`` + ``rehydrate_timers``).
 """
 
 from __future__ import annotations
@@ -216,6 +219,80 @@ class TimerService:
         rows.sort(key=lambda r: (r.get("expires_at") or "", r.get("id") or ""))
         _write_json_list(self.waits_path, rows)
 
+    def _wake_exists(self, wake_id: str | None) -> bool:
+        """True if ``wake_id`` is known to the queue (any lifecycle op)."""
+        if not wake_id:
+            return False
+        return self._queue.get(wake_id) is not None
+
+    def _timer_payload(self, timer: PendingTimer) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "wake_at": timer.wake_at,
+            "reason": timer.reason,
+            "timer_id": timer.id,
+        }
+        if timer.goal_id is not None:
+            payload["goal_id"] = timer.goal_id
+        if timer.task_id is not None:
+            payload["task_id"] = timer.task_id
+        return payload
+
+    def _wait_timeout_payload(
+        self, wait: PendingWait, now_dt: datetime
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "wait_id": wait.id,
+            "moment_id": wait.moment_id,
+            "choices_offered": list(wait.choices),
+            "prompt": wait.prompt,
+            "user_id": wait.user_id,
+        }
+        elapsed_s = _wait_elapsed_s(wait, now_dt)
+        if elapsed_s is not None:
+            payload["wait_elapsed_s"] = elapsed_s
+        return payload
+
+    def _reconcile_orphaned_timer_fires(self) -> list[WakeItem]:
+        """Enqueue for fired timers whose pre-assigned wake never landed.
+
+        Covers: mark+persist succeeded, process died before events append.
+        """
+        recovered: list[WakeItem] = []
+        for timer in sorted(
+            self._timers.values(), key=lambda t: (t.wake_at, t.id)
+        ):
+            if timer.status != STATUS_FIRED or not timer.wake_id:
+                continue
+            if self._wake_exists(timer.wake_id):
+                continue
+            item = self._queue.enqueue(
+                "timer",
+                self._timer_payload(timer),
+                wake_id=timer.wake_id,
+            )
+            recovered.append(item)
+        return recovered
+
+    def _reconcile_orphaned_wait_timeouts(
+        self, now_dt: datetime
+    ) -> list[WakeItem]:
+        """Enqueue for timed_out waits whose pre-assigned wake never landed."""
+        recovered: list[WakeItem] = []
+        for wait in sorted(
+            self._waits.values(), key=lambda w: (w.expires_at, w.id)
+        ):
+            if wait.status != STATUS_TIMED_OUT or not wait.wake_id:
+                continue
+            if self._wake_exists(wait.wake_id):
+                continue
+            item = self._queue.enqueue(
+                "wait_timeout",
+                self._wait_timeout_payload(wait, now_dt),
+                wake_id=wait.wake_id,
+            )
+            recovered.append(item)
+        return recovered
+
     # --- timers -----------------------------------------------------------
 
     def schedule_timer(
@@ -295,20 +372,16 @@ class TimerService:
             for timer in due:
                 wake_id = str(uuid.uuid4())
                 # Mark + persist first — restart must not re-fire this timer.
+                # If crash before enqueue, rehydrate reconciles via wake_id.
                 timer.status = STATUS_FIRED
                 timer.wake_id = wake_id
                 self._persist_timers()
 
-                payload: dict[str, Any] = {
-                    "wake_at": timer.wake_at,
-                    "reason": timer.reason,
-                    "timer_id": timer.id,
-                }
-                if timer.goal_id is not None:
-                    payload["goal_id"] = timer.goal_id
-                if timer.task_id is not None:
-                    payload["task_id"] = timer.task_id
-                item = self._queue.enqueue("timer", payload, wake_id=wake_id)
+                item = self._queue.enqueue(
+                    "timer",
+                    self._timer_payload(timer),
+                    wake_id=wake_id,
+                )
                 fired.append(item)
         return fired
 
@@ -316,12 +389,15 @@ class TimerService:
         self,
         now: datetime | str | None = None,
     ) -> list[WakeItem]:
-        """Reload timers from disk and fire any already-due scheduled timers.
+        """Reload timers, recover orphaned fires, then fire newly due timers.
 
         Pair with ``rehydrate_waits`` on startup (or use ``rehydrate``).
         """
         self._load()
-        return self.schedule_due(now=now)
+        with self._lock:
+            recovered = self._reconcile_orphaned_timer_fires()
+        due = self.schedule_due(now=now)
+        return recovered + due
 
     # --- waits ------------------------------------------------------------
 
@@ -429,21 +505,16 @@ class TimerService:
             for wait in due:
                 wake_id = str(uuid.uuid4())
                 # Mark + persist first — restart must not re-fire this wait.
+                # If crash before enqueue, rehydrate reconciles via wake_id.
                 wait.status = STATUS_TIMED_OUT
                 wait.wake_id = wake_id
                 self._persist_waits()
 
-                payload: dict[str, Any] = {
-                    "wait_id": wait.id,
-                    "moment_id": wait.moment_id,
-                    "choices_offered": list(wait.choices),
-                    "prompt": wait.prompt,
-                    "user_id": wait.user_id,
-                }
-                elapsed_s = _wait_elapsed_s(wait, now_dt)
-                if elapsed_s is not None:
-                    payload["wait_elapsed_s"] = elapsed_s
-                item = self._queue.enqueue("wait_timeout", payload, wake_id=wake_id)
+                item = self._queue.enqueue(
+                    "wait_timeout",
+                    self._wait_timeout_payload(wait, now_dt),
+                    wake_id=wake_id,
+                )
                 fired.append(item)
         return fired
 
@@ -451,21 +522,44 @@ class TimerService:
         self,
         now: datetime | str | None = None,
     ) -> list[WakeItem]:
-        """Reload waits from disk and fire any already-expired pending waits.
+        """Reload waits, recover orphaned timeouts, fire newly expired waits.
 
         On startup: pending with deadline past → enqueue wait_timeout;
         still-future deadlines remain pending for later check_timeouts.
-        Already timed_out rows are not re-fired (snapshot marked first).
+        Terminal ``timed_out`` rows without a matching wake event are
+        reconciled once (inverse of mark-before-enqueue crash window).
         """
+        if now is None:
+            now_dt = datetime.now(UTC)
+        elif isinstance(now, str):
+            now_dt = parse_utc(now)
+        else:
+            now_dt = now if now.tzinfo else now.replace(tzinfo=UTC)
+            now_dt = now_dt.astimezone(UTC)
+
         self._load()
-        return self.check_timeouts(now=now)
+        with self._lock:
+            recovered = self._reconcile_orphaned_wait_timeouts(now_dt)
+        due = self.check_timeouts(now=now_dt)
+        return recovered + due
 
     def rehydrate(
         self,
         now: datetime | str | None = None,
     ) -> list[WakeItem]:
-        """Startup helper: reload both snapshots and fire due waits + timers."""
+        """Startup helper: reload both snapshots, reconcile orphans, fire dues."""
+        if now is None:
+            now_dt = datetime.now(UTC)
+        elif isinstance(now, str):
+            now_dt = parse_utc(now)
+        else:
+            now_dt = now if now.tzinfo else now.replace(tzinfo=UTC)
+            now_dt = now_dt.astimezone(UTC)
+
         self._load()
-        waits = self.check_timeouts(now=now)
-        timers = self.schedule_due(now=now)
-        return waits + timers
+        with self._lock:
+            wait_orphans = self._reconcile_orphaned_wait_timeouts(now_dt)
+            timer_orphans = self._reconcile_orphaned_timer_fires()
+        waits = self.check_timeouts(now=now_dt)
+        timers = self.schedule_due(now=now_dt)
+        return wait_orphans + timer_orphans + waits + timers
