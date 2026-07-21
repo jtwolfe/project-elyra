@@ -1,0 +1,246 @@
+"""Wake queue: event fold, claim, crash recovery, task_ready dedupe."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from elyra.config import resolve_paths
+from elyra.presence.queue import (
+    KIND_PRIORITY,
+    REASON_INTERRUPTED,
+    REASON_REPLACED,
+    WakeItem,
+    WakeQueue,
+    fold_events,
+    priority_for_kind,
+)
+
+
+def _queue(tmp_path) -> WakeQueue:
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    return WakeQueue(paths)
+
+
+def test_priority_bands():
+    assert priority_for_kind("user_message") == 0
+    assert priority_for_kind("wait_reply") == 0
+    assert priority_for_kind("wait_timeout") == 1
+    assert priority_for_kind("timer") == 2
+    assert priority_for_kind("task_ready") == 3
+    assert priority_for_kind("background") == 4
+    assert KIND_PRIORITY["user_message"] == 0
+
+
+def test_fold_events_latest_op_and_item_body():
+    events = [
+        {
+            "ts": "2026-01-01T00:00:00Z",
+            "wake_id": "W1",
+            "op": "enqueue",
+            "item": {
+                "id": "W1",
+                "kind": "user_message",
+                "priority": 0,
+                "created_at": "2026-01-01T00:00:00Z",
+                "payload": {"content": "hi"},
+            },
+        },
+        {
+            "ts": "2026-01-01T00:00:01Z",
+            "wake_id": "W1",
+            "op": "claimed",
+            "moment_id": "M1",
+        },
+        {
+            "ts": "2026-01-01T00:00:02Z",
+            "wake_id": "W1",
+            "op": "done",
+        },
+        {
+            "ts": "2026-01-01T00:00:03Z",
+            "wake_id": "W2",
+            "op": "enqueue",
+            "item": {
+                "id": "W2",
+                "kind": "timer",
+                "priority": 2,
+                "created_at": "2026-01-01T00:00:03Z",
+                "payload": {"reason": "ping"},
+            },
+        },
+        {
+            "ts": "2026-01-01T00:00:04Z",
+            "wake_id": "W2",
+            "op": "cancelled",
+            "reason": "test",
+        },
+    ]
+    folded = fold_events(events)
+    assert folded["W1"].op == "done"
+    assert folded["W1"].item is not None
+    assert folded["W1"].item.payload["content"] == "hi"
+    assert folded["W1"].moment_id == "M1"
+    assert folded["W2"].op == "cancelled"
+    assert folded["W2"].reason == "test"
+    assert folded["W2"].item.kind == "timer"
+
+
+def test_enqueue_persists_and_pending_order(tmp_path):
+    q = _queue(tmp_path)
+    bg = q.enqueue("background", {"n": 1})
+    user = q.enqueue("user_message", {"content": "hello"})
+    timer = q.enqueue("timer", {"reason": "t"})
+    pending = q.pending()
+    assert [p.id for p in pending] == [user.id, timer.id, bg.id]
+    assert pending[0].kind == "user_message"
+    assert pending[0].priority == 0
+
+    # Events on disk
+    path = q.events_path
+    assert path.is_file()
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 3
+    ops = [json.loads(ln)["op"] for ln in lines]
+    assert ops == ["enqueue", "enqueue", "enqueue"]
+
+
+def test_claim_sequential_and_done(tmp_path):
+    q = _queue(tmp_path)
+    a = q.enqueue("user_message", {"content": "a"})
+    b = q.enqueue("wait_timeout", {"wait_id": "w"})
+    c = q.enqueue("background", {})
+
+    first = q.claim("M1")
+    assert first is not None
+    assert first.id == a.id
+    assert q.status(a.id) == "claimed"
+    assert q.peek() is not None
+    assert q.peek().id == b.id
+
+    second = q.claim("M2")
+    assert second is not None
+    assert second.id == b.id
+
+    q.mark_done(a.id)
+    assert q.status(a.id) == "done"
+    q.mark_done(b.id)
+
+    third = q.claim("M3")
+    assert third is not None
+    assert third.id == c.id
+    q.cancel(c.id, "host")
+    assert q.status(c.id) == "cancelled"
+
+    assert q.claim("M4") is None
+    assert q.pending() == []
+
+
+def test_claim_under_lock_reload_fold(tmp_path):
+    """Claim + done survive re-fold from disk (new queue instance)."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q1 = WakeQueue(paths)
+    item = q1.enqueue("task_ready", {"task_id": "T1"})
+    claimed = q1.claim("moment-1")
+    assert claimed is not None
+    assert claimed.id == item.id
+
+    q2 = WakeQueue(paths)
+    assert q2.status(item.id) == "claimed"
+    assert q2.pending() == []
+    assert q2.get(item.id) is not None
+    assert q2.get(item.id).payload["task_id"] == "T1"
+
+    q2.mark_done(item.id)
+    q3 = WakeQueue(paths)
+    assert q3.status(item.id) == "done"
+
+
+def test_recover_claimed_cancels_user_reenqueues_timer(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    user = q.enqueue("user_message", {"content": "once"})
+    timer = q.enqueue("timer", {"reason": "retry-me", "wake_at": "2026-01-01T00:00:00Z"})
+    task = q.enqueue("task_ready", {"task_id": "T9", "goal_id": "G1"})
+    wait_to = q.enqueue("wait_timeout", {"wait_id": "W"})
+
+    assert q.claim("M-user").id == user.id
+    assert q.claim("M-wait").id == wait_to.id
+    assert q.claim("M-timer").id == timer.id
+    assert q.claim("M-task").id == task.id
+    assert q.pending() == []
+
+    # Simulate crash: new process folds claimed-without-done
+    q2 = WakeQueue(paths)
+    claimed = {w.kind: w for w in q2.claimed()}
+    assert set(claimed) == {"user_message", "wait_timeout", "timer", "task_ready"}
+
+    reenqueued = q2.recover_claimed()
+    assert q2.status(user.id) == "cancelled"
+    assert q2.status(wait_to.id) == "cancelled"
+    assert q2.status(timer.id) == "cancelled"
+    assert q2.status(task.id) == "cancelled"
+
+    # Social/wait: no re-enqueue
+    pending = q2.pending()
+    kinds = sorted(p.kind for p in pending)
+    assert kinds == ["task_ready", "timer"]
+    assert len(reenqueued) == 2
+    assert {r.kind for r in reenqueued} == {"timer", "task_ready"}
+    # New ids
+    assert all(r.id not in {timer.id, task.id} for r in reenqueued)
+    timer_clone = next(r for r in reenqueued if r.kind == "timer")
+    assert timer_clone.payload["reason"] == "retry-me"
+    task_clone = next(r for r in reenqueued if r.kind == "task_ready")
+    assert task_clone.payload["task_id"] == "T9"
+
+    # Events include interrupted_redelivery
+    text = Path(q2.events_path).read_text(encoding="utf-8")
+    assert REASON_INTERRUPTED in text
+
+
+def test_task_ready_dedupe_cancels_old_pending(tmp_path):
+    q = _queue(tmp_path)
+    first = q.enqueue_task_ready("T1", goal_id="G", payload={"n": 1})
+    assert first.kind == "task_ready"
+    assert first.payload["task_id"] == "T1"
+    assert len(q.pending()) == 1
+
+    second = q.enqueue_task_ready("T1", goal_id="G", payload={"n": 2})
+    assert second.id != first.id
+    assert q.status(first.id) == "cancelled"
+    # reason on disk
+    lines = [
+        json.loads(ln)
+        for ln in q.events_path.read_text(encoding="utf-8").splitlines()
+        if ln.strip()
+    ]
+    cancel_ev = next(
+        e for e in lines if e.get("wake_id") == first.id and e.get("op") == "cancelled"
+    )
+    assert cancel_ev["reason"] == REASON_REPLACED
+
+    pending = q.pending()
+    assert len(pending) == 1
+    assert pending[0].id == second.id
+    assert pending[0].payload["n"] == 2
+
+    # Different task_id is independent
+    other = q.enqueue_task_ready("T2")
+    assert len(q.pending()) == 2
+    assert {p.payload["task_id"] for p in q.pending()} == {"T1", "T2"}
+    assert other.payload["task_id"] == "T2"
+
+
+def test_wake_item_roundtrip_dict():
+    item = WakeItem(
+        id="W",
+        kind="background",
+        priority=4,
+        created_at="2026-01-01T00:00:00Z",
+        payload={"x": 1},
+    )
+    assert WakeItem.from_dict(item.to_dict()) == item
