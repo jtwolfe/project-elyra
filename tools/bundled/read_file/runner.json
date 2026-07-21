@@ -1,0 +1,4 @@
+{
+  "kind": "builtin",
+  "entry": "elyra.tools.builtin.files:read_file"
+}
