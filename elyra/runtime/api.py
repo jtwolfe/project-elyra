@@ -1,29 +1,40 @@
 """HTTP API and static Web UI.
 
 Scope: REST JSON + SPA fallthrough for operator glass.
-In scope: status, messages, wait reply routing via resolve_user_input.
-Out of scope: glass panels (goals/moments UI polish), tool catalog endpoints.
+In scope: status, messages, wait reply, lean glass catalogs
+  (goals, moments, tools, skills, identity/users).
+Out of scope: promote/verify admin, multi-user glass, write identity.
 """
 
 from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from elyra.config import ElyraPaths
+from elyra.goals import GoalsStore
+from elyra.identity import IdentityStore
 from elyra.llm.queue import LlamaServerGate
 from elyra.messages import append_message, list_messages
+from elyra.moment import MomentStore
 from elyra.presence.interject import REASON_BUFFER_FULL
 from elyra.presence.worker import PresenceWorker
 from elyra.runtime.config import RuntimeConfig
 from elyra.runtime.state import RuntimeState
+from elyra.skills.catalog import SkillCatalog
+from elyra.tools.registry import ToolRegistry
+from elyra.users import UsersStore
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+
+# Path params: single safe segment (matches users/moment id style).
+_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _route_payload(result: dict[str, Any], *, message: Any | None = None) -> dict[str, Any]:
@@ -49,12 +60,26 @@ def _route_payload(result: dict[str, Any], *, message: Any | None = None) -> dic
     return out
 
 
+def _safe_segment(raw: str) -> str | None:
+    """Return path segment if safe, else None."""
+    if not raw or not _SEGMENT_RE.fullmatch(raw):
+        return None
+    return raw
+
+
 class ElyraApiHandler(BaseHTTPRequestHandler):
     paths: ElyraPaths
     gate: LlamaServerGate
     state: RuntimeState
     worker: PresenceWorker
     config: RuntimeConfig
+    # Lean catalog stores (file-backed; constructed once at server start).
+    goals: GoalsStore
+    moments: MomentStore
+    identity: IdentityStore
+    users: UsersStore
+    tools: ToolRegistry | None
+    skills: SkillCatalog | None
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -85,6 +110,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        qs = parse_qs(parsed.query)
 
         if path == "/api/status":
             snap = self.state.snapshot()
@@ -103,13 +129,119 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/messages":
-            qs = parse_qs(parsed.query)
             limit = int((qs.get("limit") or ["200"])[0])
             self._json(200, {"messages": list_messages(limit=limit, paths=self.paths)})
             return
 
         if path == "/api/health":
             self._json(200, {"ok": True})
+            return
+
+        if path == "/api/goals":
+            status = (qs.get("status") or [None])[0]
+            try:
+                goals = self.goals.list_goals(status=status if status else None)
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            self._json(200, {"goals": goals})
+            return
+
+        if path == "/api/moments":
+            limit_raw = (qs.get("limit") or ["50"])[0]
+            try:
+                limit = int(limit_raw)
+            except (TypeError, ValueError):
+                limit = 50
+            open_only = (qs.get("open") or ["0"])[0] in ("1", "true", "yes")
+            moments = self.moments.list_moments(limit=limit, open_only=open_only)
+            self._json(200, {"moments": moments})
+            return
+
+        if path.startswith("/api/moments/"):
+            mid = _safe_segment(unquote(path[len("/api/moments/") :]))
+            if mid is None:
+                self._json(400, {"ok": False, "error": "invalid moment id"})
+                return
+            try:
+                meta = self.moments.get_moment(mid)
+            except ValueError:
+                self._json(400, {"ok": False, "error": "invalid moment id"})
+                return
+            if meta is None:
+                self._json(404, {"ok": False, "error": "moment not found"})
+                return
+            beats = self.moments.list_beats(mid)
+            self._json(200, {"moment": meta, "beats": beats})
+            return
+
+        if path == "/api/identity":
+            digest = self.identity.self_digest()
+            self._json(
+                200,
+                {
+                    "self": {
+                        "path": str(self.identity.self_path),
+                        "digest": digest,
+                    }
+                },
+            )
+            return
+
+        if path.startswith("/api/users/"):
+            uid = _safe_segment(unquote(path[len("/api/users/") :]))
+            if uid is None:
+                self._json(400, {"ok": False, "error": "invalid user id"})
+                return
+            try:
+                profile = self.users.profile(uid)
+            except ValueError:
+                self._json(400, {"ok": False, "error": "invalid user id"})
+                return
+            self._json(
+                200,
+                {
+                    "user_id": uid,
+                    "profile": profile,
+                    "path": str(self.users.profile_path(uid)),
+                },
+            )
+            return
+
+        if path == "/api/tools":
+            if self.tools is None:
+                self._json(200, {"tools": [], "error": "tools catalog unavailable"})
+                return
+            catalog = []
+            for name in self.tools.names():
+                pkg = self.tools.get(name)
+                if pkg is None:
+                    continue
+                catalog.append(
+                    {
+                        "name": pkg.meta.name,
+                        "description": pkg.meta.description,
+                        "kind": pkg.meta.kind,
+                        "source": pkg.source,
+                    }
+                )
+            self._json(200, {"tools": catalog})
+            return
+
+        if path == "/api/skills":
+            if self.skills is None:
+                self._json(200, {"skills": [], "error": "skills catalog unavailable"})
+                return
+            items = self.skills.catalog()
+            # Enrich with source when available.
+            enriched = []
+            for item in items:
+                meta = self.skills.get(item["name"])
+                row = dict(item)
+                if meta is not None:
+                    row["source"] = meta.source
+                enriched.append(row)
+            self._json(200, {"skills": enriched})
             return
 
         self._serve_static(path)
@@ -127,7 +259,32 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_wait_reply(body)
             return
 
+        if path == "/api/goals":
+            self._post_goals(body)
+            return
+
         self._json(404, {"error": "not found"})
+
+    def _post_goals(self, body: dict[str, Any]) -> None:
+        """POST /api/goals — create a goal (lean glass / operator)."""
+        title = str(body.get("title") or "").strip()
+        if not title:
+            self._json(400, {"ok": False, "error": "title required"})
+            return
+        acceptance = body.get("acceptance")
+        if acceptance is not None:
+            acceptance = str(acceptance)
+        status = str(body.get("status") or "open")
+        try:
+            goal = self.goals.create_goal(
+                title,
+                acceptance=acceptance,
+                status=status,
+            )
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc)})
+            return
+        self._json(200, {"ok": True, "goal": goal})
 
     def _post_messages(self, body: dict[str, Any]) -> None:
         """POST /api/messages — glass chat → resolve_user_input (from_wait_api=False).
@@ -228,6 +385,20 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         self._send(200, data, ctype)
 
 
+def _try_tool_registry(paths: ElyraPaths) -> ToolRegistry | None:
+    try:
+        return ToolRegistry(paths)
+    except Exception:  # noqa: BLE001 — catalog optional for glass
+        return None
+
+
+def _try_skill_catalog(paths: ElyraPaths) -> SkillCatalog | None:
+    try:
+        return SkillCatalog(paths)
+    except Exception:  # noqa: BLE001 — catalog optional for glass
+        return None
+
+
 def start_api_server(
     config: RuntimeConfig,
     *,
@@ -235,7 +406,23 @@ def start_api_server(
     gate: LlamaServerGate,
     state: RuntimeState,
     worker: PresenceWorker,
+    goals: GoalsStore | None = None,
+    moments: MomentStore | None = None,
+    identity: IdentityStore | None = None,
+    users: UsersStore | None = None,
+    tools: ToolRegistry | None = ...,  # type: ignore[assignment]
+    skills: SkillCatalog | None = ...,  # type: ignore[assignment]
 ) -> tuple[ThreadingHTTPServer, threading.Thread]:
+    """Start ThreadingHTTPServer serving REST + static glass.
+
+    Catalog stores default from ``paths``. Pass ``tools=None`` / ``skills=None``
+    to skip disk scan (tests without bundled roots). Omit (ellipsis) to auto-build.
+    """
+    if tools is ...:
+        tools = _try_tool_registry(paths)
+    if skills is ...:
+        skills = _try_skill_catalog(paths)
+
     handler = type(
         "BoundHandler",
         (ElyraApiHandler,),
@@ -245,6 +432,12 @@ def start_api_server(
             "state": state,
             "worker": worker,
             "config": config,
+            "goals": goals or GoalsStore(paths),
+            "moments": moments or MomentStore(paths),
+            "identity": identity or IdentityStore(paths),
+            "users": users or UsersStore(paths),
+            "tools": tools,
+            "skills": skills,
         },
     )
     server = ThreadingHTTPServer((config.api_host, config.api_port), handler)

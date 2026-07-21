@@ -18,20 +18,34 @@
         </div>
         <nav class="nav">
           <button type="button" class="nav-btn active" data-panel="chat">Chat</button>
+          <button type="button" class="nav-btn" data-panel="goals">Goals</button>
+          <button type="button" class="nav-btn" data-panel="moments">Moments</button>
+          <button type="button" class="nav-btn" data-panel="tools">Tools</button>
+          <button type="button" class="nav-btn" data-panel="identity">Identity</button>
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
         <div class="rail-foot">
           <div id="pill-llama" class="pill pill-off">llama</div>
           <div id="pill-worker" class="pill pill-off">worker</div>
+          <div id="pill-phase" class="pill pill-off">phase</div>
         </div>
       </aside>
 
       <main class="main">
+        <div id="notice" class="notice" hidden role="status"></div>
+
         <section id="panel-chat" class="panel active">
           <header class="panel-head">
             <h1>Chat</h1>
-            <p class="muted">Messages enqueue a presence wake → simple do-loop (LLM reply).</p>
+            <p class="muted">
+              Messages route via presence (<code>resolve_user_input</code>). Wait
+              choices post to <code>/api/wait/reply</code>.
+            </p>
           </header>
+          <div id="wait-bar" class="wait-bar" hidden>
+            <div class="wait-prompt" id="wait-prompt"></div>
+            <div class="wait-choices" id="wait-choices"></div>
+          </div>
           <div id="messages" class="messages" aria-live="polite"></div>
           <form id="chat-form" class="composer">
             <textarea
@@ -42,6 +56,59 @@
             ></textarea>
             <button type="submit" id="send-btn">Send</button>
           </form>
+        </section>
+
+        <section id="panel-goals" class="panel">
+          <header class="panel-head">
+            <h1>Goals</h1>
+            <p class="muted">Durable ledger from <code>/api/goals</code>.</p>
+          </header>
+          <div id="goals-list" class="list-panel">loading…</div>
+        </section>
+
+        <section id="panel-moments" class="panel">
+          <header class="panel-head">
+            <h1>Moments</h1>
+            <p class="muted">
+              Recent do-loops and beats. Reasoning is collapsed by default.
+            </p>
+          </header>
+          <div id="moments-list" class="list-panel">loading…</div>
+          <div id="moment-detail" class="list-panel detail-panel" hidden></div>
+        </section>
+
+        <section id="panel-tools" class="panel">
+          <header class="panel-head">
+            <h1>Tools &amp; skills</h1>
+            <p class="muted">Callable catalog from <code>/api/tools</code> and <code>/api/skills</code>.</p>
+          </header>
+          <div class="split-lists">
+            <div>
+              <h2 class="subhead">Tools</h2>
+              <div id="tools-list" class="list-panel">loading…</div>
+            </div>
+            <div>
+              <h2 class="subhead">Skills</h2>
+              <div id="skills-list" class="list-panel">loading…</div>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-identity" class="panel">
+          <header class="panel-head">
+            <h1>Identity</h1>
+            <p class="muted">Self digest + operator profile (read-only).</p>
+          </header>
+          <div class="split-lists">
+            <div>
+              <h2 class="subhead">Self</h2>
+              <pre id="identity-self" class="code-block">loading…</pre>
+            </div>
+            <div>
+              <h2 class="subhead">User · operator</h2>
+              <pre id="identity-user" class="code-block">loading…</pre>
+            </div>
+          </div>
         </section>
 
         <section id="panel-status" class="panel">
