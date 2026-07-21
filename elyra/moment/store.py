@@ -27,6 +27,8 @@ from elyra.moment.types import (
 _MOMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 INDEX_FILENAME = "index.jsonl"
+# Stems whose ``<id>.jsonl`` would collide with the global moment index file.
+_RESERVED_MOMENT_STEMS = frozenset({"index"})
 
 
 def _now() -> str:
@@ -34,11 +36,21 @@ def _now() -> str:
 
 
 def _validate_moment_id(moment_id: str) -> str:
-    """Return ``moment_id`` if it is a single safe path segment."""
+    """Return ``moment_id`` if it is a single safe, non-reserved path segment.
+
+    Rejects path escapes and stems that would make the beat tape path equal
+    the moment index (``index.jsonl``). Comparison is case-insensitive so
+    case-insensitive filesystems cannot alias ``Index`` onto the index file.
+    """
     if not isinstance(moment_id, str) or not _MOMENT_ID_RE.fullmatch(moment_id):
         raise ValueError(f"invalid moment_id: {moment_id!r}")
     path = Path(moment_id)
     if path.is_absolute() or len(path.parts) != 1:
+        raise ValueError(f"invalid moment_id: {moment_id!r}")
+    if moment_id.lower() in _RESERVED_MOMENT_STEMS:
+        raise ValueError(f"invalid moment_id: {moment_id!r}")
+    # Defense in depth: tape basename must never be the index file name.
+    if f"{moment_id}.jsonl".lower() == INDEX_FILENAME.lower():
         raise ValueError(f"invalid moment_id: {moment_id!r}")
     return moment_id
 
@@ -138,6 +150,7 @@ class MomentStore:
 
         self._ensure_moments_dir()
         path = self.tape_path(mid)
+        self._ensure_trailing_newline(path)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
@@ -190,13 +203,23 @@ class MomentStore:
     def recover_open_moments(self) -> list[str]:
         """Close all open moments with ``stop_reason=interrupted``.
 
-        Returns the ids that were closed. Safe to call when none are open.
+        Single index load + one rewrite for all orphans. Returns the ids that
+        were closed. Safe to call when none are open.
         """
+        by_id = self._load_index_by_id()
         closed: list[str] = []
-        for meta in self.list_open_moments():
-            mid = meta["id"]
-            self.close_moment(mid, "interrupted")
+        ended = _now()
+        for mid, meta in list(by_id.items()):
+            if meta.get("ended_at") is not None:
+                continue
+            updated: MomentMeta = dict(meta)
+            updated["ended_at"] = ended
+            updated["stop_reason"] = "interrupted"
+            updated.setdefault("schema_version", SCHEMA_VERSION)
+            by_id[mid] = updated
             closed.append(mid)
+        if closed:
+            self._rewrite_index(by_id)
         return closed
 
     def get_moment(self, moment_id: str) -> MomentMeta | None:
@@ -223,8 +246,24 @@ class MomentStore:
 
     # --- index I/O ---------------------------------------------------------
 
+    def _ensure_trailing_newline(self, path: Path) -> None:
+        """If ``path`` exists, is non-empty, and lacks a trailing ``\\n``, append one.
+
+        Avoids gluing a new JSONL record onto a partial line left by a crash
+        mid-write so the new record remains parseable.
+        """
+        if not path.is_file() or path.stat().st_size == 0:
+            return
+        with path.open("rb") as handle:
+            handle.seek(-1, 2)
+            last = handle.read(1)
+        if last != b"\n":
+            with path.open("ab") as handle:
+                handle.write(b"\n")
+
     def _append_index_line(self, meta: MomentMeta) -> None:
         self._ensure_moments_dir()
+        self._ensure_trailing_newline(self.index_path)
         with self.index_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(meta, ensure_ascii=False) + "\n")
 

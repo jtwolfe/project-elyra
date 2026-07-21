@@ -195,6 +195,47 @@ def test_moment_id_path_jail(store, bad_id):
         store.tape_path(bad_id)
 
 
+@pytest.mark.parametrize("reserved", ["index", "Index", "INDEX"])
+def test_moment_id_rejects_reserved_index_stem(store, reserved):
+    """``index`` would make tape_path == index_path; reject all case variants."""
+    with pytest.raises(ValueError, match="invalid moment_id"):
+        store.open_moment(why_now="x", moment_id=reserved)
+    with pytest.raises(ValueError, match="invalid moment_id"):
+        store.tape_path(reserved)
+    # Accepted ids must never resolve the tape onto the index file.
+    mid = store.open_moment(why_now="ok", moment_id="m-ok-1")
+    assert store.tape_path(mid) != store.index_path
+    assert store.tape_path(mid).name != store.index_path.name
+
+
+def test_append_index_repairs_missing_trailing_newline(store):
+    """Partial last index line must not glue onto the next open record."""
+    mid1 = store.open_moment(why_now="first", moment_id="m-first")
+    # Complete first record, then a crash mid-write fragment without trailing \\n.
+    complete = store.index_path.read_bytes()
+    assert complete.endswith(b"\n")
+    store.index_path.write_bytes(complete + b'{"id":"partial-crash"')
+    mid2 = store.open_moment(why_now="second", moment_id="m-second")
+    assert store.get_moment(mid1) is not None
+    assert store.get_moment(mid1)["why_now"] == "first"
+    assert store.get_moment(mid2) is not None
+    assert store.get_moment(mid2)["why_now"] == "second"
+    store.append_beat(mid2, {"type": "obs", "kind": "continue", "text": "t"})
+    assert store.list_beats(mid2)[0]["text"] == "t"
+
+
+def test_recover_batches_multiple_open(store):
+    ids = [
+        store.open_moment(why_now=f"w{i}", moment_id=f"batch-{i}")
+        for i in range(3)
+    ]
+    closed = store.recover_open_moments()
+    assert sorted(closed) == sorted(ids)
+    assert store.list_open_moments() == []
+    for mid in ids:
+        assert store.get_moment(mid)["stop_reason"] == "interrupted"
+
+
 def test_list_beats_missing_tape_empty(store):
     mid = store.open_moment(why_now="x")
     assert store.list_beats(mid) == []
