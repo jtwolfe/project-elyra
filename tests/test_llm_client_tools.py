@@ -368,10 +368,16 @@ def test_http_client_omits_tools_keys_when_none(fake_chat_server):
 
 
 def test_http_client_omits_top_p_top_k_when_none(fake_chat_server):
-    """Default config leaves top_p/top_k None → keys omitted from wire payload."""
+    """When config top_p/top_k are None, keys are omitted from wire payload."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=False,
+        top_p=None,
+        top_k=None,
+    )
     assert config.top_p is None
     assert config.top_k is None
     client = HttpChatClient(config)
@@ -385,11 +391,38 @@ def test_http_client_omits_top_p_top_k_when_none(fake_chat_server):
     assert "top_k" not in sent
 
 
+def test_product_defaults_send_gemma_card_truncation(fake_chat_server):
+    """Product LlamaServerConfig defaults ship GEMMA_TOP_P / GEMMA_TOP_K on wire."""
+    from elyra.llm.constants import GEMMA_TOP_K, GEMMA_TOP_P
+
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    assert config.top_p == GEMMA_TOP_P
+    assert config.top_k == GEMMA_TOP_K
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["top_p"] == GEMMA_TOP_P
+    assert sent["top_k"] == GEMMA_TOP_K
+    assert sent["temperature"] == 0.6
+
+
 def test_http_client_includes_top_p_top_k_from_kwargs(fake_chat_server):
     """Explicit kwargs override and appear on the wire even when config is None."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=False,
+        top_p=None,
+        top_k=None,
+    )
     client = HttpChatClient(config)
     client.chat_completion(
         [{"role": "user", "content": "hi"}],

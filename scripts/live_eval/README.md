@@ -52,7 +52,8 @@ For each attempt the harness:
 5. Exports moment tape + `messages.jsonl` and fills a scorecard via
    `elyra.llm.reasoning_hygiene` (flood dim only — same module as product).
 
-**Product defaults unchanged** (Stage 0: temp **0.2**, no top_p/top_k).
+**Stage 1 knobs** (scenarios.yaml): card trunc `top_p=0.95`, `top_k=64`;
+temperature ablated via CLI. Product `LlamaServerConfig` ships the same trunc.
 
 ## Run Stage 0 baseline (3 tries × 3 scenarios)
 
@@ -77,6 +78,25 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios \
 python scripts/live_eval/run_stage.py --score-only \
   --export-dir scripts/live_eval/logs/runs/stage-0_S-social_try-1
 ```
+
+## Stage 1 sampling ablation (cost-bounded OFAT)
+
+```bash
+# Phase 1 — freeze card trunc; OFAT temp on S-mono
+for t in 0.2 0.4 0.6; do
+  python scripts/live_eval/run_stage.py --stage 1 --scenario S-mono --tries 3 \
+    --temperature "$t" --cell "t${t}-trunc" --keep-llama
+done
+
+# Phase 2 — confirm winner on S-social + S-tools
+WIN=0.4   # replace after Phase 1
+python scripts/live_eval/run_stage.py --stage 1 \
+  --scenario S-social --scenario S-tools --tries 3 \
+  --temperature "$WIN" --cell "t${WIN}-trunc-confirm" --keep-llama
+```
+
+CLI knob overrides: `--temperature`, `--top-p`, `--top-k`, `--omit-trunc`,
+`--cell` (embedded in attempt_id / scorecard name).
 
 ## Scorecard fields
 

@@ -1,12 +1,14 @@
-# Stage 0 baseline scenarios — fixed prompts (do not edit casually).
-# Product sampling knobs for Stage 0: temp 0.2, no top_p/top_k, no budget.
+# Stage 1 sampling scenarios — fixed prompts (same as Stage 0).
+# Card truncation frozen; temperature ablated via CLI --temperature / --cell.
+# Product path applies knobs via LlamaServerConfig (KD13).
 
-stage: 0
-name: baseline
+stage: 1
+name: sampling
 knobs:
-  temperature: 0.2
-  top_p: null
-  top_k: null
+  # Product ship after Stage 1 ablation (temp 0.6 + Gemma card trunc).
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 64
   reasoning_budget_tokens: null
 
 # Eval caps (written into attempt ELYRA_HOME/elyra.toml by run_stage.py)

@@ -1,11 +1,19 @@
 """LLM server connection settings.
 
 Scope: injectable dataclass for llama-server chat endpoint.
+Product sampling defaults (KD13): temperature + Gemma card truncation live here;
+HttpChatClient falls back when chat_completion kwargs are None.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from elyra.llm.constants import (
+    DEFAULT_CHAT_TEMPERATURE,
+    GEMMA_TOP_K,
+    GEMMA_TOP_P,
+)
 
 
 @dataclass(frozen=True)
@@ -18,10 +26,11 @@ class LlamaServerConfig:
     reasoning_budget: int | None = None
     connect_timeout: float = 10.0
     read_timeout: float = 600.0
-    temperature: float = 0.2
-    # None → omit from chat payload (server default). Product ship later.
-    top_p: float | None = None
-    top_k: int | None = None
+    # Stage 1 product default (live OFAT on S-mono: 0.6 beat 0.2/0.4 + card trunc).
+    temperature: float = DEFAULT_CHAT_TEMPERATURE
+    # Gemma card nucleus / top-k truncation (KD7). None → omit from chat payload.
+    top_p: float | None = GEMMA_TOP_P
+    top_k: int | None = GEMMA_TOP_K
 
     @property
     def chat_url(self) -> str:

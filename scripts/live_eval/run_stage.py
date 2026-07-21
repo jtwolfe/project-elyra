@@ -3,12 +3,14 @@
 
 Scope: fixed scenarios, isolated ELYRA_HOME per attempt, POST message, poll
 close/timeout, export tape/messages, fill scorecard via reasoning_hygiene.
-In scope: Stage 0 baseline orchestration; reuse healthy llama or start one.
-Out of scope: product sampling default changes; do-loop-only non-gating mode
-as stage gate (supported only for debug via --score-only).
+In scope: Stage 0 baseline + Stage 1 sampling ablation; reuse healthy llama
+or start one. Sampling knobs from scenarios.yaml applied to LlamaServerConfig
+(KD13); CLI --temperature/--top-p/--top-k/--cell override for OFAT cells.
 
 Usage:
-  python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
+  python scripts/live_eval/run_stage.py --stage 1 --all-scenarios --tries 3
+  python scripts/live_eval/run_stage.py --stage 1 --scenario S-mono --tries 3 \\
+      --temperature 0.4 --cell t0.4-trunc
   python scripts/live_eval/run_stage.py --stage 0 --scenario S-social --try 1
 """
 
@@ -114,9 +116,9 @@ def load_scenarios(path: Path | None = None) -> StageConfig:
     path = path or (_HERE / "scenarios.yaml")
     text = path.read_text(encoding="utf-8")
     knobs: dict[str, Any] = {
-        "temperature": 0.2,
-        "top_p": None,
-        "top_k": None,
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 64,
         "reasoning_budget_tokens": None,
     }
     caps: dict[str, Any] = {
@@ -832,6 +834,29 @@ def export_attempt(
         (export_dir / "messages.jsonl").write_text("", encoding="utf-8")
 
 
+def client_config_from_stage(
+    base: LlamaServerConfig,
+    stage_cfg: StageConfig,
+) -> LlamaServerConfig:
+    """Apply stage sampling knobs onto a connection-bearing LlamaServerConfig.
+
+    Product path: do-loop never hardcodes sampling; HttpChatClient falls back
+    to these config fields (KD13). Harness overrides are for ablation only.
+    """
+    return LlamaServerConfig(
+        host=base.host,
+        port=base.port,
+        chat_path=base.chat_path,
+        use_reasoning=base.use_reasoning,
+        reasoning_budget=base.reasoning_budget,
+        connect_timeout=base.connect_timeout,
+        read_timeout=base.read_timeout,
+        temperature=float(stage_cfg.temperature),
+        top_p=stage_cfg.top_p,
+        top_k=int(stage_cfg.top_k) if stage_cfg.top_k is not None else None,
+    )
+
+
 def run_attempt(
     scenario: Scenario,
     *,
@@ -840,8 +865,10 @@ def run_attempt(
     tries: int,
     stage_cfg: StageConfig,
     llama: LlamaHandle,
+    cell: str | None = None,
 ) -> AttemptResult:
-    attempt_id = f"stage-{stage}_{scenario.id}_try-{try_n}"
+    cell_part = f"_{cell}" if cell else ""
+    attempt_id = f"stage-{stage}_{scenario.id}{cell_part}_try-{try_n}"
     started_at = _now_iso()
     t0 = time.monotonic()
     export_dir = _HERE / "logs" / "runs" / attempt_id
@@ -858,7 +885,9 @@ def run_attempt(
     moment_id: str | None = None
 
     try:
-        stack = start_product_stack(home, llama.config)
+        # Apply stage knobs (temp / top_p / top_k) to the product client config.
+        client_cfg = client_config_from_stage(llama.config, stage_cfg)
+        stack = start_product_stack(home, client_cfg)
         _LOG.info(
             "[%s] API %s home=%s prompt=%r",
             attempt_id,
@@ -1167,8 +1196,62 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override scenarios.yaml path",
     )
+    p.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Override stage knobs temperature (ablation)",
+    )
+    p.add_argument(
+        "--top-p",
+        type=float,
+        default=None,
+        dest="top_p",
+        help="Override stage knobs top_p (use with care; None omits)",
+    )
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        dest="top_k",
+        help="Override stage knobs top_k",
+    )
+    p.add_argument(
+        "--omit-trunc",
+        action="store_true",
+        help="Force top_p/top_k omit (null) for baseline isolation cells",
+    )
+    p.add_argument(
+        "--cell",
+        type=str,
+        default=None,
+        help="Ablation cell label embedded in attempt_id (e.g. t0.4-trunc)",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
+
+
+def _apply_cli_knob_overrides(stage_cfg: StageConfig, args: argparse.Namespace) -> StageConfig:
+    """Return stage_cfg with CLI sampling overrides applied (immutable replace)."""
+    temp = stage_cfg.temperature if args.temperature is None else float(args.temperature)
+    if args.omit_trunc:
+        top_p: Any = None
+        top_k: Any = None
+    else:
+        top_p = stage_cfg.top_p if args.top_p is None else float(args.top_p)
+        top_k = stage_cfg.top_k if args.top_k is None else int(args.top_k)
+    return StageConfig(
+        stage=stage_cfg.stage,
+        name=stage_cfg.name,
+        temperature=temp,
+        top_p=top_p,
+        top_k=top_k,
+        reasoning_budget_tokens=stage_cfg.reasoning_budget_tokens,
+        max_tool_hops=stage_cfg.max_tool_hops,
+        moment_wall_clock_minutes=stage_cfg.moment_wall_clock_minutes,
+        poll_timeout_seconds=stage_cfg.poll_timeout_seconds,
+        scenarios=stage_cfg.scenarios,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1185,6 +1268,14 @@ def main(argv: list[str] | None = None) -> int:
             args.stage,
             stage_cfg.stage,
         )
+    stage_cfg = _apply_cli_knob_overrides(stage_cfg, args)
+    _LOG.info(
+        "sampling knobs: temp=%s top_p=%s top_k=%s cell=%s",
+        stage_cfg.temperature,
+        stage_cfg.top_p,
+        stage_cfg.top_k,
+        args.cell,
+    )
 
     if args.score_only:
         if not args.export_dir:
@@ -1257,6 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
                     tries=args.tries,
                     stage_cfg=stage_cfg,
                     llama=llama,
+                    cell=args.cell,
                 )
                 write_scorecard(
                     result,
