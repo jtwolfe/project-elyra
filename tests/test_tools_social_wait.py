@@ -237,6 +237,46 @@ def test_wait_user_free_text_empty_choices(ctx: ToolContext) -> None:
     assert result.arm_wait.choices == []
 
 
+def test_wait_user_arm_wait_failed_no_ends_moment(
+    paths, timers: TimerService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TimerService.arm_wait raise → ok=False, no ends_moment, no arm_wait."""
+    def boom(**_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(timers, "arm_wait", boom)
+    ctx = ToolContext(
+        paths=paths,
+        timers=timers,
+        settings=default_settings(),
+        moment_id="m-fail",
+        user_id="operator",
+    )
+    result = wait_user({"prompt": "Still there?"}, ctx)
+    assert result.ok is False
+    assert result.ends_moment is False
+    assert result.arm_wait is None
+    assert result.stop_reason is None
+    assert result.counts_as_speak is False
+    assert result.error_reason == "arm_wait_failed:OSError"
+    assert result.payload["reason"] == "arm_wait_failed:OSError"
+
+
+def test_wait_user_arm_wait_value_error_no_ends_moment(
+    paths, timers: TimerService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(**_kwargs):
+        raise ValueError("expires_at or timeout is required")
+
+    monkeypatch.setattr(timers, "arm_wait", boom)
+    ctx = ToolContext(paths=paths, timers=timers, moment_id="m")
+    result = wait_user({"prompt": "?"}, ctx)
+    assert result.ok is False
+    assert result.ends_moment is False
+    assert result.arm_wait is None
+    assert result.error_reason == "arm_wait_failed:ValueError"
+
+
 # ---------------------------------------------------------------------------
 # schedule_wake
 # ---------------------------------------------------------------------------
@@ -339,6 +379,25 @@ def test_schedule_wake_invalid_delay(ctx: ToolContext) -> None:
         result = schedule_wake({"delay_seconds": bad}, ctx)
         assert result.ok is False, bad
         assert result.error_reason == "invalid_delay_seconds"
+
+
+def test_schedule_wake_invalid_reason(ctx: ToolContext) -> None:
+    result = schedule_wake({"delay_seconds": 5, "reason": 123}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "invalid_reason"
+    assert result.ends_moment is False
+
+
+def test_schedule_wake_invalid_goal_id(ctx: ToolContext) -> None:
+    result = schedule_wake({"delay_seconds": 5, "goal_id": 99}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "invalid_goal_id"
+
+
+def test_schedule_wake_invalid_task_id(ctx: ToolContext) -> None:
+    result = schedule_wake({"delay_seconds": 5, "task_id": ["t"]}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "invalid_task_id"
 
 
 def test_schedule_wake_task_and_goal_ids(ctx: ToolContext, timers: TimerService) -> None:
