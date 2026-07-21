@@ -95,6 +95,20 @@ Requirements: `./model` symlink (or tree) with Gemma GGUF + mmproj + `llama.cpp/
 pytest -m llm tests/test_doloop.py -q
 ```
 
+### Live qualitative stage gates (Stage 0+)
+
+Fixed scenarios + full product path (presence → moment → do-loop → real Gemma).
+See [scripts/live_eval/README.md](scripts/live_eval/README.md) and
+[docs/design-gemma-sampling-hygiene-staged.md](docs/design-gemma-sampling-hygiene-staged.md).
+
+```bash
+# Stage 0 baseline: 3 tries × S-social / S-tools / S-mono (reuses :8080 if healthy)
+python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
+```
+
+Scorecards and Stage Logs land under `scripts/live_eval/logs/` (bulky raw
+exports gitignored). Flood scoring uses `elyra.llm.reasoning_hygiene`.
+
 ### Stretch 1 done-when regression
 
 `tests/test_stretch1_donewhen.py` pins that each freeze **Done when** claim has covering tests and that PR13 create-tool gates remain present. It does not re-run the full suite; it maps claims → modules and asserts gate modules/symbols exist.
