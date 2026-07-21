@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Skill package name (e.g. talk, do-work, create-tool)"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}
