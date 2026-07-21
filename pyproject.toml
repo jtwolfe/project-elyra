@@ -27,5 +27,5 @@ elyra = ["runtime/web/**/*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "llm: tests that call the real llama.cpp/Gemma stack (skip in CI without GPU)",
+    "llm: real llama-server / Gemma model (needs model/ GGUF + GPU; skip in CI without GPU)",
 ]
