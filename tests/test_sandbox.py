@@ -107,6 +107,29 @@ def test_list_read_write_happy(sandbox: Sandbox) -> None:
     assert sandbox.read_text("dir/bar.txt") == "two\n"
 
 
+def test_list_dir_missing_raises_file_not_found(sandbox: Sandbox) -> None:
+    with pytest.raises(FileNotFoundError, match="not found"):
+        sandbox.list_dir("missing_dir")
+
+
+def test_list_dir_file_raises_not_a_directory(sandbox: Sandbox) -> None:
+    sandbox.write_text("onlyfile.txt", "x")
+    with pytest.raises(NotADirectoryError):
+        sandbox.list_dir("onlyfile.txt")
+
+
+def test_read_text_directory_raises_is_a_directory(sandbox: Sandbox) -> None:
+    sandbox.write_text("subdir/f.txt", "x")
+    with pytest.raises(IsADirectoryError):
+        sandbox.read_text("subdir")
+
+
+def test_search_replace_directory_raises_is_a_directory(sandbox: Sandbox) -> None:
+    sandbox.write_text("subdir/f.txt", "x")
+    with pytest.raises(IsADirectoryError):
+        sandbox.search_replace("subdir", "a", "b")
+
+
 def test_write_dotdot_denied(sandbox: Sandbox) -> None:
     with pytest.raises(PathEscapeError):
         sandbox.write_text("../escape.txt", "x")

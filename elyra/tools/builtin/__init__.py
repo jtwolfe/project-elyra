@@ -1,4 +1,4 @@
 """Host builtin tool handlers (entry points referenced by runner.json).
 
-Sample handlers in this package are test-double quality until PR7 FS tools.
+Sandbox FS group: files (read_file, list_dir, grep, search_replace) + run_cmd.run.
 """

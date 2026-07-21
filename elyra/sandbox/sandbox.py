@@ -115,10 +115,14 @@ class Sandbox:
         """Read a text file under the sandbox.
 
         Path-jailed only (see module trust boundary). Uncapped file size in S1.
+        Raises ``IsADirectoryError`` when the path is a directory;
+        ``FileNotFoundError`` when missing or not a regular file.
         """
         path = self.resolve(user_path)
         # Re-check immediately before open (mitigate resolve→use TOCTOU).
         path = resolve(self._root, user_path)
+        if path.is_dir():
+            raise IsADirectoryError(f"is a directory: {user_path!r}")
         if not path.is_file():
             raise FileNotFoundError(f"not a file: {user_path!r}")
         return path.read_text(encoding=encoding)
@@ -148,8 +152,14 @@ class Sandbox:
         return path
 
     def list_dir(self, user_path: str = ".") -> list[str]:
-        """List directory entry names (not recursive). ``.`` is sandbox root."""
+        """List directory entry names (not recursive). ``.`` is sandbox root.
+
+        Raises ``FileNotFoundError`` when the path does not exist;
+        ``NotADirectoryError`` when it exists but is not a directory.
+        """
         path = self.resolve(user_path)
+        if not path.exists():
+            raise FileNotFoundError(f"not found: {user_path!r}")
         if not path.is_dir():
             raise NotADirectoryError(f"not a directory: {user_path!r}")
         return sorted(p.name for p in path.iterdir())
@@ -220,6 +230,8 @@ class Sandbox:
             raise ValueError("old must be non-empty")
         path = self.resolve(user_path)
         path = resolve(self._root, user_path)
+        if path.is_dir():
+            raise IsADirectoryError(f"is a directory: {user_path!r}")
         if not path.is_file():
             raise FileNotFoundError(f"not a file: {user_path!r}")
         original = path.read_text(encoding=encoding)

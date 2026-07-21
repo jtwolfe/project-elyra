@@ -193,14 +193,32 @@ def test_missing_default_bundled_root_message(monkeypatch: pytest.MonkeyPatch) -
 
 def test_execute_returns_tool_result(registry: ToolRegistry, home: Path) -> None:
     paths = resolve_paths(home)
-    ctx = ToolContext(paths=paths)
+    paths.ensure_data_dirs()
+    sandbox = Sandbox(paths)
+    sandbox.write_text("notes.txt", "notes body\n")
+    ctx = ToolContext(paths=paths, sandbox=sandbox)
     result = registry.execute("read_file", {"path": "notes.txt"}, ctx)
     assert isinstance(result, ToolResult)
     assert result.ok is True
     assert result.payload["path"] == "notes.txt"
-    assert result.payload.get("test_double") is True
+    assert result.payload["content"] == "notes body\n"
+    assert "test_double" not in result.payload
     assert result.ends_moment is False
     assert result.counts_as_speak is False
+
+
+def test_execute_without_sandbox_fails(
+    registry: ToolRegistry, home: Path
+) -> None:
+    """PR7: FS tools require ctx.sandbox (no test double)."""
+    paths = resolve_paths(home)
+    result = registry.execute(
+        "read_file",
+        {"path": "notes.txt"},
+        ToolContext(paths=paths),
+    )
+    assert result.ok is False
+    assert result.error_reason == "no_sandbox"
 
 
 def test_execute_with_sandbox(registry: ToolRegistry, home: Path) -> None:
@@ -249,15 +267,19 @@ def test_execute_missing_path_arg(registry: ToolRegistry, home: Path) -> None:
 def test_name_isolation_casefold(home: Path, bundled_root: Path) -> None:
     """Case-normalized lookup: Read_File hits read_file package."""
     paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    sandbox = Sandbox(paths)
+    sandbox.write_text("a", "ok\n")
     reg = ToolRegistry(paths, bundled_root=bundled_root)
     assert reg.has("READ_FILE")
     assert reg.get("Read_File") is not None
     result = reg.execute(
         "READ_FILE",
         {"path": "a"},
-        ToolContext(paths=paths),
+        ToolContext(paths=paths, sandbox=sandbox),
     )
     assert result.ok is True
+    assert result.payload["content"] == "ok\n"
 
 
 # ---------------------------------------------------------------------------

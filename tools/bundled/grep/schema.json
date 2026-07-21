@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "type": "string",
+      "description": "Substring to find, or regex when regex=true"
+    },
+    "path": {
+      "type": "string",
+      "description": "File or directory under the sandbox (default: \".\")"
+    },
+    "regex": {
+      "type": "boolean",
+      "description": "Treat pattern as a regular expression (default: false)"
+    },
+    "max_matches": {
+      "type": "integer",
+      "description": "Maximum number of matches to return (default: 200)",
+      "minimum": 1
+    }
+  },
+  "required": ["pattern"],
+  "additionalProperties": false
+}
