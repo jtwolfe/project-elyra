@@ -139,6 +139,24 @@ def test_read_file_path_escape(ctx: ToolContext) -> None:
     assert result.error_reason == "path_escape"
 
 
+def test_read_file_directory_is_directory(
+    ctx: ToolContext, sandbox: Sandbox
+) -> None:
+    sandbox.write_text("sub/inside.txt", "x")
+    result = files.read_file({"path": "sub"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "is_directory"
+
+
+def test_read_file_decode_error(ctx: ToolContext, sandbox: Sandbox) -> None:
+    """Non-UTF-8 binary content → decode_error (not invalid_path)."""
+    bin_path = sandbox.root / "binary.bin"
+    bin_path.write_bytes(b"\xff\xfe\x00\x01\x80")
+    result = files.read_file({"path": "binary.bin"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "decode_error"
+
+
 def test_read_file_via_registry(
     registry: ToolRegistry, home: Path, sandbox: Sandbox
 ) -> None:
@@ -179,6 +197,13 @@ def test_list_dir_not_a_directory(ctx: ToolContext, sandbox: Sandbox) -> None:
     result = files.list_dir({"path": "file.txt"}, ctx)
     assert result.ok is False
     assert result.error_reason == "not_a_directory"
+
+
+def test_list_dir_missing_not_found(ctx: ToolContext) -> None:
+    """Missing path is not_found (not collapsed into not_a_directory)."""
+    result = files.list_dir({"path": "does_not_exist"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "not_found"
 
 
 def test_list_dir_path_escape(ctx: ToolContext) -> None:
@@ -306,6 +331,18 @@ def test_search_replace_path_escape(ctx: ToolContext) -> None:
     )
     assert result.ok is False
     assert result.error_reason == "path_escape"
+
+
+def test_search_replace_directory_is_directory(
+    ctx: ToolContext, sandbox: Sandbox
+) -> None:
+    sandbox.write_text("d/f.txt", "x")
+    result = files.search_replace(
+        {"path": "d", "old": "a", "new": "b"},
+        ctx,
+    )
+    assert result.ok is False
+    assert result.error_reason == "is_directory"
 
 
 def test_search_replace_via_registry(

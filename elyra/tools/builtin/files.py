@@ -51,6 +51,9 @@ def read_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=False, payload={}, error_reason="not_found")
     except IsADirectoryError:
         return ToolResult(ok=False, payload={}, error_reason="is_directory")
+    except UnicodeDecodeError:
+        # Binary / non-UTF-8 content (ValueError subclass — catch before ValueError).
+        return ToolResult(ok=False, payload={}, error_reason="decode_error")
     except ValueError:
         return ToolResult(ok=False, payload={}, error_reason="invalid_path")
     except OSError as exc:
@@ -212,6 +215,8 @@ def search_replace(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return ToolResult(ok=False, payload={}, error_reason="not_found")
     except IsADirectoryError:
         return ToolResult(ok=False, payload={}, error_reason="is_directory")
+    except UnicodeDecodeError:
+        return ToolResult(ok=False, payload={}, error_reason="decode_error")
     except ValueError as exc:
         msg = str(exc).lower()
         if "non-empty" in msg or "old" in msg:
