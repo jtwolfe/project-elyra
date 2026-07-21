@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "wake_at": {
+      "type": "string",
+      "description": "Absolute ISO UTC fire time (e.g. 2026-01-01T12:00:00Z)"
+    },
+    "delay_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Relative seconds from now (alternative to wake_at)"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Short reason stored on the timer / wake payload"
+    },
+    "goal_id": {
+      "type": "string",
+      "description": "Optional goal id linkage"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Optional task id linkage"
+    }
+  },
+  "additionalProperties": false
+}

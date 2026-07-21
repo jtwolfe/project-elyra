@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from elyra.config import resolve_paths
 from elyra.presence.queue import WakeQueue
 from elyra.presence.timers import (
@@ -345,3 +347,49 @@ def test_orphan_fired_timer_reconciled_on_rehydrate(tmp_path):
     assert again == []
     pending = [p for p in q2.pending() if p.payload.get("timer_id") == t.id]
     assert len(pending) == 1
+
+
+def test_arm_wait_persist_failure_rolls_back_map(tmp_path, monkeypatch):
+    """If waits.json write fails, in-memory map must not keep a ghost wait."""
+    svc, _q = _svc(tmp_path)
+
+    def boom(_path, _rows):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "elyra.presence.timers._write_json_list",
+        boom,
+    )
+    with pytest.raises(OSError, match="disk full"):
+        svc.arm_wait(
+            prompt="ghost?",
+            user_id="operator",
+            moment_id="M",
+            timeout=30.0,
+            wait_id="wait-ghost",
+        )
+    assert svc.get_wait("wait-ghost") is None
+    assert svc.list_waits() == []
+    # No subsequent timeout for the failed arm.
+    assert svc.check_timeouts(now="2099-01-01T00:00:00Z") == []
+
+
+def test_schedule_timer_persist_failure_rolls_back_map(tmp_path, monkeypatch):
+    """If timers.json write fails, in-memory map must not keep a ghost timer."""
+    svc, _q = _svc(tmp_path)
+
+    def boom(_path, _rows):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(
+        "elyra.presence.timers._write_json_list",
+        boom,
+    )
+    with pytest.raises(OSError, match="disk full"):
+        svc.schedule_timer(
+            "2020-01-01T00:00:00Z",
+            reason="ghost",
+            timer_id="timer-ghost",
+        )
+    assert svc.list_timers() == []
+    assert svc.schedule_due(now="2021-01-01T00:00:00Z") == []

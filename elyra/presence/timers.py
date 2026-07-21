@@ -219,6 +219,40 @@ class TimerService:
         rows.sort(key=lambda r: (r.get("expires_at") or "", r.get("id") or ""))
         _write_json_list(self.waits_path, rows)
 
+    def _install_timer(self, timer: PendingTimer) -> None:
+        """Install timer in map and persist; roll back map if persist fails.
+
+        Caller must hold ``self._lock``. Prevents ghost in-memory timers when
+        disk write fails (process would otherwise fire them on check_due).
+        """
+        prev = self._timers.get(timer.id)
+        self._timers[timer.id] = timer
+        try:
+            self._persist_timers()
+        except Exception:
+            if prev is None:
+                self._timers.pop(timer.id, None)
+            else:
+                self._timers[timer.id] = prev
+            raise
+
+    def _install_wait(self, wait: PendingWait) -> None:
+        """Install wait in map and persist; roll back map if persist fails.
+
+        Caller must hold ``self._lock``. Prevents ghost pending waits that
+        could enqueue wait_timeout after a failed arm.
+        """
+        prev = self._waits.get(wait.id)
+        self._waits[wait.id] = wait
+        try:
+            self._persist_waits()
+        except Exception:
+            if prev is None:
+                self._waits.pop(wait.id, None)
+            else:
+                self._waits[wait.id] = prev
+            raise
+
     def _wake_exists(self, wake_id: str | None) -> bool:
         """True if ``wake_id`` is known to the queue (any lifecycle op)."""
         if not wake_id:
@@ -320,8 +354,7 @@ class TimerService:
             status=STATUS_SCHEDULED,
         )
         with self._lock:
-            self._timers[timer.id] = timer
-            self._persist_timers()
+            self._install_timer(timer)
         return timer
 
     def cancel_timer(self, timer_id: str, *, reason: str = "cancelled") -> None:
@@ -332,8 +365,13 @@ class TimerService:
                 raise KeyError(f"unknown timer_id: {timer_id}")
             if timer.status != STATUS_SCHEDULED:
                 return
+            old_status = timer.status
             timer.status = STATUS_CANCELLED
-            self._persist_timers()
+            try:
+                self._persist_timers()
+            except Exception:
+                timer.status = old_status
+                raise
 
     def list_timers(self, *, status: str | None = STATUS_SCHEDULED) -> list[PendingTimer]:
         with self._lock:
@@ -373,9 +411,16 @@ class TimerService:
                 wake_id = str(uuid.uuid4())
                 # Mark + persist first — restart must not re-fire this timer.
                 # If crash before enqueue, rehydrate reconciles via wake_id.
+                old_status = timer.status
+                old_wake_id = timer.wake_id
                 timer.status = STATUS_FIRED
                 timer.wake_id = wake_id
-                self._persist_timers()
+                try:
+                    self._persist_timers()
+                except Exception:
+                    timer.status = old_status
+                    timer.wake_id = old_wake_id
+                    raise
 
                 item = self._queue.enqueue(
                     "timer",
@@ -437,8 +482,7 @@ class TimerService:
             status=STATUS_PENDING,
         )
         with self._lock:
-            self._waits[wait.id] = wait
-            self._persist_waits()
+            self._install_wait(wait)
         return wait
 
     def get_wait(self, wait_id: str) -> PendingWait | None:
@@ -460,8 +504,13 @@ class TimerService:
                 raise KeyError(f"unknown wait_id: {wait_id}")
             if wait.status != STATUS_PENDING:
                 return wait
+            old_status = wait.status
             wait.status = STATUS_ANSWERED
-            self._persist_waits()
+            try:
+                self._persist_waits()
+            except Exception:
+                wait.status = old_status
+                raise
             return wait
 
     def cancel_wait(self, wait_id: str) -> PendingWait:
@@ -471,8 +520,13 @@ class TimerService:
                 raise KeyError(f"unknown wait_id: {wait_id}")
             if wait.status != STATUS_PENDING:
                 return wait
+            old_status = wait.status
             wait.status = STATUS_CANCELLED
-            self._persist_waits()
+            try:
+                self._persist_waits()
+            except Exception:
+                wait.status = old_status
+                raise
             return wait
 
     def check_timeouts(
@@ -506,9 +560,16 @@ class TimerService:
                 wake_id = str(uuid.uuid4())
                 # Mark + persist first — restart must not re-fire this wait.
                 # If crash before enqueue, rehydrate reconciles via wake_id.
+                old_status = wait.status
+                old_wake_id = wait.wake_id
                 wait.status = STATUS_TIMED_OUT
                 wait.wake_id = wake_id
-                self._persist_waits()
+                try:
+                    self._persist_waits()
+                except Exception:
+                    wait.status = old_status
+                    wait.wake_id = old_wake_id
+                    raise
 
                 item = self._queue.enqueue(
                     "wait_timeout",
