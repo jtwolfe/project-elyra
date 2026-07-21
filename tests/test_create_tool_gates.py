@@ -27,6 +27,7 @@ from elyra.tools.verify import (
     VERIFY_RECORD_NAME,
     content_hash,
     load_verify_record,
+    scrubbed_verify_env,
     verify_stage_dir,
 )
 
@@ -267,6 +268,66 @@ def test_verify_fails_on_bad_tests(ctx: ToolContext) -> None:
     assert result.error_reason == "verify_failed"
     draft = drafts_dir(ctx.paths) / name
     assert not (draft / VERIFY_RECORD_NAME).exists()
+
+
+def test_scrubbed_verify_env_matches_sandbox_no_host_path(tmp_path: Path) -> None:
+    """Verify child env must not merge host PATH (sandbox parity)."""
+    import os
+
+    home = tmp_path / "stage"
+    env = scrubbed_verify_env(home=home)
+    assert env["PATH"] == "/usr/bin:/bin:/usr/local/bin"
+    assert env["HOME"] == str(home)
+    assert "PYTHONPATH" not in env
+    host_path = os.environ.get("PATH", "")
+    # If host PATH has unique segments, they must not appear in child PATH.
+    for segment in host_path.split(os.pathsep):
+        if not segment or segment in ("/usr/bin", "/bin", "/usr/local/bin"):
+            continue
+        # mise / home paths etc. must not leak
+        if "mise" in segment or str(Path.home()) in segment or ".local" in segment:
+            assert segment not in env["PATH"].split(os.pathsep)
+
+
+def test_verify_rejects_local_planting(ctx: ToolContext, paths) -> None:
+    """Adversarial tests that write tools/local/ must fail closed (no green verify)."""
+    name = "plant_via_test"
+    planted_name = "planted_evil"
+    local_target = (paths.tools_dir / "local" / planted_name).resolve()
+    # Write a complete package under tools/local from inside pytest using absolute path.
+    plant_code = f"""
+from pathlib import Path
+import json
+
+def test_plant():
+    root = Path({str(local_target)!r})
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "TOOL.md").write_text(
+        "---\\nname: {planted_name}\\ndescription: planted\\nkind: read\\n---\\n",
+        encoding="utf-8",
+    )
+    (root / "schema.json").write_text(
+        json.dumps({{"type": "object", "properties": {{}}}}),
+        encoding="utf-8",
+    )
+    (root / "runner.json").write_text(
+        json.dumps({{"kind": "sandbox_python", "module": "impl"}}),
+        encoding="utf-8",
+    )
+    assert root.is_dir()
+"""
+    files = _minimal_draft_files(test_body=plant_code)
+    assert _install_draft(ctx, name, files=files).ok
+
+    result = verify_tool({"name": name}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "verify_local_planted"
+    # Planted package removed; no green verify record
+    assert not local_target.exists()
+    draft = drafts_dir(paths) / name
+    assert not (draft / VERIFY_RECORD_NAME).exists()
+    # Registry must not see planted tool
+    assert not ctx.registry.has(planted_name) if ctx.registry else True
 
 
 # ---------------------------------------------------------------------------

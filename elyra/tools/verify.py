@@ -2,7 +2,24 @@
 
 Scope: stage drafts under data/sandbox/.verify/, run allowlisted pytest,
 write .verify.json only on pass with content_hash of draft tree.
-Out of scope: promote, install_tool_draft writes, registry scan.
+Out of scope: promote, install_tool_draft writes, registry scan,
+container/namespace isolation for the verify child (S1 process-level only).
+
+Trust boundary (S1)
+-------------------
+Verify runs package tests as a host subprocess with process-level isolation
+only: ``shell=False``, scrubbed env matching ``Sandbox.run`` (no host PATH
+merge, no secret inherit), ``cwd`` = staged package under
+``data/sandbox/.verify/<name>/``. The child is **not** a chroot/container;
+it can open absolute host paths and use the network (same residual as
+sandbox ``run``).
+
+Fail-closed mitigations in S1:
+  - Host PATH is never merged into the child env.
+  - After pytest, any **new** packages under ``tools/local/`` planted during
+    the run are removed and the verify fails (blocks the known
+    “pass tests by writing tools/local” promote-bypass).
+  - Full FS/network isolation is out of scope until stronger sandbox hardening.
 """
 
 from __future__ import annotations
@@ -31,7 +48,7 @@ DEFAULT_VERIFY_TIMEOUT_SECONDS = 120
 # Retained log tail written into .verify.json / returned to the model.
 _LOG_TAIL_CHARS = 8000
 
-# Minimal env for verify child (same spirit as sandbox.run scrubbing).
+# Match elyra.sandbox.sandbox._MINIMAL_PATH — never merge host PATH.
 _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
 
 
@@ -141,23 +158,60 @@ def validate_draft_package(package_dir: Path) -> str | None:
     return None
 
 
-def _scrubbed_verify_env() -> dict[str, str]:
-    """Minimal child env: PATH includes host python dir; no host secret inherit."""
-    path_parts = [_MINIMAL_PATH]
-    exe_dir = str(Path(sys.executable).resolve().parent)
-    if exe_dir not in path_parts[0]:
-        path_parts.insert(0, exe_dir)
-    # Keep existing PATH entries that help find system tools, but do not pull secrets.
-    host_path = os.environ.get("PATH", "")
-    if host_path:
-        path_parts.append(host_path)
+def scrubbed_verify_env(*, home: Path | str) -> dict[str, str]:
+    """Minimal child env matching ``Sandbox.run`` scrubbing.
+
+    Host env is **never** merged (no host PATH append). ``sys.executable`` is
+    absolute in argv, so the interpreter parent need not be on PATH.
+    PYTHONPATH and other loader keys are left unset (not inherited).
+    """
     return {
-        "PATH": os.pathsep.join(path_parts),
-        "HOME": "",  # filled by caller with stage root if desired
+        "PATH": _MINIMAL_PATH,
+        "HOME": str(home),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
         "TERM": "dumb",
     }
+
+
+# Backward-compatible private alias
+_scrubbed_verify_env = scrubbed_verify_env
+
+
+def local_tool_package_names(paths: ElyraPaths) -> frozenset[str]:
+    """Directory basenames under ``tools/local/`` (non-dot dirs only)."""
+    local_root = (paths.tools_dir / "local").resolve()
+    if not local_root.is_dir():
+        return frozenset()
+    names: set[str] = set()
+    try:
+        for child in local_root.iterdir():
+            if child.is_dir() and not child.name.startswith("."):
+                names.add(child.name)
+    except OSError:
+        return frozenset()
+    return frozenset(names)
+
+
+def remove_planted_local_packages(
+    paths: ElyraPaths, planted: frozenset[str]
+) -> list[str]:
+    """Best-effort remove newly planted ``tools/local/<name>/`` dirs. Returns removed."""
+    removed: list[str] = []
+    local_root = (paths.tools_dir / "local").resolve()
+    for name in sorted(planted):
+        if not is_valid_tool_name(name):
+            continue
+        target = (local_root / name).resolve()
+        try:
+            if not target.is_relative_to(local_root):
+                continue
+            if target.is_dir():
+                shutil.rmtree(target)
+                removed.append(name)
+        except OSError as exc:
+            _LOG.warning("failed to remove planted local package %s: %s", name, exc)
+    return removed
 
 
 def stage_draft_for_verify(paths: ElyraPaths, name: str, draft_dir: Path) -> Path:
@@ -185,7 +239,9 @@ def run_staged_pytest(
     """Run allowlisted pytest on staged package. Returns (rc, combined_log, timed_out).
 
     argv is fixed: ``[sys.executable, -m, pytest, tests/, -q, --tb=short]``.
-    ``shell=False``; cwd = staged root. Never runs against repo tests/.
+    ``shell=False``; cwd = staged root; env scrubbed like sandbox (no host PATH).
+    Never runs against repo tests/. Process-level isolation only (see module
+    trust boundary).
     """
     argv = [
         sys.executable,
@@ -197,8 +253,7 @@ def run_staged_pytest(
         "-p",
         "no:cacheprovider",
     ]
-    env = _scrubbed_verify_env()
-    env["HOME"] = str(stage_dir)
+    env = scrubbed_verify_env(home=stage_dir)
     try:
         completed = subprocess.run(
             argv,
@@ -296,10 +351,35 @@ def verify_draft_tool(
             "passed": False,
         }
 
+    # Snapshot tools/local before pytest so planted packages fail closed.
+    local_before = local_tool_package_names(paths)
+
     rc, log, timed_out = run_staged_pytest(stage, timeout_seconds=timeout)
-    passed = rc == 0 and not timed_out
     tree_hash = content_hash(draft_dir)
 
+    local_after = local_tool_package_names(paths)
+    planted = frozenset(local_after - local_before)
+    if planted:
+        removed = remove_planted_local_packages(paths, planted)
+        _LOG.warning(
+            "verify %s: tests planted tools/local packages %s (removed=%s)",
+            name,
+            sorted(planted),
+            removed,
+        )
+        return {
+            "ok": False,
+            "error_reason": "verify_local_planted",
+            "passed": False,
+            "content_hash": tree_hash,
+            "log": log,
+            "returncode": rc,
+            "stage_dir": str(stage),
+            "planted": sorted(planted),
+            "planted_removed": removed,
+        }
+
+    passed = rc == 0 and not timed_out
     if not passed:
         reason = "verify_timeout" if timed_out else "verify_failed"
         return {
@@ -337,6 +417,9 @@ __all__ = [
     "delete_verify_record",
     "draft_package_dir",
     "load_verify_record",
+    "local_tool_package_names",
+    "remove_planted_local_packages",
+    "scrubbed_verify_env",
     "stage_draft_for_verify",
     "validate_draft_package",
     "verify_draft_tool",
