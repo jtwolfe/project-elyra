@@ -367,6 +367,88 @@ def test_http_client_omits_tools_keys_when_none(fake_chat_server):
     assert result.reasoning_content == "thinking"
 
 
+def test_http_client_omits_top_p_top_k_when_none(fake_chat_server):
+    """Default config leaves top_p/top_k None → keys omitted from wire payload."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    assert config.top_p is None
+    assert config.top_k is None
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert "top_p" not in sent
+    assert "top_k" not in sent
+
+
+def test_http_client_includes_top_p_top_k_from_kwargs(fake_chat_server):
+    """Explicit kwargs override and appear on the wire even when config is None."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+        top_p=0.95,
+        top_k=64,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["top_p"] == 0.95
+    assert sent["top_k"] == 64
+
+
+def test_http_client_falls_back_to_config_top_p_top_k(fake_chat_server):
+    """When kwargs are None, config values are sent on the wire."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=False,
+        top_p=0.9,
+        top_k=40,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["top_p"] == 0.9
+    assert sent["top_k"] == 40
+
+
+def test_http_client_kwarg_overrides_config_top_p_top_k(fake_chat_server):
+    """Explicit kwargs win over config defaults."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=False,
+        top_p=0.9,
+        top_k=40,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+        top_p=0.5,
+        top_k=16,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["top_p"] == 0.5
+    assert sent["top_k"] == 16
+
+
 def test_gated_client_forwards_tools_kwargs():
     captured: dict[str, Any] = {}
 
@@ -376,11 +458,15 @@ def test_gated_client_forwards_tools_kwargs():
         max_tokens: int = 4096,
         reasoning: bool = True,
         temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
         captured["tools"] = tools
         captured["tool_choice"] = tool_choice
+        captured["top_p"] = top_p
+        captured["top_k"] = top_k
         return ChatCompletionResult(content="ok", reasoning_content="", raw_json="{}")
 
     class _Inner:
@@ -393,9 +479,13 @@ def test_gated_client_forwards_tools_kwargs():
         [{"role": "user", "content": "x"}],
         tools=tools,
         tool_choice="auto",
+        top_p=0.95,
+        top_k=64,
     )
     assert captured["tools"] == tools
     assert captured["tool_choice"] == "auto"
+    assert captured["top_p"] == 0.95
+    assert captured["top_k"] == 64
 
 
 # ---------------------------------------------------------------------------
