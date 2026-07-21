@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "elyra"
+version = "0.1.0"
+description = "Elyra — communal assistant (Stretch 1 harness)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+elyra = "elyra.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["elyra*"]
+
+[tool.setuptools.package-data]
+elyra = ["runtime/web/**/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

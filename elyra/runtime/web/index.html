@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Elyra</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail">
+        <div class="brand">
+          <div class="orb" aria-hidden="true"></div>
+          <div>
+            <div class="brand-name">Elyra</div>
+            <div class="brand-sub">Stretch 1 glass</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <button type="button" class="nav-btn active" data-panel="chat">Chat</button>
+          <button type="button" class="nav-btn" data-panel="status">Status</button>
+        </nav>
+        <div class="rail-foot">
+          <div id="pill-llama" class="pill pill-off">llama</div>
+          <div id="pill-worker" class="pill pill-off">worker</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section id="panel-chat" class="panel active">
+          <header class="panel-head">
+            <h1>Chat</h1>
+            <p class="muted">Messages enqueue a presence wake → simple do-loop (LLM reply).</p>
+          </header>
+          <div id="messages" class="messages" aria-live="polite"></div>
+          <form id="chat-form" class="composer">
+            <textarea
+              id="chat-input"
+              rows="2"
+              placeholder="Message Elyra…"
+              autocomplete="off"
+            ></textarea>
+            <button type="submit" id="send-btn">Send</button>
+          </form>
+        </section>
+
+        <section id="panel-status" class="panel">
+          <header class="panel-head">
+            <h1>Status</h1>
+            <p class="muted">Runtime snapshot from <code>/api/status</code>.</p>
+          </header>
+          <pre id="status-json" class="code-block">loading…</pre>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
