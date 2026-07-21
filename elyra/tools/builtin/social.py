@@ -25,18 +25,12 @@ def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     Transport failure → ``ok=False``, reason in payload (and error_reason).
     """
     raw_text = args.get("text")
+    if raw_text is None and "text" not in args:
+        # Key absent — fail closed without writing glass.
+        return _text_error("missing_text", args, ctx)
     if not isinstance(raw_text, str):
-        # Missing or wrong type — fail closed without writing glass.
-        return ToolResult(
-            ok=False,
-            payload={
-                "transport_ok": False,
-                "reason": "missing_text",
-                "user_id": _resolve_user_id(args, ctx),
-            },
-            error_reason="missing_text",
-            counts_as_speak=False,
-        )
+        # Key present but not a string (incl. explicit null) — invalid_text.
+        return _text_error("invalid_text", args, ctx)
 
     transport = _resolve_transport(ctx)
     user_id = _resolve_user_id(args, ctx)
@@ -59,6 +53,21 @@ def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     return ToolResult(
         ok=False,
         payload=delivery.as_payload(),
+        error_reason=reason,
+        counts_as_speak=False,
+    )
+
+
+def _text_error(
+    reason: str, args: dict[str, Any], ctx: ToolContext
+) -> ToolResult:
+    return ToolResult(
+        ok=False,
+        payload={
+            "transport_ok": False,
+            "reason": reason,
+            "user_id": _resolve_user_id(args, ctx),
+        },
         error_reason=reason,
         counts_as_speak=False,
     )

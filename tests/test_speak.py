@@ -114,6 +114,17 @@ def test_deliver_append_failure_returns_reason(paths) -> None:
     assert _assistant_rows(paths) == []
 
 
+def test_deliver_append_returns_none_does_not_raise(paths) -> None:
+    """Contract: never raise when inject/double returns non-Message."""
+    transport = SpeakTransport(paths, append=lambda *_a, **_k: None)
+    result = transport.deliver("will not land")
+    assert result.ok is False
+    assert result.reason == "append_failed:invalid_return"
+    assert result.message_id is None
+    assert result.as_payload()["transport_ok"] is False
+    assert _assistant_rows(paths) == []
+
+
 def test_deliver_defaults_blank_user_id_to_operator(
     transport: SpeakTransport, paths
 ) -> None:
@@ -183,6 +194,17 @@ def test_speak_missing_text(ctx: ToolContext, paths) -> None:
     assert result.counts_as_speak is False
     assert result.error_reason == "missing_text"
     assert result.payload["reason"] == "missing_text"
+    assert _assistant_rows(paths) == []
+
+
+def test_speak_non_string_text_is_invalid_text(ctx: ToolContext, paths) -> None:
+    """Present but wrong type → invalid_text (not missing_text)."""
+    for bad in (42, True, ["x"], {"t": "x"}, None):
+        result = speak_handler({"text": bad}, ctx)
+        assert result.ok is False
+        assert result.counts_as_speak is False
+        assert result.error_reason == "invalid_text"
+        assert result.payload["reason"] == "invalid_text"
     assert _assistant_rows(paths) == []
 
 

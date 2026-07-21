@@ -109,13 +109,31 @@ class SpeakTransport:
             )
 
         try:
-            msg: Message = self._append(
+            msg = self._append(
                 "assistant",
                 text,
                 user_id=uid,
                 reasoning=reasoning or "",
                 moment_id=moment_id,
                 paths=self._paths,
+            )
+            # Bad doubles / adapters may return non-Message without raising —
+            # keep attribute access inside the fault boundary (never raise).
+            if not isinstance(msg, Message):
+                return SpeakDelivery(
+                    ok=False,
+                    text=text,
+                    user_id=uid,
+                    moment_id=moment_id,
+                    reason="append_failed:invalid_return",
+                )
+            return SpeakDelivery(
+                ok=True,
+                text=text,
+                user_id=uid,
+                message_id=msg.id,
+                moment_id=moment_id or msg.moment_id,
+                reason=None,
             )
         except Exception as exc:  # noqa: BLE001 — transport failure → structured result
             return SpeakDelivery(
@@ -125,15 +143,6 @@ class SpeakTransport:
                 moment_id=moment_id,
                 reason=f"append_failed:{type(exc).__name__}",
             )
-
-        return SpeakDelivery(
-            ok=True,
-            text=text,
-            user_id=uid,
-            message_id=msg.id,
-            moment_id=moment_id or msg.moment_id,
-            reason=None,
-        )
 
 
 def _normalize_user_id(user_id: str | None) -> str:
