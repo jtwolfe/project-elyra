@@ -1,6 +1,6 @@
 # Stretch 1 — runtime contract
 
-**Status:** Build freeze. Implementers start here.  
+**Status:** **Shipped.** Build freeze still law for behaviour; implementers use this as the runtime contract.  
 **Supersedes** archive notes and older wording on hop caps, pre-stage skills, or fused wake/goals.
 
 Continuously present **single worker**: wake queue → moments (do-loops) → tools/skills → speak/wait.  
@@ -174,14 +174,16 @@ Formats: [tools-and-skills.md](tools-and-skills.md).
 
 ## Done when (Stretch 1)
 
-- [ ] Presence + wake queue + single worker do-loops  
-- [ ] Moments/beats persist; restart-safe  
-- [ ] Base tools + sandbox; speak with transport feedback  
-- [ ] Wait + multi-choice + timeout path  
-- [ ] Skills loadable mid-loop; base skills present  
-- [ ] Goals/tasks + review-before-close bias  
-- [ ] create-tool / create-skill fail-closed  
-- [ ] llama.cpp Gemma path works; context policy documented  
-- [ ] Interjections mid-moment  
+All items below are **done**. Regression mapping: `tests/test_stretch1_donewhen.py` and the README testing section.
+
+- [x] Presence + wake queue + single worker do-loops  
+- [x] Moments/beats persist; restart-safe  
+- [x] Base tools + sandbox; speak with transport feedback  
+- [x] Wait + multi-choice + timeout path  
+- [x] Skills loadable mid-loop; base skills present  
+- [x] Goals/tasks + review-before-close bias  
+- [x] create-tool / create-skill fail-closed (**requires PR13 gates** — `tests/test_create_tool_gates.py`; not “hardening later”)  
+- [x] llama.cpp Gemma path works; context policy documented (`-c` ceiling vs sliding ~24k)  
+- [x] Interjections mid-moment  
 
 Not required: Stretch 2 memory, Lance graph, multi-sandbox, subagents.

@@ -112,8 +112,8 @@ The `create-tool` skill body should be a strict checklist matching the above so 
 | Ledger | `update_task`, `update_goal` |
 | Social | `speak`, wait/questions, `schedule_wake` |
 | Skills | `load_skill` (or host equivalent) |
-| Growth | `verify_tool`, `promote_tool` |
-| Optional late S1 | `search_tools`, `use_tool` |
+| Growth | `install_tool_draft`, `verify_tool`, `promote_tool`, `install_skill` |
+| Optional later | `search_tools`, `use_tool` |
 
 `speak` failure → tool result with reason.  
 `run` = **sandbox only**, not host shell.
