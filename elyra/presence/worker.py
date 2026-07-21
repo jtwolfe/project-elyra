@@ -217,7 +217,13 @@ class PresenceWorker:
     ) -> dict[str, Any]:
         """Buffer an interjection when ``phase == in_moment``.
 
-        On buffer full: enqueue as ``user_message`` wake for after close.
+        On buffer full: still an interject decision — return
+        ``routed=interject``, ``ok=false``, ``reason=interjection_buffer_full``,
+        and enqueue a durable ``user_message`` wake (do not drop). Clients should
+        key glass notices off ``ok`` + ``reason`` (and optional ``wake_id``);
+        ``routed`` stays ``interject`` so UI that branches on route does not
+        treat overflow as a fresh idle chat.
+
         When not in a moment: enqueue as ``user_message`` instead.
         """
         text = content if isinstance(content, str) else str(content)
@@ -243,7 +249,7 @@ class PresenceWorker:
             ok, reason = self._interject.try_add(item)
             if ok:
                 return {"ok": True, "routed": ROUTE_INTERJECT}
-            # Overflow → durable wake (do not drop).
+            # Overflow → durable wake (do not drop); keep routed=interject.
             wake_id = self._queue.enqueue(
                 "user_message",
                 {
@@ -255,7 +261,7 @@ class PresenceWorker:
             ).id
             return {
                 "ok": False,
-                "routed": ROUTE_USER_MESSAGE,
+                "routed": ROUTE_INTERJECT,
                 "reason": reason or REASON_BUFFER_FULL,
                 "wake_id": wake_id,
             }

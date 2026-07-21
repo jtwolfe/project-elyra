@@ -25,7 +25,7 @@ from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence.interject import INTERJECT_MAX_MESSAGES, REASON_BUFFER_FULL
 from elyra.presence.queue import WakeQueue
-from elyra.presence.timers import TimerService
+from elyra.presence.timers import STATUS_CANCELLED, STATUS_PENDING, TimerService
 from elyra.presence.user_input import (
     PHASE_IDLE,
     PHASE_IN_MOMENT,
@@ -338,9 +338,11 @@ def test_interject_buffer_full_returns_notice(paths):
             assert body["routed"] == ROUTE_INTERJECT
 
         code, overflow = h.post("/api/messages", {"content": "overflow-me"})
-        # 200 so glass can show notice; ok=false + reason + wake_id
+        # 200 so glass can show notice; ok=false + reason + wake_id.
+        # routed stays interject (decision path); clients key notice off ok/reason.
         assert code == 200
         assert overflow["ok"] is False
+        assert overflow["routed"] == ROUTE_INTERJECT
         assert overflow["reason"] == REASON_BUFFER_FULL
         assert overflow.get("wake_id")
     finally:
@@ -498,7 +500,10 @@ def test_wait_api_while_idle_with_pending_wait(paths):
 
 
 def test_idle_cancels_stale_wait_on_new_message(paths):
-    """POST /api/messages while idle with a pending wait for user → user_message + cancel."""
+    """POST /api/messages while idle with a pending wait for user → user_message + cancel.
+
+    Asserts both the response flag and durable wait status (not pending).
+    """
     queue = WakeQueue(paths)
     timers = TimerService(paths, queue)
     timers.arm_wait(
@@ -509,19 +514,14 @@ def test_idle_cancels_stale_wait_on_new_message(paths):
         timeout=600.0,
     )
 
-    # Use a worker that does not auto-start reclaiming immediately with a long poll;
-    # still start it — resolve will cancel before claim races.
     h = _ApiHarness(paths)
     try:
-        # Force phase idle with a pending wait still on disk (cancel without answer path).
-        # If rehydrate set waiting, free-text would be wait_reply — so force idle by
-        # cancelling via host path then re-arm? Design: idle + pending → cancel_stale.
-        # Rehydrate sets waiting when pending exists. To hit idle+stale we cancel
-        # the wait in timers after worker start then re-arm without updating phase.
+        # Rehydrate sets phase=waiting when a pending wait exists. Force idle so
+        # free-text hits cancel_stale (not wait_reply) while the durable wait remains.
         with h.worker._lock:  # noqa: SLF001
             h.worker._phase = PHASE_IDLE  # noqa: SLF001
-            # Ensure a pending wait exists for operator
-            if not h.worker._timers.list_waits(status="pending"):  # noqa: SLF001
+            pending = h.worker._timers.list_waits(status=STATUS_PENDING)  # noqa: SLF001
+            if not pending:
                 h.worker._timers.arm_wait(  # noqa: SLF001
                     wait_id="stale-w2",
                     prompt="old",
@@ -529,6 +529,13 @@ def test_idle_cancels_stale_wait_on_new_message(paths):
                     moment_id="m0",
                     timeout=600.0,
                 )
+                pending = h.worker._timers.list_waits(status=STATUS_PENDING)  # noqa: SLF001
+            assert pending, "expected a durable pending wait before cancel"
+            wait_id = pending[0].id
+
+        pre = h.worker._timers.get_wait(wait_id)  # noqa: SLF001
+        assert pre is not None
+        assert pre.status == STATUS_PENDING
 
         code, body = h.post(
             "/api/messages",
@@ -537,6 +544,17 @@ def test_idle_cancels_stale_wait_on_new_message(paths):
         assert code == 200
         assert body["routed"] == ROUTE_USER_MESSAGE
         assert body.get("cancel_stale_wait") is True
+
+        # Durable side effect: wait left pending and will not time out as pending.
+        post = h.worker._timers.get_wait(wait_id)  # noqa: SLF001
+        assert post is not None
+        assert post.status == STATUS_CANCELLED
+        assert h.worker._timers.list_waits(status=STATUS_PENDING) == []  # noqa: SLF001
+        assert h.worker.pending_wait is None
+
+        code, st = h.get("/api/status")
+        assert code == 200
+        assert st["pending_wait"] is None
     finally:
         h.close()
 

@@ -133,7 +133,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         """POST /api/messages — glass chat → resolve_user_input (from_wait_api=False).
 
         Routing matrix (worker phase + pending wait):
-        - in_moment → interject buffer (overflow → wake + reason)
+        - in_moment → interject buffer
+        - in_moment + buffer full → still ``routed=interject``, ``ok=false``,
+          ``reason=interjection_buffer_full``, ``wake_id`` set (overflow wake;
+          HTTP 200 for glass notice — do not key only on ``routed``)
         - waiting (+ matching wait) → wait_reply
         - idle → user_message (cancel stale wait for user when present)
         """
