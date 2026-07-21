@@ -7,24 +7,24 @@ Out of scope: patch_user, cross-user inject, fused self+user files.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from elyra.config import ElyraPaths
+
+# Single segment: letter/digit start; alnum, dot, underscore, hyphen after.
+_USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _validate_user_id(user_id: str) -> str:
     """Return ``user_id`` if it is a single safe path segment.
 
-    Raises ValueError when empty, absolute, or containing separators / ``.`` / ``..``.
+    Requires ``^[A-Za-z0-9][A-Za-z0-9._-]*$`` so blank/whitespace, control
+    chars (including NUL), separators, and ``.`` / ``..`` are rejected.
     """
-    if not isinstance(user_id, str) or not user_id:
+    if not isinstance(user_id, str) or not _USER_ID_RE.fullmatch(user_id):
         raise ValueError(f"invalid user_id: {user_id!r}")
-    if user_id in (".", ".."):
-        raise ValueError(f"invalid user_id: {user_id!r}")
-    if any(sep in user_id for sep in ("/", "\\")):
-        raise ValueError(f"invalid user_id: {user_id!r}")
-    if user_id.startswith("~"):
-        raise ValueError(f"invalid user_id: {user_id!r}")
+    # Defense in depth: path parts must still be exactly one segment.
     path = Path(user_id)
     if path.is_absolute() or len(path.parts) != 1:
         raise ValueError(f"invalid user_id: {user_id!r}")

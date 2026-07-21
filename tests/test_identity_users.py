@@ -49,7 +49,24 @@ def test_users_custom_profile_read(tmp_path):
 
 @pytest.mark.parametrize(
     "bad_id",
-    ["..", ".", "", "../x", "a/b", "a\\b", "/etc", "~root"],
+    [
+        "..",
+        ".",
+        "",
+        " ",
+        "\t",
+        "\n",
+        "op\x00er",
+        "a b",
+        "../x",
+        "a/b",
+        "a\\b",
+        "/etc",
+        "~root",
+        "-leading-hyphen",
+        ".dotstart",
+        "_understart",
+    ],
 )
 def test_users_profile_rejects_path_escape(tmp_path, bad_id):
     paths = resolve_paths(tmp_path)
@@ -61,3 +78,12 @@ def test_users_profile_rejects_path_escape(tmp_path, bad_id):
         store.profile(bad_id)
     with pytest.raises(ValueError, match="invalid user_id"):
         store.profile_path(bad_id)
+
+
+@pytest.mark.parametrize("good_id", ["operator", "alice", "u1", "A_B-2.3"])
+def test_users_profile_accepts_conservative_ids(tmp_path, good_id):
+    paths = resolve_paths(tmp_path)
+    store = UsersStore(paths)
+    # path builds without error; missing file still returns ""
+    assert store.profile(good_id) == ""
+    assert store.profile_path(good_id).name == "profile.md"
