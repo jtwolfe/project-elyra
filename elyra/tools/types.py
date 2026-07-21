@@ -2,7 +2,7 @@
 
 Scope: ToolCall, ToolResult, WaitArm, ToolContext shapes.
 In scope: frozen result flags (ends_moment, counts_as_speak), minimal ctx.
-Out of scope: do-loop orchestration, promote/verify, speak transport.
+Out of scope: do-loop orchestration, promote/verify.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from elyra.config import ElyraPaths
     from elyra.sandbox import Sandbox
     from elyra.settings import Settings
+    from elyra.speak import SpeakTransport
     from elyra.tools.registry import ToolRegistry
 
 
@@ -59,7 +60,7 @@ class ToolResult:
 class ToolContext:
     """Per-invocation host context for tool handlers.
 
-    Full ports (goals, skills, speak, enqueue) land as later packages attach;
+    Full ports (goals, skills, enqueue) land as later packages attach;
     handlers that need them read from attributes when present.
     """
 
@@ -69,11 +70,13 @@ class ToolContext:
     moment_id: str = ""
     user_id: str | None = None
     registry: ToolRegistry | None = None
+    # Glass delivery — speak builtin uses this; loop injects shared instance.
+    speak: SpeakTransport | None = None
     # Mutable bags / ports filled by presence/do-loop wiring (later PRs):
     skills_used: list[str] = field(default_factory=list)
     mark_spoke: Callable[[], None] | None = None
     mark_task_changed: Callable[[], None] | None = None
     enqueue_wake: Callable[..., str] | None = None
     cancel_wait: Callable[[str], None] | None = None
-    # Extension bag for ports not yet typed (goals, skills, speak, …)
+    # Extension bag for ports not yet typed (goals, skills, …)
     extras: dict[str, Any] = field(default_factory=dict)
