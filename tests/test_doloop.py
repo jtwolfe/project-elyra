@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from elyra.config import resolve_paths
 from elyra.llm.client import HttpChatClient, StubChatClient
 from elyra.llm.config import LlamaServerConfig
 from elyra.llm.server import build_server_command, validate_model_paths
+from elyra.loop.context import assemble_outer_meal
 from elyra.loop.doloop import (
     NO_SPEAK_NUDGE,
     DoLoopResult,
@@ -33,6 +35,7 @@ from elyra.loop.doloop import (
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence import TimerService, WakeQueue
+from elyra.prompts.loader import load_prompt
 from elyra.sandbox import Sandbox
 from elyra.settings import Settings, default_settings
 from elyra.speak import SpeakTransport
@@ -522,57 +525,160 @@ def test_enforce_in_turn_budget_reouter_when_still_over() -> None:
     assert tool_msgs[0]["content"].endswith("…[truncated]")
 
 
+class _FatPayloadRegistry:
+    """Registry double: huge tool payloads to force in-turn re-outer."""
+
+    def __init__(self, inner: ToolRegistry, blob_chars: int = 20_000) -> None:
+        self._inner = inner
+        self._blob = "Z" * blob_chars
+        self.names_executed: list[str] = []
+
+    def openai_tools(self) -> list[dict[str, Any]]:
+        return self._inner.openai_tools()
+
+    def execute(self, name: str, args: dict[str, Any] | None, ctx: ToolContext) -> ToolResult:
+        self.names_executed.append(name)
+        # Still exercise real tools for speak/wait; fat payload for list_dir.
+        if name == "list_dir":
+            return ToolResult(ok=True, payload={"entries": ["notes.txt"], "blob": self._blob})
+        return self._inner.execute(name, args, ctx)
+
+
 def test_run_do_loop_reouter_under_pressure(
     ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
 ) -> None:
-    """End-to-end: oversized tool payload forces re-outer on next hop."""
+    """End-to-end: oversized tool payload forces mid-loop re-outer."""
     mid = moments.open_moment(why_now="budget", moment_id="mbudget")
     ctx.moment_id = mid
     rebuilds = {"n": 0}
+    outers_seen: list[str] = []
 
     def rebuild() -> list[dict[str, Any]]:
         rebuilds["n"] += 1
+        label = f"outer-{rebuilds['n']}"
+        outers_seen.append(label)
         return [
-            {"role": "system", "content": f"outer-{rebuilds['n']}"},
+            {"role": "system", "content": label},
             {"role": "user", "content": "work"},
         ]
 
-    # Hop1: list_dir (normal). Hop2: after chain grows we still just stop.
-    # Use tiny budget + large scripted tool payload via fake execute...
-    # Instead: pre-seed by using a stub that returns huge content through a
-    # real tool is hard; exercise reouter_count via enforce path by making
-    # tool_result_max_chars large and budget tiny with many hops.
+    fat = _FatPayloadRegistry(registry, blob_chars=30_000)
     client = StubChatClient.scripted(
         [
             _tc("list_dir", {"path": "."}, call_id="c1"),
             _tc("list_dir", {"path": "."}, call_id="c2"),
-            _tc("list_dir", {"path": "."}, call_id="c3"),
+            _text("done"),
+        ]
+    )
+    # Tiny budget + large (post-truncate still big) payloads force re-outer
+    # on hop 2 before the second model call (sole batch cannot be dropped).
+    settings = _settings(
+        max_tool_hops=10,
+        in_turn_max_tokens=80,
+        sliding_input_tokens=80,
+        tool_result_max_chars=2000,
+    )
+    result = run_do_loop(
+        client=client,
+        registry=fat,  # type: ignore[arg-type]
+        ctx=ctx,
+        rebuild_outer=rebuild,
+        settings=settings,
+        moments=moments,
+    )
+    assert result.hop_count >= 2
+    assert result.stop_reason == "no_tools"
+    # Initial rebuild (no outer_prefix) + at least one mid-loop re-outer.
+    assert result.reouter_count >= 1, result
+    assert rebuilds["n"] >= 2, rebuilds
+    assert "outer-2" in outers_seen or outers_seen[-1] != "outer-1"
+
+
+def test_reouter_count_zero_without_caller_rebuild(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """Compress-only pressure without rebuild_outer must not inflate reouter_count."""
+    fat = _FatPayloadRegistry(registry, blob_chars=30_000)
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _tc("list_dir", {"path": "."}, call_id="c2"),
             _text("done"),
         ]
     )
     settings = _settings(
         max_tool_hops=10,
-        in_turn_max_tokens=50,
-        sliding_input_tokens=50,
-        tool_result_max_chars=40,
+        in_turn_max_tokens=80,
+        sliding_input_tokens=80,
+        tool_result_max_chars=2000,
+    )
+    result = run_do_loop(
+        client=client,
+        registry=fat,  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+    )
+    assert result.reouter_count == 0
+    assert result.stop_reason == "no_tools"
+
+
+# ---------------------------------------------------------------------------
+# Disk prompts via assemble_outer_meal
+# ---------------------------------------------------------------------------
+
+
+def test_doloop_rebuild_outer_uses_disk_prompts(
+    ctx: ToolContext, registry: ToolRegistry, paths, moments: MomentStore
+) -> None:
+    """rebuild_outer → assemble_outer_meal loads system/orient from disk prompts/."""
+    mid = moments.open_moment(why_now="disk prompts", user_id="operator", moment_id="mdisk")
+    ctx.moment_id = mid
+    system_text = load_prompt("system", paths=paths)
+    assert system_text.strip(), "expected prompts/system.md content"
+
+    def rebuild() -> list[dict[str, Any]]:
+        return assemble_outer_meal(
+            paths=paths,
+            glass_history=[],
+            wake_content="Please list files and greet me",
+            why_now="user_message:disk",
+            settings=default_settings(),
+        )
+
+    meal = rebuild()
+    assert meal[0]["role"] == "system"
+    assert meal[0]["content"] == system_text
+    assert meal[-1]["role"] == "user"
+    orient = meal[-1]["content"]
+    assert "disk" in orient.lower() or "user_message" in orient or "WHY" in orient or orient
+    # Orient placeholders should be filled (no bare {{NOW}}).
+    assert "{{NOW}}" not in orient
+    assert "{{WHY_NOW}}" not in orient
+
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _tc("speak", {"text": "hi from disk meal"}, call_id="c2"),
+            _text("done"),
+        ]
     )
     result = run_do_loop(
         client=client,
         registry=registry,
         ctx=ctx,
         rebuild_outer=rebuild,
-        settings=settings,
+        settings=default_settings(),
         moments=moments,
+        social_wake=True,
     )
-    # Either re-outer happened or chain trim kept us running; hop progressed.
-    assert result.hop_count >= 1
-    assert result.stop_reason in ("no_tools", "max_hops", "error")
-    # rebuild called at least once for initial outer
-    assert rebuilds["n"] >= 1
+    assert result.stop_reason == "no_tools"
+    assert result.spoke is True
+    assert result.hop_count == 3
 
 
 # ---------------------------------------------------------------------------
-# Wire mark_spoke / ToolContext
+# Wire mark_spoke / mark_task_changed / ToolContext reuse (Issues 1–2, 5)
 # ---------------------------------------------------------------------------
 
 
@@ -594,6 +700,144 @@ def test_mark_spoke_hook_called(
     result = _run(client, ctx, registry)
     assert result.spoke is True
     assert flags["spoke"] >= 1
+    # Host hook restored after loop (no nested wrapper left on ctx).
+    assert ctx.mark_spoke is on_spoke
+
+
+def test_host_mark_task_changed_updates_continue_idle(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """Host-provided mark_task_changed must still stamp loop last_activity.
+
+    Without always-wrap, a long tool that only calls the host hook leaves
+    last_activity at moment start → spurious continue inject.
+    """
+    clock = {"t": datetime(2026, 1, 1, 12, 0, tzinfo=UTC)}
+
+    def now() -> datetime:
+        return clock["t"]
+
+    host_hits = {"n": 0}
+
+    def host_task_changed() -> None:
+        host_hits["n"] += 1
+
+    ctx.mark_task_changed = host_task_changed
+
+    class _TaskProgressRegistry:
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return registry.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, c: ToolContext
+        ) -> ToolResult:
+            if name == "list_dir":
+                # Simulate long work then task progress via host hook.
+                clock["t"] = clock["t"] + timedelta(minutes=10)
+                assert c.mark_task_changed is not None
+                c.mark_task_changed()
+                return ToolResult(ok=True, payload={"entries": ["notes.txt"]})
+            return registry.execute(name, args, c)
+
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    settings = _settings(continue_idle_minutes=5, continue_max_injects=3, max_tool_hops=10)
+    t0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    result = run_do_loop(
+        client=client,
+        registry=_TaskProgressRegistry(),  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        clock=now,
+        started_at=t0,
+    )
+    assert host_hits["n"] >= 1
+    assert result.continue_injects == 0, (
+        "task change via host mark_task_changed should refresh idle clock; "
+        f"got continue_injects={result.continue_injects}"
+    )
+    assert result.stop_reason == "no_tools"
+    # Host hook restored.
+    assert ctx.mark_task_changed is host_task_changed
+
+
+def test_ctx_reuse_across_moments_rewires_fresh_hooks(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """Second run_do_loop on same ctx must not keep moment-1 closures."""
+    host_hits = {"n": 0}
+
+    def host_task() -> None:
+        host_hits["n"] += 1
+
+    ctx.mark_task_changed = host_task
+
+    class _MarkTaskReg:
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return registry.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, c: ToolContext
+        ) -> ToolResult:
+            if c.mark_task_changed is not None:
+                c.mark_task_changed()
+            return ToolResult(ok=True, payload={"ok": True, "name": name})
+
+    # Moment 1
+    r1 = run_do_loop(
+        client=StubChatClient.scripted(
+            [_tc("list_dir", {"path": "."}, call_id="a1"), _text("d1")]
+        ),
+        registry=_MarkTaskReg(),  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings(max_tool_hops=5),
+    )
+    assert r1.stop_reason == "no_tools"
+    assert ctx.mark_task_changed is host_task
+    hits_after_m1 = host_hits["n"]
+    assert hits_after_m1 >= 1
+
+    # Moment 2 — same ctx; host hook must still fire (fresh wrap each entry).
+    r2 = run_do_loop(
+        client=StubChatClient.scripted(
+            [_tc("list_dir", {"path": "."}, call_id="b1"), _text("d2")]
+        ),
+        registry=_MarkTaskReg(),  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings(max_tool_hops=5),
+    )
+    assert r2.stop_reason == "no_tools"
+    assert host_hits["n"] > hits_after_m1
+    assert ctx.mark_task_changed is host_task
+
+
+def test_host_mark_spoke_exception_does_not_abort_loop(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """Host mark_spoke raising must not surface stop_reason=error (Issue 5)."""
+
+    def boom() -> None:
+        raise RuntimeError("host spoke hook exploded")
+
+    ctx.mark_spoke = boom
+    client = StubChatClient.scripted(
+        [
+            _tc("speak", {"text": "still delivered"}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry)
+    assert result.stop_reason == "no_tools"
+    assert result.spoke is True
+    assert result.error is None
+    assert ctx.mark_spoke is boom
 
 
 # ---------------------------------------------------------------------------
@@ -751,25 +995,24 @@ def test_real_model_tool_call_through_doloop(
             kw.setdefault("max_tokens", 256)
             return http.chat_completion(messages, **kw)
 
-    outer = [
-        {
-            "role": "system",
-            "content": (
-                "You are Elyra. Use tools only. "
-                "First list_dir on path '.', then speak a short hello mentioning a file."
-            ),
-        },
-        {
-            "role": "user",
-            "content": "List the sandbox directory, then greet me via speak.",
-        },
-    ]
+    def rebuild() -> list[dict[str, Any]]:
+        return assemble_outer_meal(
+            paths=paths,
+            glass_history=[],
+            wake_content="List the sandbox directory, then greet me via speak.",
+            why_now="llm multi-hop",
+            settings=default_settings(),
+        )
+
+    meal = rebuild()
+    assert meal[0]["content"] == load_prompt("system", paths=paths)
+
     settings = _settings(max_tool_hops=6, generation_max_tokens=256)
     result = run_do_loop(
         client=_FirstHopPinned(),  # type: ignore[arg-type]
         registry=registry,
         ctx=ctx,
-        outer_prefix=outer,
+        rebuild_outer=rebuild,
         settings=settings,
         moments=moments,
         social_wake=True,

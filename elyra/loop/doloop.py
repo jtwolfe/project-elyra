@@ -272,13 +272,14 @@ def enforce_in_turn_budget(
     if not over():
         return outer_prefix, chain_messages, False
 
-    # Still over → re-outer: compress chain, rebuild outer meal.
+    # Still over → re-outer: compress chain; rebuild outer only when caller
+    # supplied rebuild_outer (compress-only does not count as re-outer).
     chain_messages[:] = _compress_chain_for_reouter(chain_messages)
     _truncate_chain_tool_contents(chain_messages, tool_result_max_chars)
     if rebuild_outer is not None:
         outer_prefix = list(rebuild_outer())
         did_reouter = True
-    # Final pass: drop more batches if still over after re-outer.
+    # Final pass: drop more batches if still over after re-outer/compress.
     while over() and _drop_oldest_batch(chain_messages):
         pass
     return outer_prefix, chain_messages, did_reouter
@@ -301,20 +302,49 @@ def _obs_user_message(text: str) -> dict[str, Any]:
     return {"role": "user", "content": text}
 
 
-def _wire_ctx_defaults(
+def _install_activity_hooks(
     ctx: ToolContext,
     *,
     registry: ToolRegistry,
-    mark_spoke: Callable[[], None],
-    mark_task_changed: Callable[[], None],
-) -> None:
-    """Fill missing ToolContext ports used by builtins (non-destructive)."""
+    state: _LoopState,
+    now: Callable[[], datetime],
+) -> tuple[Callable[[], None] | None, Callable[[], None] | None]:
+    """Always wrap mark_spoke / mark_task_changed for this moment.
+
+    Each ``run_do_loop`` entry installs fresh wrappers that:
+    1. Update live ``state.spoke`` / ``state.last_activity``
+    2. Call any pre-existing host hooks (best-effort; host exceptions logged)
+
+    Returns the previous host callables so the caller can restore them on exit
+    (avoids nesting wrappers and stale closures when the same ToolContext is
+    reused across moments — presence PR12 pattern).
+    """
     if ctx.registry is None:
         ctx.registry = registry
-    if ctx.mark_spoke is None:
-        ctx.mark_spoke = mark_spoke
-    if ctx.mark_task_changed is None:
-        ctx.mark_task_changed = mark_task_changed
+
+    host_spoke = ctx.mark_spoke
+    host_task = ctx.mark_task_changed
+
+    def mark_spoke() -> None:
+        state.spoke = True
+        state.last_activity = now()
+        if host_spoke is not None:
+            try:
+                host_spoke()
+            except Exception:  # noqa: BLE001 — host hooks must not kill the loop
+                _LOG.exception("host mark_spoke failed")
+
+    def mark_task_changed() -> None:
+        state.last_activity = now()
+        if host_task is not None:
+            try:
+                host_task()
+            except Exception:  # noqa: BLE001
+                _LOG.exception("host mark_task_changed failed")
+
+    ctx.mark_spoke = mark_spoke
+    ctx.mark_task_changed = mark_task_changed
+    return host_spoke, host_task
 
 
 def _execute_one(
@@ -416,18 +446,9 @@ def run_do_loop(
 
     state = _LoopState(outer_prefix=initial_outer, last_activity=t0)
 
-    def mark_spoke() -> None:
-        state.spoke = True
-        state.last_activity = now()
-
-    def mark_task_changed() -> None:
-        state.last_activity = now()
-
-    _wire_ctx_defaults(
-        ctx,
-        registry=registry,
-        mark_spoke=mark_spoke,
-        mark_task_changed=mark_task_changed,
+    # Always wrap (Issues 1–2): update live state + chain host hooks; restore on exit.
+    host_spoke, host_task = _install_activity_hooks(
+        ctx, registry=registry, state=state, now=now
     )
 
     openai_tools = tools if tools is not None else registry.openai_tools()
@@ -440,11 +461,8 @@ def run_do_loop(
     tool_cap = loop.tool_result_max_chars
     max_hops = loop.max_tool_hops
 
-    def _rebuild() -> list[dict[str, Any]]:
-        if rebuild_outer is not None:
-            return list(rebuild_outer())
-        return list(state.outer_prefix)
-
+    # Only pass caller-supplied rebuild_outer so reouter_count is accurate
+    # (compress-only under pressure does not count as re-outer — Issue 6).
     try:
         return _run_loop_body(
             state=state,
@@ -462,7 +480,7 @@ def run_do_loop(
             tool_cap=tool_cap,
             max_hops=max_hops,
             loop=loop,
-            rebuild=_rebuild,
+            rebuild_outer=rebuild_outer,
             drain_interjections=drain_interjections,
         )
     except Exception as exc:  # noqa: BLE001 — surface as stop error
@@ -482,6 +500,10 @@ def run_do_loop(
             continue_injects=state.continue_injects,
             error=f"{type(exc).__name__}: {exc}",
         )
+    finally:
+        # Restore host hooks so reuse does not nest wrappers / stale state.
+        ctx.mark_spoke = host_spoke
+        ctx.mark_task_changed = host_task
 
 
 def _run_loop_body(
@@ -501,7 +523,7 @@ def _run_loop_body(
     tool_cap: int,
     max_hops: int,
     loop: LoopSettings,
-    rebuild: Callable[[], list[dict[str, Any]]],
+    rebuild_outer: Callable[[], list[dict[str, Any]]] | None,
     drain_interjections: Callable[[], Sequence[Any]] | None,
 ) -> DoLoopResult:
     while True:
@@ -545,7 +567,7 @@ def _run_loop_body(
             state.chain_messages,
             budget_tokens=budget,
             tool_result_max_chars=tool_cap,
-            rebuild_outer=rebuild,
+            rebuild_outer=rebuild_outer,
         )
         if did_re:
             state.reouter_count += 1
@@ -645,11 +667,12 @@ def _handle_tool_batch(
         )
 
         if tr.counts_as_speak and tr.ok:
-            # Loop tracks speak; host mark_spoke updates activity / glass hooks.
-            state.spoke = True
-            state.last_activity = now()
+            # Wired wrapper updates state.last_activity/spoke then host hook.
             if ctx.mark_spoke is not None:
                 ctx.mark_spoke()
+            else:
+                state.spoke = True
+                state.last_activity = now()
 
         if tr.ends_moment:
             # Remaining tool_calls in this batch are NOT executed.
