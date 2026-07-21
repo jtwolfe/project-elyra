@@ -11,6 +11,7 @@ from elyra.loop.context import (
     fill_orient,
     format_now,
 )
+from elyra.prompts.loader import load_prompt
 from elyra.settings import LoopSettings
 
 
@@ -43,6 +44,19 @@ def test_fill_orient_placeholders():
     assert "C=talk" in text
     assert "B=prefer talk" in text
     assert "{{" not in text
+
+
+def test_fill_orient_values_not_rescanned():
+    """Digest text containing later placeholder tokens must not be rewritten."""
+    template = "SELF={{SELF}}\nGOALS={{GOALS}}\n"
+    text = fill_orient(
+        template,
+        now="n",
+        self_digest="has {{GOALS}} inside",
+        goals="",
+    )
+    assert "has {{GOALS}} inside" in text
+    assert text.endswith("GOALS=\n") or "GOALS=\n" in text
 
 
 def test_format_now_includes_utc_and_weekday():
@@ -200,6 +214,56 @@ def test_protected_wake_not_dropped_when_only_copy():
     mid = meal[1:-1]
     assert any(m["content"] == "trigger only" for m in mid)
     assert not any(m["content"].startswith("old") for m in mid)
+
+
+def test_protects_at_least_one_trigger_when_duplicate_content_no_id():
+    """Multi-copy same wake text without message_id must keep ≥1 trigger."""
+    system = "S" * 8
+    orient_t = "O" * 8 + "{{NOW}}{{SELF}}{{USER}}{{WHY_NOW}}{{GOALS}}"
+    orient_t += "{{SKILL_CATALOG}}{{SKILL_BIAS}}"
+    # Older duplicate + big assistant + latest same content (no ids).
+    history = [
+        {"role": "user", "content": "trigger"},
+        {"role": "assistant", "content": "big" + ("z" * 400)},
+        {"role": "user", "content": "trigger"},
+    ]
+    meal = assemble_outer_meal(
+        glass_history=history,
+        system_text=system,
+        orient_template=orient_t,
+        wake_content="trigger",
+        # no wake_message_id
+        sliding_input_tokens=30,  # force drop under pressure
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    mid = meal[1:-1]
+    triggers = [m for m in mid if m["role"] == "user" and m["content"] == "trigger"]
+    assert len(triggers) == 1
+    # Older big assistant should be gone.
+    assert not any(m["content"].startswith("big") for m in mid)
+
+
+def test_default_meal_loads_disk_system_and_orient():
+    """Production default path loads prompts/system.md and prompts/orient.md."""
+    fixed = datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
+    meal = assemble_outer_meal(
+        glass_history=[{"role": "user", "content": "hi from glass"}],
+        now=fixed,
+        self_digest="Elyra self digest",
+        why_now="user_message:hi",
+    )
+    assert meal[0]["role"] == "system"
+    assert meal[0]["content"] == load_prompt("system")
+    orient_body = meal[-1]["content"]
+    assert meal[-1]["role"] == "user"
+    assert "# Orient" in orient_body
+    assert "## NOW" in orient_body
+    assert "{{NOW}}" not in orient_body
+    assert "{{SELF}}" not in orient_body
+    assert "{{USER}}" not in orient_body
+    assert "Elyra self digest" in orient_body
+    assert "2026-07-21" in orient_body
+    assert any(m["content"] == "hi from glass" for m in meal[1:-1])
 
 
 def test_skips_system_and_empty_rows_in_glass():

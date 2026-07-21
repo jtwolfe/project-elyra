@@ -7,6 +7,7 @@ Out of scope: in-turn chain budget, tool messages, do-loop orchestration.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any, Mapping, Sequence
 
@@ -16,6 +17,11 @@ from elyra.settings import LoopSettings, Settings, default_settings
 
 # Placeholders left empty when not provided (goals/skills land in later PRs).
 _EMPTY_PLACEHOLDER = ""
+
+# Single-pass orient fill — substituted values are never re-scanned.
+_ORIENT_PLACEHOLDER_RE = re.compile(
+    r"\{\{(NOW|SELF|USER|WHY_NOW|GOALS|SKILL_CATALOG|SKILL_BIAS)\}\}"
+)
 
 
 def estimate_tokens(text: str) -> int:
@@ -62,19 +68,24 @@ def fill_orient(
     skill_catalog: str = "",
     skill_bias: str = "",
 ) -> str:
-    """Fill ``prompts/orient.md`` placeholders (simple ``{{NAME}}`` replace)."""
-    return (
-        template.replace("{{NOW}}", now)
-        .replace("{{SELF}}", self_digest if self_digest else _EMPTY_PLACEHOLDER)
-        .replace("{{USER}}", user_digest if user_digest else _EMPTY_PLACEHOLDER)
-        .replace("{{WHY_NOW}}", why_now if why_now else _EMPTY_PLACEHOLDER)
-        .replace("{{GOALS}}", goals if goals else _EMPTY_PLACEHOLDER)
-        .replace(
-            "{{SKILL_CATALOG}}",
-            skill_catalog if skill_catalog else _EMPTY_PLACEHOLDER,
-        )
-        .replace("{{SKILL_BIAS}}", skill_bias if skill_bias else _EMPTY_PLACEHOLDER)
-    )
+    """Fill ``prompts/orient.md`` placeholders in a single pass.
+
+    Values may contain ``{{…}}``-looking text without being re-substituted.
+    """
+    values = {
+        "NOW": now,
+        "SELF": self_digest if self_digest else _EMPTY_PLACEHOLDER,
+        "USER": user_digest if user_digest else _EMPTY_PLACEHOLDER,
+        "WHY_NOW": why_now if why_now else _EMPTY_PLACEHOLDER,
+        "GOALS": goals if goals else _EMPTY_PLACEHOLDER,
+        "SKILL_CATALOG": skill_catalog if skill_catalog else _EMPTY_PLACEHOLDER,
+        "SKILL_BIAS": skill_bias if skill_bias else _EMPTY_PLACEHOLDER,
+    }
+
+    def _repl(match: re.Match[str]) -> str:
+        return values[match.group(1)]
+
+    return _ORIENT_PLACEHOLDER_RE.sub(_repl, template)
 
 
 def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
@@ -127,11 +138,38 @@ def _history_contains_wake(
     return False
 
 
+def _select_protected_trigger(
+    history: list[dict[str, Any]],
+    *,
+    wake_content: str | None,
+    wake_message_id: str | None,
+) -> set[int]:
+    """Return ``id(msg)`` objects that must never be dropped under budget.
+
+    Always keeps **at least one** wake trigger when content/id is provided:
+    - Prefer the row with ``wake_message_id``.
+    - Else protect the **last** user row whose content equals ``wake_content``.
+    Older duplicate content rows remain droppable.
+    """
+    protected: set[int] = set()
+    if wake_message_id:
+        for msg in history:
+            if msg.get("id") == wake_message_id:
+                protected.add(id(msg))
+                return protected
+    if wake_content:
+        for msg in reversed(history):
+            if msg.get("role") == "user" and (msg.get("content") or "") == wake_content:
+                protected.add(id(msg))
+                return protected
+    return protected
+
+
 def _drop_oldest_history(
     history: list[dict[str, Any]],
     *,
     protected_ids: set[str],
-    protected_contents: set[str],
+    protected_obj_ids: set[int],
 ) -> bool:
     """Drop the oldest unprotected history message (prefer full pairs).
 
@@ -141,11 +179,10 @@ def _drop_oldest_history(
         return False
 
     def is_protected(msg: Mapping[str, Any]) -> bool:
+        if id(msg) in protected_obj_ids:
+            return True
         mid = msg.get("id")
         if mid is not None and mid in protected_ids:
-            return True
-        content = msg.get("content") or ""
-        if content in protected_contents and msg.get("role") == "user":
             return True
         return False
 
@@ -195,8 +232,9 @@ def assemble_outer_meal(
     3. Orient near the end (``prompts/orient.md`` filled)
 
     Budget: ``settings.loop.sliding_input_tokens`` (default 24000). Drops oldest
-    history first. Never drops system or orient. Never drops the single
-    triggering user text when it is the only copy (protected by content/id).
+    history first. Never drops system or orient. Always keeps **at least one**
+    triggering user row when ``wake_content`` / ``wake_message_id`` is set
+    (prefer id; else last matching content). Older duplicate triggers may drop.
 
     Dedupe: if ``wake_content`` / ``wake_message_id`` already appears in glass
     history, do not inject a second copy.
@@ -240,18 +278,13 @@ def assemble_outer_meal(
     system_msg: dict[str, Any] = {"role": "system", "content": system_text}
 
     protected_ids: set[str] = set()
-    protected_contents: set[str] = set()
     if wake_message_id:
         protected_ids.add(wake_message_id)
-    if wake_content:
-        # Protect only when this is the sole copy of the trigger in history.
-        copies = sum(
-            1
-            for m in history
-            if m.get("role") == "user" and (m.get("content") or "") == wake_content
-        )
-        if copies <= 1:
-            protected_contents.add(wake_content)
+    protected_obj_ids = _select_protected_trigger(
+        history,
+        wake_content=wake_content,
+        wake_message_id=wake_message_id,
+    )
 
     fixed_tokens = estimate_tokens(system_text) + estimate_tokens(orient_body)
 
@@ -263,7 +296,7 @@ def assemble_outer_meal(
         if not _drop_oldest_history(
             history,
             protected_ids=protected_ids,
-            protected_contents=protected_contents,
+            protected_obj_ids=protected_obj_ids,
         ):
             # Only protected rows remain; stop dropping.
             break

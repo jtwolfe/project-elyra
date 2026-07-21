@@ -126,3 +126,24 @@ def test_policy_reads_loop_settings():
     assert should_stop_wall_clock(
         last, last + timedelta(minutes=10), settings=settings
     )
+
+
+def test_datetime_naive_treated_as_utc():
+    """Naive and aware UTC stamps compare without TypeError (naive = UTC)."""
+    last_naive = datetime(2026, 7, 21, 12, 0, 0)  # no tzinfo
+    now_aware = datetime(2026, 7, 21, 12, 10, 0, tzinfo=UTC)
+    assert should_inject_continue(
+        last_naive, 0, now_aware, continue_idle_minutes=8
+    ) is True
+    assert should_stop_wall_clock(
+        last_naive,
+        now_aware,
+        moment_wall_clock_minutes=5,
+    ) is True
+    # Both naive
+    assert should_inject_continue(
+        last_naive,
+        0,
+        datetime(2026, 7, 21, 12, 9, 0),
+        continue_idle_minutes=8,
+    ) is True

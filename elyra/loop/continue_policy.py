@@ -3,11 +3,14 @@
 Scope: idle continue inject decisions from settings knobs.
 In scope: continue_idle_minutes, continue_max_injects, moment_wall_clock_minutes.
 Out of scope: do-loop scheduling, HOST message delivery, hop thrash (max_tool_hops).
+
+Datetime contract: both comparison args are normalized to timezone-aware UTC.
+Naive datetimes are treated as UTC (not local). Prefer passing aware UTC stamps.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from elyra.settings import LoopSettings, Settings, default_settings
 
@@ -20,6 +23,13 @@ CONTINUE_HOST_TEMPLATE = (
     "HOST: {minutes} minutes idle on this work — "
     "continue / speak / wait / stop / schedule?"
 )
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize to timezone-aware UTC. Naive values are treated as UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
@@ -36,7 +46,7 @@ def continue_host_message(idle_minutes: int) -> str:
 
 
 def _idle_minutes(last_activity: datetime, now: datetime) -> float:
-    delta = now - last_activity
+    delta = _as_utc(now) - _as_utc(last_activity)
     return delta.total_seconds() / 60.0
 
 
@@ -53,6 +63,8 @@ def should_inject_continue(
 
     Idle is measured since last speak or task change (caller tracks that).
     Injecting resets idle for the next check (caller updates last_activity).
+
+    Datetimes may be naive or aware; both sides are coerced to UTC first.
     """
     loop = _loop_settings(settings)
     idle_min = (
@@ -71,7 +83,7 @@ def should_inject_continue(
         return False
     if idle_min < 0:
         idle_min = 0
-    return (now - last_activity) >= timedelta(minutes=idle_min)
+    return (_as_utc(now) - _as_utc(last_activity)) >= timedelta(minutes=idle_min)
 
 
 def should_stop_time_continue_declined(
@@ -87,6 +99,8 @@ def should_stop_time_continue_declined(
 
     Matches multi-hop pre-check:
     ``continue_injects >= continue_max and still idle → time_continue_declined``.
+
+    Datetimes may be naive or aware; both sides are coerced to UTC first.
     """
     loop = _loop_settings(settings)
     idle_min = (
@@ -103,7 +117,7 @@ def should_stop_time_continue_declined(
         return False
     if idle_min < 0:
         idle_min = 0
-    return (now - last_activity) >= timedelta(minutes=idle_min)
+    return (_as_utc(now) - _as_utc(last_activity)) >= timedelta(minutes=idle_min)
 
 
 def should_stop_wall_clock(
@@ -113,7 +127,10 @@ def should_stop_wall_clock(
     moment_wall_clock_minutes: int | None = None,
     settings: Settings | LoopSettings | None = None,
 ) -> bool:
-    """True when moment absolute wall-clock budget is exceeded."""
+    """True when moment absolute wall-clock budget is exceeded.
+
+    Datetimes may be naive or aware; both sides are coerced to UTC first.
+    """
     loop = _loop_settings(settings)
     wall = (
         moment_wall_clock_minutes
@@ -122,7 +139,7 @@ def should_stop_wall_clock(
     )
     if wall < 0:
         wall = 0
-    return (now - started_at) >= timedelta(minutes=wall)
+    return (_as_utc(now) - _as_utc(started_at)) >= timedelta(minutes=wall)
 
 
 def idle_minutes_since(last_activity: datetime, now: datetime) -> float:

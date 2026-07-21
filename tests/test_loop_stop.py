@@ -15,6 +15,7 @@ from elyra.loop.stop import (
     STOP_WALL_CLOCK,
     is_valid_stop_reason,
     resolve_host_precheck_stop,
+    stop_for_blocked,
     stop_for_error,
     stop_for_interrupted,
     stop_for_max_hops,
@@ -47,6 +48,7 @@ def test_stop_constants_match_moment_vocabulary():
 def test_named_stop_helpers():
     assert stop_for_no_tools() == "no_tools"
     assert stop_for_wait() == "wait"
+    assert stop_for_blocked() == "blocked"
     assert stop_for_policy() == "policy"
     assert stop_for_time_continue_declined() == "time_continue_declined"
     assert stop_for_wall_clock() == "wall_clock"
