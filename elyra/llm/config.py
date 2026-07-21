@@ -19,6 +19,9 @@ class LlamaServerConfig:
     connect_timeout: float = 10.0
     read_timeout: float = 600.0
     temperature: float = 0.2
+    # None → omit from chat payload (server default). Product ship later.
+    top_p: float | None = None
+    top_k: int | None = None
 
     @property
     def chat_url(self) -> str:

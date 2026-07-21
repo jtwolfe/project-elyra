@@ -51,6 +51,8 @@ class ChatClient(Protocol):
         max_tokens: int = 4096,
         reasoning: bool = True,
         temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult: ...
@@ -276,6 +278,8 @@ class StubChatClient:
         max_tokens: int = 4096,
         reasoning: bool = True,
         temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
@@ -285,6 +289,8 @@ class StubChatClient:
                 max_tokens=max_tokens,
                 reasoning=reasoning,
                 temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
                 tools=tools,
                 tool_choice=tool_choice,
             )
@@ -316,9 +322,13 @@ class HttpChatClient:
         max_tokens: int = 4096,
         reasoning: bool = True,
         temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
+        resolved_top_p = top_p if top_p is not None else self._config.top_p
+        resolved_top_k = top_k if top_k is not None else self._config.top_k
         payload: dict[str, Any] = {
             "messages": messages,
             "max_tokens": max_tokens,
@@ -327,6 +337,10 @@ class HttpChatClient:
             ),
             "stream": False,
         }
+        if resolved_top_p is not None:
+            payload["top_p"] = resolved_top_p
+        if resolved_top_k is not None:
+            payload["top_k"] = resolved_top_k
         if self._config.use_reasoning:
             payload["reasoning"] = bool(reasoning)
         if tools is not None:
@@ -370,6 +384,8 @@ class GatedChatClient:
         max_tokens: int = 4096,
         reasoning: bool = True,
         temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
@@ -380,6 +396,8 @@ class GatedChatClient:
                 max_tokens=max_tokens,
                 reasoning=reasoning,
                 temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
                 tools=tools,
                 tool_choice=tool_choice,
             ),
