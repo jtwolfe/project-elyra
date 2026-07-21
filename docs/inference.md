@@ -77,7 +77,7 @@ llama-server
 
 Client: `http://127.0.0.1:8080/v1/chat/completions` (tools + reasoning). Long read timeout (~600s).
 
-### Product chat sampling (Stage 1)
+### Product chat sampling (Stages 1–2)
 
 Defaults live on `LlamaServerConfig` (KD13). Do-loop does not hardcode sampling; `HttpChatClient` falls back when kwargs are `None`.
 
@@ -86,13 +86,13 @@ Defaults live on `LlamaServerConfig` (KD13). Do-loop does not hardcode sampling;
 | **temperature** | **0.6** | `DEFAULT_CHAT_TEMPERATURE` — Stage 1 live OFAT (S-mono 0.2/0.4/0.6 × 3; 0.6 cleanest flood + tools) |
 | **top_p** | **0.95** | `GEMMA_TOP_P` (Gemma card / elyra2 freeze) |
 | **top_k** | **64** | `GEMMA_TOP_K` |
-| reasoning budget | omit | Stage 2 |
+| **reasoning budget** | **2048** | `DEFAULT_REASONING_BUDGET_TOKENS` → wire `thinking_budget_tokens` (Stage 2 OFAT; relative to `generation_max_tokens=8192`) |
 
-When `top_p` / `top_k` are explicitly `None` on config, the client **omits** them from the HTTP body (server default).
+When `top_p` / `top_k` are explicitly `None` on config, the client **omits** them from the HTTP body (server default). When `default_reasoning_budget_tokens` is `None` and `reasoning=True`, the client **omits** `thinking_budget_tokens`. When `reasoning=False`, the client always sends a budget (value or `0`) so the private channel can be disabled.
 
-**Known residual:** S-social post-speak hop-2 pure channel flood (~280s) still 0/3 at these defaults (same shape as Stage 0 temp 0.2). Sampling alone does not close (A) on social; Stages 2–4 (budget, hygiene ingress, RC re-feed) remain in plan. S-tools stayed 3/3 clean; S-mono improved to 3/3 flood-clean at 0.6 vs softer 0.2/0.4 cells.
+**Known residual:** S-social post-speak hop-2 pure channel flood (~280s) is **not cured** by sampling or by 2048/4096 thinking budgets (flood still scores when the model burns the private channel on `<|channel>thought` loops). Stages 3–4 (hygiene ingress, flood-safe RC re-feed) remain the (A) boundary fix. S-tools stays 3/3 clean under budget 2048.
 
-See `scripts/live_eval/logs/stage-1.md` and `docs/design-gemma-sampling-hygiene-staged.md`.
+See `scripts/live_eval/logs/stage-1.md`, `scripts/live_eval/logs/stage-2.md`, and `docs/design-gemma-sampling-hygiene-staged.md`.
 
 ## Real model tests
 

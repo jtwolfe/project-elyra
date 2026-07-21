@@ -1,15 +1,16 @@
-# Stage 1 sampling scenarios — fixed prompts (same as Stage 0).
-# Card truncation frozen; temperature ablated via CLI --temperature / --cell.
+# Stage 2 budget scenarios — fixed prompts (same as Stage 0/1).
+# Stage 1 sampling frozen (temp 0.6 + card trunc); budget ablated via
+# CLI --reasoning-budget / --omit-budget / --cell.
 # Product path applies knobs via LlamaServerConfig (KD13).
 
-stage: 1
-name: sampling
+stage: 2
+name: thinking_budget
 knobs:
-  # Product ship after Stage 1 ablation (temp 0.6 + Gemma card trunc).
+  # Product ship after Stage 2 OFAT: temp 0.6 + card trunc + budget 2048.
   temperature: 0.6
   top_p: 0.95
   top_k: 64
-  reasoning_budget_tokens: null
+  reasoning_budget_tokens: 2048
 
 # Eval caps (written into attempt ELYRA_HOME/elyra.toml by run_stage.py)
 eval_caps:
