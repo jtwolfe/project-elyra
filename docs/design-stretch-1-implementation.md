@@ -5,7 +5,7 @@
 | **Document** | Stretch 1 runtime completion |
 | **Author** | _(implementer)_ |
 | **Date** | 2026-07-21 |
-| **Status** | Draft (rev 3 — re-review residuals closed) |
+| **Status** | **Stretch 1 shipped** (rev 3 design + PR1–PR15); freeze still `docs/stretch-1.md` |
 | **Product root** | `/home/jim/Workspace/project-elyra` |
 | **Build freeze** | `docs/stretch-1.md` |
 | **Supersedes** | Archive research notes under `docs/archive/` (not law) |
@@ -1321,12 +1321,12 @@ PR11 must not start until **PR7 + PR8\* + PR9 + PR10** (PR10 needs PR2) are merg
 - **Deps:** PR12b
 - **Changes:** Lean panels; wait UI; moments debug for stuck loops.
 
-### PR15 — Done-when hardening
+### PR15 — Done-when checklist and docs
 
 - **Title:** `chore: Stretch 1 done-when checklist and docs`
-- **Files:** README, inference notes, regression pack
+- **Files:** README, `docs/stretch-1.md`, inference notes, `tests/test_stretch1_donewhen.py`
 - **Deps:** PR12c, **PR13**, PR14
-- **Changes:** Walk freeze Done list; **create-tool box requires PR13**; no dumping gates into “hardening.”
+- **Changes:** Walk freeze Done list (all checked); **create-tool box requires PR13** (`test_create_tool_gates` + runtime verify/promote — gates already exist, not re-implemented as “hardening”); document `pytest -m llm` / sliding 24k vs `-c`.
 
 ```mermaid
 flowchart LR

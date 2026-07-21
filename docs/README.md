@@ -1,19 +1,19 @@
 # Project Elyra — documentation
 
-Communal digital teammate. Thin **do-loop** harness (Stretch 1), deeper **memory** later (Stretch 2).  
+Communal digital teammate. Thin **do-loop** harness (**Stretch 1 shipped**), deeper **memory** later (Stretch 2).  
 Grok Build for loop/tools/skills ideas — not as the product skin.
 
 ## Read in this order
 
 | # | Doc | Role |
 |---|-----|------|
-| 1 | **[stretch-1.md](stretch-1.md)** | **Build freeze** — how Stretch 1 runs |
+| 1 | **[stretch-1.md](stretch-1.md)** | **Runtime contract** — how Stretch 1 runs + done-when |
 | 2 | **[design-stretch-1-implementation.md](design-stretch-1-implementation.md)** | **Implementation design + PR plan** (reviewed) |
 | 3 | **[engineering-principles.md](engineering-principles.md)** | **How we write code** — modules, tests, config, dogfood |
-| 3 | [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
-| 4 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, dogfood, create-tool safety |
-| 5 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, time layers, speak timing |
-| 6 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma from elyra2 |
+| 4 | [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
+| 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, dogfood, create-tool safety |
+| 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, time layers, speak timing |
+| 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` ceiling vs sliding ~24k |
 
 **Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime.  
 **Archive:** longer research notes under [archive/](archive/) (not freeze).
@@ -31,11 +31,11 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 
 ## Stretch 1 vs Stretch 2
 
-| Stretch 1 (now) | Stretch 2 (later) |
-|-----------------|-------------------|
+| Stretch 1 (shipped) | Stretch 2 (later) |
+|---------------------|-------------------|
 | Presence, wake queue, do-loops | Hypergraph, auto-ontology |
-| Skills + tools + create-tool (safe) | Opaque sleep / sparse linking |
-| Sliding context, simple storage | LanceDB / graph migration |
+| Skills + tools + create-tool (fail-closed, PR13) | Opaque sleep / sparse linking |
+| Sliding context (~24k under `-c` ceiling) | LanceDB / graph migration |
 | Gemma via llama.cpp Vulkan | Same model stack, richer memory |
 
 ## Run
@@ -47,6 +47,15 @@ elyra start --no-llama   # stub LLM + UI
 # http://127.0.0.1:8787/
 ```
 
+## Tests
+
+```bash
+pytest -m 'not llm'   # default pack
+pytest -m llm         # real Gemma (needs model/ + GPU)
+```
+
+Done-when map: root [README.md](../README.md) testing section and `tests/test_stretch1_donewhen.py`.
+
 ## Status
 
-Start stack + glass UI + simple presence chat loop. Multi-hop tools still ahead of Stretch 1 complete.
+**Stretch 1 complete.** Presence worker → moments (multi-hop do-loops) → tools/skills → speak/wait → glass panels; create-tool gates from PR13; no one-shot chat path. See [stretch-1.md](stretch-1.md) Done when (all checked).
