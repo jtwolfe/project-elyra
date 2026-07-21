@@ -96,6 +96,55 @@ def test_parse_tool_calls_empty_and_missing():
     assert parse_tool_calls("not-a-list") == []
 
 
+def test_non_serializable_dict_arguments_do_not_raise():
+    raw = [
+        {
+            "id": "call_obj",
+            "type": "function",
+            "function": {"name": "echo", "arguments": {"a": object()}},
+        }
+    ]
+    calls = parse_tool_calls(raw)
+    assert len(calls) == 1
+    assert calls[0].name == "echo"
+    assert calls[0].arguments == {}
+    assert calls[0].arguments_parse_ok is False
+    assert calls[0].arguments_raw  # best-effort raw for diagnostics
+
+
+def test_empty_or_null_function_name_is_skipped():
+    raw = [
+        {"id": "c1", "type": "function", "function": None},
+        {"id": "c2", "type": "function", "function": {}},
+        {"id": "c3", "type": "function", "function": {"name": "", "arguments": "{}"}},
+        {
+            "id": "c4",
+            "type": "function",
+            "function": {"name": "list_dir", "arguments": '{"path": "."}'},
+        },
+    ]
+    calls = parse_tool_calls(raw)
+    assert len(calls) == 1
+    assert calls[0].id == "c4"
+    assert calls[0].name == "list_dir"
+
+
+def test_flat_scripted_tool_call_shape_is_accepted():
+    """Mini result dicts may use flat {id, name, arguments} without function envelope."""
+    raw = [
+        {"id": "1", "name": "echo", "arguments": {"text": "x"}},
+        {"id": "2", "name": "speak", "arguments": '{"text": "hi"}'},
+    ]
+    calls = parse_tool_calls(raw)
+    assert len(calls) == 2
+    assert calls[0].name == "echo"
+    assert calls[0].arguments == {"text": "x"}
+    assert calls[0].arguments_parse_ok is True
+    assert calls[1].name == "speak"
+    assert calls[1].arguments == {"text": "hi"}
+    assert calls[1].arguments_parse_ok is True
+
+
 # ---------------------------------------------------------------------------
 # Stub scripted sequences
 # ---------------------------------------------------------------------------
@@ -177,6 +226,38 @@ def test_stub_scripted_with_toolcall_objects():
     result = client.chat_completion([{"role": "user", "content": "x"}])
     assert result.tool_calls[0].name == "echo"
     assert result.tool_calls[0].arguments == {"text": "x"}
+
+
+def test_stub_scripted_flat_tool_calls_mini_dict():
+    client = StubChatClient.scripted(
+        [
+            {
+                "content": "",
+                "finish_reason": "tool_calls",
+                "tool_calls": [
+                    {"id": "1", "name": "echo", "arguments": {"text": "x"}},
+                ],
+            }
+        ]
+    )
+    result = client.chat_completion([{"role": "user", "content": "x"}])
+    assert result.tool_calls[0].name == "echo"
+    assert result.tool_calls[0].arguments == {"text": "x"}
+    assert result.finish_reason == "tool_calls"
+
+
+def test_stub_scripted_finish_reason_coerced_to_str():
+    client = StubChatClient.scripted(
+        [{"content": "ok", "finish_reason": 0, "tool_calls": []}]
+    )
+    result = client.chat_completion([{"role": "user", "content": "x"}])
+    assert result.finish_reason == "0"
+    assert isinstance(result.finish_reason, str)
+
+
+def test_stub_rejects_mapping_as_responses():
+    with pytest.raises(TypeError, match="list/tuple"):
+        StubChatClient(responses={"step": "oops"})  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +346,25 @@ def test_http_client_handles_args_already_object(fake_chat_server):
     result = client.chat_completion([{"role": "user", "content": "x"}])
     assert result.tool_calls[0].arguments == {"text": "hello"}
     assert result.tool_calls[0].arguments_parse_ok is True
+
+
+def test_http_client_omits_tools_keys_when_none(fake_chat_server):
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    client = HttpChatClient(config)
+    result = client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert "tools" not in sent
+    assert "tool_choice" not in sent
+    assert result.tool_calls == []
+    assert result.content == "Just text, no tools."
+    assert result.finish_reason == "stop"
+    assert result.reasoning_content == "thinking"
 
 
 def test_gated_client_forwards_tools_kwargs():
@@ -477,12 +577,11 @@ def test_real_model_client_parses_tool_calls_shape(live_llama_server):
         assert isinstance(tc.arguments_parse_ok, bool)
 
 
-@pytest.mark.llm
-def test_real_model_malformed_args_path_is_safe_via_parser():
-    """Invalid arguments string never crashes client parse path (unit of live shape).
+def test_malformed_args_partial_json_is_safe_via_parser():
+    """Invalid partial JSON arguments never crash parse (Http contract path).
 
-    Live models rarely emit broken JSON; validate the same parse helper the
-    HTTP client uses so the failure mode is covered without forcing bad output.
+    Live models rarely emit broken JSON; unit/fake-HTTP cover this mode.
+    Kept as a unit test (not @pytest.mark.llm) — no llama-server call.
     """
     broken = [
         {
