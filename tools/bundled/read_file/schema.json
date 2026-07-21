@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Relative path within the sandbox workspace"
+    }
+  },
+  "required": ["path"],
+  "additionalProperties": false
+}
