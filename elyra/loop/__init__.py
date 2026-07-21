@@ -1,6 +1,6 @@
 """Do-loop packages: context meal, continue policy, stop reasons, multi-hop.
 
-Scaffold worker remains until presence cutover (PR12c).
+Orchestration lives in ``elyra.presence.worker``; this package is loop internals only.
 """
 
 from elyra.loop.context import assemble_outer_meal, estimate_tokens, fill_orient
