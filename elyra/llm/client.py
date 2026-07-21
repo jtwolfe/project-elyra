@@ -2,7 +2,8 @@
 
 Scope: POST /v1/chat/completions with optional OpenAI-style tools.
 In scope: HTTP client, gated wrapper, stub (incl. scripted tool_calls),
-          parse message.tool_calls (arguments string → dict).
+          parse message.tool_calls (arguments string → dict),
+          reasoning_budget_tokens → wire thinking_budget_tokens adapter.
 Out of scope: do-loop / multi-hop tool execution (loop package).
 """
 
@@ -53,6 +54,7 @@ class ChatClient(Protocol):
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult: ...
@@ -280,6 +282,7 @@ class StubChatClient:
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
@@ -291,6 +294,7 @@ class StubChatClient:
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
+                reasoning_budget_tokens=reasoning_budget_tokens,
                 tools=tools,
                 tool_choice=tool_choice,
             )
@@ -324,11 +328,28 @@ class HttpChatClient:
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
+        """Python: ``reasoning_budget_tokens``. Wire: ``thinking_budget_tokens``.
+
+        When ``use_reasoning`` is true:
+        - always set ``reasoning`` bool
+        - if ``reasoning`` is True: include wire budget only when resolved
+          value is not None (kwarg → config.default_reasoning_budget_tokens)
+        - if ``reasoning`` is False: always include wire budget (resolved value
+          or 0) so private channel can be disabled (elyra2 API completeness)
+
+        Never emit chat-body key ``reasoning_budget_tokens``.
+        """
         resolved_top_p = top_p if top_p is not None else self._config.top_p
         resolved_top_k = top_k if top_k is not None else self._config.top_k
+        resolved_budget = (
+            reasoning_budget_tokens
+            if reasoning_budget_tokens is not None
+            else self._config.default_reasoning_budget_tokens
+        )
         payload: dict[str, Any] = {
             "messages": messages,
             "max_tokens": max_tokens,
@@ -343,6 +364,13 @@ class HttpChatClient:
             payload["top_k"] = resolved_top_k
         if self._config.use_reasoning:
             payload["reasoning"] = bool(reasoning)
+            if reasoning:
+                if resolved_budget is not None:
+                    payload["thinking_budget_tokens"] = resolved_budget
+            else:
+                payload["thinking_budget_tokens"] = (
+                    resolved_budget if resolved_budget is not None else 0
+                )
         if tools is not None:
             payload["tools"] = tools
         if tool_choice is not None:
@@ -386,6 +414,7 @@ class GatedChatClient:
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
@@ -398,6 +427,7 @@ class GatedChatClient:
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
+                reasoning_budget_tokens=reasoning_budget_tokens,
                 tools=tools,
                 tool_choice=tool_choice,
             ),

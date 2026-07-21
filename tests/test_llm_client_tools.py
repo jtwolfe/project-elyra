@@ -412,6 +412,27 @@ def test_product_defaults_send_gemma_card_truncation(fake_chat_server):
     assert sent["temperature"] == 0.6
 
 
+def test_product_defaults_send_reasoning_budget_when_reasoning_true(fake_chat_server):
+    """Stage 2 product default ships thinking_budget_tokens under reasoning=True."""
+    from elyra.llm.constants import DEFAULT_REASONING_BUDGET_TOKENS
+
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=True)
+    assert config.default_reasoning_budget_tokens == DEFAULT_REASONING_BUDGET_TOKENS
+    assert DEFAULT_REASONING_BUDGET_TOKENS == 2048
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=True,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["reasoning"] is True
+    assert sent["thinking_budget_tokens"] == 2048
+    assert "reasoning_budget_tokens" not in sent
+
+
 def test_http_client_includes_top_p_top_k_from_kwargs(fake_chat_server):
     """Explicit kwargs override and appear on the wire even when config is None."""
     fx = _fixtures()
@@ -482,6 +503,124 @@ def test_http_client_kwarg_overrides_config_top_p_top_k(fake_chat_server):
     assert sent["top_k"] == 16
 
 
+def test_http_client_includes_wire_thinking_budget_when_reasoning_enabled(fake_chat_server):
+    """Python reasoning_budget_tokens → wire thinking_budget_tokens only."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=True)
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=True,
+        reasoning_budget_tokens=2048,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["reasoning"] is True
+    assert sent["thinking_budget_tokens"] == 2048
+    assert "reasoning_budget_tokens" not in sent
+
+
+def test_http_client_omits_wire_thinking_budget_when_not_set(fake_chat_server):
+    """When reasoning=True and budget None (kwarg + config), omit wire key."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=True,
+        default_reasoning_budget_tokens=None,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=True,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["reasoning"] is True
+    assert "thinking_budget_tokens" not in sent
+    assert "reasoning_budget_tokens" not in sent
+
+
+def test_http_client_falls_back_to_config_default_reasoning_budget(fake_chat_server):
+    """Product default_reasoning_budget_tokens applied when kwarg is None."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=True,
+        default_reasoning_budget_tokens=4096,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=True,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["thinking_budget_tokens"] == 4096
+
+
+def test_http_client_kwarg_overrides_config_reasoning_budget(fake_chat_server):
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=True,
+        default_reasoning_budget_tokens=4096,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=True,
+        reasoning_budget_tokens=1024,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["thinking_budget_tokens"] == 1024
+
+
+def test_http_client_reasoning_false_sends_budget_zero_by_default(fake_chat_server):
+    """reasoning=False → always include thinking_budget_tokens (0 if unset)."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=True,
+        default_reasoning_budget_tokens=None,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["reasoning"] is False
+    assert sent["thinking_budget_tokens"] == 0
+    assert "reasoning_budget_tokens" not in sent
+
+
+def test_http_client_reasoning_false_uses_explicit_budget(fake_chat_server):
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=True)
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=False,
+        reasoning_budget_tokens=0,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["reasoning"] is False
+    assert sent["thinking_budget_tokens"] == 0
+
+
 def test_gated_client_forwards_tools_kwargs():
     captured: dict[str, Any] = {}
 
@@ -493,6 +632,7 @@ def test_gated_client_forwards_tools_kwargs():
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
@@ -500,6 +640,7 @@ def test_gated_client_forwards_tools_kwargs():
         captured["tool_choice"] = tool_choice
         captured["top_p"] = top_p
         captured["top_k"] = top_k
+        captured["reasoning_budget_tokens"] = reasoning_budget_tokens
         return ChatCompletionResult(content="ok", reasoning_content="", raw_json="{}")
 
     class _Inner:
@@ -514,9 +655,13 @@ def test_gated_client_forwards_tools_kwargs():
         tool_choice="auto",
         top_p=0.95,
         top_k=64,
+        reasoning_budget_tokens=2048,
     )
     assert captured["tools"] == tools
     assert captured["tool_choice"] == "auto"
+    assert captured["top_p"] == 0.95
+    assert captured["top_k"] == 64
+    assert captured["reasoning_budget_tokens"] == 2048
     assert captured["top_p"] == 0.95
     assert captured["top_k"] == 64
 

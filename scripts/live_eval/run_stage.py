@@ -5,12 +5,14 @@ Scope: fixed scenarios, isolated ELYRA_HOME per attempt, POST message, poll
 close/timeout, export tape/messages, fill scorecard via reasoning_hygiene.
 In scope: Stage 0 baseline + Stage 1 sampling ablation; reuse healthy llama
 or start one. Sampling knobs from scenarios.yaml applied to LlamaServerConfig
-(KD13); CLI --temperature/--top-p/--top-k/--cell override for OFAT cells.
+(KD13); CLI --temperature/--top-p/--top-k/--reasoning-budget/--cell for OFAT.
 
 Usage:
   python scripts/live_eval/run_stage.py --stage 1 --all-scenarios --tries 3
   python scripts/live_eval/run_stage.py --stage 1 --scenario S-mono --tries 3 \\
       --temperature 0.4 --cell t0.4-trunc
+  python scripts/live_eval/run_stage.py --stage 2 --scenario S-social --tries 3 \\
+      --reasoning-budget 2048 --cell b2048
   python scripts/live_eval/run_stage.py --stage 0 --scenario S-social --try 1
 """
 
@@ -843,6 +845,9 @@ def client_config_from_stage(
     Product path: do-loop never hardcodes sampling; HttpChatClient falls back
     to these config fields (KD13). Harness overrides are for ablation only.
     """
+    budget = stage_cfg.reasoning_budget_tokens
+    if budget is not None:
+        budget = int(budget)
     return LlamaServerConfig(
         host=base.host,
         port=base.port,
@@ -854,6 +859,7 @@ def client_config_from_stage(
         temperature=float(stage_cfg.temperature),
         top_p=stage_cfg.top_p,
         top_k=int(stage_cfg.top_k) if stage_cfg.top_k is not None else None,
+        default_reasoning_budget_tokens=budget,
     )
 
 
@@ -1227,6 +1233,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Ablation cell label embedded in attempt_id (e.g. t0.4-trunc)",
     )
+    p.add_argument(
+        "--reasoning-budget",
+        type=int,
+        default=None,
+        dest="reasoning_budget",
+        help="Override stage knobs reasoning_budget_tokens (e.g. 2048)",
+    )
+    p.add_argument(
+        "--omit-budget",
+        action="store_true",
+        help="Force reasoning_budget_tokens=None (omit thinking_budget_tokens)",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -1240,13 +1258,19 @@ def _apply_cli_knob_overrides(stage_cfg: StageConfig, args: argparse.Namespace) 
     else:
         top_p = stage_cfg.top_p if args.top_p is None else float(args.top_p)
         top_k = stage_cfg.top_k if args.top_k is None else int(args.top_k)
+    if args.omit_budget:
+        budget: Any = None
+    elif args.reasoning_budget is not None:
+        budget = int(args.reasoning_budget)
+    else:
+        budget = stage_cfg.reasoning_budget_tokens
     return StageConfig(
         stage=stage_cfg.stage,
         name=stage_cfg.name,
         temperature=temp,
         top_p=top_p,
         top_k=top_k,
-        reasoning_budget_tokens=stage_cfg.reasoning_budget_tokens,
+        reasoning_budget_tokens=budget,
         max_tool_hops=stage_cfg.max_tool_hops,
         moment_wall_clock_minutes=stage_cfg.moment_wall_clock_minutes,
         poll_timeout_seconds=stage_cfg.poll_timeout_seconds,
@@ -1270,10 +1294,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     stage_cfg = _apply_cli_knob_overrides(stage_cfg, args)
     _LOG.info(
-        "sampling knobs: temp=%s top_p=%s top_k=%s cell=%s",
+        "sampling knobs: temp=%s top_p=%s top_k=%s budget=%s cell=%s",
         stage_cfg.temperature,
         stage_cfg.top_p,
         stage_cfg.top_k,
+        stage_cfg.reasoning_budget_tokens,
         args.cell,
     )
 

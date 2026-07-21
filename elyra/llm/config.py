@@ -1,8 +1,9 @@
 """LLM server connection settings.
 
 Scope: injectable dataclass for llama-server chat endpoint.
-Product sampling defaults (KD13): temperature + Gemma card truncation live here;
-HttpChatClient falls back when chat_completion kwargs are None.
+Product sampling defaults (KD13): temperature + Gemma card truncation +
+default_reasoning_budget_tokens live here; HttpChatClient falls back when
+chat_completion kwargs are None.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 
 from elyra.llm.constants import (
     DEFAULT_CHAT_TEMPERATURE,
+    DEFAULT_REASONING_BUDGET_TOKENS,
     GEMMA_TOP_K,
     GEMMA_TOP_P,
 )
@@ -31,6 +33,9 @@ class LlamaServerConfig:
     # Gemma card nucleus / top-k truncation (KD7). None → omit from chat payload.
     top_p: float | None = GEMMA_TOP_P
     top_k: int | None = GEMMA_TOP_K
+    # Stage 2: per-request private channel cap (Python → wire thinking_budget_tokens).
+    # None → omit when reasoning=True. Product ships non-None after live OFAT.
+    default_reasoning_budget_tokens: int | None = DEFAULT_REASONING_BUDGET_TOKENS
 
     @property
     def chat_url(self) -> str:

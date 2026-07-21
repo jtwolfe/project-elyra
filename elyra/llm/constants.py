@@ -26,3 +26,9 @@ GEMMA_TOP_K = 64
 
 # Chat temperature product default (Stage 1 live OFAT → 0.6 + card trunc).
 DEFAULT_CHAT_TEMPERATURE = 0.6
+
+# Per-request private-channel budget (Python name → wire thinking_budget_tokens).
+# Relative to do-loop generation_max_tokens=8192. Stage 2 live OFAT: ship 2048
+# (S-tools 3/3; social hop2 flood not cured — leave room for tool JSON).
+# None would omit key when reasoning=True (unbounded private channel).
+DEFAULT_REASONING_BUDGET_TOKENS: int | None = 2048
