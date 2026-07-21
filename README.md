@@ -98,8 +98,12 @@ pytest -m llm tests/test_doloop.py -q
 ### Live qualitative stage gates (Stage 0+)
 
 Fixed scenarios + full product path (presence → moment → do-loop → real Gemma).
-See [scripts/live_eval/README.md](scripts/live_eval/README.md) and
-[docs/design-gemma-sampling-hygiene-staged.md](docs/design-gemma-sampling-hygiene-staged.md).
+**3-attempt protocol**, failure modes **(A) flood** vs **(B) tools/speak**, and P0
+exit criteria: [docs/live-eval.md](docs/live-eval.md).
+
+Also: harness [scripts/live_eval/README.md](scripts/live_eval/README.md),
+design plan [docs/design-gemma-sampling-hygiene-staged.md](docs/design-gemma-sampling-hygiene-staged.md),
+ship knobs [docs/inference.md](docs/inference.md).
 
 ```bash
 # Stage 0 baseline: 3 tries × S-social / S-tools / S-mono (reuses :8080 if healthy)
@@ -151,6 +155,8 @@ Out of scope (Stretch 2+): hypergraph / sleep, Lance graph, multi-sandbox, subag
 | [docs/design-stretch-1-implementation.md](docs/design-stretch-1-implementation.md) | Implementation design + PR plan |
 | [docs/engineering-principles.md](docs/engineering-principles.md) | How we build |
 | [docs/overview.md](docs/overview.md) | Glossary |
-| [docs/inference.md](docs/inference.md) | llama.cpp / Gemma (`-c` vs sliding 24k) |
+| [docs/inference.md](docs/inference.md) | llama.cpp / Gemma; ship sampling, hygiene, RC re-feed, hop-0 speak pin |
+| [docs/live-eval.md](docs/live-eval.md) | Live 3-attempt protocol, A/B failure modes, how to run `scripts/live_eval` |
+| [docs/design-gemma-sampling-hygiene-staged.md](docs/design-gemma-sampling-hygiene-staged.md) | Staged plan (sampling / hygiene / tool-speak) |
 | [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, catalog, create-tool safety |
 | [docs/README.md](docs/README.md) | Full index |
