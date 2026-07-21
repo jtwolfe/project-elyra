@@ -21,7 +21,7 @@ from elyra.llm.config import LlamaServerConfig
 from elyra.llm.constants import CONTEXT_WINDOW_TOKENS
 from elyra.llm.queue import LlamaServerGate
 from elyra.llm.server import build_server_command, validate_model_paths
-from elyra.loop.worker import PresenceWorker
+from elyra.presence.worker import PresenceWorker
 from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
 from elyra.runtime.state import RuntimeState, set_runtime_state

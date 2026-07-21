@@ -15,8 +15,8 @@ from urllib.parse import parse_qs, urlparse
 
 from elyra.config import ElyraPaths
 from elyra.llm.queue import LlamaServerGate
-from elyra.loop.worker import PresenceWorker
 from elyra.messages import append_message, list_messages
+from elyra.presence.worker import PresenceWorker
 from elyra.runtime.config import RuntimeConfig
 from elyra.runtime.state import RuntimeState
 
