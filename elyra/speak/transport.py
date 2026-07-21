@@ -4,8 +4,8 @@ Scope: write user-visible assistant rows via messages.append_message only.
 In scope: deliver(text, user_id, moment_id) → SpeakDelivery with transport status.
 Out of scope: wait_user, schedule_wake, do-loop mark_spoke, beat tape.
 
-Ownership: this module is the sole path for assistant glass rows in the product
-tool path. Loop/worker bare content writes are removed in a later cutover PR.
+Ownership: this module is the sole production path for assistant glass rows.
+Bare one-shot content writes (former loop/worker) have been removed.
 """
 
 from __future__ import annotations

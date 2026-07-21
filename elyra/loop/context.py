@@ -131,7 +131,7 @@ def _history_contains_wake(
                 return True
     if wake_content is None:
         return False
-    # Same guard as scaffold worker: last user row already is the trigger.
+    # Dedupe: last user glass row already is the trigger (API append-before-enqueue).
     for msg in reversed(history):
         if msg.get("role") == "user":
             return (msg.get("content") or "") == wake_content
