@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from elyra.config import ElyraPaths
+    from elyra.goals import GoalsStore
+    from elyra.presence.timers import TimerService
     from elyra.sandbox import Sandbox
     from elyra.settings import Settings
     from elyra.speak import SpeakTransport
@@ -72,11 +74,15 @@ class ToolContext:
     registry: ToolRegistry | None = None
     # Glass delivery — speak builtin uses this; loop injects shared instance.
     speak: SpeakTransport | None = None
+    # Timer/wait store — schedule_wake + wait_user durable arming.
+    timers: TimerService | None = None
+    # Ledger port (PR8c); host injects GoalsStore for update_task / update_goal.
+    goals: GoalsStore | None = None
     # Mutable bags / ports filled by presence/do-loop wiring (later PRs):
     skills_used: list[str] = field(default_factory=list)
     mark_spoke: Callable[[], None] | None = None
     mark_task_changed: Callable[[], None] | None = None
     enqueue_wake: Callable[..., str] | None = None
     cancel_wait: Callable[[str], None] | None = None
-    # Extension bag for ports not yet typed (goals, skills, …)
+    # Extension bag for ports not yet typed (skills loader, …)
     extras: dict[str, Any] = field(default_factory=dict)
