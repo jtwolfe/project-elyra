@@ -45,9 +45,37 @@ NO_SPEAK_NUDGE = (
     "HOST: no speak tool used — if the user needs a reply, call speak; otherwise stop."
 )
 
+# OpenAI-style function pin used only on social first completion (Stage 5 L4).
+_SPEAK_TOOL_CHOICE: dict[str, Any] = {
+    "type": "function",
+    "function": {"name": "speak"},
+}
+
 _TRUNC_MARKER = "…[truncated]"
 # Keep this many newest assistant+tool groups when re-outer compresses the chain.
 _REOUTER_KEEP_GROUPS = 2
+
+
+def social_first_hop_tool_choice(
+    *,
+    social_wake: bool,
+    hop: int,
+) -> dict[str, Any] | None:
+    """Speak pin for the **first** social completion only.
+
+    Predicate (normative for Stage 5 L4):
+
+    - ``social_wake`` is True (presence user_message / wait_reply / …)
+    - ``hop == 0`` **before** ``chat_completion`` is called
+
+    Do **not** use ``hop == 1`` at call time: after the first return
+    ``state.hop`` is already 1, so that would pin the **second** hop.
+    Non-social wakes and later hops return ``None`` (omit ``tool_choice``;
+    never default to ``required``).
+    """
+    if social_wake and hop == 0:
+        return dict(_SPEAK_TOOL_CHOICE)
+    return None
 
 
 @dataclass(frozen=True)
@@ -592,10 +620,17 @@ def _run_loop_body(
             state.reouter_count += 1
 
         messages = list(state.outer_prefix) + list(state.chain_messages)
+        # Stage 5 L4: pin speak only on social first completion (hop==0 pre-call).
+        # Omit tool_choice otherwise — never product-default tool_choice=required.
+        tool_choice = social_first_hop_tool_choice(
+            social_wake=social_wake,
+            hop=state.hop,
+        )
         result = client.chat_completion(
             messages,
             max_tokens=gen_max,
             tools=openai_tools,
+            tool_choice=tool_choice,
         )
         # Ingress sanitize: strip channel-marker floods before beat tape + chain
         # re-feed. Boundary defense only — does not cure generation floods.
@@ -763,6 +798,7 @@ __all__ = [
     "enforce_in_turn_budget",
     "run_do_loop",
     "serialize_tool_result",
+    "social_first_hop_tool_choice",
     "tool_result_to_content",
     "truncate_tool_content",
     "assemble_outer_meal",

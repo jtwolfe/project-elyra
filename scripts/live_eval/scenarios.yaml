@@ -1,12 +1,11 @@
-# Stage 2 budget scenarios — fixed prompts (same as Stage 0/1).
-# Stage 1 sampling frozen (temp 0.6 + card trunc); budget ablated via
-# CLI --reasoning-budget / --omit-budget / --cell.
-# Product path applies knobs via LlamaServerConfig (KD13).
+# Stage 5 tool/speak reliability scenarios — fixed prompts (same as Stage 0–2).
+# Ship knobs: temp 0.6 + card trunc + budget 2048 + PR6 sanitize + PR7 flood-safe RC.
+# Stage 5 L4: social_wake hop==0 speak pin (product doloop; not tool_choice=required).
 
-stage: 2
-name: thinking_budget
+stage: 5
+name: tool_speak_reliability
 knobs:
-  # Product ship after Stage 2 OFAT: temp 0.6 + card trunc + budget 2048.
+  # Product ship: temp 0.6 + card trunc + budget 2048.
   temperature: 0.6
   top_p: 0.95
   top_k: 64
