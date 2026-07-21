@@ -263,3 +263,6 @@ def test_list_moments_newest_first_with_limit(store):
     assert limited[0]["id"] == "mom-b"
     open_only = store.list_moments(open_only=True)
     assert [r["id"] for r in open_only] == ["mom-b"]
+    # Negative limit clamps to empty (never means "all").
+    assert store.list_moments(limit=-1) == []
+    assert store.list_moments(limit=0) == []

@@ -153,6 +153,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 limit = int(limit_raw)
             except (TypeError, ValueError):
                 limit = 50
+            # Negative would mean "no slice" in list_moments; clamp to empty.
+            if limit < 0:
+                limit = 0
             open_only = (qs.get("open") or ["0"])[0] in ("1", "true", "yes")
             moments = self.moments.list_moments(limit=limit, open_only=open_only)
             self._json(200, {"moments": moments})

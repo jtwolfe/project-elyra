@@ -216,6 +216,11 @@ def test_get_moments_and_detail(paths):
         assert body["moments"][0]["why_now"] == "user_message:test"
         assert body["moments"][0]["stop_reason"] == "no_tools"
 
+        # Negative limit clamps to empty list (not "all").
+        code, empty = h.get("/api/moments?limit=-1")
+        assert code == 200
+        assert empty["moments"] == []
+
         code, detail = h.get(f"/api/moments/{mid}")
         assert code == 200
         assert detail["moment"]["id"] == mid

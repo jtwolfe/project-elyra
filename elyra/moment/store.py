@@ -221,8 +221,10 @@ class MomentStore:
                 continue
             rows.append(dict(meta))
         rows.sort(key=lambda m: str(m.get("started_at") or ""), reverse=True)
-        if limit is not None and limit >= 0:
-            rows = rows[: int(limit)]
+        if limit is not None:
+            # Clamp negatives to 0 (empty) so callers never get "all" by accident.
+            n = max(0, int(limit))
+            rows = rows[:n]
         return rows
 
     def recover_open_moments(self) -> list[str]:

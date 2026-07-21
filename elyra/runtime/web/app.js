@@ -25,6 +25,8 @@ const REASON_BUFFER_FULL = "interjection_buffer_full";
 
 let lastPendingWaitId = null;
 let noticeTimer = null;
+/** True while a wait-choice POST is in flight (blocks double-submit). */
+let waitReplyInFlight = false;
 
 function setPill(el, label, mode) {
   el.textContent = label;
@@ -93,12 +95,19 @@ function renderMessages(messages) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+function setWaitChoicesDisabled(disabled) {
+  waitChoices.querySelectorAll("button.choice-btn").forEach((btn) => {
+    btn.disabled = disabled;
+  });
+}
+
 function renderWaitBar(pending) {
   if (!pending || pending.status !== "pending") {
     waitBar.hidden = true;
     waitChoices.innerHTML = "";
     waitPrompt.textContent = "";
     lastPendingWaitId = null;
+    waitReplyInFlight = false;
     return;
   }
   const wid = pending.id || pending.wait_id || "";
@@ -111,6 +120,7 @@ function renderWaitBar(pending) {
   // Rebuild buttons only when wait id changes (avoid focus thrash).
   if (wid !== lastPendingWaitId) {
     lastPendingWaitId = wid;
+    waitReplyInFlight = false;
     waitChoices.innerHTML = "";
     for (const c of choices) {
       const btn = document.createElement("button");
@@ -127,17 +137,29 @@ function renderWaitBar(pending) {
       waitChoices.appendChild(hint);
     }
   }
+  // Keep buttons disabled while a reply is in flight (even if poll re-renders).
+  if (waitReplyInFlight) {
+    setWaitChoicesDisabled(true);
+  }
 }
 
 async function sendWaitChoice(choice) {
+  if (waitReplyInFlight) return;
+  waitReplyInFlight = true;
+  setWaitChoicesDisabled(true);
   try {
-    await fetchJson("/api/wait/reply", {
+    const data = await fetchJson("/api/wait/reply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ choice, user_id: USER_ID }),
     });
+    if (data && data.routed && data.routed !== "wait_reply") {
+      showNotice(`Wait reply routed as ${data.routed} (wait may have already cleared).`);
+    }
     await Promise.all([refreshMessages(), refreshStatus()]);
   } catch (err) {
+    waitReplyInFlight = false;
+    setWaitChoicesDisabled(false);
     showNotice(String(err.message || err));
   }
 }
@@ -433,6 +455,10 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
+function panelLoadError(panelName, err) {
+  showNotice(`${panelName}: ${err && err.message ? err.message : err}`);
+}
+
 document.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
@@ -440,12 +466,12 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.classList.add("active");
     const panel = document.getElementById(`panel-${btn.dataset.panel}`);
     if (panel) panel.classList.add("active");
-    // Refresh panel data when opened.
+    // Refresh panel data when opened; surface failures (parity with chat).
     const name = btn.dataset.panel;
-    if (name === "goals") refreshGoals().catch(() => {});
-    if (name === "moments") refreshMoments().catch(() => {});
-    if (name === "tools") refreshTools().catch(() => {});
-    if (name === "identity") refreshIdentity().catch(() => {});
+    if (name === "goals") refreshGoals().catch((e) => panelLoadError("Goals", e));
+    if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
+    if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
+    if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
   });
 });
 

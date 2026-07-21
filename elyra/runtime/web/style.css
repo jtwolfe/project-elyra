@@ -264,9 +264,14 @@ body {
   cursor: pointer;
 }
 
-.choice-btn:hover {
+.choice-btn:hover:not(:disabled) {
   background: #1c2a44;
   border-color: var(--accent);
+}
+
+.choice-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .list-panel {
