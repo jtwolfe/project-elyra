@@ -493,6 +493,7 @@ def test_interject_buffer_overflow_enqueues_wake(paths):
 
         overflow = worker.interject("too-many")
         assert overflow["ok"] is False
+        assert overflow["routed"] == ROUTE_INTERJECT
         assert overflow["reason"] == "interjection_buffer_full"
         assert overflow.get("wake_id")
 
