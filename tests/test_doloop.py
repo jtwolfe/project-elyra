@@ -31,6 +31,7 @@ from elyra.loop.doloop import (
     assistant_message_from_result,
     enforce_in_turn_budget,
     run_do_loop,
+    social_first_hop_tool_choice,
     tool_result_to_content,
     truncate_tool_content,
 )
@@ -219,6 +220,121 @@ def test_tool_result_to_content_includes_ok_and_error():
     assert body["ok"] is False
     assert body["error_reason"] == "nope"
     assert body["x"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 L4 — social first-hop speak pin predicate (hop==0 pre-call)
+# ---------------------------------------------------------------------------
+
+
+def test_social_first_hop_tool_choice_predicate_table() -> None:
+    """Pin speak only when social_wake and hop==0 (before chat_completion).
+
+    Explicit matrix — must not pin hop==1 (second hop after first return).
+    """
+    speak_pin = {"type": "function", "function": {"name": "speak"}}
+
+    assert social_first_hop_tool_choice(social_wake=True, hop=0) == speak_pin
+    # After first completion state.hop is 1 — must NOT pin second hop.
+    assert social_first_hop_tool_choice(social_wake=True, hop=1) is None
+    assert social_first_hop_tool_choice(social_wake=True, hop=2) is None
+    # Non-social wakes never pin (including hop 0).
+    assert social_first_hop_tool_choice(social_wake=False, hop=0) is None
+    assert social_first_hop_tool_choice(social_wake=False, hop=1) is None
+    # Never returns the high-risk "required" string default.
+    for sw in (True, False):
+        for h in (0, 1, 2, 5):
+            tc = social_first_hop_tool_choice(social_wake=sw, hop=h)
+            assert tc != "required"
+            assert tc is None or (
+                isinstance(tc, dict)
+                and tc.get("type") == "function"
+                and tc.get("function", {}).get("name") == "speak"
+            )
+
+
+def test_social_first_hop_pin_passed_only_on_hop0_social(
+    ctx, registry, moments
+) -> None:
+    """Integration: run_do_loop passes speak pin on first social call only."""
+    from elyra.llm.client import ToolCall as LlmToolCall
+
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            self._n += 1
+            if self._n == 1:
+                # Simulate model obeying speak pin
+                return ChatCompletionResult(
+                    content="",
+                    reasoning_content="",
+                    raw_json="{}",
+                    tool_calls=[
+                        LlmToolCall(
+                            id="c1",
+                            name="speak",
+                            arguments={"text": "Hello."},
+                            arguments_raw='{"text":"Hello."}',
+                            arguments_parse_ok=True,
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            return ChatCompletionResult(
+                content="",
+                reasoning_content="",
+                raw_json="{}",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=[{"role": "system", "content": "test"}],
+        settings=_settings(max_tool_hops=4),
+        moments=moments,
+        social_wake=True,
+    )
+    assert result.spoke is True
+    assert len(captured) >= 2
+    assert captured[0] == {"type": "function", "function": {"name": "speak"}}
+    # Second completion (hop was 1 pre-call) must omit pin
+    assert captured[1] is None
+
+
+def test_no_speak_pin_on_non_social_wake(ctx, registry, moments) -> None:
+    """Non-social: tool_choice stays None even on hop 0."""
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return ChatCompletionResult(
+                content="plan only",
+                reasoning_content="",
+                raw_json="{}",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=[{"role": "system", "content": "test"}],
+        settings=_settings(max_tool_hops=2),
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.stop_reason == "no_tools"
+    assert captured == [None]
 
 
 # ---------------------------------------------------------------------------
