@@ -4,6 +4,10 @@ Scope: schedule timer wakes, poll due → enqueue kind=timer; arm_wait /
 check timeouts → enqueue wait_timeout; waits.json rehydrate.
 In scope: pure store layer over data/wakes/{timers,waits}.json + WakeQueue.
 Out of scope: worker phases, wait_user tool, full presence state machine.
+
+Crash safety: mark snapshot terminal (fired/timed_out) and persist **before**
+enqueue so a restart cannot double-fire the same wait/timer. Startup should
+call ``rehydrate()`` (or ``rehydrate_waits`` + ``rehydrate_timers``).
 """
 
 from __future__ import annotations
@@ -88,6 +92,7 @@ class PendingWait:
     moment_id: str
     expires_at: str
     timeout: float | None = None  # optional seconds used when arming
+    armed_at: str | None = None  # when arm_wait persisted (for elapsed)
     status: str = STATUS_PENDING
     wake_id: str | None = None  # wait_timeout wake if timed out
 
@@ -110,6 +115,7 @@ class PendingWait:
                 data.get("expires_at") or data.get("deadline_utc") or ""
             ),
             timeout=float(timeout) if timeout is not None else None,
+            armed_at=data.get("armed_at"),
             status=str(data.get("status") or STATUS_PENDING),
             wake_id=data.get("wake_id"),
         )
@@ -137,6 +143,31 @@ def _write_json_list(path: Path, rows: list[dict[str, Any]]) -> None:
         encoding="utf-8",
     )
     tmp.replace(path)
+
+
+def _wait_elapsed_s(wait: PendingWait, now_dt: datetime) -> float | None:
+    """Wall elapsed from arm → fire ``now`` when we can estimate arm time.
+
+    Prefers ``armed_at`` when fire time is not before arm. Falls back to
+    ``expires_at - timeout`` so synthetic ``now`` in tests (and missing
+    ``armed_at`` on old snapshots) still yields a sensible elapsed value.
+    """
+    if wait.armed_at:
+        try:
+            armed = parse_utc(wait.armed_at)
+            if now_dt >= armed:
+                return max(0.0, (now_dt - armed).total_seconds())
+        except (ValueError, TypeError):
+            pass
+    if wait.timeout is not None and wait.expires_at:
+        try:
+            arm_approx = parse_utc(wait.expires_at) - timedelta(
+                seconds=float(wait.timeout)
+            )
+            return max(0.0, (now_dt - arm_approx).total_seconds())
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 class TimerService:
@@ -241,7 +272,9 @@ class TimerService:
     ) -> list[WakeItem]:
         """Enqueue wake kind=timer for every scheduled timer with wake_at <= now.
 
-        Marks those timers fired and records the wake_id. Idempotent per timer.
+        Marks each timer fired and persists **before** enqueue so a crash cannot
+        double-fire on restart. Pre-assigns ``wake_id`` so the enqueue uses a
+        stable id. Idempotent per timer while status stays fired.
         """
         if now is None:
             now_dt = datetime.now(UTC)
@@ -260,6 +293,12 @@ class TimerService:
             ]
             due.sort(key=lambda t: (t.wake_at, t.id))
             for timer in due:
+                wake_id = str(uuid.uuid4())
+                # Mark + persist first — restart must not re-fire this timer.
+                timer.status = STATUS_FIRED
+                timer.wake_id = wake_id
+                self._persist_timers()
+
                 payload: dict[str, Any] = {
                     "wake_at": timer.wake_at,
                     "reason": timer.reason,
@@ -269,13 +308,20 @@ class TimerService:
                     payload["goal_id"] = timer.goal_id
                 if timer.task_id is not None:
                     payload["task_id"] = timer.task_id
-                item = self._queue.enqueue("timer", payload)
-                timer.status = STATUS_FIRED
-                timer.wake_id = item.id
+                item = self._queue.enqueue("timer", payload, wake_id=wake_id)
                 fired.append(item)
-            if due:
-                self._persist_timers()
         return fired
+
+    def rehydrate_timers(
+        self,
+        now: datetime | str | None = None,
+    ) -> list[WakeItem]:
+        """Reload timers from disk and fire any already-due scheduled timers.
+
+        Pair with ``rehydrate_waits`` on startup (or use ``rehydrate``).
+        """
+        self._load()
+        return self.schedule_due(now=now)
 
     # --- waits ------------------------------------------------------------
 
@@ -291,6 +337,7 @@ class TimerService:
         wait_id: str | None = None,
     ) -> PendingWait:
         """Persist a pending wait. Caller may later check_timeouts / answer / cancel."""
+        armed_at = _now_iso()
         if expires_at is None:
             if timeout is None:
                 raise ValueError("expires_at or timeout is required")
@@ -310,6 +357,7 @@ class TimerService:
             moment_id=moment_id,
             expires_at=expires_s,
             timeout=float(timeout) if timeout is not None else None,
+            armed_at=armed_at,
             status=STATUS_PENDING,
         )
         with self._lock:
@@ -355,7 +403,11 @@ class TimerService:
         self,
         now: datetime | str | None = None,
     ) -> list[WakeItem]:
-        """Enqueue wait_timeout for pending waits with expires_at <= now."""
+        """Enqueue wait_timeout for pending waits with expires_at <= now.
+
+        Marks each wait timed_out and persists **before** enqueue so a crash
+        cannot double-fire the same wait on rehydrate.
+        """
         if now is None:
             now_dt = datetime.now(UTC)
         elif isinstance(now, str):
@@ -375,10 +427,12 @@ class TimerService:
             ]
             due.sort(key=lambda w: (w.expires_at, w.id))
             for wait in due:
-                # Elapsed seconds if we can parse both ends.
-                elapsed_s: float | None = None
-                if wait.timeout is not None:
-                    elapsed_s = float(wait.timeout)
+                wake_id = str(uuid.uuid4())
+                # Mark + persist first — restart must not re-fire this wait.
+                wait.status = STATUS_TIMED_OUT
+                wait.wake_id = wake_id
+                self._persist_waits()
+
                 payload: dict[str, Any] = {
                     "wait_id": wait.id,
                     "moment_id": wait.moment_id,
@@ -386,14 +440,11 @@ class TimerService:
                     "prompt": wait.prompt,
                     "user_id": wait.user_id,
                 }
+                elapsed_s = _wait_elapsed_s(wait, now_dt)
                 if elapsed_s is not None:
                     payload["wait_elapsed_s"] = elapsed_s
-                item = self._queue.enqueue("wait_timeout", payload)
-                wait.status = STATUS_TIMED_OUT
-                wait.wake_id = item.id
+                item = self._queue.enqueue("wait_timeout", payload, wake_id=wake_id)
                 fired.append(item)
-            if due:
-                self._persist_waits()
         return fired
 
     def rehydrate_waits(
@@ -404,6 +455,17 @@ class TimerService:
 
         On startup: pending with deadline past → enqueue wait_timeout;
         still-future deadlines remain pending for later check_timeouts.
+        Already timed_out rows are not re-fired (snapshot marked first).
         """
         self._load()
         return self.check_timeouts(now=now)
+
+    def rehydrate(
+        self,
+        now: datetime | str | None = None,
+    ) -> list[WakeItem]:
+        """Startup helper: reload both snapshots and fire due waits + timers."""
+        self._load()
+        waits = self.check_timeouts(now=now)
+        timers = self.schedule_due(now=now)
+        return waits + timers

@@ -244,3 +244,114 @@ def test_wake_item_roundtrip_dict():
         payload={"x": 1},
     )
     assert WakeItem.from_dict(item.to_dict()) == item
+
+
+def test_poison_enqueue_line_does_not_abort_load(tmp_path):
+    """A truncated/missing-field enqueue must not prevent loading valid wakes."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    good = q.enqueue("user_message", {"content": "ok"})
+    path = q.events_path
+    # Append poison line (missing kind/priority/created_at) then another good wake.
+    poison = {
+        "ts": "2026-01-01T00:00:00Z",
+        "wake_id": "POISON",
+        "op": "enqueue",
+        "item": {"id": "POISON"},  # incomplete
+    }
+    other = {
+        "ts": "2026-01-01T00:00:01Z",
+        "wake_id": "W-good2",
+        "op": "enqueue",
+        "item": {
+            "id": "W-good2",
+            "kind": "background",
+            "priority": 4,
+            "created_at": "2026-01-01T00:00:01Z",
+            "payload": {},
+        },
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(poison) + "\n")
+        handle.write(json.dumps(other) + "\n")
+
+    q2 = WakeQueue(paths)  # must not raise
+    pending_ids = {p.id for p in q2.pending()}
+    assert good.id in pending_ids
+    assert "W-good2" in pending_ids
+    assert "POISON" not in pending_ids
+    assert q2.get("POISON") is None
+
+
+def test_fold_repairs_mismatched_item_id(tmp_path):
+    """item.id != event wake_id is repaired so claim can pop the heap entry."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    path = q.events_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ev = {
+        "ts": "2026-01-01T00:00:00Z",
+        "wake_id": "EVENT-ID",
+        "op": "enqueue",
+        "item": {
+            "id": "ITEM-ID-DIFFERENT",
+            "kind": "timer",
+            "priority": 2,
+            "created_at": "2026-01-01T00:00:00Z",
+            "payload": {"reason": "mismatch"},
+        },
+    }
+    path.write_text(json.dumps(ev) + "\n", encoding="utf-8")
+    q2 = WakeQueue(paths)
+    pending = q2.pending()
+    assert len(pending) == 1
+    assert pending[0].id == "EVENT-ID"
+    claimed = q2.claim("M1")
+    assert claimed is not None
+    assert claimed.id == "EVENT-ID"
+
+
+def test_task_ready_dedupe_leaves_claimed_alone(tmp_path):
+    """Dedupe is enqueue-queue only; claimed same task_id is not replaced."""
+    q = _queue(tmp_path)
+    first = q.enqueue_task_ready("T1", payload={"n": 1})
+    claimed = q.claim("M1")
+    assert claimed is not None
+    assert claimed.id == first.id
+    assert q.status(first.id) == "claimed"
+
+    second = q.enqueue_task_ready("T1", payload={"n": 2})
+    assert second.id != first.id
+    # Claimed original still claimed (not cancelled)
+    assert q.status(first.id) == "claimed"
+    assert q.status(second.id) == "enqueue"
+    assert len(q.pending()) == 1
+    assert q.pending()[0].id == second.id
+
+
+def test_reject_reenqueue_nonterminal_same_id(tmp_path):
+    q = _queue(tmp_path)
+    item = q.enqueue("background", {})
+    try:
+        q.enqueue("background", {}, wake_id=item.id)
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "non-terminal" in str(exc)
+
+
+def test_recover_wait_reply_and_background_cancel_only(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    wr = q.enqueue("wait_reply", {"content": "ans"})
+    bg = q.enqueue("background", {})
+    assert q.claim("M1").id == wr.id
+    assert q.claim("M2").id == bg.id
+    q2 = WakeQueue(paths)
+    re = q2.recover_claimed()
+    assert re == []
+    assert q2.status(wr.id) == "cancelled"
+    assert q2.status(bg.id) == "cancelled"
+    assert q2.pending() == []

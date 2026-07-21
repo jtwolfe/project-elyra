@@ -102,15 +102,17 @@ def test_arm_wait_and_check_timeouts(tmp_path):
     assert svc.waits_path.is_file()
     assert svc.get_wait(wait.id) is not None
 
-    # Not yet due relative to past? expires is 2020, now 2021 → due
-    fired = svc.check_timeouts(now="2021-06-01T00:00:00Z")
+    # expires is 2020, now 2021 → due; elapsed is wall time from armed_at
+    fire_at = "2021-06-01T00:00:00Z"
+    fired = svc.check_timeouts(now=fire_at)
     assert len(fired) == 1
     assert fired[0].kind == "wait_timeout"
     assert fired[0].priority == 1
     assert fired[0].payload["wait_id"] == wait.id
     assert fired[0].payload["moment_id"] == "M1"
     assert fired[0].payload["choices_offered"] == ["A", "B"]
-    assert fired[0].payload["wait_elapsed_s"] == 30.0
+    assert "wait_elapsed_s" in fired[0].payload
+    assert fired[0].payload["wait_elapsed_s"] > 30.0  # late rehydrate, not nominal
 
     updated = svc.get_wait(wait.id)
     assert updated is not None
@@ -118,7 +120,7 @@ def test_arm_wait_and_check_timeouts(tmp_path):
     assert updated.wake_id == fired[0].id
 
     # Idempotent
-    assert svc.check_timeouts(now="2021-06-01T00:00:00Z") == []
+    assert svc.check_timeouts(now=fire_at) == []
     assert len(q.pending()) == 1
 
 
@@ -200,3 +202,73 @@ def test_future_wait_survives_rehydrate(tmp_path):
     fired = svc.rehydrate_waits(now=datetime.now(UTC))
     assert fired == []
     assert svc.get_wait(wait.id).status == STATUS_PENDING
+
+
+def test_wait_crash_window_no_double_fire(tmp_path):
+    """If events already has wait_timeout but snapshot still pending (old bug),
+    mark-before-enqueue means rehydrate after a correct partial fire does not
+    double-enqueue. Simulate: fire once, then force snapshot back to pending
+    only if we had old ordering — with new ordering, timed_out snapshot +
+    rehydrate yields a single wake.
+    """
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    svc = TimerService(paths, q)
+    wait = svc.arm_wait(
+        prompt="once",
+        user_id="operator",
+        moment_id="M",
+        expires_at="2020-01-01T00:00:00Z",
+    )
+    first = svc.check_timeouts(now="2021-01-01T00:00:00Z")
+    assert len(first) == 1
+    assert svc.get_wait(wait.id).status == STATUS_TIMED_OUT
+
+    # Crash-window regression: events has the wake, snapshot is already terminal.
+    q2 = WakeQueue(paths)
+    svc2 = TimerService(paths, q2)
+    second = svc2.rehydrate_waits(now="2021-01-01T00:00:00Z")
+    assert second == []
+    pending_timeouts = [
+        p for p in q2.pending() if p.kind == "wait_timeout" and p.payload.get("wait_id") == wait.id
+    ]
+    assert len(pending_timeouts) == 1
+
+
+def test_timer_crash_window_no_double_fire(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    svc = TimerService(paths, q)
+    t = svc.schedule_timer("2020-01-01T00:00:00Z", reason="once")
+    first = svc.schedule_due(now="2021-01-01T00:00:00Z")
+    assert len(first) == 1
+    assert svc.list_timers(status=STATUS_SCHEDULED) == []
+
+    q2 = WakeQueue(paths)
+    svc2 = TimerService(paths, q2)
+    second = svc2.rehydrate_timers(now="2021-01-01T00:00:00Z")
+    assert second == []
+    pending = [p for p in q2.pending() if p.payload.get("timer_id") == t.id]
+    assert len(pending) == 1
+
+
+def test_rehydrate_fires_due_timers_and_waits(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    svc = TimerService(paths, q)
+    svc.schedule_timer("2020-01-01T00:00:00Z", reason="t")
+    svc.arm_wait(
+        prompt="w",
+        user_id="operator",
+        moment_id="M",
+        expires_at="2020-01-01T00:00:00Z",
+    )
+    # Cold start
+    q2 = WakeQueue(paths)
+    svc2 = TimerService(paths, q2)
+    fired = svc2.rehydrate(now="2021-01-01T00:00:00Z")
+    kinds = sorted(i.kind for i in fired)
+    assert kinds == ["timer", "wait_timeout"]

@@ -4,12 +4,18 @@ Scope: WakeItem, append-only events.jsonl, fold, claim, recover_claimed,
 in-process priority heap, task_ready dedupe helper.
 In scope: ops enqueue|claimed|done|cancelled; band priority; crash recovery.
 Out of scope: worker phases, moments open/close, interjections, runtime/web.
+
+Durability: single-writer under RLock; appends flush+fsync so claim survives
+process crash better than buffered stdio alone. Multi-process file locking
+is out of scope (S1 single worker).
 """
 
 from __future__ import annotations
 
 import heapq
 import json
+import logging
+import os
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -18,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from elyra.config import ElyraPaths
+
+logger = logging.getLogger(__name__)
 
 EVENTS_REL = Path("wakes") / "events.jsonl"
 
@@ -82,18 +90,75 @@ class _FoldedWake:
     reason: str | None = None
 
 
+def _parse_wake_item(item_raw: dict[str, Any], wake_id: str) -> WakeItem | None:
+    """Build WakeItem from enqueue payload; skip poison rows; align id to wake_id."""
+    try:
+        item = WakeItem.from_dict(item_raw)
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "skipping poison enqueue item for wake_id=%s: %s", wake_id, exc
+        )
+        return None
+    if item.kind not in KNOWN_KINDS:
+        logger.warning(
+            "skipping enqueue with unknown kind %r for wake_id=%s",
+            item.kind,
+            wake_id,
+        )
+        return None
+    # Heap / pending use event wake_id; force item.id to match.
+    if item.id != wake_id:
+        logger.warning(
+            "enqueue item.id %r != wake_id %r; repairing to wake_id",
+            item.id,
+            wake_id,
+        )
+        item = WakeItem(
+            id=wake_id,
+            kind=item.kind,
+            priority=item.priority,
+            created_at=item.created_at,
+            payload=dict(item.payload),
+        )
+    # Clamp priority to band table so fold cannot invent social-band background.
+    band = priority_for_kind(item.kind)
+    if item.priority != band:
+        item = WakeItem(
+            id=item.id,
+            kind=item.kind,
+            priority=band,
+            created_at=item.created_at,
+            payload=dict(item.payload),
+        )
+    return item
+
+
 def fold_events(events: list[dict[str, Any]]) -> dict[str, _FoldedWake]:
-    """Fold event list: latest lifecycle op per wake_id; item from last enqueue."""
+    """Fold event list: latest lifecycle op per wake_id; item from last enqueue.
+
+    Malformed enqueue items are skipped (logged) so one poison line does not
+    abort loading a healthy suffix of the event stream.
+    """
     state: dict[str, _FoldedWake] = {}
     for ev in events:
-        wake_id = str(ev["wake_id"])
-        op = str(ev["op"])
+        try:
+            wake_id = str(ev["wake_id"])
+            op = str(ev["op"])
+        except (KeyError, TypeError):
+            logger.warning("skipping event missing wake_id/op: %r", ev)
+            continue
         slot = state.setdefault(wake_id, _FoldedWake())
         if op == "enqueue":
             item_raw = ev.get("item")
             if not isinstance(item_raw, dict):
+                logger.warning(
+                    "skipping enqueue without item dict for wake_id=%s", wake_id
+                )
                 continue
-            slot.item = WakeItem.from_dict(item_raw)
+            item = _parse_wake_item(item_raw, wake_id)
+            if item is None:
+                continue
+            slot.item = item
             # Enqueue resets lifecycle to pending (non-terminal).
             slot.op = "enqueue"
             slot.moment_id = None
@@ -127,6 +192,7 @@ class WakeQueue:
     """Append-only wake event store + in-process pending heap.
 
     Mutations are serialized with an RLock (API and single worker share it later).
+    Single-writer assumption: one process owns the events file.
     """
 
     def __init__(self, paths: ElyraPaths) -> None:
@@ -164,9 +230,16 @@ class WakeQueue:
         return rows
 
     def _append_event(self, event: dict[str, Any]) -> None:
+        """Append one event line; flush+fsync for claim durability (single-writer)."""
         self._ensure_parent()
         with self.events_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                # Some filesystems / test fakes may not support fsync.
+                pass
 
     def _apply_fold(self, folded: dict[str, _FoldedWake]) -> None:
         self._items.clear()
@@ -178,6 +251,7 @@ class WakeQueue:
         for wake_id, slot in folded.items():
             if slot.item is None:
                 continue
+            # item.id is repaired to wake_id in fold; store under wake_id.
             self._items[wake_id] = slot.item
             if slot.op is None:
                 continue
@@ -219,18 +293,19 @@ class WakeQueue:
         payload: dict[str, Any] | None = None,
         *,
         wake_id: str | None = None,
-        priority: int | None = None,
         created_at: str | None = None,
     ) -> WakeItem:
-        """Append enqueue event and add to pending heap. Returns the WakeItem."""
-        band = priority_for_kind(kind) if priority is None else int(priority)
-        if priority is not None and kind not in KNOWN_KINDS:
-            # Allow explicit priority only for known kinds (keeps fold predictable).
-            raise ValueError(f"unknown wake kind: {kind!r}")
+        """Append enqueue event and add to pending heap. Returns the WakeItem.
+
+        Priority is always the band for ``kind`` (callers cannot override bands).
+        Re-enqueue of an existing non-terminal ``wake_id`` is rejected — cancel
+        or use a new id (redelivery clones use new ids).
+        """
+        band = priority_for_kind(kind)
         item = WakeItem(
             id=wake_id or str(uuid.uuid4()),
             kind=kind,
-            priority=band if priority is None else int(priority),
+            priority=band,
             created_at=created_at or _now_iso(),
             payload=dict(payload or {}),
         )
@@ -241,6 +316,12 @@ class WakeQueue:
             "item": item.to_dict(),
         }
         with self._lock:
+            existing = self._ops.get(item.id)
+            if existing is not None and existing not in TERMINAL_OPS:
+                raise ValueError(
+                    f"wake_id {item.id!r} already non-terminal ({existing}); "
+                    "cancel first or use a new id"
+                )
             self._append_event(event)
             self._items[item.id] = item
             self._ops[item.id] = "enqueue"
@@ -365,7 +446,7 @@ class WakeQueue:
             return out
 
     def pending_task_ready(self, task_id: str) -> list[WakeItem]:
-        """Pending (not claimed/terminal) task_ready wakes for ``task_id``."""
+        """Enqueue-state (not claimed/terminal) task_ready wakes for ``task_id``."""
         with self._lock:
             out: list[WakeItem] = []
             for wid in self._pending_ids:
@@ -385,10 +466,13 @@ class WakeQueue:
         goal_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> WakeItem:
-        """Enqueue task_ready after cancelling any pending same task_id (dedupe).
+        """Enqueue task_ready after cancelling pending (enqueue-only) same task_id.
 
-        Old pending (enqueue-only) task_ready for the same task_id are cancelled
-        with reason=replaced, then a fresh wake is enqueued.
+        Dedupe contract: only wakes still in **enqueue** state are replaced
+        (reason=replaced). A **claimed** task_ready is owned by the in-flight
+        moment and is not cancelled here — the worker finishes or
+        recover_claimed handles crash. A second ready signal while claimed
+        therefore becomes an additional pending wake after the claim completes.
         """
         if not task_id:
             raise ValueError("task_id is required")
