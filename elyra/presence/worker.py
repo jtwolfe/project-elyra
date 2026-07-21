@@ -398,6 +398,8 @@ class PresenceWorker:
             self._startup_recover()
             self._started = True
             while not self._stop.is_set():
+                wake: WakeItem | None = None
+                moment_id: str | None = None
                 try:
                     claimed = self._claim_and_open()
                     if claimed is None:
@@ -407,20 +409,13 @@ class PresenceWorker:
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
-                    result = self._run_moment(wake, moment_id)
-                    self._finalize_moment(wake, moment_id, result)
+                    result, skills_used = self._run_moment(wake, moment_id)
+                    self._finalize_moment(
+                        wake, moment_id, result, skills_used=skills_used
+                    )
                 except Exception as exc:  # noqa: BLE001 — keep worker alive
                     _LOG.exception("presence worker iteration failed: %s", exc)
-                    with self._lock:
-                        self._worker_error = f"{type(exc).__name__}: {exc}"
-                        self._busy = False
-                        self._active_moment_id = None
-                        if self._phase == PHASE_IN_MOMENT:
-                            # Defensive: do not leave phase stuck in_moment.
-                            if self._timers.list_waits(status=STATUS_PENDING):
-                                self._phase = PHASE_WAITING
-                            else:
-                                self._phase = PHASE_IDLE
+                    self._fail_in_flight(wake, moment_id, exc)
                     self._stop.wait(timeout=self._poll)
         finally:
             _LOG.info("presence worker stopped")
@@ -460,7 +455,11 @@ class PresenceWorker:
             _LOG.exception("timer/wait poll failed")
 
     def _claim_and_open(self) -> tuple[WakeItem, str] | None:
-        """Under lock: fire due work, claim one wake, open moment, set phase."""
+        """Under lock: fire due work, claim one wake, open moment, set phase.
+
+        If claim succeeds but ``open_moment`` fails, the wake is cancelled so it
+        is not left stuck in ``claimed``.
+        """
         with self._lock:
             self._fire_due_unlocked()
             moment_id = str(uuid.uuid4())
@@ -469,12 +468,20 @@ class PresenceWorker:
                 return None
             user_id = _user_id_from_wake(wake)
             why = _why_now(wake)
-            self._moments.open_moment(
-                why_now=why,
-                user_id=user_id,
-                wake_id=wake.id,
-                moment_id=moment_id,
-            )
+            try:
+                self._moments.open_moment(
+                    why_now=why,
+                    user_id=user_id,
+                    wake_id=wake.id,
+                    moment_id=moment_id,
+                )
+            except Exception:
+                # Do not leave a claimed-without-terminal wake.
+                try:
+                    self._queue.cancel(wake.id, "open_moment_failed")
+                except KeyError:
+                    pass
+                raise
             self._phase = PHASE_IN_MOMENT
             self._busy = True
             self._active_moment_id = moment_id
@@ -485,8 +492,14 @@ class PresenceWorker:
             self._interject.clear()
             return wake, moment_id
 
-    def _run_moment(self, wake: WakeItem, moment_id: str) -> DoLoopResult:
-        """Run do-loop outside the state lock (interjects still lock-protected)."""
+    def _run_moment(
+        self, wake: WakeItem, moment_id: str
+    ) -> tuple[DoLoopResult, list[str]]:
+        """Run do-loop outside the state lock (interjects still lock-protected).
+
+        Returns ``(result, skills_used)`` so close can persist skills loaded
+        during the moment even if the loop returns without a live ctx ref.
+        """
         ctx = self._build_tool_context(wake, moment_id)
         social = wake.kind in SOCIAL_WAKE_KINDS
         payload = wake.payload or {}
@@ -520,7 +533,7 @@ class PresenceWorker:
             )
 
         registry = self._ensure_registry()
-        return self._run_do_loop(
+        result = self._run_do_loop(
             client=self.client,
             registry=registry,
             ctx=ctx,
@@ -530,12 +543,15 @@ class PresenceWorker:
             social_wake=social,
             drain_interjections=self._drain_interjections,
         )
+        return result, list(ctx.skills_used)
 
     def _finalize_moment(
         self,
         wake: WakeItem,
         moment_id: str,
         result: DoLoopResult,
+        *,
+        skills_used: list[str] | None = None,
     ) -> None:
         """Close moment, mark wake done, phase → waiting|idle (under lock)."""
         with self._lock:
@@ -543,7 +559,7 @@ class PresenceWorker:
             if stop not in STOP_REASONS:
                 stop = "error"
             hop = int(result.hop_count) if result else 0
-            skills = None
+            skills = list(skills_used) if skills_used is not None else []
             try:
                 self._moments.close_moment(
                     moment_id,
@@ -571,17 +587,65 @@ class PresenceWorker:
             arm = result.arm_wait if result else None
             if stop == "wait" or arm is not None:
                 self._ensure_wait_armed_unlocked(arm, moment_id)
-                self._phase = PHASE_WAITING
-            else:
-                if self._timers.list_waits(status=STATUS_PENDING):
-                    self._phase = PHASE_WAITING
-                else:
-                    self._phase = PHASE_IDLE
+            # Phase waiting only when a durable pending wait exists — never
+            # label waiting with pending_wait is None (stub/misbehaving loop).
+            self._phase = self._phase_from_pending_waits_unlocked()
+            if stop == "wait" and self._phase != PHASE_WAITING:
+                _LOG.warning(
+                    "wait stop without durable pending wait "
+                    "(arm_wait=%s); phase=idle",
+                    arm.wait_id if arm is not None else None,
+                )
 
             self._busy = False
             self._active_moment_id = None
             if result and result.error:
                 self._worker_error = result.error
+
+    def _fail_in_flight(
+        self,
+        wake: WakeItem | None,
+        moment_id: str | None,
+        exc: BaseException,
+    ) -> None:
+        """Close open moment + terminalize claimed wake after iteration failure.
+
+        Preserves design invariant: open moment iff phase == in_moment.
+        """
+        with self._lock:
+            self._worker_error = f"{type(exc).__name__}: {exc}"
+            if moment_id is not None:
+                try:
+                    meta = self._moments.get_moment(moment_id)
+                    if meta is not None and meta.get("ended_at") is None:
+                        self._moments.close_moment(
+                            moment_id,
+                            "error",
+                            hop_count=self._hop_count,
+                        )
+                except (KeyError, ValueError) as close_exc:
+                    _LOG.warning(
+                        "fail_in_flight close_moment failed: %s", close_exc
+                    )
+            if wake is not None:
+                try:
+                    op = self._queue.status(wake.id)
+                    if op is not None and op not in ("done", "cancelled"):
+                        self._queue.mark_done(wake.id)
+                except KeyError:
+                    _LOG.warning(
+                        "fail_in_flight mark_done unknown wake_id=%s", wake.id
+                    )
+            self._flush_interjects_as_wakes_unlocked()
+            self._phase = self._phase_from_pending_waits_unlocked()
+            self._busy = False
+            self._active_moment_id = None
+
+    def _phase_from_pending_waits_unlocked(self) -> str:
+        """``waiting`` iff durable pending wait exists; else ``idle``."""
+        if self._timers.list_waits(status=STATUS_PENDING):
+            return PHASE_WAITING
+        return PHASE_IDLE
 
     def _ensure_wait_armed_unlocked(
         self, arm: WaitArm | None, moment_id: str

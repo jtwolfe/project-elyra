@@ -316,6 +316,89 @@ def test_worker_wait_stop_arms_wait_and_phase_waiting(paths):
         _stop_join(worker, stop, t)
 
 
+def test_wait_stop_without_arm_does_not_leave_waiting(paths):
+    """stop_reason=wait with no arm_wait and no durable wait → idle, not stranded."""
+    stub = _stub_loop(stop_reason="wait", hop_count=1, arm_wait=None)
+    worker, stop = _make_worker(paths, run_do_loop_fn=stub)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("wait without arm")
+        assert _wait_until(lambda: not worker.busy and len(stub.calls) >= 1)
+        assert worker.phase == PHASE_IDLE
+        assert worker.pending_wait is None
+        assert MomentStore(paths).list_open_moments() == []
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_exception_after_claim_closes_moment_and_terminalizes_wake(paths):
+    """Issue 1: exception after open must not leave open moment / claimed wake."""
+
+    def boom(**_kwargs: Any) -> DoLoopResult:
+        raise RuntimeError("stub boom")
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=boom)
+    t = _start(worker)
+    try:
+        wake_id = worker.enqueue_user_message("will fail")
+        assert _wait_until(
+            lambda: worker._queue.status(wake_id) == "done",  # noqa: SLF001
+            timeout=2.0,
+        )
+        assert worker.phase == PHASE_IDLE
+        assert worker.busy is False
+        assert worker.active_moment_id is None
+        assert MomentStore(paths).list_open_moments() == []
+        # Error recorded
+        assert worker.last_error is not None
+        assert "RuntimeError" in (worker.last_error or "")
+
+        # Subsequent wake still processes cleanly
+        stub = _stub_loop(hop_count=1)
+        worker._run_do_loop = stub  # noqa: SLF001
+        wake2 = worker.enqueue_user_message("recover and continue")
+        assert _wait_until(lambda: len(stub.calls) >= 1, timeout=2.0)
+        assert _wait_until(
+            lambda: worker._queue.status(wake2) == "done",  # noqa: SLF001
+            timeout=2.0,
+        )
+        assert MomentStore(paths).list_open_moments() == []
+        assert worker.phase == PHASE_IDLE
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_skills_used_passed_to_close_moment(paths):
+    """Issue 2: skills loaded on ctx are recorded on closed moment meta."""
+    seen_mid: list[str] = []
+
+    def with_skill(**kwargs: Any) -> DoLoopResult:
+        ctx = kwargs["ctx"]
+        seen_mid.append(ctx.moment_id)
+        ctx.skills_used.append("talk")
+        ctx.skills_used.append("wait")
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=with_skill)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("use skill")
+        assert _wait_until(lambda: len(seen_mid) >= 1, timeout=2.0)
+        assert _wait_until(
+            lambda: not worker.busy and worker.phase == PHASE_IDLE, timeout=2.0
+        )
+        meta = MomentStore(paths).get_moment(seen_mid[0])
+        assert meta is not None
+        assert meta.get("ended_at") is not None
+        assert meta.get("skills_used") == ["talk", "wait"]
+    finally:
+        _stop_join(worker, stop, t)
+
+
 def test_resolve_user_input_wait_reply_enqueues_wake(paths):
     arm = WaitArm(
         wait_id="wait-reply-1",
@@ -451,6 +534,65 @@ def test_startup_recovers_open_moments(paths):
         assert meta is not None
         assert meta["ended_at"] is not None
         assert meta["stop_reason"] == "interrupted"
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_startup_recover_claimed_user_message_and_timer(paths):
+    """Issue 3: recover_claimed cancels social wakes; re-enqueues timer/task_ready."""
+    import uuid as uuid_mod
+
+    from elyra.presence.queue import REASON_INTERRUPTED
+
+    seed_queue = WakeQueue(paths)
+    user_item = seed_queue.enqueue(
+        "user_message",
+        {"content": "orphaned", "user_id": "operator", "message_id": "m1"},
+    )
+    timer_item = seed_queue.enqueue(
+        "timer",
+        {"reason": "ping", "wake_at": "2099-01-01T00:00:00Z", "timer_id": "t1"},
+    )
+    # Claim both without completing (crash mid-moment). user band 0 first.
+    claimed_user = seed_queue.claim(str(uuid_mod.uuid4()))
+    claimed_timer = seed_queue.claim(str(uuid_mod.uuid4()))
+    assert claimed_user is not None and claimed_user.id == user_item.id
+    assert claimed_timer is not None and claimed_timer.id == timer_item.id
+    assert seed_queue.status(user_item.id) == "claimed"
+    assert seed_queue.status(timer_item.id) == "claimed"
+
+    # Fresh worker reloads events and runs recover_claimed on start.
+    stub = _stub_loop()
+    worker, stop = _make_worker(paths, run_do_loop_fn=stub)
+    t = _start(worker)
+    try:
+        assert _wait_until(
+            lambda: worker._queue.status(user_item.id) == "cancelled",  # noqa: SLF001
+            timeout=2.0,
+        )
+        assert worker._queue.status(user_item.id) == "cancelled"  # noqa: SLF001
+        assert worker._queue.status(timer_item.id) == "cancelled"  # noqa: SLF001
+
+        # Timer re-enqueued as a new id (clone); may already be done by worker.
+        def timer_clone_seen() -> bool:
+            q = worker._queue  # noqa: SLF001
+            for item in list(q._items.values()):  # noqa: SLF001
+                if item.id == timer_item.id:
+                    continue
+                if item.kind == "timer" and item.payload.get("reason") == "ping":
+                    return True
+            return False
+
+        assert _wait_until(timer_clone_seen, timeout=2.0)
+        assert _wait_until(lambda: not worker.busy, timeout=2.0)
+        assert MomentStore(paths).list_open_moments() == []
+        # user_message must not be re-enqueued as pending
+        pending_kinds = [w.kind for w in worker._queue.pending()]  # noqa: SLF001
+        assert "user_message" not in pending_kinds
+        # Sanity: interrupted reason on cancelled user wake (fold state)
+        assert (
+            worker._queue._reasons.get(user_item.id) == REASON_INTERRUPTED  # noqa: SLF001
+        )
     finally:
         _stop_join(worker, stop, t)
 
