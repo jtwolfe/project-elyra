@@ -1,3 +1,5 @@
+import pytest
+
 from elyra.config import resolve_paths
 from elyra.identity import IdentityStore
 from elyra.users import UsersStore
@@ -26,7 +28,7 @@ def test_users_operator_profile_after_seed(tmp_path):
     store = UsersStore(paths)
     text = store.profile("operator")
     assert text
-    assert "operator" in text.lower() or "Operator" in text
+    assert "Operator" in text
 
 
 def test_users_missing_profile_returns_empty(tmp_path):
@@ -43,3 +45,19 @@ def test_users_custom_profile_read(tmp_path):
     dest.write_text("# Alice\nPrefers brief notes.\n", encoding="utf-8")
     store = UsersStore(paths)
     assert "Alice" in store.profile("alice")
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    ["..", ".", "", "../x", "a/b", "a\\b", "/etc", "~root"],
+)
+def test_users_profile_rejects_path_escape(tmp_path, bad_id):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    # plant a file that a naive join might read
+    (paths.data_dir / "profile.md").write_text("ESCAPED\n", encoding="utf-8")
+    store = UsersStore(paths)
+    with pytest.raises(ValueError, match="invalid user_id"):
+        store.profile(bad_id)
+    with pytest.raises(ValueError, match="invalid user_id"):
+        store.profile_path(bad_id)

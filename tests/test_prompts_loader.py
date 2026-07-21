@@ -24,7 +24,7 @@ def test_resolve_prompt_path_prefers_home(tmp_path):
     custom.parent.mkdir(parents=True)
     custom.write_text("# custom system\n", encoding="utf-8")
     found = resolve_prompt_path("system", paths=paths)
-    assert found == custom
+    assert found == custom.resolve()
     assert load_prompt("system", paths=paths) == "# custom system\n"
 
 
@@ -41,11 +41,23 @@ def test_load_prompt_missing_raises(tmp_path):
         load_prompt("does-not-exist-xyz", paths=paths)
 
 
-@pytest.mark.llm
-def test_system_prompt_is_valid_nonempty_for_llm():
-    """Optional LLM-facing smoke: system.md is usable prompt text (no server)."""
+def test_system_prompt_is_valid_nonempty_lean():
+    """Disk smoke: system.md is usable lean prompt text (no model required)."""
     text = load_prompt("system")
     assert isinstance(text, str)
     assert len(text.strip()) > 40
     # lean system — not a multi-page bible
     assert len(text) < 4000
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    ["../secret", "../../etc/passwd", "/etc/passwd", "a/b", "seeds/identity/self"],
+)
+def test_prompt_path_jail_rejects_escape(tmp_path, bad_name):
+    paths = resolve_paths(tmp_path)
+    # file outside prompts that a naive join might hit
+    (tmp_path / "secret.md").write_text("NOPE\n", encoding="utf-8")
+    assert resolve_prompt_path(bad_name, paths=paths) is None
+    with pytest.raises(FileNotFoundError):
+        load_prompt(bad_name, paths=paths)

@@ -1,20 +1,20 @@
 """Settings from defaults, optional elyra.toml, and CLI overrides.
 
 Scope: load/merge loop, wait, tools, goals (and common CLI) knobs.
-In scope: tomllib, frozen defaults, precedence defaults < toml < CLI.
+In scope: tomllib, frozen defaults, precedence defaults < toml < CLI, type checks.
 Out of scope: runtime wiring, argv parsing, ELYRA_HOME (see config).
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields, replace
+import types
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover — py<3.11
-    import tomli as tomllib  # type: ignore[no-redef]
+import tomllib
+
+_CLOSE_GATES = frozenset({"soft", "hard"})
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,8 @@ def load_settings(home: Path | str | None = None) -> Settings:
     base = default_settings()
     if home is None:
         return base
-    path = Path(home) / "elyra.toml"
+    root = Path(home).expanduser().resolve()
+    path = root / "elyra.toml"
     if not path.is_file():
         return base
     with path.open("rb") as f:
@@ -96,25 +97,106 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
     kwargs: dict[str, Any] = {}
 
     if "loop" in data and isinstance(data["loop"], Mapping):
-        kwargs["loop"] = _replace_section(settings.loop, data["loop"])
+        kwargs["loop"] = _replace_section(settings.loop, data["loop"], "loop")
     if "wait" in data and isinstance(data["wait"], Mapping):
-        kwargs["wait"] = _replace_section(settings.wait, data["wait"])
+        kwargs["wait"] = _replace_section(settings.wait, data["wait"], "wait")
     if "tools" in data and isinstance(data["tools"], Mapping):
-        kwargs["tools"] = _replace_section(settings.tools, data["tools"])
+        kwargs["tools"] = _replace_section(settings.tools, data["tools"], "tools")
     if "goals" in data and isinstance(data["goals"], Mapping):
-        kwargs["goals"] = _replace_section(settings.goals, data["goals"])
+        kwargs["goals"] = _replace_section(settings.goals, data["goals"], "goals")
 
+    # get_type_hints resolves postponed annotations (str -> real types).
+    top_types = get_type_hints(Settings)
     for key in ("api_host", "api_port", "context_tokens"):
         if key in data and data[key] is not None:
-            kwargs[key] = data[key]
+            kwargs[key] = _coerce_value(key, data[key], top_types[key])
 
     return replace(settings, **kwargs) if kwargs else settings
 
 
-def _replace_section(section: Any, values: Mapping[str, Any]) -> Any:
-    known = {f.name for f in fields(section)}
-    filtered = {k: v for k, v in values.items() if k in known and v is not None}
+def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> Any:
+    known = get_type_hints(type(section))
+    filtered: dict[str, Any] = {}
+    for k, v in values.items():
+        if k not in known or v is None:
+            continue
+        path = f"{prefix}.{k}"
+        coerced = _coerce_value(path, v, known[k])
+        if path == "goals.close_gate" and coerced not in _CLOSE_GATES:
+            raise ValueError(
+                f"{path}: expected one of {sorted(_CLOSE_GATES)}, got {coerced!r}"
+            )
+        filtered[k] = coerced
     return replace(section, **filtered) if filtered else section
+
+
+def _coerce_value(key: str, value: Any, annotation: Any) -> Any:
+    """Coerce ``value`` to ``annotation`` or raise ValueError with key path."""
+    expected = _unwrap_optional(annotation)
+    if expected is None:
+        # annotation was None-only (should not happen); accept None only
+        if value is None:
+            return None
+        raise ValueError(f"{key}: expected None, got {type(value).__name__}")
+
+    if expected is int:
+        return _as_int(key, value)
+    if expected is str:
+        if not isinstance(value, str):
+            raise ValueError(
+                f"{key}: expected str, got {type(value).__name__}: {value!r}"
+            )
+        return value
+    if expected is float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"{key}: expected float, got {type(value).__name__}: {value!r}"
+            )
+        return float(value)
+    if expected is bool:
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"{key}: expected bool, got {type(value).__name__}: {value!r}"
+            )
+        return value
+    # Fallback: exact type match
+    if not isinstance(value, expected):
+        raise ValueError(
+            f"{key}: expected {getattr(expected, '__name__', expected)}, "
+            f"got {type(value).__name__}: {value!r}"
+        )
+    return value
+
+
+def _unwrap_optional(annotation: Any) -> Any | None:
+    """Return the non-None arm of T | None, or annotation as-is."""
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+        return annotation
+    return annotation
+
+
+def _as_int(key: str, value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{key}: expected int, got bool: {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        raise ValueError(f"{key}: expected int, got non-integer float: {value!r}")
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            return int(text, 10)
+        except ValueError as exc:
+            raise ValueError(
+                f"{key}: expected int, got non-integer str: {value!r}"
+            ) from exc
+    raise ValueError(f"{key}: expected int, got {type(value).__name__}: {value!r}")
 
 
 def settings_as_dict(settings: Settings) -> dict[str, Any]:

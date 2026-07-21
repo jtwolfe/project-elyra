@@ -1,7 +1,8 @@
 from pathlib import Path
 
+import pytest
+
 from elyra.settings import (
-    GoalsSettings,
     LoopSettings,
     Settings,
     default_settings,
@@ -63,6 +64,18 @@ close_gate = "hard"
     assert s.goals.close_gate == "hard"
 
 
+def test_load_settings_expands_user_home(tmp_path, monkeypatch):
+    home = tmp_path / "elyra-home"
+    home.mkdir()
+    (home / "elyra.toml").write_text(
+        "[loop]\nmax_tool_hops = 11\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    s = load_settings("~/elyra-home")
+    assert s.loop.max_tool_hops == 11
+
+
 def test_cli_overrides_win_over_toml(tmp_path):
     (tmp_path / "elyra.toml").write_text(
         """
@@ -105,3 +118,44 @@ def test_settings_as_dict_round_structure():
     d = settings_as_dict(default_settings())
     assert d["loop"]["max_tool_hops"] == 200
     assert d["goals"]["close_gate"] == "soft"
+
+
+def test_bad_int_type_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[loop]\nmax_tool_hops = "not-a-number"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="loop.max_tool_hops"):
+        load_settings(tmp_path)
+
+
+def test_bad_float_for_int_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[loop]\ncontinue_idle_minutes = 8.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="continue_idle_minutes"):
+        load_settings(tmp_path)
+
+
+def test_invalid_close_gate_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[goals]\nclose_gate = "maybe"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="close_gate"):
+        load_settings(tmp_path)
+
+
+def test_string_int_coerces_in_cli_override():
+    merged = merge_cli_overrides(
+        default_settings(),
+        {"api_port": "9001", "loop": {"max_tool_hops": "50"}},
+    )
+    assert merged.api_port == 9001
+    assert merged.loop.max_tool_hops == 50
+
+
+def test_bool_rejected_as_int():
+    with pytest.raises(ValueError, match="api_port"):
+        merge_cli_overrides(default_settings(), {"api_port": True})

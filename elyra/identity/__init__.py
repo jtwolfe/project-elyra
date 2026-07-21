@@ -1,4 +1,4 @@
-"""Self identity store (read + seed; no patch tools in S1)."""
+"""Read-only self digest store (seeded by ensure_data_dirs; no patch tools in S1)."""
 
 from elyra.identity.store import IdentityStore
 
