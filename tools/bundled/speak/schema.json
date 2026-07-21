@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "Message content to deliver to the user via glass/chat"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Recipient user id (defaults to active wake user or operator)"
+    }
+  },
+  "required": ["text"],
+  "additionalProperties": false
+}

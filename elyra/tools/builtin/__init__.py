@@ -1,4 +1,9 @@
 """Host builtin tool handlers (entry points referenced by runner.json).
 
-Sandbox FS group: files (read_file, list_dir, grep, search_replace) + run_cmd.run.
+- files.py — sandbox FS tools (read_file, list_dir, grep, search_replace)
+- run_cmd.py — run
+- social.py — speak, wait_user, schedule_wake
+- ledger.py — update_task, update_goal
+- skills_tools.py — load_skill
+- growth.py — install_tool_draft, verify_tool, promote_tool, install_skill
 """
