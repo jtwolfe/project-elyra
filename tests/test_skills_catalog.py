@@ -342,6 +342,7 @@ def test_load_skill_missing_name(home: Path, catalog: SkillCatalog) -> None:
     paths = resolve_paths(home)
     ctx = ToolContext(paths=paths, extras={"skills": catalog})
     assert load_skill({}, ctx).error_reason == "missing_name"
+    assert load_skill({"name": None}, ctx).error_reason == "missing_name"
     assert load_skill({"name": ""}, ctx).error_reason == "missing_name"
     assert load_skill({"name": "  "}, ctx).error_reason == "missing_name"
 
@@ -352,15 +353,17 @@ def test_load_skill_invalid_name(home: Path, catalog: SkillCatalog) -> None:
     result = load_skill({"name": "../etc"}, ctx)
     assert result.ok is False
     assert result.error_reason == "invalid_name"
+    # Type-wrong args are invalid, not missing (align with PR6 tool execute).
+    assert load_skill({"name": 123}, ctx).error_reason == "invalid_name"
+    assert load_skill({"name": ["talk"]}, ctx).error_reason == "invalid_name"
+    assert load_skill({"name": True}, ctx).error_reason == "invalid_name"
 
 
 def test_load_skill_builds_catalog_from_paths_when_not_injected(
-    home: Path, skills_bundled_root: Path, monkeypatch: pytest.MonkeyPatch
+    home: Path,
 ) -> None:
     """Without extras['skills'], handler constructs SkillCatalog from paths."""
     paths = resolve_paths(home)
-    # Point project bundled via monkeypatch of resolve if needed — inject
-    # by making SkillCatalog default work: paths home may not have skills/bundled.
     # Handler uses SkillCatalog(ctx.paths) which resolves BUNDLED from project_root.
     ctx = ToolContext(paths=paths)
     result = load_skill({"name": "rest"}, ctx)
@@ -369,6 +372,27 @@ def test_load_skill_builds_catalog_from_paths_when_not_injected(
     assert result.payload["name"] == "rest"
     assert "Idle honestly" in result.payload["body"] or "Rest" in result.payload["body"]
     assert "rest" in ctx.skills_used
+
+
+def test_load_skill_skills_unavailable(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When catalog cannot be built and no inject, return skills_unavailable."""
+    paths = resolve_paths(home)
+    ctx = ToolContext(paths=paths)
+
+    def _fail(_override: object = None) -> Path:
+        raise BundledSkillsRootError("forced for test")
+
+    # Fail construction without replacing SkillCatalog type (isinstance must work).
+    monkeypatch.setattr(
+        "elyra.skills.catalog.resolve_bundled_skills_root",
+        _fail,
+    )
+    result = load_skill({"name": "talk"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "skills_unavailable"
+    assert ctx.skills_used == []
 
 
 def test_load_skill_create_tool_checklist(

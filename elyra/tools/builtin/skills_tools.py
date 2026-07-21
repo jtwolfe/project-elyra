@@ -37,13 +37,27 @@ def load_skill(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     (once per name per bag).
     """
     name = args.get("name")
-    if not isinstance(name, str) or not name.strip():
+    # Absent / empty string → missing_name; type-wrong or malformed → invalid_name
+    # (align with PR6 tool execute: non-str is invalid, not "missing").
+    if name is None:
         return ToolResult(
             ok=False,
             payload={},
             error_reason="missing_name",
         )
+    if not isinstance(name, str):
+        return ToolResult(
+            ok=False,
+            payload={},
+            error_reason="invalid_name",
+        )
     name = name.strip()
+    if not name:
+        return ToolResult(
+            ok=False,
+            payload={},
+            error_reason="missing_name",
+        )
     if not is_valid_skill_name(name):
         return ToolResult(
             ok=False,
