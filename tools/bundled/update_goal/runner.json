@@ -1,0 +1,4 @@
+{
+  "kind": "builtin",
+  "entry": "elyra.tools.builtin.ledger:update_goal"
+}

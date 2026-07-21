@@ -346,6 +346,9 @@ class GoalsStore:
         always call ``on_task_ready(task_id, goal_id)`` if set. Already-ready
         does not re-fire. Dedupe is the hook's contract. Hook runs after save
         and outside the store lock.
+
+        Result includes ``became_ready: bool`` computed under the store lock so
+        callers (ledger tools) can key side effects without a separate status read.
         """
         with self._lock:
             doc = self._load()
@@ -380,7 +383,9 @@ class GoalsStore:
         if became_ready:
             self._fire_task_ready(task_copy["id"], goal_id)
 
-        return {"ok": True, "task": task_copy}
+        # became_ready is authoritative (in-lock); tools should key wakes off this
+        # rather than a separate pre-read of status (avoids TOCTOU).
+        return {"ok": True, "task": task_copy, "became_ready": became_ready}
 
     def _fire_task_ready(self, task_id: str, goal_id: str) -> None:
         hook = self._on_task_ready

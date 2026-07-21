@@ -100,6 +100,7 @@ def test_create_and_update_task(store):
     assert updated["ok"] is True
     assert updated["task"]["status"] == "in_progress"
     assert updated["task"]["notes"] == "n2"
+    assert updated["became_ready"] is False
 
     parent = store.get_goal(g["id"])
     assert len(parent["tasks"]) == 1
@@ -116,16 +117,19 @@ def test_task_ready_hook_fires_on_ready_transition(store, tmp_path):
     t = s.create_task(g["id"], "T")
     assert calls == []
 
-    s.update_task(t["id"], status="ready")
+    r1 = s.update_task(t["id"], status="ready")
+    assert r1["became_ready"] is True
     assert calls == [(t["id"], g["id"])]
 
     # Already ready: no re-fire
-    s.update_task(t["id"], status="ready")
+    r2 = s.update_task(t["id"], status="ready")
+    assert r2["became_ready"] is False
     assert calls == [(t["id"], g["id"])]
 
     # Leave ready and re-enter: fires again (dedupe is hook-side)
     s.update_task(t["id"], status="in_progress")
-    s.update_task(t["id"], status="ready")
+    r3 = s.update_task(t["id"], status="ready")
+    assert r3["became_ready"] is True
     assert calls == [(t["id"], g["id"]), (t["id"], g["id"])]
 
 

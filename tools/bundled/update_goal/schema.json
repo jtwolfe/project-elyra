@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "goal_id": {
+      "type": "string",
+      "description": "Id of the goal to update (e.g. g_…)"
+    },
+    "title": {
+      "type": "string",
+      "description": "New goal title"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "review", "closed", "cancelled"],
+      "description": "New goal status; prefer review before closed"
+    },
+    "acceptance": {
+      "type": "string",
+      "description": "Acceptance criteria text"
+    },
+    "force": {
+      "type": "boolean",
+      "description": "If true, open→closed omits soft-close warning (metric still counts)"
+    }
+  },
+  "required": ["goal_id"],
+  "additionalProperties": false
+}

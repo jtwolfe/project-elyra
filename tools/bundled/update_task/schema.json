@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Id of the task to update (e.g. t_…)"
+    },
+    "title": {
+      "type": "string",
+      "description": "New task title"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "ready", "in_progress", "blocked", "done", "cancelled"],
+      "description": "New task status; transition to ready enqueues task_ready"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional notes (pass null/empty to clear if supported)"
+    }
+  },
+  "required": ["task_id"],
+  "additionalProperties": false
+}
