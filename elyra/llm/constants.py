@@ -20,6 +20,9 @@ CONTEXT_BUDGET_TOKENS = CONTEXT_WINDOW_TOKENS - GENERATION_RESERVED_TOKENS
 # Prefer sliding meals well under this in practice (VRAM / stability).
 DEFAULT_SLIDING_INPUT_TOKENS = 24_000
 
-# Gemma card nucleus / top-k truncation (product defaults ship in a later PR).
+# Gemma card nucleus / top-k truncation (product defaults on LlamaServerConfig).
 GEMMA_TOP_P = 0.95
 GEMMA_TOP_K = 64
+
+# Chat temperature product default (Stage 1 live OFAT → 0.6 + card trunc).
+DEFAULT_CHAT_TEMPERATURE = 0.6

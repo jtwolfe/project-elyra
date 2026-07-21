@@ -75,7 +75,24 @@ llama-server
 | Generation | **Generous** when stable (do not starve tool loops) |
 | Stability | One HTTP call at a time (chat or embed); drop `-c` before inventing new stacks |
 
-Client: `http://127.0.0.1:8080/v1/chat/completions` (tools + reasoning). Long read timeout (~600s). Temperature ~0.2 until tuned.
+Client: `http://127.0.0.1:8080/v1/chat/completions` (tools + reasoning). Long read timeout (~600s).
+
+### Product chat sampling (Stage 1)
+
+Defaults live on `LlamaServerConfig` (KD13). Do-loop does not hardcode sampling; `HttpChatClient` falls back when kwargs are `None`.
+
+| Knob | Default | Constant / source |
+|------|---------|-------------------|
+| **temperature** | **0.6** | `DEFAULT_CHAT_TEMPERATURE` — Stage 1 live OFAT (S-mono 0.2/0.4/0.6 × 3; 0.6 cleanest flood + tools) |
+| **top_p** | **0.95** | `GEMMA_TOP_P` (Gemma card / elyra2 freeze) |
+| **top_k** | **64** | `GEMMA_TOP_K` |
+| reasoning budget | omit | Stage 2 |
+
+When `top_p` / `top_k` are explicitly `None` on config, the client **omits** them from the HTTP body (server default).
+
+**Known residual:** S-social post-speak hop-2 pure channel flood (~280s) still 0/3 at these defaults (same shape as Stage 0 temp 0.2). Sampling alone does not close (A) on social; Stages 2–4 (budget, hygiene ingress, RC re-feed) remain in plan. S-tools stayed 3/3 clean; S-mono improved to 3/3 flood-clean at 0.6 vs softer 0.2/0.4 cells.
+
+See `scripts/live_eval/logs/stage-1.md` and `docs/design-gemma-sampling-hygiene-staged.md`.
 
 ## Real model tests
 
