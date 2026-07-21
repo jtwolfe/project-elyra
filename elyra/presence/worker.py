@@ -14,8 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Sequence
 
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
@@ -26,6 +25,11 @@ from elyra.loop.doloop import DoLoopResult, run_do_loop
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.moment.types import STOP_REASONS
+from elyra.presence.interject import (
+    REASON_BUFFER_FULL,
+    InterjectBuffer,
+    InterjectItem,
+)
 from elyra.presence.queue import KIND_PRIORITY, WakeItem, WakeQueue
 from elyra.presence.timers import STATUS_PENDING, TimerService
 from elyra.presence.user_input import (
@@ -50,53 +54,8 @@ _LOG = logging.getLogger(__name__)
 # Social wakes get the no-speak nudge path inside the do-loop.
 SOCIAL_WAKE_KINDS = frozenset({"user_message", "wait_reply"})
 
-# Interjection buffer caps (design: first limit hit wins).
-INTERJECT_MAX_MESSAGES = 8
-INTERJECT_MAX_CHARS = 16_000
-
 # Injectable do-loop port (tests inject stubs; production uses run_do_loop).
 RunDoLoopFn = Callable[..., DoLoopResult]
-
-
-@dataclass
-class _InterjectItem:
-    content: str
-    user_id: str
-    message_id: str | None = None
-
-
-@dataclass
-class _InterjectBuffer:
-    """Bounded mid-moment interjection buffer (not wake-queue items)."""
-
-    max_messages: int = INTERJECT_MAX_MESSAGES
-    max_chars: int = INTERJECT_MAX_CHARS
-    items: list[_InterjectItem] = field(default_factory=list)
-    chars: int = 0
-
-    def try_add(self, item: _InterjectItem) -> tuple[bool, str | None]:
-        n = len(item.content)
-        if len(self.items) >= self.max_messages:
-            return False, "interjection_buffer_full"
-        if self.chars + n > self.max_chars:
-            return False, "interjection_buffer_full"
-        self.items.append(item)
-        self.chars += n
-        return True, None
-
-    def drain(self) -> list[_InterjectItem]:
-        out = list(self.items)
-        self.items.clear()
-        self.chars = 0
-        return out
-
-    def clear(self) -> None:
-        self.items.clear()
-        self.chars = 0
-
-    @property
-    def depth(self) -> int:
-        return len(self.items)
 
 
 def _why_now(wake: WakeItem) -> str:
@@ -177,7 +136,7 @@ class PresenceWorker:
         self._hop_count = 0
         self._last_tool: str | None = None
         self._continue_injects = 0
-        self._interject = _InterjectBuffer()
+        self._interject = InterjectBuffer()
         self._started = False
 
     # ------------------------------------------------------------------
@@ -278,7 +237,7 @@ class PresenceWorker:
                     "wake_id": wake_id,
                     "reason": "not_in_moment",
                 }
-            item = _InterjectItem(
+            item = InterjectItem(
                 content=text, user_id=user_id, message_id=message_id
             )
             ok, reason = self._interject.try_add(item)
@@ -297,7 +256,7 @@ class PresenceWorker:
             return {
                 "ok": False,
                 "routed": ROUTE_USER_MESSAGE,
-                "reason": reason or "interjection_buffer_full",
+                "reason": reason or REASON_BUFFER_FULL,
                 "wake_id": wake_id,
             }
 

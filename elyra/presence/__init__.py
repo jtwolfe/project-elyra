@@ -1,9 +1,16 @@
-"""Presence: wake queue, timers, and worker phase machine.
+"""Presence: wake queue, timers, worker phase machine, interjections.
 
 Scope: durable wake events, claim/fold, timers/waits, PresenceWorker orchestration.
 Out of scope: HTTP/web panels (runtime), tool handler internals.
 """
 
+from elyra.presence.interject import (
+    INTERJECT_MAX_CHARS,
+    INTERJECT_MAX_MESSAGES,
+    REASON_BUFFER_FULL,
+    InterjectBuffer,
+    InterjectItem,
+)
 from elyra.presence.queue import (
     KIND_PRIORITY,
     TERMINAL_OPS,
@@ -24,15 +31,20 @@ from elyra.presence.user_input import (
 from elyra.presence.worker import PresenceWorker
 
 __all__ = [
+    "INTERJECT_MAX_CHARS",
+    "INTERJECT_MAX_MESSAGES",
     "KIND_PRIORITY",
     "PHASE_IDLE",
     "PHASE_IN_MOMENT",
     "PHASE_WAITING",
     "PresenceWorker",
+    "REASON_BUFFER_FULL",
     "ROUTE_INTERJECT",
     "ROUTE_USER_MESSAGE",
     "ROUTE_WAIT_REPLY",
     "TERMINAL_OPS",
+    "InterjectBuffer",
+    "InterjectItem",
     "PendingTimer",
     "PendingWait",
     "TimerService",
