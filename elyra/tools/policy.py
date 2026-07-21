@@ -30,14 +30,22 @@ class BundledToolsRootError(FileNotFoundError):
     """Raised when BUNDLED_TOOLS_ROOT cannot be resolved (non-editable install)."""
 
 
-def normalize_tool_name(name: str) -> str:
-    """Case-fold and strip for isolation keys (local vs bundled clash)."""
-    return (name or "").strip().casefold()
+def normalize_tool_name(name: object) -> str:
+    """Case-fold and strip for isolation keys (local vs bundled clash).
+
+    Non-strings return ``""`` so callers can map to ``invalid_name`` without
+    raising (execute public surface never raises on bad names).
+    """
+    if not isinstance(name, str):
+        return ""
+    return name.strip().casefold()
 
 
-def is_valid_tool_name(name: str) -> bool:
+def is_valid_tool_name(name: object) -> bool:
     """True if ``name`` matches the allowed package name pattern."""
-    raw = (name or "").strip()
+    if not isinstance(name, str):
+        return False
+    raw = name.strip()
     if not raw:
         return False
     return bool(_TOOL_NAME_RE.match(raw))
@@ -51,6 +59,37 @@ def assert_callable_root(root: Path, *, label: str) -> None:
             f"{label} must not be a non-callable tools segment "
             f"(got {resolved!s}; drafts are never callable)"
         )
+
+
+def is_under_drafts_tree(path: Path, *, tools_dir: Path | None = None) -> bool:
+    """True if ``path`` resolves into a non-callable drafts tree.
+
+    Covers:
+      - ``$ELYRA_HOME/tools/drafts/...`` (via ``tools_dir``)
+      - any resolved path containing a ``tools/drafts`` segment pair
+        (catches symlinks from ``local/`` into drafts packages)
+
+    Fail-closed on resolve errors (treat as drafts / non-callable).
+    """
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return True
+
+    if tools_dir is not None:
+        try:
+            drafts_root = (Path(tools_dir) / "drafts").resolve()
+            if resolved == drafts_root or resolved.is_relative_to(drafts_root):
+                return True
+        except (OSError, ValueError):
+            pass
+
+    # tools/drafts segment pair anywhere on the resolved path (symlink targets).
+    parts = [p.casefold() for p in resolved.parts]
+    for i, part in enumerate(parts[:-1]):
+        if part == "tools" and parts[i + 1] == "drafts":
+            return True
+    return False
 
 
 def resolve_bundled_tools_root(override: Path | str | None = None) -> Path:

@@ -227,6 +227,16 @@ def test_invalid_name_error_result_not_exception(
     result2 = registry.execute("", {}, ctx)
     assert result2.ok is False
     assert result2.error_reason == "invalid_name"
+    # malformed package-name strings → invalid_name (not unknown_tool)
+    for bad in ("../escape", "has space", "a/b", ".", "-leading"):
+        got = registry.execute(bad, {}, ctx)
+        assert got.ok is False, bad
+        assert got.error_reason == "invalid_name", bad
+    # non-string names never raise
+    for bad_name in (123, True, ["x"], {}, None):
+        got = registry.execute(bad_name, {}, ctx)  # type: ignore[arg-type]
+        assert got.ok is False
+        assert got.error_reason == "invalid_name"
 
 
 def test_execute_missing_path_arg(registry: ToolRegistry, home: Path) -> None:
@@ -299,36 +309,190 @@ def test_normalize_and_validate_names() -> None:
     assert not is_valid_tool_name("has space")
 
 
-def test_ends_moment_stripped_for_non_control(
+def test_control_flags_stripped_for_non_control(
     home: Path, bundled_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Registry strips ends_moment unless kind is control/speak."""
+    """Registry strips loop-control flags for non-control kinds.
+
+    Patch ``elyra.tools.registry.dispatch`` (import binding used by execute),
+    not ``runner.dispatch`` — the latter is a no-op on the registry module.
+    """
+    from elyra.tools import registry as registry_mod
+    from elyra.tools.types import WaitArm
+
     paths = resolve_paths(home)
     reg = ToolRegistry(paths, bundled_root=bundled_root)
-    pkg = reg.get("read_file")
-    assert pkg is not None
 
-    def _fake_handler(args: dict, ctx: ToolContext) -> ToolResult:
+    fake_wait = WaitArm(
+        wait_id="w1",
+        timeout_seconds=30,
+        prompt="?",
+        choices=["a"],
+        user_id="operator",
+    )
+
+    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={"forced": True},
             ends_moment=True,
             stop_reason="wait",
+            arm_wait=fake_wait,
+            counts_as_speak=True,
         )
 
-    # Patch the cached handler on a reloaded registry by writing local package
-    # that still has kind=read.
-    from elyra.tools import runner as runner_mod
-
-    monkeypatch.setattr(
-        runner_mod,
-        "dispatch",
-        lambda runner, args, ctx, handler=None: _fake_handler(args, ctx),
-    )
+    monkeypatch.setattr(registry_mod, "dispatch", _fake_dispatch)
     result = reg.execute("read_file", {"path": "x"}, ToolContext(paths=paths))
     assert result.ok is True
+    assert result.payload == {"forced": True}  # proves fake ran, not real read_file
     assert result.ends_moment is False
     assert result.stop_reason is None
+    assert result.arm_wait is None
+    assert result.counts_as_speak is False
+
+
+def test_control_flags_stripped_without_ends_moment(
+    home: Path, bundled_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-control tools lose stop_reason / arm_wait / counts_as_speak even if
+    ends_moment is already False (no early-out that leaves smuggled flags)."""
+    from elyra.tools import registry as registry_mod
+    from elyra.tools.types import WaitArm
+
+    paths = resolve_paths(home)
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+
+    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+        return ToolResult(
+            ok=True,
+            payload={},
+            ends_moment=False,
+            stop_reason="policy",
+            arm_wait=WaitArm("w", 1, "p", [], "u"),
+            counts_as_speak=True,
+        )
+
+    monkeypatch.setattr(registry_mod, "dispatch", _fake_dispatch)
+    result = reg.execute("read_file", {"path": "x"}, ToolContext(paths=paths))
+    assert result.ends_moment is False
+    assert result.stop_reason is None
+    assert result.arm_wait is None
+    assert result.counts_as_speak is False
+
+
+def test_control_kind_keeps_ends_moment(
+    home: Path, bundled_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """kind=control may set ends_moment / stop_reason; still no counts_as_speak."""
+    from elyra.tools import registry as registry_mod
+    from elyra.tools.types import WaitArm
+
+    paths = resolve_paths(home)
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    _write_package(local, "wait_stub", kind="control")
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+    assert reg.get("wait_stub") is not None
+    assert reg.get("wait_stub").meta.kind == "control"
+
+    wait = WaitArm("w2", 60, "choose", ["y", "n"], "operator")
+
+    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+        return ToolResult(
+            ok=True,
+            payload={"waiting": True},
+            ends_moment=True,
+            stop_reason="wait",
+            arm_wait=wait,
+            counts_as_speak=True,  # smuggled — must strip (not kind=speak)
+        )
+
+    monkeypatch.setattr(registry_mod, "dispatch", _fake_dispatch)
+    result = reg.execute("wait_stub", {}, ToolContext(paths=paths))
+    assert result.ok is True
+    assert result.ends_moment is True
+    assert result.stop_reason == "wait"
+    assert result.arm_wait == wait
+    assert result.counts_as_speak is False
+
+
+def test_speak_kind_keeps_counts_as_speak(
+    home: Path, bundled_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """kind=speak may set counts_as_speak (and ends_moment as control kind)."""
+    from elyra.tools import registry as registry_mod
+
+    paths = resolve_paths(home)
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    _write_package(local, "speak_stub", kind="speak")
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+
+    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+        return ToolResult(
+            ok=True,
+            payload={},
+            counts_as_speak=True,
+        )
+
+    monkeypatch.setattr(registry_mod, "dispatch", _fake_dispatch)
+    result = reg.execute("speak_stub", {}, ToolContext(paths=paths))
+    assert result.counts_as_speak is True
+
+
+def test_symlink_into_drafts_not_callable(home: Path, bundled_root: Path) -> None:
+    """local/ symlink targeting tools/drafts/<name> must not become callable."""
+    paths = resolve_paths(home)
+    draft_root = drafts_dir(paths)
+    draft_root.mkdir(parents=True, exist_ok=True)
+    draft_pkg = _write_package(draft_root, "symlinked_draft")
+
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    link = local / "via_symlink"
+    link.symlink_to(draft_pkg)
+
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+    assert not reg.has("via_symlink")
+    assert not reg.has("symlinked_draft")
+    result = reg.execute("via_symlink", {"path": "x"}, ToolContext(paths=paths))
+    assert result.ok is False
+    assert result.error_reason == "unknown_tool"
+
+
+def test_directory_name_is_canonical_openai_name(
+    home: Path, bundled_root: Path
+) -> None:
+    """Frontmatter case-only mismatch still advertises directory basename."""
+    paths = resolve_paths(home)
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    pkg = local / "case_tool"
+    pkg.mkdir()
+    (pkg / "TOOL.md").write_text(
+        "---\nname: Case_Tool\ndescription: cased\nkind: read\n---\n",
+        encoding="utf-8",
+    )
+    (pkg / "schema.json").write_text(
+        json.dumps({"type": "object", "properties": {}}),
+        encoding="utf-8",
+    )
+    (pkg / "runner.json").write_text(
+        json.dumps(
+            {
+                "kind": "builtin",
+                "entry": "elyra.tools.builtin.files:read_file",
+            }
+        ),
+        encoding="utf-8",
+    )
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+    got = reg.get("case_tool")
+    assert got is not None
+    assert got.meta.name == "case_tool"
+    names = [t["function"]["name"] for t in reg.openai_tools()]
+    assert "case_tool" in names
+    assert "Case_Tool" not in names
 
 
 def test_reload_picks_up_new_local(home: Path, bundled_root: Path) -> None:

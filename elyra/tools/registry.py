@@ -17,6 +17,7 @@ from elyra.tools.policy import (
     CONTROL_TOOL_KINDS,
     BundledToolsRootError,
     assert_callable_root,
+    is_under_drafts_tree,
     is_valid_tool_name,
     normalize_tool_name,
     resolve_bundled_tools_root,
@@ -136,7 +137,7 @@ class ToolRegistry:
         args: dict[str, Any] | None,
         ctx: ToolContext,
     ) -> ToolResult:
-        """Run a callable tool; unknown names return error ToolResult (no raise)."""
+        """Run a callable tool; unknown/invalid names return error ToolResult (no raise)."""
         if args is None:
             args = {}
         if not isinstance(args, dict):
@@ -145,6 +146,9 @@ class ToolRegistry:
                 payload={},
                 error_reason="invalid_arguments_type",
             )
+        # Fail closed on non-str / malformed names (never AttributeError).
+        if not isinstance(name, str) or not is_valid_tool_name(name):
+            return ToolResult(ok=False, payload={}, error_reason="invalid_name")
         key = normalize_tool_name(name)
         if not key:
             return ToolResult(ok=False, payload={}, error_reason="invalid_name")
@@ -159,23 +163,42 @@ class ToolRegistry:
     def _enforce_control_policy(
         self, pkg: ToolPackage, result: ToolResult
     ) -> ToolResult:
-        """Strip ends_moment unless tool kind is allowlisted control/speak.
+        """Strip loop-control flags unless the tool kind is allowlisted.
 
-        Registry forces ends_moment=False for sandbox_* and ordinary read tools
-        so non-control runners cannot stop the moment by accident.
+        - ``ends_moment`` / ``stop_reason`` / ``arm_wait``: only ``control`` or
+          ``speak`` kinds may set them (design: loop trusts execute flags only).
+        - ``counts_as_speak``: only ``kind=speak``.
+
+        Applied whenever any restricted flag is set — not only when
+        ``ends_moment`` is true — so buggy handlers cannot smuggle wait/speak
+        side effects through ordinary read/mutate tools.
         """
-        if not result.ends_moment:
-            return result
         kind = (pkg.meta.kind or "").lower()
-        if kind in CONTROL_TOOL_KINDS:
+        ends_moment = result.ends_moment
+        stop_reason = result.stop_reason
+        arm_wait = result.arm_wait
+        counts_as_speak = result.counts_as_speak
+
+        if kind not in CONTROL_TOOL_KINDS:
+            ends_moment = False
+            stop_reason = None
+            arm_wait = None
+        if kind != "speak":
+            counts_as_speak = False
+
+        if (
+            ends_moment == result.ends_moment
+            and stop_reason == result.stop_reason
+            and arm_wait is result.arm_wait
+            and counts_as_speak == result.counts_as_speak
+        ):
             return result
-        # Builtin control packages should declare kind=control|speak in TOOL.md.
-        # Without that, strip flags (fail closed).
         return replace(
             result,
-            ends_moment=False,
-            stop_reason=None,
-            arm_wait=None,
+            ends_moment=ends_moment,
+            stop_reason=stop_reason,
+            arm_wait=arm_wait,
+            counts_as_speak=counts_as_speak,
         )
 
     def _scan_root(self, root: Path, *, source: str) -> Iterable[ToolPackage]:
@@ -184,6 +207,9 @@ class ToolRegistry:
         # Never treat a drafts tree as a scan root (defense in depth).
         if root.name.casefold() == "drafts":
             _LOG.warning("refusing to scan drafts as callable tools root: %s", root)
+            return
+        if is_under_drafts_tree(root, tools_dir=self._paths.tools_dir):
+            _LOG.warning("refusing to scan path under drafts: %s", root)
             return
         for child in sorted(root.iterdir()):
             if not child.is_dir():
@@ -194,6 +220,13 @@ class ToolRegistry:
                 continue
             if not is_valid_tool_name(child.name):
                 _LOG.warning("skip tool package with invalid name: %s", child)
+                continue
+            # Symlink (or hard path) into tools/drafts is never callable.
+            if is_under_drafts_tree(child, tools_dir=self._paths.tools_dir):
+                _LOG.warning(
+                    "skip tool package resolving under drafts (not callable): %s",
+                    child,
+                )
                 continue
             # Require schema + runner for a complete package.
             if not (child / "schema.json").is_file():
@@ -207,14 +240,16 @@ class ToolRegistry:
 
     def _load_package(self, package_dir: Path, *, source: str) -> ToolPackage:
         meta = load_tool_meta(package_dir, default_name=package_dir.name)
-        # Directory name is the isolation key; frontmatter name must match
-        # case-insensitively so catalog keys stay predictable.
-        if normalize_tool_name(meta.name) != normalize_tool_name(package_dir.name):
-            _LOG.warning(
-                "tool package dir %s name %r differs; using directory name",
-                package_dir.name,
-                meta.name,
-            )
+        # Directory basename is the canonical callable / OpenAI function name
+        # (dogfood: folder name = tool name). Always rewrite so case-only
+        # frontmatter mismatches cannot advertise a different casing.
+        if meta.name != package_dir.name:
+            if normalize_tool_name(meta.name) != normalize_tool_name(package_dir.name):
+                _LOG.warning(
+                    "tool package dir %s name %r differs; using directory name",
+                    package_dir.name,
+                    meta.name,
+                )
             meta = ToolMeta(
                 name=package_dir.name,
                 description=meta.description,
