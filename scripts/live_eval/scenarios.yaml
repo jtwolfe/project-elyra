@@ -1,0 +1,42 @@
+# Stage 0 baseline scenarios — fixed prompts (do not edit casually).
+# Product sampling knobs for Stage 0: temp 0.2, no top_p/top_k, no budget.
+
+stage: 0
+name: baseline
+knobs:
+  temperature: 0.2
+  top_p: null
+  top_k: null
+  reasoning_budget_tokens: null
+
+# Eval caps (written into attempt ELYRA_HOME/elyra.toml by run_stage.py)
+eval_caps:
+  max_tool_hops: 12
+  moment_wall_clock_minutes: 10
+  # Harness poll timeout (seconds) — slightly above wall clock so product stop wins
+  poll_timeout_seconds: 620
+
+scenarios:
+  - id: S-social
+    intent: Social greeting → speak
+    prompt: "Hi Elyra — just saying hello."
+    expects:
+      tools: true
+      speak: true
+      flood: false
+
+  - id: S-tools
+    intent: Force tool then speak
+    prompt: "List the sandbox directory with list_dir, then greet me via speak."
+    expects:
+      tools: true
+      speak: true
+      flood: false
+
+  - id: S-mono
+    intent: Monologue-heavy / planning pressure (stress for channel flood)
+    prompt: "Think carefully about how you would organize the sandbox, then tell me your plan via speak. Prefer tools over prose-only."
+    expects:
+      tools: true
+      speak: true
+      flood: false

@@ -1,0 +1,7 @@
+# Keep stage summaries and filled scorecards; ignore bulky raw exports.
+*
+!.gitignore
+!.gitkeep
+!stage-*.md
+!scorecard-*.md
+!baseline-summary.md

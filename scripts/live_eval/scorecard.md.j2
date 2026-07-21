@@ -1,0 +1,72 @@
+# Scorecard — Stage {{ stage }} / {{ scenario_id }} / try {{ try_n }}/{{ tries }}
+
+| Field | Value |
+|-------|-------|
+| **attempt_id** | `{{ attempt_id }}` |
+| **stage** | {{ stage }} |
+| **scenario** | {{ scenario_id }} |
+| **try** | {{ try_n }}/{{ tries }} |
+| **prompt** | {{ prompt }} |
+| **knobs** | temp={{ temperature }} top_p={{ top_p }} top_k={{ top_k }} budget={{ reasoning_budget }} |
+| **started_at** | {{ started_at }} |
+| **ended_at** | {{ ended_at }} |
+| **status** | {{ status }} |
+
+## Product outcome
+
+| Field | Value |
+|-------|-------|
+| **moment_id** | {{ moment_id }} |
+| **hop_count** | {{ hop_count }} |
+| **stop_reason** | {{ stop_reason }} |
+| **spoke** | {{ spoke }} |
+| **tools** | {{ tools }} |
+| **per_hop_finish_reason** | {{ per_hop_finish_reason }} |
+| **reasoning_len** | {{ reasoning_len }} |
+| **markers_raw (content / reasoning)** | {{ markers_content }} / {{ markers_reasoning }} |
+| **markers_after_strip (c / r)** | {{ markers_strip_c }} / {{ markers_strip_r }} |
+| **flood Y/N** | {{ flood }} |
+| **glass_speak Y/N** | {{ glass_speak }} |
+| **free_text_only Y/N** | {{ free_text_only }} |
+| **latency_s** | {{ latency_s }} |
+| **feel 1-5** | {{ feel }} |
+
+## Paths
+
+| Artifact | Path |
+|----------|------|
+| tape | `{{ tape_path }}` |
+| messages | `{{ messages_path }}` |
+| export dir | `{{ export_dir }}` |
+| ELYRA_HOME | `{{ elyra_home }}` |
+
+## Rubric (per attempt)
+
+| # | Dimension | Pass? | Notes |
+|---|-----------|-------|-------|
+| 1 | Channel-marker flood | {{ dim_flood }} | {{ dim_flood_notes }} |
+| 2 | Structured tool_calls | {{ dim_tools }} | {{ dim_tools_notes }} |
+| 3 | Speak on glass | {{ dim_speak }} | {{ dim_speak_notes }} |
+| 4 | Latency / feel | {{ dim_feel }} | {{ dim_feel_notes }} |
+| 5 | Free-text-vs-tools | {{ dim_freetext }} | {{ dim_freetext_notes }} |
+
+## Notes
+
+{{ notes }}
+
+## Snippets
+
+### Model content (truncated)
+```
+{{ content_snippet }}
+```
+
+### Reasoning (truncated)
+```
+{{ reasoning_snippet }}
+```
+
+### Glass assistant rows (truncated)
+```
+{{ glass_snippet }}
+```
