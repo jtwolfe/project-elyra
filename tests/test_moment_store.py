@@ -250,3 +250,19 @@ def test_works_without_prior_ensure_data_dirs(tmp_path):
     store.close_moment(mid, "no_tools")
     assert store.get_moment(mid)["stop_reason"] == "no_tools"
     assert len(store.list_beats(mid)) == 1
+
+
+def test_list_moments_newest_first_with_limit(store):
+    m1 = store.open_moment(why_now="older", moment_id="mom-a")
+    store.close_moment(m1, "no_tools")
+    m2 = store.open_moment(why_now="newer", moment_id="mom-b")
+    all_rows = store.list_moments()
+    assert [r["id"] for r in all_rows] == ["mom-b", "mom-a"]
+    limited = store.list_moments(limit=1)
+    assert len(limited) == 1
+    assert limited[0]["id"] == "mom-b"
+    open_only = store.list_moments(open_only=True)
+    assert [r["id"] for r in open_only] == ["mom-b"]
+    # Negative limit clamps to empty (never means "all").
+    assert store.list_moments(limit=-1) == []
+    assert store.list_moments(limit=0) == []

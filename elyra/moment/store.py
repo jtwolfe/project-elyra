@@ -200,6 +200,33 @@ class MomentStore:
                 open_list.append(dict(meta))
         return open_list
 
+    def list_moments(
+        self,
+        *,
+        limit: int | None = None,
+        open_only: bool = False,
+    ) -> list[MomentMeta]:
+        """Return moments newest-first (by ``started_at``).
+
+        Parameters
+        ----------
+        limit:
+            Max rows after sort (None = all).
+        open_only:
+            When True, only moments with ``ended_at`` null.
+        """
+        rows: list[MomentMeta] = []
+        for meta in self._load_index_by_id().values():
+            if open_only and meta.get("ended_at") is not None:
+                continue
+            rows.append(dict(meta))
+        rows.sort(key=lambda m: str(m.get("started_at") or ""), reverse=True)
+        if limit is not None:
+            # Clamp negatives to 0 (empty) so callers never get "all" by accident.
+            n = max(0, int(limit))
+            rows = rows[:n]
+        return rows
+
     def recover_open_moments(self) -> list[str]:
         """Close all open moments with ``stop_reason=interrupted``.
 
