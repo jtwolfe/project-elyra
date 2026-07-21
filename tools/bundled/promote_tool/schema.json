@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Verified draft tool package name to promote"
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": false
+}

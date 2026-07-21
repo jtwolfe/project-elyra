@@ -2,7 +2,7 @@
 
 Scope: load_skill host entry for tools/bundled/load_skill.
 In scope: resolve SkillCatalog from ctx, full body payload, skills_used append.
-Out of scope: install_skill (PR13), orient catalog formatting.
+Out of scope: install_skill (see growth.py), orient catalog formatting.
 """
 
 from __future__ import annotations

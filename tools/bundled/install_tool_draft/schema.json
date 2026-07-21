@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Tool package name matching [a-z0-9_][a-z0-9_-]*"
+    },
+    "files": {
+      "type": "object",
+      "description": "Map of relative paths to UTF-8 file contents (TOOL.md, schema.json, runner.json, tests/..., impl/...)",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "required": ["name", "files"],
+  "additionalProperties": false
+}

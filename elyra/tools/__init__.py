@@ -1,7 +1,7 @@
-"""Tool registry, schema load, and runner dispatch.
+"""Tool registry, schema load, runner dispatch, and create-tool gates.
 
 Public API: ToolRegistry, ToolResult, ToolCall, ToolContext, discovery helpers.
-Draft tools under tools/drafts/ are never callable.
+Draft tools under tools/drafts/ are never callable until promote.
 """
 
 from elyra.tools.policy import (
@@ -9,7 +9,7 @@ from elyra.tools.policy import (
     normalize_tool_name,
     resolve_bundled_tools_root,
 )
-from elyra.tools.registry import ToolPackage, ToolRegistry
+from elyra.tools.registry import ToolPackage, ToolRegistry, drafts_dir
 from elyra.tools.types import ToolCall, ToolContext, ToolResult, WaitArm
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "WaitArm",
+    "drafts_dir",
     "normalize_tool_name",
     "resolve_bundled_tools_root",
 ]
