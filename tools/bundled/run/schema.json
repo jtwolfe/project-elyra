@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "command": {
+      "description": "Argv list (preferred) or a shell-like string (shlex-split, never shell=True)",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        }
+      ]
+    },
+    "timeout": {
+      "type": "number",
+      "description": "Seconds before process-group kill (default: 60)",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": ["command"],
+  "additionalProperties": false
+}
