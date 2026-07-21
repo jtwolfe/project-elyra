@@ -248,10 +248,98 @@ def test_update_task_via_registry(registry: ToolRegistry, paths, store: GoalsSto
     )
     assert result.ok is True
     assert result.payload["task"]["status"] == "ready"
+    assert result.payload.get("became_ready") is True
     assert wakes and wakes[0]["kind"] == "task_ready"
     # Ledger tools are mutate, not control — must not end the moment.
     assert result.ends_moment is False
     assert result.counts_as_speak is False
+
+
+def test_update_task_uses_store_became_ready(paths, store: GoalsStore) -> None:
+    """Tool keys wake on store-returned became_ready, not a separate pre-read."""
+    g = store.create_goal("G")
+    t = store.create_task(g["id"], "T")
+    wakes: list[dict[str, Any]] = []
+    result = update_task(
+        {"task_id": t["id"], "status": "ready"},
+        _ctx(paths, store, enqueue_wake=lambda **kw: wakes.append(kw) or "w"),
+    )
+    assert result.ok is True
+    assert result.payload["became_ready"] is True
+    assert len(wakes) == 1
+
+    # Already ready: store reports became_ready=False → no tool enqueue.
+    result2 = update_task(
+        {"task_id": t["id"], "status": "ready", "notes": "noop"},
+        _ctx(paths, store, enqueue_wake=lambda **kw: wakes.append(kw) or "w"),
+    )
+    assert result2.ok is True
+    assert result2.payload["became_ready"] is False
+    assert len(wakes) == 1
+
+
+def test_enqueue_wake_failure_after_ready_still_ok(
+    paths, store: GoalsStore
+) -> None:
+    """Enqueue raise after durable ready must not fail the tool (strand risk)."""
+
+    def boom(**_kwargs: Any) -> str:
+        raise RuntimeError("wake queue down")
+
+    g = store.create_goal("G")
+    t = store.create_task(g["id"], "T")
+    result = update_task(
+        {"task_id": t["id"], "status": "ready"},
+        _ctx(paths, store, enqueue_wake=boom),
+    )
+    assert result.ok is True
+    assert result.payload["task"]["status"] == "ready"
+    assert result.payload["became_ready"] is True
+    assert result.payload.get("warning", "").startswith("task_ready_enqueue_failed:")
+    # Durable commit retained even though wake failed.
+    assert store.get_task(t["id"])["status"] == "ready"
+
+
+def test_mark_task_changed_failure_still_ok(paths, store: GoalsStore) -> None:
+    def boom() -> None:
+        raise RuntimeError("continue clock down")
+
+    g = store.create_goal("G")
+    t = store.create_task(g["id"], "T")
+    result = update_task(
+        {"task_id": t["id"], "title": "Still saved"},
+        _ctx(paths, store, mark_task_changed=boom),
+    )
+    assert result.ok is True
+    assert result.payload["task"]["title"] == "Still saved"
+    assert store.get_task(t["id"])["title"] == "Still saved"
+
+
+def test_dual_path_store_hook_and_tool_enqueue_both_fire(tmp_path: Path) -> None:
+    """Documented dual path: both may fire; host must dedupe if both wired."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store_calls: list[tuple[str, str]] = []
+    tool_wakes: list[dict[str, Any]] = []
+
+    store = GoalsStore(
+        paths,
+        on_task_ready=lambda tid, gid: store_calls.append((tid, gid)),
+    )
+    g = store.create_goal("G")
+    t = store.create_task(g["id"], "T")
+    result = update_task(
+        {"task_id": t["id"], "status": "ready"},
+        _ctx(
+            paths,
+            store,
+            enqueue_wake=lambda **kw: tool_wakes.append(kw) or "w1",
+        ),
+    )
+    assert result.ok is True
+    assert store_calls == [(t["id"], g["id"])]
+    assert len(tool_wakes) == 1
+    assert tool_wakes[0]["kind"] == "task_ready"
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +417,19 @@ def test_update_goal_force_must_be_bool(paths, store: GoalsStore) -> None:
     assert result.ok is False
     assert result.error_reason == "force_must_be_bool"
     assert store.get_goal(g["id"])["status"] == "open"
+
+
+def test_update_goal_force_alone_rejected(paths, store: GoalsStore) -> None:
+    """force is only meaningful with a field change; alone → no_fields_to_update."""
+    g = store.create_goal("G")
+    result = update_goal(
+        {"goal_id": g["id"], "force": True},
+        _ctx(paths, store),
+    )
+    assert result.ok is False
+    assert result.error_reason == "no_fields_to_update"
+    assert store.get_goal(g["id"])["status"] == "open"
+    assert g["updated_at"] == store.get_goal(g["id"])["updated_at"]
 
 
 def test_update_goal_not_found(paths, store: GoalsStore) -> None:
