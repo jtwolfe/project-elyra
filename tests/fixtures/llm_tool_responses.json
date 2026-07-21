@@ -1,0 +1,146 @@
+{
+  "tools_list_dir": [
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "description": "List entries in a directory path relative to the sandbox root.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Directory path, default '.'"
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    }
+  ],
+  "tools_echo": [
+    {
+      "type": "function",
+      "function": {
+        "name": "echo",
+        "description": "Echo back a short message. Use this tool to reply.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Text to echo"
+            }
+          },
+          "required": ["text"]
+        }
+      }
+    }
+  ],
+  "tools_speak": [
+    {
+      "type": "function",
+      "function": {
+        "name": "speak",
+        "description": "Send a message to the user.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "Message body"
+            }
+          },
+          "required": ["text"]
+        }
+      }
+    }
+  ],
+  "openai_response_list_dir": {
+    "id": "chatcmpl-fixture",
+    "object": "chat.completion",
+    "choices": [
+      {
+        "index": 0,
+        "finish_reason": "tool_calls",
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_list_1",
+              "type": "function",
+              "function": {
+                "name": "list_dir",
+                "arguments": "{\"path\": \".\"}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "openai_response_malformed_args": {
+    "id": "chatcmpl-malformed",
+    "object": "chat.completion",
+    "choices": [
+      {
+        "index": 0,
+        "finish_reason": "tool_calls",
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_bad_1",
+              "type": "function",
+              "function": {
+                "name": "list_dir",
+                "arguments": "{not valid json"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "openai_response_args_object": {
+    "id": "chatcmpl-obj-args",
+    "object": "chat.completion",
+    "choices": [
+      {
+        "index": 0,
+        "finish_reason": "tool_calls",
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_obj_1",
+              "type": "function",
+              "function": {
+                "name": "speak",
+                "arguments": {"text": "hello"}
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "openai_response_content_only": {
+    "id": "chatcmpl-content",
+    "object": "chat.completion",
+    "choices": [
+      {
+        "index": 0,
+        "finish_reason": "stop",
+        "message": {
+          "role": "assistant",
+          "content": "Just text, no tools.",
+          "reasoning_content": "thinking"
+        }
+      }
+    ]
+  }
+}
