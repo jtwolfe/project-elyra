@@ -188,6 +188,21 @@ def test_install_writes_under_drafts_only(ctx: ToolContext, paths) -> None:
     assert not (paths.tools_dir / "local" / "ok_draft").exists()
 
 
+def test_empty_files_fails_before_mkdir(ctx: ToolContext, paths) -> None:
+    """files={} must not create tools/drafts/<name>/ (Phase A / K4)."""
+    name = "search_web"
+    draft = drafts_dir(paths) / name
+    assert not draft.exists()
+
+    result = install_tool_draft({"name": name, "files": {}}, ctx)
+
+    assert result.ok is False
+    assert result.error_reason == "empty_files"
+    assert result.payload.get("name") == name
+    # No draft-tree side effects — hollow mkdir must not run
+    assert not draft.exists()
+
+
 def test_drafts_never_callable_before_promote(
     ctx: ToolContext, registry: ToolRegistry
 ) -> None:

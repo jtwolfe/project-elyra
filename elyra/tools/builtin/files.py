@@ -30,6 +30,12 @@ def _str_arg(args: dict[str, Any], key: str) -> str | None:
     return stripped if stripped else None
 
 
+def _path_fail(path: str, error_reason: str, **extra: Any) -> ToolResult:
+    """Fail-closed ToolResult that always echoes ``path`` (Phase A honesty)."""
+    payload: dict[str, Any] = {"path": path, **extra}
+    return ToolResult(ok=False, payload=payload, error_reason=error_reason)
+
+
 def read_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Read a UTF-8 text file under the sandbox workspace.
 
@@ -46,20 +52,20 @@ def read_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     try:
         content = sb.read_text(path)
     except PathEscapeError:
-        return ToolResult(ok=False, payload={}, error_reason="path_escape")
+        return _path_fail(path, "path_escape")
     except FileNotFoundError:
-        return ToolResult(ok=False, payload={}, error_reason="not_found")
+        return _path_fail(path, "not_found")
     except IsADirectoryError:
-        return ToolResult(ok=False, payload={}, error_reason="is_directory")
+        return _path_fail(path, "is_directory")
     except UnicodeDecodeError:
         # Binary / non-UTF-8 content (ValueError subclass — catch before ValueError).
-        return ToolResult(ok=False, payload={}, error_reason="decode_error")
+        return ToolResult(ok=False, payload={"path": path}, error_reason="decode_error")
     except ValueError:
-        return ToolResult(ok=False, payload={}, error_reason="invalid_path")
+        return ToolResult(ok=False, payload={"path": path}, error_reason="invalid_path")
     except OSError as exc:
         return ToolResult(
             ok=False,
-            payload={},
+            payload={"path": path},
             error_reason=f"os_error:{type(exc).__name__}",
         )
     return ToolResult(ok=True, payload={"path": path, "content": content})
@@ -85,17 +91,17 @@ def list_dir(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     try:
         entries = sb.list_dir(path)
     except PathEscapeError:
-        return ToolResult(ok=False, payload={}, error_reason="path_escape")
+        return _path_fail(path, "path_escape")
     except FileNotFoundError:
-        return ToolResult(ok=False, payload={}, error_reason="not_found")
+        return _path_fail(path, "not_found")
     except NotADirectoryError:
-        return ToolResult(ok=False, payload={}, error_reason="not_a_directory")
+        return ToolResult(ok=False, payload={"path": path}, error_reason="not_a_directory")
     except ValueError:
-        return ToolResult(ok=False, payload={}, error_reason="invalid_path")
+        return ToolResult(ok=False, payload={"path": path}, error_reason="invalid_path")
     except OSError as exc:
         return ToolResult(
             ok=False,
-            payload={},
+            payload={"path": path},
             error_reason=f"os_error:{type(exc).__name__}",
         )
     return ToolResult(ok=True, payload={"path": path, "entries": entries})
@@ -144,21 +150,25 @@ def grep(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             max_matches=max_matches,
         )
     except PathEscapeError:
-        return ToolResult(ok=False, payload={}, error_reason="path_escape")
+        return _path_fail(path, "path_escape", pattern=pattern)
     except FileNotFoundError:
-        return ToolResult(ok=False, payload={}, error_reason="not_found")
+        return _path_fail(path, "not_found", pattern=pattern)
     except re.error as exc:
         return ToolResult(
             ok=False,
-            payload={},
+            payload={"path": path, "pattern": pattern},
             error_reason=f"invalid_regex:{exc}",
         )
     except ValueError:
-        return ToolResult(ok=False, payload={}, error_reason="invalid_path")
+        return ToolResult(
+            ok=False,
+            payload={"path": path, "pattern": pattern},
+            error_reason="invalid_path",
+        )
     except OSError as exc:
         return ToolResult(
             ok=False,
-            payload={},
+            payload={"path": path, "pattern": pattern},
             error_reason=f"os_error:{type(exc).__name__}",
         )
 
@@ -210,22 +220,22 @@ def search_replace(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     try:
         n = sb.search_replace(path, old, new, count=count)
     except PathEscapeError:
-        return ToolResult(ok=False, payload={}, error_reason="path_escape")
+        return _path_fail(path, "path_escape")
     except FileNotFoundError:
-        return ToolResult(ok=False, payload={}, error_reason="not_found")
+        return _path_fail(path, "not_found")
     except IsADirectoryError:
-        return ToolResult(ok=False, payload={}, error_reason="is_directory")
+        return _path_fail(path, "is_directory")
     except UnicodeDecodeError:
-        return ToolResult(ok=False, payload={}, error_reason="decode_error")
+        return ToolResult(ok=False, payload={"path": path}, error_reason="decode_error")
     except ValueError as exc:
         msg = str(exc).lower()
         if "non-empty" in msg or "old" in msg:
-            return ToolResult(ok=False, payload={}, error_reason="empty_old")
-        return ToolResult(ok=False, payload={}, error_reason="invalid_path")
+            return ToolResult(ok=False, payload={"path": path}, error_reason="empty_old")
+        return ToolResult(ok=False, payload={"path": path}, error_reason="invalid_path")
     except OSError as exc:
         return ToolResult(
             ok=False,
-            payload={},
+            payload={"path": path},
             error_reason=f"os_error:{type(exc).__name__}",
         )
     return ToolResult(

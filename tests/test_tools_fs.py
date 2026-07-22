@@ -131,12 +131,14 @@ def test_read_file_not_found(ctx: ToolContext) -> None:
     result = files.read_file({"path": "nope.txt"}, ctx)
     assert result.ok is False
     assert result.error_reason == "not_found"
+    assert result.payload.get("path") == "nope.txt"
 
 
 def test_read_file_path_escape(ctx: ToolContext) -> None:
     result = files.read_file({"path": "../secret.txt"}, ctx)
     assert result.ok is False
     assert result.error_reason == "path_escape"
+    assert result.payload.get("path") == "../secret.txt"
 
 
 def test_read_file_directory_is_directory(
@@ -146,6 +148,7 @@ def test_read_file_directory_is_directory(
     result = files.read_file({"path": "sub"}, ctx)
     assert result.ok is False
     assert result.error_reason == "is_directory"
+    assert result.payload.get("path") == "sub"
 
 
 def test_read_file_decode_error(ctx: ToolContext, sandbox: Sandbox) -> None:
@@ -204,12 +207,14 @@ def test_list_dir_missing_not_found(ctx: ToolContext) -> None:
     result = files.list_dir({"path": "does_not_exist"}, ctx)
     assert result.ok is False
     assert result.error_reason == "not_found"
+    assert result.payload.get("path") == "does_not_exist"
 
 
 def test_list_dir_path_escape(ctx: ToolContext) -> None:
     result = files.list_dir({"path": "../"}, ctx)
     assert result.ok is False
     assert result.error_reason == "path_escape"
+    assert result.payload.get("path") == "../"
 
 
 def test_list_dir_via_registry(
@@ -263,6 +268,16 @@ def test_grep_path_escape(ctx: ToolContext) -> None:
     result = files.grep({"pattern": "x", "path": "../outside"}, ctx)
     assert result.ok is False
     assert result.error_reason == "path_escape"
+    assert result.payload.get("path") == "../outside"
+    assert result.payload.get("pattern") == "x"
+
+
+def test_grep_not_found_includes_path_and_pattern(ctx: ToolContext) -> None:
+    result = files.grep({"pattern": "needle", "path": "missing_dir"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "not_found"
+    assert result.payload.get("path") == "missing_dir"
+    assert result.payload.get("pattern") == "needle"
 
 
 def test_grep_via_registry(
@@ -331,6 +346,17 @@ def test_search_replace_path_escape(ctx: ToolContext) -> None:
     )
     assert result.ok is False
     assert result.error_reason == "path_escape"
+    assert result.payload.get("path") == "../x"
+
+
+def test_search_replace_not_found(ctx: ToolContext) -> None:
+    result = files.search_replace(
+        {"path": "gone.txt", "old": "a", "new": "b"},
+        ctx,
+    )
+    assert result.ok is False
+    assert result.error_reason == "not_found"
+    assert result.payload.get("path") == "gone.txt"
 
 
 def test_search_replace_directory_is_directory(
@@ -343,6 +369,7 @@ def test_search_replace_directory_is_directory(
     )
     assert result.ok is False
     assert result.error_reason == "is_directory"
+    assert result.payload.get("path") == "d"
 
 
 def test_search_replace_via_registry(
@@ -494,3 +521,4 @@ def test_read_file_symlink_escape_denied(ctx: ToolContext, sandbox: Sandbox) -> 
     result = files.read_file({"path": "leak"}, ctx)
     assert result.ok is False
     assert result.error_reason == "path_escape"
+    assert result.payload.get("path") == "leak"
