@@ -21,6 +21,11 @@ from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.client import ChatClient
 from elyra.loop.context import assemble_outer_meal
+from elyra.loop.continuous_policy import (
+    ContinuousRuntimeState,
+    continuous_status_block,
+    load_continuous_runtime,
+)
 from elyra.loop.doloop import DoLoopResult, run_do_loop
 from elyra.loop.orient_slice import (
     format_goals_slice,
@@ -79,6 +84,9 @@ def _why_now(wake: WakeItem) -> str:
         return f"timer due: {reason}" if reason else "timer due"
     if kind == "task_ready":
         return f"task ready: {payload.get('task_id') or '?'}"
+    if kind == "moment_continue":
+        src = payload.get("source_moment_id") or "?"
+        return f"continue work (from moment {src})"
     if kind == "background":
         return "background wake"
     return f"wake kind={kind}"
@@ -136,6 +144,13 @@ class PresenceWorker:
 
         self._identity = IdentityStore(paths)
         self._users = UsersStore(paths)
+
+        # Continuous work runtime stub (PR4): load defaults + JSON override.
+        # Finalize does NOT enqueue moment_continue here (PR6 owns that).
+        self._continuous: ContinuousRuntimeState = load_continuous_runtime(
+            paths.data_dir,
+            defaults=self.settings.continuous,
+        )
 
         self._phase: str = PHASE_IDLE
         self._busy = False
@@ -346,6 +361,7 @@ class PresenceWorker:
     def status_snapshot(self) -> dict[str, Any]:
         """Snapshot for ``/api/status`` (phase, hops, queue depths, wait)."""
         with self._lock:
+            pending_continues = len(self._queue.pending_of_kind("moment_continue"))
             return {
                 "phase": self._phase,
                 "active_moment_id": self._active_moment_id,
@@ -358,6 +374,11 @@ class PresenceWorker:
                 "worker_busy": self._busy,
                 "worker_pending": len(self._queue.pending()),
                 "interject_depth": self._interject.depth,
+                "continuous": continuous_status_block(
+                    self._continuous,
+                    self.settings.continuous,
+                    pending_moment_continues=pending_continues,
+                ),
             }
 
     # ------------------------------------------------------------------

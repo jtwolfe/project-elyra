@@ -1,6 +1,6 @@
 """Settings from defaults, optional elyra.toml, and CLI overrides.
 
-Scope: load/merge loop, wait, tools, goals (and common CLI) knobs.
+Scope: load/merge loop, wait, tools, goals, continuous (and common CLI) knobs.
 In scope: tomllib, frozen defaults, precedence defaults < toml < CLI, type checks.
 Out of scope: runtime wiring, argv parsing, ELYRA_HOME (see config).
 """
@@ -48,11 +48,33 @@ class GoalsSettings:
 
 
 @dataclass(frozen=True)
+class ContinuousSettings:
+    """Hybrid continuous work knobs (in-moment nudge + outer moment_continue).
+
+    Default ``enabled=False`` (safe dogfood). ``require_open_work=True`` only —
+    no empty-ledger outer continue (K18). Runtime toggle lives in
+    ``data/runtime/continuous.json`` and does not mutate frozen Settings.
+    """
+
+    enabled: bool = False
+    # In-moment
+    in_moment_work_nudge_max: int = 1  # per moment
+    # Outer chain
+    max_continue_streak: int = 8  # consecutive moment_continue without user wake
+    cooldown_seconds: int = 30  # min wall time between moment_continue enqueues
+    max_pending_continues: int = 1  # dedupe: at most one pending moment_continue
+    require_progress: bool = True  # tools_ran (non-speak) OR ledger_mutated
+    require_open_work: bool = True  # always require open work (no empty-ledger)
+    skip_pure_social: bool = True  # social + no tools/ledger → no outer continue
+
+
+@dataclass(frozen=True)
 class Settings:
     loop: LoopSettings = field(default_factory=LoopSettings)
     wait: WaitSettings = field(default_factory=WaitSettings)
     tools: ToolsSettings = field(default_factory=ToolsSettings)
     goals: GoalsSettings = field(default_factory=GoalsSettings)
+    continuous: ContinuousSettings = field(default_factory=ContinuousSettings)
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"
     api_port: int = 8787
@@ -107,6 +129,10 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
         kwargs["tools"] = _replace_section(settings.tools, data["tools"], "tools")
     if "goals" in data and isinstance(data["goals"], Mapping):
         kwargs["goals"] = _replace_section(settings.goals, data["goals"], "goals")
+    if "continuous" in data and isinstance(data["continuous"], Mapping):
+        kwargs["continuous"] = _replace_section(
+            settings.continuous, data["continuous"], "continuous"
+        )
 
     # get_type_hints resolves postponed annotations (str -> real types).
     top_types = get_type_hints(Settings)
