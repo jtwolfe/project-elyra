@@ -776,7 +776,12 @@ def _run_loop_body(
             continue
 
         # Budgeted in-moment work-continue HOST (continuous policy; K7/flood).
-        # Flood free-text → hard stop (no inject). Social path already handled.
+        # Flood free-text → hard stop (no inject).
+        # K8 is owned structurally above (no-speak continue) AND in pure policy
+        # (social work-continue requires spoke; after no-speak spent without
+        # speak → need_spoke stop). no_speak_still_needed is always False here
+        # because the structural branch already continued when it was True —
+        # passed for API completeness / belt-and-suspenders if that branch moves.
         work_ctx = in_moment_work_context(
             social_wake=social_wake,
             tools_ran=state.tools_ran,
@@ -784,21 +789,11 @@ def _run_loop_body(
             wake_kind=wake_kind,
             has_open_goals_slice=has_open_goals_slice,
         )
-        # After social path above, no-speak is either done or not needed.
         no_speak_still_needed = (
             social_wake and not state.spoke and not state.no_speak_nudge_sent
         )
-        # Dedupe: skip if last chain message is already a work-continue HOST.
-        last_is_work_host = False
-        if state.chain_messages:
-            last = state.chain_messages[-1]
-            last_content = last.get("content") if isinstance(last, Mapping) else None
-            host_line_probe = work_continue_host_message()
-            last_is_work_host = (
-                _is_host_inject(last)
-                and isinstance(last_content, str)
-                and last_content.strip() == host_line_probe.strip()
-            )
+        # Second inject blocked by work_nudge_sent >= max (budget), not by
+        # folding last-HOST into work_context (keeps reason diagnostics clean).
         nudge = should_in_moment_work_nudge(
             continuous_enabled=continuous_enabled,
             social_wake=social_wake,
@@ -806,7 +801,7 @@ def _run_loop_body(
             no_speak_nudge_pending_or_needed=no_speak_still_needed,
             work_nudge_sent=state.work_continue_injects,
             max_nudges=work_nudge_max,
-            work_context=work_ctx and not last_is_work_host,
+            work_context=work_ctx,
             last_hop_was_flood=hop_was_flood,
         )
         if nudge.inject:

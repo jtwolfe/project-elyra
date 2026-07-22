@@ -49,7 +49,7 @@ class InMomentNudgeDecision:
     """Result of should_in_moment_work_nudge."""
 
     inject: bool
-    reason: str  # injected | disabled | budget | not_workish | social_nudge_first | flood | …
+    reason: str  # injected | disabled | budget | not_workish | social_nudge_first | need_spoke | flood | …
 
 
 @dataclass(frozen=True)
@@ -124,8 +124,13 @@ def should_in_moment_work_nudge(
 ) -> InMomentNudgeDecision:
     """Decide whether to inject the work-continue HOST before accepting no_tools.
 
-    Full do-loop wire is PR5; this function is pure and testable now.
-    Social no-speak nudge wins first when still needed (K8).
+    Social path (K8 / design §D):
+    1. No-speak nudge wins first when still needed (``social_nudge_first``).
+    2. Work-continue on social requires ``spoke=True`` — after no-speak is spent
+       without a speak tool, accept ``no_tools`` (``need_spoke``). Never a second
+       HOST that pushes tools without glass speech on a social wake.
+
+    Non-social: ``spoke`` is not required; ``work_context`` alone can inject.
 
     Progress inputs are folded into ``work_context`` by the caller via
     ``in_moment_work_context`` (tools_ran / ledger_mutated not re-checked here).
@@ -134,8 +139,11 @@ def should_in_moment_work_nudge(
         return InMomentNudgeDecision(inject=False, reason="disabled")
     if last_hop_was_flood:
         return InMomentNudgeDecision(inject=False, reason="flood")
-    if social_wake and not spoke and no_speak_nudge_pending_or_needed:
-        return InMomentNudgeDecision(inject=False, reason="social_nudge_first")
+    # K8: social no-speak first, then work-continue only after spoke.
+    if social_wake and not spoke:
+        if no_speak_nudge_pending_or_needed:
+            return InMomentNudgeDecision(inject=False, reason="social_nudge_first")
+        return InMomentNudgeDecision(inject=False, reason="need_spoke")
     if max_nudges <= 0 or work_nudge_sent >= max_nudges:
         return InMomentNudgeDecision(inject=False, reason="budget")
     if not work_context:

@@ -962,11 +962,17 @@ def test_social_work_context_ignores_open_goals_alone(
 def test_social_no_speak_wins_before_work_continue(
     ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
 ) -> None:
-    """K8: on social free-text without speak, no-speak nudge fires first (not work)."""
+    """K8 order: list_dir → free-text → no_speak → speak → free-text → work_continue → stop.
+
+    Sequence:
+    1. list_dir (tools_ran, not spoke)
+    2. free-text → no_speak_nudge (social, not spoke)
+    3. speak tool (spoke=True)
+    4. free-text with work_context → work_continue once
+    5. free-text again → no_tools stop
+    """
     mid = moments.open_moment(why_now="social first", moment_id="msocfirst")
     ctx.moment_id = mid
-    # Non-speak tools first so work_context would be true after speak path…
-    # Here: free-text only; work_context false; ensure no work_continue before no_speak.
     client = StubChatClient.scripted(
         [
             _tc("list_dir", {"path": "."}, call_id="c1"),
@@ -993,11 +999,161 @@ def test_social_no_speak_wins_before_work_continue(
     assert result.work_continue_injects == 1
     beats = moments.list_beats(mid)
     kinds = [b.get("kind") for b in beats if b.get("type") == "obs"]
-    # no_speak must not appear (spoke via tool before free-text after tools?);
-    # first free-text is after list_dir without speak → no_speak first, then speak tool.
     assert "no_speak_nudge" in kinds
     assert "work_continue" in kinds
     assert kinds.index("no_speak_nudge") < kinds.index("work_continue")
+
+
+def test_social_no_work_continue_without_spoke_after_no_speak(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Strict K8: list_dir → free-text → no_speak → free-text (still no speak) → stop.
+
+    tools_ran alone must not unlock work-continue on social without spoke.
+    """
+    mid = moments.open_moment(why_now="social need spoke", moment_id="msocneedspoke")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _text("silent free text"),
+            _text("still no speak after nudge"),
+            _text("should not run"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings_continuous(enabled=True),
+        moments=moments,
+        social_wake=True,
+        wake_kind="user_message",
+        continuous_enabled=True,
+    )
+    assert result.tools_ran is True
+    assert result.spoke is False
+    assert result.work_continue_injects == 0
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    assert any(b.get("kind") == "no_speak_nudge" for b in beats)
+    assert not any(b.get("kind") == "work_continue" for b in beats)
+
+
+def test_failed_non_speak_tool_tools_ran_false(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """v1 K15: failed non-speak tool (ok=False) does not set tools_ran."""
+    class _FailListDir:
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return registry.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, c: ToolContext
+        ) -> ToolResult:
+            if name == "list_dir":
+                return ToolResult(
+                    ok=False, payload={}, error_reason="sandbox_denied"
+                )
+            return registry.execute(name, args, c)
+
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=_FailListDir(),  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=default_settings(),
+    )
+    assert result.tools_ran is False
+    assert result.spoke is False
+    assert result.stop_reason == "no_tools"
+
+
+def test_ledger_mutated_alone_work_continue_non_social(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """ledger_mutated alone (no ok non-speak tool) → work_continue on non-social."""
+    mid = moments.open_moment(why_now="ledger only", moment_id="mledgeronly")
+    ctx.moment_id = mid
+
+    class _LedgerOnly:
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return registry.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, c: ToolContext
+        ) -> ToolResult:
+            if name == "list_dir":
+                # Fail tool so tools_ran stays False, but mutate ledger.
+                assert c.mark_task_changed is not None
+                c.mark_task_changed()
+                return ToolResult(ok=False, payload={}, error_reason="simulated")
+            return registry.execute(name, args, c)
+
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _text("exit early"),
+            _text("after work continue"),
+            _text("should not run"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=_LedgerOnly(),  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings_continuous(enabled=True),
+        moments=moments,
+        social_wake=False,
+        wake_kind="timer",
+        continuous_enabled=True,
+    )
+    assert result.ledger_mutated is True
+    assert result.tools_ran is False
+    assert result.work_continue_injects == 1
+    assert result.stop_reason == "no_tools"
+
+
+def test_nonsocial_workish_wake_kind_without_tools_work_continue(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Non-social task_ready wake with no tools → work_context from wake_kind → inject once."""
+    mid = moments.open_moment(why_now="task ready free", moment_id="mtaskreadywc")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _text("premature free text"),
+            _text("after work continue"),
+            _text("should not run"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings_continuous(enabled=True),
+        moments=moments,
+        social_wake=False,
+        wake_kind="task_ready",
+        has_open_goals_slice=False,
+        continuous_enabled=True,
+    )
+    assert result.tools_ran is False
+    assert result.ledger_mutated is False
+    assert result.work_continue_injects == 1
+    assert result.stop_reason == "no_tools"
+    assert any(
+        b.get("kind") == "work_continue" for b in moments.list_beats(mid)
+    )
 
 
 def test_mark_task_changed_sets_ledger_mutated(

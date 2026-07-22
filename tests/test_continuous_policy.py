@@ -370,6 +370,38 @@ def test_in_moment_nudge_social_nudge_first():
     assert d.reason == "social_nudge_first"
 
 
+def test_in_moment_nudge_social_need_spoke_after_no_speak_spent():
+    """K8/§D: after no-speak budget spent without speak, no work-continue on social."""
+    d = should_in_moment_work_nudge(
+        continuous_enabled=True,
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_pending_or_needed=False,
+        work_nudge_sent=0,
+        max_nudges=1,
+        work_context=True,  # tools ran does not override need_spoke
+        last_hop_was_flood=False,
+    )
+    assert d.inject is False
+    assert d.reason == "need_spoke"
+
+
+def test_in_moment_nudge_social_injects_after_spoke():
+    """Social work-continue only when spoke + work_context."""
+    d = should_in_moment_work_nudge(
+        continuous_enabled=True,
+        social_wake=True,
+        spoke=True,
+        no_speak_nudge_pending_or_needed=False,
+        work_nudge_sent=0,
+        max_nudges=1,
+        work_context=True,
+        last_hop_was_flood=False,
+    )
+    assert d.inject is True
+    assert d.reason == "injected"
+
+
 def test_in_moment_nudge_budget():
     d = should_in_moment_work_nudge(
         continuous_enabled=True,
