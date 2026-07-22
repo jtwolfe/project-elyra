@@ -37,6 +37,7 @@ from elyra.loop.doloop import (
     tool_result_to_content,
     truncate_tool_content,
 )
+from elyra.loop.skill_commit_policy import skill_commit_host_message
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence import TimerService, WakeQueue
@@ -233,6 +234,87 @@ def test_tool_result_to_content_includes_ok_and_error():
     assert body["ok"] is False
     assert body["error_reason"] == "nope"
     assert body["x"] == 1
+
+
+def test_tool_result_to_content_load_skill_ok_frames_playbook():
+    """Successful load_skill wire content is PLAYBOOK ACTIVE plain text, not JSON."""
+    body_md = "---\nname: plan-work\n---\n\n# plan-work\n\nSteps go here.\n"
+    tr = ToolResult(
+        ok=True,
+        payload={
+            "name": "plan-work",
+            "description": "Break work into goals and tasks",
+            "source": "bundled",
+            "body": body_md,
+        },
+    )
+    raw = tool_result_to_content(tr, max_chars=8000, tool_name="load_skill")
+    assert raw.startswith("PLAYBOOK ACTIVE: plan-work")
+    assert "source: bundled" in raw
+    assert "## Playbook" in raw
+    assert body_md.rstrip() in raw
+    assert "tool_call implementing step 1" in raw
+    # Must not be the old JSON envelope.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(raw)
+
+
+def test_tool_result_to_content_load_skill_rest_honest_stop_follow_line():
+    """rest framing still includes body but follow-line allows honest no-tool stop (K16)."""
+    body_md = "# rest\n\nIdle honestly.\n"
+    tr = ToolResult(
+        ok=True,
+        payload={
+            "name": "rest",
+            "description": "Honest idle",
+            "source": "bundled",
+            "body": body_md,
+        },
+    )
+    raw = tool_result_to_content(tr, max_chars=8000, tool_name="load_skill")
+    assert raw.startswith("PLAYBOOK ACTIVE: rest")
+    assert "## Playbook" in raw
+    assert body_md.rstrip() in raw
+    assert "honest stop with no tools" in raw
+    assert "must be a tool_call" not in raw
+
+
+def test_tool_result_to_content_load_skill_error_stays_json():
+    """Failed load_skill stays JSON (ok / error_reason)."""
+    tr = ToolResult(
+        ok=False,
+        payload={"name": "nope"},
+        error_reason="unknown_skill",
+    )
+    raw = tool_result_to_content(tr, max_chars=8000, tool_name="load_skill")
+    body = json.loads(raw)
+    assert body["ok"] is False
+    assert body["error_reason"] == "unknown_skill"
+    assert body["name"] == "nope"
+
+
+def test_tool_result_to_content_tool_name_none_or_other_stays_json():
+    """Default tool_name=None and non-load_skill tools keep JSON path."""
+    tr = ToolResult(
+        ok=True,
+        payload={
+            "name": "plan-work",
+            "description": "x",
+            "source": "bundled",
+            "body": "# plan-work body",
+        },
+    )
+    # No tool_name → JSON (direct unit callers).
+    none_raw = tool_result_to_content(tr, max_chars=8000)
+    none_body = json.loads(none_raw)
+    assert none_body["ok"] is True
+    assert none_body["body"] == "# plan-work body"
+
+    # Other tool names → JSON even if payload looks like a skill.
+    other_raw = tool_result_to_content(tr, max_chars=8000, tool_name="list_goals")
+    other_body = json.loads(other_raw)
+    assert other_body["ok"] is True
+    assert other_body["name"] == "plan-work"
 
 
 # ---------------------------------------------------------------------------
@@ -1223,6 +1305,614 @@ def test_work_continue_disabled_when_continuous_off(
     assert result.tools_ran is True
     assert result.work_continue_injects == 0
     assert result.stop_reason == "no_tools"
+
+
+# ---------------------------------------------------------------------------
+# 5c. Skill-commit HOST after load_skill (PR2)
+# ---------------------------------------------------------------------------
+
+
+def test_load_skill_work_free_text_skill_commit_then_tools(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """load_skill(plan-work) → free-text → skill_commit obs → tools; continuous OFF."""
+    mid = moments.open_moment(why_now="skill commit", moment_id="mskillcommit")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            _text("I have the skill, planning..."),
+            _tc("list_dir", {"path": "."}, call_id="c2"),
+            _text("done after tools"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),  # continuous OFF
+    )
+    assert result.skill_commit_injects == 1
+    assert result.work_continue_injects == 0
+    assert result.tools_ran is True
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    commits = [
+        b
+        for b in beats
+        if b.get("type") == "obs" and b.get("kind") == "skill_commit"
+    ]
+    assert len(commits) == 1
+    content = commits[0].get("content") or ""
+    assert content == skill_commit_host_message("plan-work")
+    assert content.startswith("HOST:")
+    assert commits[0].get("skill") == "plan-work"
+    assert _is_host_inject({"role": "user", "content": content})
+    # Order: tool load_skill, model free-text, obs skill_commit, tool list_dir
+    commit_idx = next(
+        i for i, b in enumerate(beats) if b.get("kind") == "skill_commit"
+    )
+    load_idx = next(
+        i
+        for i, b in enumerate(beats)
+        if b.get("type") == "tool" and b.get("name") == "load_skill"
+    )
+    list_idx = next(
+        i
+        for i, b in enumerate(beats)
+        if b.get("type") == "tool" and b.get("name") == "list_dir"
+    )
+    assert load_idx < commit_idx < list_idx
+
+
+def test_flood_free_text_still_gets_skill_commit(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Flood free-text after load_skill still injects skill_commit (unlike work_continue).
+
+    Continuous ON so a pure work_continue path would also be candidate; flood
+    hard-stops work_continue on the flood hop, but skill_commit still fires.
+    """
+    mid = moments.open_moment(why_now="flood skill", moment_id="mfloodsc")
+    ctx.moment_id = mid
+    flood = "\n".join(["<|channel>thought"] * 20)
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            {
+                "content": flood,
+                "reasoning_content": flood,
+                "tool_calls": [],
+                "finish_reason": "length",
+            },
+            # Second free-text is also flood → no work_continue either.
+            {
+                "content": flood,
+                "reasoning_content": flood,
+                "tool_calls": [],
+                "finish_reason": "length",
+            },
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings_continuous(enabled=True),
+        moments=moments,
+        social_wake=False,
+        wake_kind="timer",
+        continuous_enabled=True,
+    )
+    assert result.skill_commit_injects == 1
+    assert result.work_continue_injects == 0  # flood hard-stops work_continue
+    assert result.channel_flood_beats >= 1
+    assert result.last_stop_hop_was_flood is True
+    beats = moments.list_beats(mid)
+    assert any(b.get("kind") == "skill_commit" for b in beats)
+    assert not any(b.get("kind") == "work_continue" for b in beats)
+
+
+def test_social_plan_work_free_text_skill_commit_not_no_speak(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Social + load_skill(plan-work) + free-text → skill_commit, not no_speak on that hop."""
+    mid = moments.open_moment(why_now="social plan", moment_id="msocplan")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            _text("planning without tools"),
+            _tc("list_dir", {"path": "."}, call_id="c2"),
+            _text("after tools free"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=True,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 1
+    beats = moments.list_beats(mid)
+    kinds = [b.get("kind") for b in beats if b.get("type") == "obs"]
+    assert "skill_commit" in kinds
+    # On the hop after load_skill, no_speak must not fire first.
+    commit_idx = kinds.index("skill_commit")
+    if "no_speak_nudge" in kinds:
+        assert kinds.index("no_speak_nudge") > commit_idx
+    # After commit spent + tools (list_dir clears pending), free-text may no_speak.
+    # Sequence ends with free-text after list_dir — social !spoke → no_speak then stop.
+    # Either path is fine as long as first free-text after load was skill_commit.
+
+
+def test_load_skill_and_list_goals_same_batch_no_skill_commit(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Same-batch load_skill + non-load tool clears pending; free-text does not skill_commit."""
+    mid = moments.open_moment(why_now="same batch", moment_id="msamebatch")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _batch(
+                {"id": "c1", "name": "load_skill", "arguments": {"name": "plan-work"}},
+                {"id": "c2", "name": "list_dir", "arguments": {"path": "."}},
+            ),
+            _text("free after same-batch tools"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 0
+    assert result.tools_ran is True
+    assert result.stop_reason == "no_tools"
+    assert not any(
+        b.get("kind") == "skill_commit" for b in moments.list_beats(mid)
+    )
+
+
+def test_load_rest_alone_no_skill_commit(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """rest is never commit-eligible; free-text does not skill_commit."""
+    mid = moments.open_moment(why_now="rest idle", moment_id="mrestalone")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "rest"}, call_id="c1"),
+            _text("honest idle free text"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 0
+    assert result.stop_reason == "no_tools"
+    assert not any(
+        b.get("kind") == "skill_commit" for b in moments.list_beats(mid)
+    )
+
+
+def test_plan_work_then_rest_clears_pending_no_skill_commit(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """load plan-work then rest (replace-not-sticky) → free-text does not skill_commit."""
+    mid = moments.open_moment(why_now="rest supersede", moment_id="mrestsuper")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            _tc("load_skill", {"name": "rest"}, call_id="c2"),
+            _text("idle after rest"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 0
+    assert not any(
+        b.get("kind") == "skill_commit" for b in moments.list_beats(mid)
+    )
+
+
+def test_failed_rest_load_does_not_clear_prior_work_pending(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Failed rest load does not clear prior work pending → free-text skill_commits."""
+    mid = moments.open_moment(why_now="failed rest", moment_id="mfailrest")
+    ctx.moment_id = mid
+
+    class _FailRestAfterPlan:
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return registry.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, c: ToolContext
+        ) -> ToolResult:
+            if name == "load_skill" and (args or {}).get("name") == "rest":
+                return ToolResult(
+                    ok=False,
+                    payload={"name": "rest"},
+                    error_reason="simulated_fail",
+                )
+            return registry.execute(name, args, c)
+
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            _tc("load_skill", {"name": "rest"}, call_id="c2"),
+            _text("should get skill_commit for plan-work"),
+            _text("after commit"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=_FailRestAfterPlan(),  # type: ignore[arg-type]
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=default_settings(),
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.skill_commit_injects == 1
+    commits = [
+        b
+        for b in moments.list_beats(mid)
+        if b.get("kind") == "skill_commit"
+    ]
+    assert len(commits) == 1
+    assert commits[0].get("skill") == "plan-work"
+
+
+def test_non_load_clear_does_not_set_skill_commit_sent(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Clearing pending via non-load tool does not spend skill_commit budget.
+
+    After clear without inject, a later re-load can still arm and inject once.
+    After inject spends budget, second skill load free-text gets no second HOST.
+    """
+    mid = moments.open_moment(why_now="budget", moment_id="mbudgetsc")
+    ctx.moment_id = mid
+    # Path A: load + list_dir same batch clears pending without inject;
+    # then re-load eligible alone → free-text should still skill_commit once.
+    client = StubChatClient.scripted(
+        [
+            _batch(
+                {"id": "c1", "name": "load_skill", "arguments": {"name": "plan-work"}},
+                {"id": "c2", "name": "list_dir", "arguments": {"path": "."}},
+            ),
+            _tc("load_skill", {"name": "do-work"}, call_id="c3"),
+            _text("commit for do-work"),
+            _tc("load_skill", {"name": "create-tool"}, call_id="c4"),
+            _text("second free-text after inject spent — no second HOST"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 1
+    commits = [
+        b
+        for b in moments.list_beats(mid)
+        if b.get("kind") == "skill_commit"
+    ]
+    assert len(commits) == 1
+    assert commits[0].get("skill") == "do-work"
+
+
+def test_skill_commit_does_not_touch_speak_transport(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """skill_commit HOST is chain-only; never SpeakTransport / glass."""
+    mid = moments.open_moment(why_now="glass check", moment_id="mglasssc")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            _text("free"),
+            _text("after"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 1
+    host_line = skill_commit_host_message("plan-work")
+    glass = list_messages(paths=paths)
+    assert not any(host_line in (m.get("content") or "") for m in glass)
+    assert not any(
+        "execute its next checklist step" in (m.get("content") or "")
+        for m in glass
+    )
+
+
+def test_skill_commit_once_per_moment_budget(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """At most one skill_commit HOST per moment even with two free-text hops."""
+    mid = moments.open_moment(why_now="once", moment_id="moncesc")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+            _text("first free"),
+            _text("second free after commit"),
+            _text("should not run third"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.skill_commit_injects == 1
+    assert result.hop_count == 3  # load + free + free after inject
+    commits = [
+        b
+        for b in moments.list_beats(mid)
+        if b.get("kind") == "skill_commit"
+    ]
+    assert len(commits) == 1
+
+
+# ---------------------------------------------------------------------------
+# 5d. Optional post-load tool_choice=required (PR4; default OFF)
+# ---------------------------------------------------------------------------
+
+
+def test_post_load_tool_choice_flag_off_stays_none(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Default flag OFF → tool_choice is None after load_skill arm."""
+    mid = moments.open_moment(why_now="tc off", moment_id="mtcoff")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._n = 0
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+                    _tc("list_dir", {"path": "."}, call_id="c2"),
+                    _text("done"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=default_settings(),  # flag default False
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.tools_ran is True
+    assert len(captured) >= 2
+    # hop0: no pending yet → None; hop1: pending armed but flag OFF → None
+    assert captured[0] is None
+    assert captured[1] is None
+
+
+def test_post_load_tool_choice_flag_on_required_after_load(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Flag ON + eligible pending → tool_choice == \"required\" on next hop only."""
+    mid = moments.open_moment(why_now="tc on", moment_id="mtcon")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+                    # Hop after arm: model obeys required with a real tool.
+                    _tc("list_dir", {"path": "."}, call_id="c2"),
+                    _text("done"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.tools_ran is True
+    assert len(captured) >= 3
+    # hop0 pre-load: no pending → None
+    assert captured[0] is None
+    # hop1 after load_skill arm: required
+    assert captured[1] == "required"
+    # hop2 after non-load clear: pending cleared → None
+    assert captured[2] is None
+
+
+def test_post_load_tool_choice_cleared_after_commit_spent(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Flag ON: free-text spends skill_commit → later hop tool_choice is None."""
+    mid = moments.open_moment(why_now="tc spent", moment_id="mtcsp")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+                    # Free-text while armed → skill_commit injects, clears pending
+                    _text("planning in prose..."),
+                    # After commit spent: no more required
+                    _text("still free-text"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.skill_commit_injects == 1
+    assert len(captured) >= 3
+    assert captured[0] is None
+    assert captured[1] == "required"  # armed on free-text hop
+    assert captured[2] is None  # after commit spent / pending cleared
+
+
+def test_post_load_tool_choice_rest_load_never_required(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """rest is not commit-eligible; flag ON still yields None after load rest."""
+    mid = moments.open_moment(why_now="tc rest", moment_id="mtcrest")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "rest"}, call_id="c1"),
+                    _text("idle"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.skill_commit_injects == 0
+    assert len(captured) >= 2
+    assert captured[0] is None
+    assert captured[1] is None  # rest never arms
+
+
+def test_social_hop0_speak_pin_wins_over_post_load_flag(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Social hop==0 speak pin is never overridden by post-load required flag.
+
+    pending_skill_commit cannot arm before hop 0 in real runs; this locks the
+    wire order (speak pin first) independent of arm state / flag.
+    """
+    from elyra.llm.client import ToolCall as LlmToolCall
+
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            self._n += 1
+            if self._n == 1:
+                return ChatCompletionResult(
+                    content="",
+                    reasoning_content="",
+                    raw_json="{}",
+                    tool_calls=[
+                        LlmToolCall(
+                            id="c1",
+                            name="speak",
+                            arguments={"text": "Hello."},
+                            arguments_raw='{"text":"Hello."}',
+                            arguments_parse_ok=True,
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            return ChatCompletionResult(
+                content="",
+                reasoning_content="",
+                raw_json="{}",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=[{"role": "system", "content": "test"}],
+        settings=settings,
+        moments=moments,
+        social_wake=True,
+    )
+    assert result.spoke is True
+    assert len(captured) >= 1
+    # Hop-0 social: speak function pin, not "required"
+    assert captured[0] == {"type": "function", "function": {"name": "speak"}}
+    assert captured[0] != "required"
 
 
 # ---------------------------------------------------------------------------

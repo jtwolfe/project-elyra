@@ -407,3 +407,27 @@ def test_load_skill_create_tool_checklist(
     assert "install_tool_draft" in body
     assert "verify_tool" in body
     assert "promote_tool" in body
+    assert "First tool call" in body
+
+
+def test_bundled_skills_have_first_action_section(catalog: SkillCatalog) -> None:
+    """Work+talk: First tool call (mandatory); rest: First action (honest stop)."""
+    work_and_talk = (
+        "talk",
+        "plan-work",
+        "do-work",
+        "review-work",
+        "create-tool",
+        "create-skill",
+    )
+    for name in work_and_talk:
+        loaded = catalog.load(name)
+        assert loaded is not None, name
+        body = loaded.body
+        assert "First tool call" in body, f"{name} missing First tool call"
+        assert "mandatory" in body.lower(), f"{name} missing mandatory framing"
+    rest = catalog.load("rest")
+    assert rest is not None
+    assert "First action" in rest.body
+    assert "First tool call" not in rest.body
+    assert "stop with no tools" in rest.body.lower() or "no tools" in rest.body.lower()

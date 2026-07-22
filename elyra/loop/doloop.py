@@ -1,7 +1,9 @@
 """Multi-hop do-loop: model ↔ tools with ToolResult contracts.
 
 Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak
-nudge, budgeted in-moment work-continue HOST (continuous policy).
+nudge, budgeted in-moment work-continue HOST (continuous policy), post-load
+skill-commit HOST (skill_commit_policy), optional post-load tool_choice pin
+(default OFF).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
           completion-ingress channel hygiene (sanitize before beat/chain),
           tools_ran / ledger_mutated / flood counters on DoLoopResult.
@@ -36,6 +38,14 @@ from elyra.loop.continuous_policy import (
     in_moment_work_context,
     should_in_moment_work_nudge,
     work_continue_host_message,
+)
+from elyra.loop.skill_commit_policy import (
+    format_playbook_active,
+    is_commit_eligible_skill,
+    post_load_skill_tool_choice,
+    should_allow_no_speak,
+    should_skill_commit_nudge,
+    skill_commit_host_message,
 )
 from elyra.loop.stop import (
     STOP_ERROR,
@@ -98,6 +108,7 @@ class DoLoopResult:
     reouter_count: int = 0
     continue_injects: int = 0  # time-idle HOST injects (continue_policy)
     work_continue_injects: int = 0  # continuous work-continue HOST injects
+    skill_commit_injects: int = 0  # post-load_skill commit HOST injects
     # K15: ≥1 successful non-speak tool (ok and not counts_as_speak); speak alone False
     tools_ran: bool = False
     ledger_mutated: bool = False  # mark_task_changed fired this moment
@@ -119,6 +130,9 @@ class _LoopState:
     continue_injects: int = 0
     no_speak_nudge_sent: bool = False
     work_continue_injects: int = 0
+    pending_skill_commit: str | None = None
+    skill_commit_sent: bool = False
+    skill_commit_injects: int = 0
     tools_ran: bool = False
     ledger_mutated: bool = False
     model_beats: int = 0
@@ -196,8 +210,39 @@ def truncate_tool_content(content: str, max_chars: int) -> str:
     return content[:keep] + _TRUNC_MARKER
 
 
-def tool_result_to_content(tr: ToolResult, max_chars: int) -> str:
-    """Serialize + truncate a ToolResult for the wire tool message."""
+def tool_result_to_content(
+    tr: ToolResult,
+    max_chars: int,
+    *,
+    tool_name: str | None = None,
+) -> str:
+    """Serialize + truncate a ToolResult for the wire tool message.
+
+    Successful ``load_skill`` results are framed as plain-text playbooks
+    (``PLAYBOOK ACTIVE: …``) when ``tool_name == "load_skill"`` and the payload
+    has a body. Errors and all other tools stay JSON. Default ``tool_name=None``
+    preserves the JSON path for direct unit callers and non-load tools.
+    """
+    if (
+        tool_name == "load_skill"
+        and tr.ok
+        and isinstance(tr.payload, dict)
+        and isinstance(tr.payload.get("body"), str)
+        and tr.payload["body"]
+    ):
+        name = tr.payload.get("name")
+        if not isinstance(name, str) or not name:
+            name = "unknown"
+        source = tr.payload.get("source")
+        description = tr.payload.get("description")
+        framed = format_playbook_active(
+            name,
+            tr.payload["body"],
+            source=source if isinstance(source, str) else None,
+            description=description if isinstance(description, str) else None,
+        )
+        return truncate_tool_content(framed, max_chars)
+
     try:
         raw = json.dumps(serialize_tool_result(tr), ensure_ascii=False, default=str)
     except (TypeError, ValueError):
@@ -511,9 +556,9 @@ def run_do_loop(
         Callable that rebuilds the outer meal (used at start if needed and on
         re-outer under in-turn budget pressure).
     social_wake:
-        When True, inject a one-shot no-speak nudge before ``no_tools`` stop if
-        no successful ``counts_as_speak`` occurred. Social no-speak wins first
-        over work-continue (K8).
+        When True, inject a one-shot no-speak nudge on free-text hops if no
+        successful ``counts_as_speak`` occurred — via ``should_allow_no_speak``
+        (deferred while a work/unknown skill is pending commit).
     wake_kind:
         Wake kind string for continuous in-moment ``work_context`` (non-social
         kinds ``task_ready`` / ``moment_continue`` / ``timer`` count as workish).
@@ -525,6 +570,14 @@ def run_do_loop(
         ``settings.continuous.enabled`` (default OFF).
     moments:
         Optional MomentStore-like object with ``append_beat(moment_id, beat)``.
+
+    Free-text inject order (K8 extended)::
+
+        skill_commit → no_speak (via should_allow_no_speak) → work_continue → stop
+
+    Skill-commit fires even on channel flood free-text and is independent of
+    ``continuous_enabled``. Social no-speak no longer always wins first over
+    post-skill commit.
     """
     loop = _loop_settings(settings)
     cont = _continuous_settings(settings)
@@ -604,6 +657,7 @@ def run_do_loop(
             reouter_count=state.reouter_count,
             continue_injects=state.continue_injects,
             work_continue_injects=state.work_continue_injects,
+            skill_commit_injects=state.skill_commit_injects,
             tools_ran=state.tools_ran,
             ledger_mutated=state.ledger_mutated,
             model_beats=state.model_beats,
@@ -689,11 +743,17 @@ def _run_loop_body(
 
         messages = list(state.outer_prefix) + list(state.chain_messages)
         # Stage 5 L4: pin speak only on social first completion (hop==0 pre-call).
-        # Omit tool_choice otherwise — never product-default tool_choice=required.
+        # Optional K12 post-load required pin only when speak pin does not apply —
+        # hop-0 social speak always wins. Flag defaults OFF.
         tool_choice = social_first_hop_tool_choice(
             social_wake=social_wake,
             hop=state.hop,
         )
+        if tool_choice is None:
+            tool_choice = post_load_skill_tool_choice(
+                pending_skill_name=state.pending_skill_commit,
+                enabled=loop.post_load_skill_tool_choice_required,
+            )
         result = client.chat_completion(
             messages,
             max_tokens=gen_max,
@@ -760,8 +820,43 @@ def _run_loop_body(
         state.last_stop_hop_was_flood = hop_was_flood
 
         # Orphan content → model beat only (already recorded); never glass.
-        # K8: social no-speak nudge wins first when still needed.
-        if social_wake and not state.spoke and not state.no_speak_nudge_sent:
+        # Free-text inject order (K8 extended): skill_commit → no_speak →
+        # work_continue → stop. Skill-commit fires even on flood free-text and
+        # is independent of continuous_enabled.
+
+        # 1. Post-load skill-commit HOST (once per moment when pending).
+        commit = should_skill_commit_nudge(
+            pending_skill_name=state.pending_skill_commit,
+            skill_commit_sent=state.skill_commit_sent,
+            free_text_no_tools=True,
+        )
+        if commit.inject:
+            skill_name = state.pending_skill_commit or ""
+            host_line = skill_commit_host_message(skill_name)
+            state.chain_messages.append(_obs_user_message(host_line))
+            state.skill_commit_sent = True
+            state.pending_skill_commit = None
+            state.skill_commit_injects += 1
+            _append_beat(
+                moments,
+                moment_id,
+                {
+                    "type": "obs",
+                    "kind": "skill_commit",
+                    "content": host_line,
+                    "skill": skill_name,
+                },
+            )
+            continue
+
+        # 2. Social no-speak via pure predicate (work pending defers; K7/K8).
+        if should_allow_no_speak(
+            social_wake=social_wake,
+            spoke=state.spoke,
+            no_speak_nudge_sent=state.no_speak_nudge_sent,
+            pending_skill_name=state.pending_skill_commit,
+            skill_commit_sent=state.skill_commit_sent,
+        ):
             state.no_speak_nudge_sent = True
             state.chain_messages.append(_obs_user_message(NO_SPEAK_NUDGE))
             _append_beat(
@@ -775,7 +870,7 @@ def _run_loop_body(
             )
             continue
 
-        # Budgeted in-moment work-continue HOST (continuous policy; K7/flood).
+        # 3. Budgeted in-moment work-continue HOST (continuous policy; K7/flood).
         # Flood free-text → hard stop (no inject).
         # K8 is owned structurally above (no-speak continue) AND in pure policy
         # (social work-continue requires spoke; after no-speak spent without
@@ -789,8 +884,12 @@ def _run_loop_body(
             wake_kind=wake_kind,
             has_open_goals_slice=has_open_goals_slice,
         )
-        no_speak_still_needed = (
-            social_wake and not state.spoke and not state.no_speak_nudge_sent
+        no_speak_still_needed = should_allow_no_speak(
+            social_wake=social_wake,
+            spoke=state.spoke,
+            no_speak_nudge_sent=state.no_speak_nudge_sent,
+            pending_skill_name=state.pending_skill_commit,
+            skill_commit_sent=state.skill_commit_sent,
         )
         # Second inject blocked by work_nudge_sent >= max (budget), not by
         # folding last-HOST into work_context (keeps reason diagnostics clean).
@@ -822,6 +921,22 @@ def _run_loop_body(
         return _finish(state, stop_for_no_tools(), moments, moment_id)
 
 
+def _skill_name_from_load(
+    tc: LlmToolCall,
+    tr: ToolResult,
+) -> str | None:
+    """Prefer catalog meta name from ok payload; fall back to parsed args."""
+    if isinstance(tr.payload, dict):
+        payload_name = tr.payload.get("name")
+        if isinstance(payload_name, str) and payload_name.strip():
+            return payload_name.strip()
+    if tc.arguments_parse_ok and isinstance(tc.arguments, dict):
+        arg_name = tc.arguments.get("name")
+        if isinstance(arg_name, str) and arg_name.strip():
+            return arg_name.strip()
+    return None
+
+
 def _handle_tool_batch(
     *,
     state: _LoopState,
@@ -839,7 +954,7 @@ def _handle_tool_batch(
 
     for tc in result.tool_calls:
         tr = _execute_one(tc, registry=registry, ctx=ctx)
-        content = tool_result_to_content(tr, tool_cap)
+        content = tool_result_to_content(tr, tool_cap, tool_name=tc.name)
         state.chain_messages.append(
             {
                 "role": "tool",
@@ -860,6 +975,19 @@ def _handle_tool_batch(
                 "content": content[:500],
             },
         )
+
+        # Arm / clear skill-commit pending (K17 replace-not-sticky; OQ1 same-batch).
+        # Failed tools do not arm or clear. Clears do NOT set skill_commit_sent.
+        if tr.ok and tc.name == "load_skill":
+            name = _skill_name_from_load(tc, tr)
+            if name and is_commit_eligible_skill(name):
+                state.pending_skill_commit = name
+            else:
+                # rest / empty / not eligible: supersede prior arm.
+                state.pending_skill_commit = None
+        elif tr.ok and tc.name != "load_skill":
+            # Same batch OR later: model already committed to a non-load tool.
+            state.pending_skill_commit = None
 
         if tr.ok and not tr.counts_as_speak:
             # K15: tools_ran = successful non-speak only (not speak-tool name).
@@ -907,6 +1035,7 @@ def _finish(
             "tools_ran": state.tools_ran,
             "ledger_mutated": state.ledger_mutated,
             "work_continue_injects": state.work_continue_injects,
+            "skill_commit_injects": state.skill_commit_injects,
         },
     )
     return DoLoopResult(
@@ -918,6 +1047,7 @@ def _finish(
         reouter_count=state.reouter_count,
         continue_injects=state.continue_injects,
         work_continue_injects=state.work_continue_injects,
+        skill_commit_injects=state.skill_commit_injects,
         tools_ran=state.tools_ran,
         ledger_mutated=state.ledger_mutated,
         model_beats=state.model_beats,
