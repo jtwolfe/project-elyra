@@ -146,9 +146,61 @@
               <p id="continuous-detail" class="muted">—</p>
             </div>
           </div>
+          <div class="reset-actions">
+            <button type="button" id="reset-open-btn" class="btn-danger">
+              Full reset…
+            </button>
+            <p class="muted reset-hint">
+              Clears moments, chat, goals, wakes/timers, sandbox, and tool drafts.
+              Preserves identity, users, continuous toggle, skills/local, and tools/local.
+            </p>
+          </div>
           <pre id="status-json" class="code-block">loading…</pre>
         </section>
       </main>
+    </div>
+
+    <div id="reset-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
+      <div class="modal-backdrop" data-reset-dismiss></div>
+      <div class="modal-card">
+        <header class="modal-head">
+          <h2 id="reset-modal-title">Full reset</h2>
+          <button type="button" class="link-btn" data-reset-dismiss aria-label="Close">close</button>
+        </header>
+        <p class="muted">
+          Destructive dogfood restart. Type <code>RESET</code> to enable confirm.
+        </p>
+        <ul class="reset-checklist">
+          <li class="will-clear">moments (index + tapes)</li>
+          <li class="will-clear">messages.jsonl (chat)</li>
+          <li class="will-clear">goals ledger</li>
+          <li class="will-clear">wakes / timers / waits (disk + memory)</li>
+          <li class="will-clear">sandbox contents</li>
+          <li class="will-clear">tools/drafts packages</li>
+          <li class="will-clear">continuous streak counters (toggle preference kept)</li>
+          <li class="will-keep">identity/self, users</li>
+          <li class="will-keep">continuous.json enabled flag</li>
+          <li class="will-keep">skills/local (always)</li>
+          <li class="will-keep">tools/local promoted tools</li>
+          <li class="will-keep">settings / model paths</li>
+        </ul>
+        <label class="reset-confirm-label" for="reset-confirm-input">
+          Type <strong>RESET</strong> to confirm
+          <input
+            id="reset-confirm-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="RESET"
+          />
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" data-reset-dismiss>Cancel</button>
+          <button type="button" id="reset-confirm-btn" class="btn-danger" disabled>
+            Confirm full reset
+          </button>
+        </div>
+      </div>
     </div>
     <script src="/app.js"></script>
   </body>

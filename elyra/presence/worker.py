@@ -1,11 +1,13 @@
 """Presence worker: claim wakes, open moments, run do-loop.
 
 Scope: single-thread orchestration; phase machine; public enqueue/interject API.
-In scope: claim → open → run_do_loop → close; wait arm → waiting; startup recover.
+In scope: claim → open → run_do_loop → close; wait arm → waiting; startup recover;
+full reset port (reset_runtime_state under lock while idle).
 Out of scope: HTTP/web, tool internals, glass UI panels.
 
 Public API: enqueue_wake, enqueue_user_message, interject, resolve_user_input,
-busy, active_moment_id, pending_wait, status_snapshot.
+busy, active_moment_id, pending_wait, status_snapshot, reset_runtime_state,
+set_continuous_enabled.
 Must not import runtime.web.
 """
 
@@ -59,6 +61,17 @@ from elyra.presence.user_input import (
     ROUTE_USER_MESSAGE,
     ROUTE_WAIT_REPLY,
     resolve_user_input as decide_user_input,
+)
+from elyra.runtime.reset import (
+    clear_goals,
+    clear_local_tools,
+    clear_messages,
+    clear_moments,
+    clear_sandbox,
+    clear_tool_drafts,
+    clear_wakes_disk,
+    ensure_preserved_dirs,
+    normalize_reset_flags,
 )
 from elyra.sandbox import Sandbox
 from elyra.settings import Settings, load_settings
@@ -186,6 +199,12 @@ class PresenceWorker:
         """
         want = bool(enabled)
         with self._lock:
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "enabled": bool(self._continuous.enabled),
+                }
             prev = bool(self._continuous.enabled)
             self._continuous.enabled = want
             try:
@@ -214,6 +233,38 @@ class PresenceWorker:
                 "cancelled_moment_continues": cancelled,
                 "continuous": block,
             }
+
+    def reset_runtime_state(
+        self, flags: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Full reset of ephemeral runtime product (K10/K11). Worker-owned.
+
+        Precondition: not busy and phase != in_moment. Else
+        ``{"ok": False, "error": "worker_busy", "phase": ...}``.
+
+        Under ``self._lock``: set ``resetting=True``, clear queue/timer memory +
+        disk helpers, zero continuous streak fields (preserve enabled), assert
+        empty pending/claimed. Concurrent ops see ``error=resetting``.
+
+        Never clears ``skills/local``, identity, users, continuous.json enabled,
+        model paths, or settings. Optional flags via ``normalize_reset_flags``.
+        """
+        norm = normalize_reset_flags(flags)
+        with self._lock:
+            if self._continuous.resetting:
+                return {"ok": False, "error": "resetting"}
+            if self._busy or self._phase == PHASE_IN_MOMENT:
+                return {
+                    "ok": False,
+                    "error": "worker_busy",
+                    "phase": self._phase,
+                    "worker_busy": self._busy,
+                }
+            self._continuous.resetting = True
+            try:
+                return self._reset_runtime_state_unlocked(norm)
+            finally:
+                self._continuous.resetting = False
 
     @property
     def busy(self) -> bool:
@@ -255,8 +306,13 @@ class PresenceWorker:
         *,
         wake_id: str | None = None,
     ) -> str:
-        """Enqueue a wake by kind; returns wake id."""
+        """Enqueue a wake by kind; returns wake id.
+
+        Raises ``RuntimeError`` with message ``resetting`` while a full reset
+        is in progress (API maps to 503).
+        """
         with self._lock:
+            self._raise_if_resetting_unlocked()
             item = self._queue.enqueue(kind, payload, wake_id=wake_id)
             return item.id
 
@@ -270,6 +326,7 @@ class PresenceWorker:
         """Enqueue a ``user_message`` wake; returns wake id."""
         mid = message_id or str(uuid.uuid4())
         with self._lock:
+            self._raise_if_resetting_unlocked()
             item = self._queue.enqueue(
                 "user_message",
                 {
@@ -300,6 +357,12 @@ class PresenceWorker:
         """
         text = content if isinstance(content, str) else str(content)
         with self._lock:
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "reason": "resetting",
+                }
             if self._phase != PHASE_IN_MOMENT:
                 wake_id = self._queue.enqueue(
                     "user_message",
@@ -349,6 +412,12 @@ class PresenceWorker:
     ) -> dict[str, Any]:
         """Route user input via the phase/wait state machine; apply side effects."""
         with self._lock:
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "reason": "resetting",
+                }
             pending = self._pending_wait_unlocked()
             decision = decide_user_input(
                 content,
@@ -423,6 +492,7 @@ class PresenceWorker:
                 "worker_busy": self._busy,
                 "worker_pending": len(self._queue.pending()),
                 "interject_depth": self._interject.depth,
+                "resetting": bool(self._continuous.resetting),
                 "continuous": continuous_status_block(
                     self._continuous,
                     self.settings.continuous,
@@ -501,9 +571,11 @@ class PresenceWorker:
         """Under lock: fire due work, claim one wake, open moment, set phase.
 
         If claim succeeds but ``open_moment`` fails, the wake is cancelled so it
-        is not left stuck in ``claimed``.
+        is not left stuck in ``claimed``. Skips claim while full reset runs.
         """
         with self._lock:
+            if self._continuous.resetting:
+                return None
             self._fire_due_unlocked()
             moment_id = str(uuid.uuid4())
             wake = self._queue.claim(moment_id)
@@ -1042,6 +1114,121 @@ class PresenceWorker:
                 and not self._timers.list_waits(status=STATUS_PENDING)
             ):
                 self._phase = PHASE_IDLE
+
+    # ------------------------------------------------------------------
+    # Full reset (disk helpers + memory; caller sets resetting flag)
+    # ------------------------------------------------------------------
+
+    def _raise_if_resetting_unlocked(self) -> None:
+        if self._continuous.resetting:
+            raise RuntimeError("resetting")
+
+    def _reset_runtime_state_unlocked(
+        self, flags: dict[str, bool]
+    ) -> dict[str, Any]:
+        """Execute clear steps; caller holds lock and ``resetting=True``."""
+        cleared: list[str] = []
+        errors: list[dict[str, str]] = []
+
+        def _step(name: str, fn: Callable[[], Any]) -> None:
+            try:
+                fn()
+                cleared.append(name)
+            except Exception as exc:  # noqa: BLE001 — partial reset shape
+                _LOG.exception("reset step %s failed: %s", name, exc)
+                errors.append({"step": name, "detail": f"{type(exc).__name__}: {exc}"})
+
+        # a/b: wakes disk + queue/timer memory (order: disk then memory reload)
+        def _wakes() -> None:
+            clear_wakes_disk(self.paths)
+            self._timers.clear_all()
+            self._queue.reset_empty()
+
+        _step("wakes", _wakes)
+
+        # c: open moments → interrupted then wipe tapes/index
+        def _moments() -> None:
+            try:
+                self._moments.recover_open_moments()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("recover_open_moments during reset: %s", exc)
+            clear_moments(self.paths)
+
+        _step("moments", _moments)
+
+        _step("messages", lambda: clear_messages(self.paths))
+        _step("goals", lambda: clear_goals(self.paths))
+
+        if flags.get("clear_sandbox", True):
+            _step("sandbox", lambda: clear_sandbox(self.paths))
+        if flags.get("clear_drafts", True):
+            _step("drafts", lambda: clear_tool_drafts(self.paths))
+        if flags.get("clear_local_tools", False):
+            _step("local_tools", lambda: clear_local_tools(self.paths))
+
+        # h: continuous streak zero; preserve enabled (and continuous.json)
+        def _continuous_zero() -> None:
+            cont = self._continuous
+            cont.streak = 0
+            cont.last_enqueue_at = None
+            cont.last_continue_wake_id = None
+            cont.last_source_moment_id = None
+            cont.last_skip_reason = None
+
+        _step("continuous_streak", _continuous_zero)
+
+        # Ensure dirs still present (sandbox empty, skills/local untouched).
+        try:
+            ensure_preserved_dirs(self.paths)
+        except OSError as exc:
+            _LOG.warning("ensure_preserved_dirs after reset: %s", exc)
+
+        # Worker soft state
+        self._interject.clear()
+        self._active_moment_id = None
+        self._busy = False
+        self._worker_error = None
+        self._hop_count = 0
+        self._last_tool = None
+        self._continue_injects = 0
+        self._phase = PHASE_IDLE
+
+        # i: assert queue empty
+        pending = self._queue.pending()
+        claimed = self._queue.claimed()
+        if pending or claimed:
+            detail = f"pending={len(pending)} claimed={len(claimed)}"
+            errors.append({"step": "queue_assert", "detail": detail})
+            _LOG.error("reset queue not empty after clear: %s", detail)
+
+        # j: no pending waits
+        waits = self._timers.list_waits(status=STATUS_PENDING)
+        if waits:
+            errors.append(
+                {
+                    "step": "waits_assert",
+                    "detail": f"pending_waits={len(waits)}",
+                }
+            )
+
+        if errors:
+            return {
+                "ok": False,
+                "error": "partial_reset",
+                "cleared": cleared,
+                "errors": errors,
+                "phase": self._phase,
+            }
+        return {
+            "ok": True,
+            "cleared": cleared,
+            "phase": self._phase,
+            "continuous": continuous_status_block(
+                self._continuous,
+                self.settings.continuous,
+                pending_moment_continues=0,
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Internals

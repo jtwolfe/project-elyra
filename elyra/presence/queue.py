@@ -272,6 +272,17 @@ class WakeQueue:
         """Re-fold events from disk (e.g. after external append — rare)."""
         self._load()
 
+    def reset_empty(self) -> None:
+        """Truncate events.jsonl and fold to empty pending/claimed (full reset).
+
+        Prefer this over cancel-all for dogfood reset: events log does not grow
+        with terminal cancel rows. Caller must hold worker-level exclusion.
+        """
+        with self._lock:
+            self._ensure_parent()
+            self.events_path.write_text("", encoding="utf-8")
+            self._apply_fold({})
+
     def _pop_pending(self) -> WakeItem | None:
         """Pop best pending item from heap, skipping stale entries."""
         while self._heap:

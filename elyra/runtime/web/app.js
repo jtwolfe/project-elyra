@@ -28,6 +28,10 @@ const continuousMetaEls = [
 const continuousSummary = $("#continuous-summary");
 const continuousBadge = $("#continuous-badge");
 const continuousDetail = $("#continuous-detail");
+const resetOpenBtn = $("#reset-open-btn");
+const resetModal = $("#reset-modal");
+const resetConfirmInput = $("#reset-confirm-input");
+const resetConfirmBtn = $("#reset-confirm-btn");
 
 const USER_ID = "operator";
 const REASON_BUFFER_FULL = "interjection_buffer_full";
@@ -40,6 +44,8 @@ let waitReplyInFlight = false;
 let continuousToggleInFlight = false;
 /** Last known continuous.enabled from status (for toggle change detection). */
 let lastContinuousEnabled = false;
+/** True while POST /api/reset is in flight. */
+let resetInFlight = false;
 
 function setPill(el, label, mode) {
   el.textContent = label;
@@ -539,6 +545,106 @@ continuousToggles.forEach((el) => {
     setContinuousEnabled(el.checked);
   });
 });
+
+function openResetModal() {
+  if (!resetModal) return;
+  resetModal.hidden = false;
+  if (resetConfirmInput) {
+    resetConfirmInput.value = "";
+    resetConfirmInput.focus();
+  }
+  if (resetConfirmBtn) resetConfirmBtn.disabled = true;
+}
+
+function closeResetModal() {
+  if (!resetModal) return;
+  resetModal.hidden = true;
+  if (resetConfirmInput) resetConfirmInput.value = "";
+  if (resetConfirmBtn) resetConfirmBtn.disabled = true;
+}
+
+function syncResetConfirmEnabled() {
+  if (!resetConfirmBtn || !resetConfirmInput) return;
+  resetConfirmBtn.disabled =
+    resetInFlight || resetConfirmInput.value.trim() !== "RESET";
+}
+
+async function refreshAllPanels() {
+  await Promise.all([
+    refreshStatus(),
+    refreshMessages(),
+    refreshGoals().catch(() => {}),
+    refreshMoments().catch(() => {}),
+    refreshTools().catch(() => {}),
+    refreshIdentity().catch(() => {}),
+  ]);
+}
+
+async function confirmFullReset() {
+  if (resetInFlight) return;
+  if (!resetConfirmInput || resetConfirmInput.value.trim() !== "RESET") return;
+  resetInFlight = true;
+  if (resetConfirmBtn) resetConfirmBtn.disabled = true;
+  try {
+    const data = await fetchJson("/api/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirm: "RESET",
+        clear_sandbox: true,
+        clear_drafts: true,
+      }),
+    });
+    closeResetModal();
+    const cleared = (data && data.cleared) || [];
+    showNotice(
+      cleared.length
+        ? `Full reset ok — cleared ${cleared.join(", ")}.`
+        : "Full reset ok."
+    );
+    await refreshAllPanels();
+  } catch (err) {
+    const status = err && err.status;
+    const body = (err && err.body) || {};
+    if (status === 409) {
+      showNotice(
+        `Reset blocked — worker busy (phase=${body.phase || "?"} ). Wait for idle.`
+      );
+    } else if (status === 503) {
+      showNotice("Reset already in progress.");
+    } else {
+      showNotice(String(err.message || err));
+    }
+  } finally {
+    resetInFlight = false;
+    syncResetConfirmEnabled();
+  }
+}
+
+if (resetOpenBtn) {
+  resetOpenBtn.addEventListener("click", openResetModal);
+}
+if (resetConfirmInput) {
+  resetConfirmInput.addEventListener("input", syncResetConfirmEnabled);
+  resetConfirmInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmFullReset();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeResetModal();
+    }
+  });
+}
+if (resetConfirmBtn) {
+  resetConfirmBtn.addEventListener("click", confirmFullReset);
+}
+if (resetModal) {
+  resetModal.querySelectorAll("[data-reset-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeResetModal);
+  });
+}
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();

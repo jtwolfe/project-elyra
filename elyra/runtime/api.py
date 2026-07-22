@@ -1,9 +1,9 @@
 """HTTP API and static Web UI.
 
 Scope: REST JSON + SPA fallthrough for operator glass.
-In scope: status, messages, wait reply, continuous toggle,
+In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users).
-Out of scope: promote/verify admin, multi-user glass, write identity, full reset.
+Out of scope: promote/verify admin, multi-user glass, write identity.
 """
 
 from __future__ import annotations
@@ -266,6 +266,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_goals(body)
             return
 
+        if path == "/api/reset":
+            self._post_reset(body)
+            return
+
         self._json(404, {"error": "not found"})
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -294,7 +298,53 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": "enabled must be a boolean"})
             return
         result = self.worker.set_continuous_enabled(enabled)
+        if result.get("error") == "resetting":
+            self._json(503, result)
+            return
         self._json(200, result)
+
+    def _post_reset(self, body: dict[str, Any]) -> None:
+        """POST /api/reset — full runtime reset with confirm body (design F).
+
+        Body: ``{"confirm": "RESET", "clear_sandbox": true, ...}``.
+        Routes to ``worker.reset_runtime_state`` only (worker-owned lock).
+        """
+        confirm = body.get("confirm")
+        if confirm != "RESET":
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "confirm required",
+                    "detail": 'body.confirm must be the string "RESET"',
+                },
+            )
+            return
+        flags = {
+            k: body[k]
+            for k in (
+                "clear_sandbox",
+                "clear_drafts",
+                "clear_local_tools",
+                "reseed_self_if_default",
+            )
+            if k in body
+        }
+        result = self.worker.reset_runtime_state(flags if flags else None)
+        if result.get("ok"):
+            self._json(200, result)
+            return
+        err = result.get("error")
+        if err == "worker_busy":
+            self._json(409, result)
+            return
+        if err == "resetting":
+            self._json(503, result)
+            return
+        if err == "partial_reset":
+            self._json(500, result)
+            return
+        self._json(500, result)
 
     def _post_goals(self, body: dict[str, Any]) -> None:
         """POST /api/goals — create a goal (lean glass / operator)."""
@@ -390,12 +440,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         - ok → 200
         - interjection_buffer_full → 200 (message enqueued as wake; glass notice)
+        - resetting → 503 (temporary; full reset in progress)
         - empty / other client errors → 400
         """
         if result.get("ok"):
             return 200
         if result.get("reason") == REASON_BUFFER_FULL:
             return 200
+        if result.get("error") == "resetting" or result.get("reason") == "resetting":
+            return 503
         return 400
 
     def _serve_static(self, path: str) -> None:
