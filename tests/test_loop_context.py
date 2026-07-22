@@ -303,3 +303,30 @@ def test_uses_loop_settings_budget():
     # With tiny budget, oldest large rows should be gone or reduced.
     mid = meal[1:-1]
     assert not any(m["content"].startswith("a") for m in mid)
+
+
+def test_meal_injects_goals_catalog_and_bias():
+    """assemble_outer_meal fills GOALS / SKILL_CATALOG / SKILL_BIAS when provided."""
+    orient = (
+        "# Orient\n## Goals / tasks\n{{GOALS}}\n"
+        "## Skills available\n{{SKILL_CATALOG}}\n"
+        "## Soft skill bias\n{{SKILL_BIAS}}\n"
+        "{{NOW}}{{SELF}}{{USER}}{{WHY_NOW}}"
+    )
+    meal = assemble_outer_meal(
+        glass_history=[],
+        system_text="SYS",
+        orient_template=orient,
+        goals="Goal g1 [open]: Ship orient",
+        skill_catalog="- talk: Social presence.",
+        skill_bias="Prefer skill: talk (social reply first; speak before wait).",
+        now=datetime(2026, 7, 21, 12, 0, tzinfo=UTC),
+        sliding_input_tokens=24_000,
+    )
+    body = meal[-1]["content"]
+    assert "Goal g1 [open]: Ship orient" in body
+    assert "- talk: Social presence." in body
+    assert "Prefer skill: talk" in body
+    assert "{{GOALS}}" not in body
+    assert "{{SKILL_CATALOG}}" not in body
+    assert "{{SKILL_BIAS}}" not in body

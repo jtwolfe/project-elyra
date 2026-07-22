@@ -8,6 +8,7 @@ const statusJson = $("#status-json");
 const pillLlama = $("#pill-llama");
 const pillWorker = $("#pill-worker");
 const pillPhase = $("#pill-phase");
+const pillAutopilot = $("#pill-autopilot");
 const noticeEl = $("#notice");
 const waitBar = $("#wait-bar");
 const waitPrompt = $("#wait-prompt");
@@ -19,6 +20,18 @@ const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
+const continuousToggles = document.querySelectorAll(".continuous-toggle");
+const continuousMetaEls = [
+  $("#continuous-status-chat"),
+  $("#continuous-status-status"),
+].filter(Boolean);
+const continuousSummary = $("#continuous-summary");
+const continuousBadge = $("#continuous-badge");
+const continuousDetail = $("#continuous-detail");
+const resetOpenBtn = $("#reset-open-btn");
+const resetModal = $("#reset-modal");
+const resetConfirmInput = $("#reset-confirm-input");
+const resetConfirmBtn = $("#reset-confirm-btn");
 
 const USER_ID = "operator";
 const REASON_BUFFER_FULL = "interjection_buffer_full";
@@ -27,6 +40,12 @@ let lastPendingWaitId = null;
 let noticeTimer = null;
 /** True while a wait-choice POST is in flight (blocks double-submit). */
 let waitReplyInFlight = false;
+/** True while PATCH /api/continuous is in flight (avoid double-toggle thrash). */
+let continuousToggleInFlight = false;
+/** Last known continuous.enabled from status (for toggle change detection). */
+let lastContinuousEnabled = false;
+/** True while POST /api/reset is in flight. */
+let resetInFlight = false;
 
 function setPill(el, label, mode) {
   el.textContent = label;
@@ -169,6 +188,104 @@ async function refreshMessages() {
   renderMessages(data.messages || []);
 }
 
+function formatContinuousMeta(c) {
+  if (!c || !c.enabled) return "off";
+  const streak = Number(c.streak) || 0;
+  const max = Number(c.max_streak) || 0;
+  const pending = Number(c.pending_moment_continues) || 0;
+  const parts = [`streak ${streak}/${max}`];
+  if (pending > 0) parts.push(`pending ${pending}`);
+  if (c.last_skip_reason) parts.push(`skip ${c.last_skip_reason}`);
+  return parts.join(" · ");
+}
+
+function renderContinuous(s) {
+  const c = (s && s.continuous) || {};
+  const enabled = Boolean(c.enabled);
+  lastContinuousEnabled = enabled;
+
+  if (!continuousToggleInFlight) {
+    continuousToggles.forEach((el) => {
+      el.checked = enabled;
+    });
+  }
+
+  const meta = formatContinuousMeta(c);
+  continuousMetaEls.forEach((el) => {
+    el.textContent = meta;
+  });
+
+  if (continuousSummary) {
+    continuousSummary.hidden = false;
+    if (continuousBadge) {
+      continuousBadge.textContent = enabled ? "on" : "off";
+      continuousBadge.classList.toggle("badge-open", enabled);
+    }
+    if (continuousDetail) {
+      const lines = [
+        `enabled: ${enabled}`,
+        `streak: ${c.streak ?? 0} / ${c.max_streak ?? "—"}`,
+        `cooldown: ${c.cooldown_seconds ?? "—"}s`,
+        `pending continues: ${c.pending_moment_continues ?? 0}`,
+        `last enqueue: ${c.last_enqueue_at || "—"}`,
+        `last skip: ${c.last_skip_reason || "—"}`,
+      ];
+      continuousDetail.textContent = lines.join(" · ");
+    }
+  }
+
+  // Optional autopilot pill: on when continuous enabled; busy if pending continue.
+  if (pillAutopilot) {
+    if (enabled) {
+      pillAutopilot.hidden = false;
+      const pending = Number(c.pending_moment_continues) || 0;
+      if (pending > 0) {
+        setPill(pillAutopilot, `autopilot · ${pending}`, "pill-busy");
+      } else {
+        setPill(pillAutopilot, "autopilot", "pill-on");
+      }
+    } else {
+      pillAutopilot.hidden = true;
+      setPill(pillAutopilot, "autopilot", "pill-off");
+    }
+  }
+}
+
+async function setContinuousEnabled(enabled) {
+  if (continuousToggleInFlight) return;
+  continuousToggleInFlight = true;
+  continuousToggles.forEach((el) => {
+    el.disabled = true;
+    el.checked = enabled;
+  });
+  try {
+    const data = await fetchJson("/api/continuous", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: Boolean(enabled) }),
+    });
+    const cancelled = (data && data.cancelled_moment_continues) || [];
+    if (!enabled && cancelled.length) {
+      showNotice(
+        `Continuous off — cancelled ${cancelled.length} pending continue${
+          cancelled.length === 1 ? "" : "s"
+        }.`
+      );
+    }
+    await refreshStatus();
+  } catch (err) {
+    continuousToggles.forEach((el) => {
+      el.checked = lastContinuousEnabled;
+    });
+    showNotice(String(err.message || err));
+  } finally {
+    continuousToggleInFlight = false;
+    continuousToggles.forEach((el) => {
+      el.disabled = false;
+    });
+  }
+}
+
 async function refreshStatus() {
   const s = await fetchJson("/api/status");
   statusJson.textContent = JSON.stringify(s, null, 2);
@@ -199,6 +316,7 @@ async function refreshStatus() {
   else if (phase === "waiting") phaseMode = "pill-busy";
   setPill(pillPhase, phase, phaseMode);
 
+  renderContinuous(s);
   renderWaitBar(s.pending_wait || null);
   return s;
 }
@@ -420,6 +538,112 @@ async function refreshIdentity() {
   identitySelf.textContent =
     (self.self && self.self.digest) || "(empty self digest)";
   identityUser.textContent = user.profile || "(empty profile)";
+}
+
+continuousToggles.forEach((el) => {
+  el.addEventListener("change", () => {
+    setContinuousEnabled(el.checked);
+  });
+});
+
+function openResetModal() {
+  if (!resetModal) return;
+  resetModal.hidden = false;
+  if (resetConfirmInput) {
+    resetConfirmInput.value = "";
+    resetConfirmInput.focus();
+  }
+  if (resetConfirmBtn) resetConfirmBtn.disabled = true;
+}
+
+function closeResetModal() {
+  if (!resetModal) return;
+  resetModal.hidden = true;
+  if (resetConfirmInput) resetConfirmInput.value = "";
+  if (resetConfirmBtn) resetConfirmBtn.disabled = true;
+}
+
+function syncResetConfirmEnabled() {
+  if (!resetConfirmBtn || !resetConfirmInput) return;
+  resetConfirmBtn.disabled =
+    resetInFlight || resetConfirmInput.value.trim() !== "RESET";
+}
+
+async function refreshAllPanels() {
+  await Promise.all([
+    refreshStatus(),
+    refreshMessages(),
+    refreshGoals().catch(() => {}),
+    refreshMoments().catch(() => {}),
+    refreshTools().catch(() => {}),
+    refreshIdentity().catch(() => {}),
+  ]);
+}
+
+async function confirmFullReset() {
+  if (resetInFlight) return;
+  if (!resetConfirmInput || resetConfirmInput.value.trim() !== "RESET") return;
+  resetInFlight = true;
+  if (resetConfirmBtn) resetConfirmBtn.disabled = true;
+  try {
+    const data = await fetchJson("/api/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirm: "RESET",
+        clear_sandbox: true,
+        clear_drafts: true,
+      }),
+    });
+    closeResetModal();
+    const cleared = (data && data.cleared) || [];
+    showNotice(
+      cleared.length
+        ? `Full reset ok — cleared ${cleared.join(", ")}.`
+        : "Full reset ok."
+    );
+    await refreshAllPanels();
+  } catch (err) {
+    const status = err && err.status;
+    const body = (err && err.body) || {};
+    if (status === 409) {
+      showNotice(
+        `Reset blocked — worker busy (phase=${body.phase || "?"} ). Wait for idle.`
+      );
+    } else if (status === 503) {
+      showNotice("Reset already in progress.");
+    } else {
+      showNotice(String(err.message || err));
+    }
+  } finally {
+    resetInFlight = false;
+    syncResetConfirmEnabled();
+  }
+}
+
+if (resetOpenBtn) {
+  resetOpenBtn.addEventListener("click", openResetModal);
+}
+if (resetConfirmInput) {
+  resetConfirmInput.addEventListener("input", syncResetConfirmEnabled);
+  resetConfirmInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmFullReset();
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeResetModal();
+    }
+  });
+}
+if (resetConfirmBtn) {
+  resetConfirmBtn.addEventListener("click", confirmFullReset);
+}
+if (resetModal) {
+  resetModal.querySelectorAll("[data-reset-dismiss]").forEach((el) => {
+    el.addEventListener("click", closeResetModal);
+  });
 }
 
 form.addEventListener("submit", async (e) => {

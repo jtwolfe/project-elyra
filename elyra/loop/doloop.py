@@ -1,9 +1,12 @@
 """Multi-hop do-loop: model ↔ tools with ToolResult contracts.
 
-Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak nudge.
+Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak
+nudge, budgeted in-moment work-continue HOST (continuous policy).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
-          completion-ingress channel hygiene (sanitize before beat/chain).
-Out of scope: registry discovery, sandbox FS, presence phase machine, glass writes.
+          completion-ingress channel hygiene (sanitize before beat/chain),
+          tools_ran / ledger_mutated / flood counters on DoLoopResult.
+Out of scope: registry discovery, sandbox FS, presence phase machine, glass
+writes, outer moment_continue enqueue (PR6).
 
 Trust: loop uses ToolResult.ends_moment / counts_as_speak only — never tool names.
 
@@ -29,13 +32,18 @@ from elyra.loop.continue_policy import (
     should_stop_time_continue_declined,
     should_stop_wall_clock,
 )
+from elyra.loop.continuous_policy import (
+    in_moment_work_context,
+    should_in_moment_work_nudge,
+    work_continue_host_message,
+)
 from elyra.loop.stop import (
     STOP_ERROR,
     resolve_host_precheck_stop,
     stop_for_no_tools,
     stop_from_tool_result,
 )
-from elyra.settings import LoopSettings, Settings, default_settings
+from elyra.settings import ContinuousSettings, LoopSettings, Settings, default_settings
 from elyra.tools.registry import ToolRegistry
 from elyra.tools.types import ToolContext, ToolResult, WaitArm
 
@@ -88,7 +96,14 @@ class DoLoopResult:
     spoke: bool = False
     moment_id: str = ""
     reouter_count: int = 0
-    continue_injects: int = 0
+    continue_injects: int = 0  # time-idle HOST injects (continue_policy)
+    work_continue_injects: int = 0  # continuous work-continue HOST injects
+    # K15: ≥1 successful non-speak tool (ok and not counts_as_speak); speak alone False
+    tools_ran: bool = False
+    ledger_mutated: bool = False  # mark_task_changed fired this moment
+    model_beats: int = 0  # type=model beats appended
+    channel_flood_beats: int = 0  # model beats with hygiene.any_flood
+    last_stop_hop_was_flood: bool = False  # free-text stop hop was channel flood
     error: str | None = None
 
 
@@ -103,6 +118,12 @@ class _LoopState:
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     continue_injects: int = 0
     no_speak_nudge_sent: bool = False
+    work_continue_injects: int = 0
+    tools_ran: bool = False
+    ledger_mutated: bool = False
+    model_beats: int = 0
+    channel_flood_beats: int = 0
+    last_stop_hop_was_flood: bool = False
     arm_wait: WaitArm | None = None
     reouter_count: int = 0
 
@@ -113,6 +134,19 @@ def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
     if isinstance(settings, LoopSettings):
         return settings
     return settings.loop
+
+
+def _continuous_settings(
+    settings: Settings | LoopSettings | ContinuousSettings | None,
+) -> ContinuousSettings:
+    if settings is None:
+        return default_settings().continuous
+    if isinstance(settings, ContinuousSettings):
+        return settings
+    if isinstance(settings, Settings):
+        return settings.continuous
+    # LoopSettings-only callers: continuous defaults (enabled OFF).
+    return default_settings().continuous
 
 
 def _now_factory() -> datetime:
@@ -383,6 +417,7 @@ def _install_activity_hooks(
 
     def mark_task_changed() -> None:
         state.last_activity = now()
+        state.ledger_mutated = True  # continuous outer / in-moment progress (K15)
         if host_task is not None:
             try:
                 host_task()
@@ -450,6 +485,9 @@ def run_do_loop(
     settings: Settings | LoopSettings | None = None,
     moments: Any | None = None,
     social_wake: bool = False,
+    wake_kind: str = "",
+    has_open_goals_slice: bool = False,
+    continuous_enabled: bool | None = None,
     clock: Callable[[], datetime] | None = None,
     started_at: datetime | None = None,
     drain_interjections: Callable[[], Sequence[Any]] | None = None,
@@ -474,14 +512,30 @@ def run_do_loop(
         re-outer under in-turn budget pressure).
     social_wake:
         When True, inject a one-shot no-speak nudge before ``no_tools`` stop if
-        no successful ``counts_as_speak`` occurred.
+        no successful ``counts_as_speak`` occurred. Social no-speak wins first
+        over work-continue (K8).
+    wake_kind:
+        Wake kind string for continuous in-moment ``work_context`` (non-social
+        kinds ``task_ready`` / ``moment_continue`` / ``timer`` count as workish).
+    has_open_goals_slice:
+        Whether orient showed a non-empty open goals slice. Used only for
+        **non-social** work_context; social wakes ignore leftover goals alone.
+    continuous_enabled:
+        Override continuous toggle for this moment. When None, uses
+        ``settings.continuous.enabled`` (default OFF).
     moments:
         Optional MomentStore-like object with ``append_beat(moment_id, beat)``.
     """
     loop = _loop_settings(settings)
+    cont = _continuous_settings(settings)
     now = clock or _now_factory
     t0 = started_at if started_at is not None else now()
     moment_id = ctx.moment_id or ""
+    cont_on = (
+        bool(continuous_enabled)
+        if continuous_enabled is not None
+        else bool(cont.enabled)
+    )
 
     if outer_prefix is not None:
         initial_outer = [dict(m) for m in outer_prefix]
@@ -519,6 +573,10 @@ def run_do_loop(
             moments=moments,
             moment_id=moment_id,
             social_wake=social_wake,
+            wake_kind=wake_kind or "",
+            has_open_goals_slice=bool(has_open_goals_slice),
+            continuous_enabled=cont_on,
+            work_nudge_max=int(cont.in_moment_work_nudge_max),
             now=now,
             t0=t0,
             openai_tools=openai_tools,
@@ -545,6 +603,12 @@ def run_do_loop(
             moment_id=moment_id,
             reouter_count=state.reouter_count,
             continue_injects=state.continue_injects,
+            work_continue_injects=state.work_continue_injects,
+            tools_ran=state.tools_ran,
+            ledger_mutated=state.ledger_mutated,
+            model_beats=state.model_beats,
+            channel_flood_beats=state.channel_flood_beats,
+            last_stop_hop_was_flood=state.last_stop_hop_was_flood,
             error=f"{type(exc).__name__}: {exc}",
         )
     finally:
@@ -562,6 +626,10 @@ def _run_loop_body(
     moments: Any | None,
     moment_id: str,
     social_wake: bool,
+    wake_kind: str,
+    has_open_goals_slice: bool,
+    continuous_enabled: bool,
+    work_nudge_max: int,
     now: Callable[[], datetime],
     t0: datetime,
     openai_tools: list[dict[str, Any]],
@@ -646,6 +714,10 @@ def _run_loop_body(
                 hygiene.reasoning_flood,
             )
         state.hop += 1
+        state.model_beats += 1
+        hop_was_flood = bool(hygiene.any_flood)
+        if hop_was_flood:
+            state.channel_flood_beats += 1
         model_beat: dict[str, Any] = {
             "type": "model",
             "content": result.content or "",
@@ -666,6 +738,8 @@ def _run_loop_body(
         _append_beat(moments, moment_id, model_beat)
 
         if result.tool_calls:
+            # Tool path is not a free-text stop; clear last free-text flood flag.
+            state.last_stop_hop_was_flood = False
             stop = _handle_tool_batch(
                 state=state,
                 result=result,
@@ -681,7 +755,12 @@ def _run_loop_body(
                 return _finish(state, stop, moments, moment_id, arm=state.arm_wait)
             continue
 
+        # Free-text hop (no tool_calls) — candidate no_tools stop site.
+        # Flood flag from this completion (not only cumulative counters).
+        state.last_stop_hop_was_flood = hop_was_flood
+
         # Orphan content → model beat only (already recorded); never glass.
+        # K8: social no-speak nudge wins first when still needed.
         if social_wake and not state.spoke and not state.no_speak_nudge_sent:
             state.no_speak_nudge_sent = True
             state.chain_messages.append(_obs_user_message(NO_SPEAK_NUDGE))
@@ -692,6 +771,50 @@ def _run_loop_body(
                     "type": "obs",
                     "kind": "no_speak_nudge",
                     "content": NO_SPEAK_NUDGE,
+                },
+            )
+            continue
+
+        # Budgeted in-moment work-continue HOST (continuous policy; K7/flood).
+        # Flood free-text → hard stop (no inject).
+        # K8 is owned structurally above (no-speak continue) AND in pure policy
+        # (social work-continue requires spoke; after no-speak spent without
+        # speak → need_spoke stop). no_speak_still_needed is always False here
+        # because the structural branch already continued when it was True —
+        # passed for API completeness / belt-and-suspenders if that branch moves.
+        work_ctx = in_moment_work_context(
+            social_wake=social_wake,
+            tools_ran=state.tools_ran,
+            ledger_mutated=state.ledger_mutated,
+            wake_kind=wake_kind,
+            has_open_goals_slice=has_open_goals_slice,
+        )
+        no_speak_still_needed = (
+            social_wake and not state.spoke and not state.no_speak_nudge_sent
+        )
+        # Second inject blocked by work_nudge_sent >= max (budget), not by
+        # folding last-HOST into work_context (keeps reason diagnostics clean).
+        nudge = should_in_moment_work_nudge(
+            continuous_enabled=continuous_enabled,
+            social_wake=social_wake,
+            spoke=state.spoke,
+            no_speak_nudge_pending_or_needed=no_speak_still_needed,
+            work_nudge_sent=state.work_continue_injects,
+            max_nudges=work_nudge_max,
+            work_context=work_ctx,
+            last_hop_was_flood=hop_was_flood,
+        )
+        if nudge.inject:
+            host_line = work_continue_host_message()
+            state.chain_messages.append(_obs_user_message(host_line))
+            state.work_continue_injects += 1
+            _append_beat(
+                moments,
+                moment_id,
+                {
+                    "type": "obs",
+                    "kind": "work_continue",
+                    "content": host_line,
                 },
             )
             continue
@@ -738,6 +861,10 @@ def _handle_tool_batch(
             },
         )
 
+        if tr.ok and not tr.counts_as_speak:
+            # K15: tools_ran = successful non-speak only (not speak-tool name).
+            state.tools_ran = True
+
         if tr.counts_as_speak and tr.ok:
             # Wired wrapper updates state.last_activity/spoke then host hook.
             if ctx.mark_spoke is not None:
@@ -777,6 +904,9 @@ def _finish(
             "stop_reason": stop_reason,
             "hop_count": state.hop,
             "spoke": state.spoke,
+            "tools_ran": state.tools_ran,
+            "ledger_mutated": state.ledger_mutated,
+            "work_continue_injects": state.work_continue_injects,
         },
     )
     return DoLoopResult(
@@ -787,6 +917,12 @@ def _finish(
         moment_id=moment_id,
         reouter_count=state.reouter_count,
         continue_injects=state.continue_injects,
+        work_continue_injects=state.work_continue_injects,
+        tools_ran=state.tools_ran,
+        ledger_mutated=state.ledger_mutated,
+        model_beats=state.model_beats,
+        channel_flood_beats=state.channel_flood_beats,
+        last_stop_hop_was_flood=state.last_stop_hop_was_flood,
     )
 
 

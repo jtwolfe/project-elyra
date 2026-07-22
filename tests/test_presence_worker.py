@@ -66,10 +66,22 @@ def _stub_loop(
     error: str | None = None,
     delay_s: float = 0.0,
     on_call: Any = None,
+    spoke: bool | None = None,
+    tools_ran: bool = False,
+    ledger_mutated: bool = False,
+    model_beats: int = 1,
+    channel_flood_beats: int = 0,
+    last_stop_hop_was_flood: bool = False,
+    work_continue_injects: int = 0,
+    results: list[DoLoopResult] | None = None,
 ) -> Any:
-    """Build a run_do_loop stand-in that records calls."""
+    """Build a run_do_loop stand-in that records calls.
+
+    When ``results`` is provided, each call pops the next result (last repeats).
+    """
 
     calls: list[dict[str, Any]] = []
+    result_idx = {"i": 0}
 
     def _fn(**kwargs: Any) -> DoLoopResult:
         calls.append(kwargs)
@@ -79,13 +91,40 @@ def _stub_loop(
             time.sleep(delay_s)
         ctx = kwargs.get("ctx")
         mid = getattr(ctx, "moment_id", "") if ctx is not None else ""
+        if results is not None and results:
+            i = min(result_idx["i"], len(results) - 1)
+            result_idx["i"] += 1
+            base = results[i]
+            return DoLoopResult(
+                stop_reason=base.stop_reason,
+                hop_count=base.hop_count,
+                arm_wait=base.arm_wait,
+                spoke=base.spoke,
+                moment_id=mid or base.moment_id,
+                reouter_count=base.reouter_count,
+                continue_injects=base.continue_injects,
+                work_continue_injects=base.work_continue_injects,
+                tools_ran=base.tools_ran,
+                ledger_mutated=base.ledger_mutated,
+                model_beats=base.model_beats,
+                channel_flood_beats=base.channel_flood_beats,
+                last_stop_hop_was_flood=base.last_stop_hop_was_flood,
+                error=base.error,
+            )
+        spoke_v = spoke if spoke is not None else (stop_reason != "no_tools")
         return DoLoopResult(
             stop_reason=stop_reason,
             hop_count=hop_count,
             arm_wait=arm_wait,
-            spoke=stop_reason != "no_tools",
+            spoke=spoke_v,
             moment_id=mid,
             continue_injects=continue_injects,
+            work_continue_injects=work_continue_injects,
+            tools_ran=tools_ran,
+            ledger_mutated=ledger_mutated,
+            model_beats=model_beats,
+            channel_flood_beats=channel_flood_beats,
+            last_stop_hop_was_flood=last_stop_hop_was_flood,
             error=error,
         )
 
@@ -99,6 +138,7 @@ def _make_worker(
     run_do_loop_fn=None,
     poll_seconds: float = 0.05,
     stop_event: threading.Event | None = None,
+    settings=None,
 ) -> tuple[PresenceWorker, threading.Event]:
     stop = stop_event or threading.Event()
     queue = WakeQueue(paths)
@@ -109,7 +149,7 @@ def _make_worker(
         client=StubChatClient(),
         stop_event=stop,
         poll_seconds=poll_seconds,
-        settings=default_settings(),
+        settings=settings or default_settings(),
         queue=queue,
         timers=timers,
         moments=moments,
@@ -117,6 +157,26 @@ def _make_worker(
         run_do_loop_fn=run_do_loop_fn or _stub_loop(),
     )
     return worker, stop
+
+
+def _open_goal(worker: PresenceWorker, title: str = "work item") -> dict:
+    return worker._ensure_goals().create_goal(title)  # noqa: SLF001
+
+
+def _progress_result(**overrides: Any) -> DoLoopResult:
+    """DoLoopResult with non-speak progress (outer continue eligible)."""
+    base = dict(
+        stop_reason="no_tools",
+        hop_count=1,
+        spoke=False,
+        tools_ran=True,
+        ledger_mutated=False,
+        model_beats=2,
+        channel_flood_beats=0,
+        last_stop_hop_was_flood=False,
+    )
+    base.update(overrides)
+    return DoLoopResult(**base)
 
 
 def _start(worker: PresenceWorker) -> threading.Thread:
@@ -519,6 +579,51 @@ def test_enqueue_wake_public_api(paths):
     assert snap["queue_depth_by_band"]["background"] == 1
 
 
+def test_status_snapshot_continuous_defaults(paths):
+    """Additive continuous status block (PR4 stub; default OFF)."""
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    snap = worker.status_snapshot()
+    cont = snap["continuous"]
+    assert cont["enabled"] is False
+    assert cont["streak"] == 0
+    assert cont["max_streak"] == 8
+    assert cont["cooldown_seconds"] == 30
+    assert cont["last_enqueue_at"] is None
+    assert cont["last_skip_reason"] is None
+    assert cont["pending_moment_continues"] == 0
+    assert set(cont) >= {
+        "enabled",
+        "streak",
+        "max_streak",
+        "cooldown_seconds",
+        "last_enqueue_at",
+        "last_skip_reason",
+        "pending_moment_continues",
+    }
+
+
+def test_why_now_moment_continue():
+    from elyra.presence.queue import WakeItem
+    from elyra.presence.worker import _why_now
+
+    wake = WakeItem(
+        id="W1",
+        kind="moment_continue",
+        priority=3,
+        created_at="2026-01-01T00:00:00Z",
+        payload={"source_moment_id": "M-abc", "source_stop_reason": "no_tools"},
+    )
+    assert _why_now(wake) == "continue work (from moment M-abc)"
+    wake2 = WakeItem(
+        id="W2",
+        kind="moment_continue",
+        priority=3,
+        created_at="2026-01-01T00:00:00Z",
+        payload={},
+    )
+    assert _why_now(wake2) == "continue work (from moment ?)"
+
+
 def test_startup_recovers_open_moments(paths):
     moments = MomentStore(paths)
     orphan = moments.open_moment(why_now="crashed", user_id="operator")
@@ -684,5 +789,469 @@ def test_priority_user_before_timer(paths):
         assert _wait_until(lambda: len(order) >= 2, timeout=3.0)
         assert order[0] == "user_message"
         assert order[1] == "timer"
+    finally:
+        _stop_join(worker, stop, t)
+
+
+# ---------------------------------------------------------------------------
+# Continuous finalize: moment_continue enqueue (PR6)
+# ---------------------------------------------------------------------------
+
+
+def _finalize_direct(
+    worker: PresenceWorker,
+    *,
+    wake_kind: str = "user_message",
+    payload: dict | None = None,
+    result: DoLoopResult | None = None,
+) -> tuple[str, Any]:
+    """Open a synthetic moment, finalize with crafted DoLoopResult (no thread)."""
+    import uuid as uuid_mod
+
+    from elyra.presence.queue import WakeItem
+
+    mid = "m-test-" + uuid_mod.uuid4().hex[:10]
+    wake_id = "wake-" + uuid_mod.uuid4().hex[:10]
+    wake = WakeItem(
+        id=wake_id,
+        kind=wake_kind,
+        priority=0 if wake_kind in ("user_message", "wait_reply") else 3,
+        created_at="2026-01-01T00:00:00Z",
+        payload=payload or {"content": "hi", "user_id": "operator"},
+    )
+    # Seed queue so mark_done succeeds.
+    worker._queue.enqueue(  # noqa: SLF001
+        wake.kind, dict(wake.payload), wake_id=wake.id, created_at=wake.created_at
+    )
+    worker._queue.claim(mid)  # noqa: SLF001
+    worker._moments.open_moment(  # noqa: SLF001
+        why_now="test",
+        user_id="operator",
+        wake_id=wake.id,
+        moment_id=mid,
+    )
+    res = result or _progress_result()
+    worker._finalize_moment(wake, mid, res)  # noqa: SLF001
+    return mid, wake
+
+
+def test_finalize_enqueues_moment_continue_with_progress(paths):
+    """Continuous ON + tools_ran + open work → moment_continue (not task_ready)."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    # Avoid cooldown from prior enqueues; zero cooldown for unit speed.
+    worker.settings = default_settings()  # frozen continuous.cooldown still 30
+    # Force cooldown elapsed by leaving last_enqueue_at None.
+    assert worker._continuous.last_enqueue_at is None  # noqa: SLF001
+
+    mid, _wake = _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t1", "goal_id": "g1"},
+        result=_progress_result(tools_ran=True),
+    )
+    pending = worker._queue.pending()  # noqa: SLF001
+    kinds = [p.kind for p in pending]
+    assert "moment_continue" in kinds
+    assert "task_ready" not in kinds  # never re-arm from continuous
+    mc = next(p for p in pending if p.kind == "moment_continue")
+    assert mc.payload["source_moment_id"] == mid
+    assert mc.payload["source_wake_kind"] == "task_ready"
+    assert mc.payload["source_stop_reason"] == "no_tools"
+    assert worker._continuous.last_continue_wake_id == mc.id  # noqa: SLF001
+    assert worker._continuous.last_enqueue_at is not None  # noqa: SLF001
+    snap = worker.status_snapshot()["continuous"]
+    assert snap["enabled"] is True
+    assert snap["pending_moment_continues"] == 1
+
+
+def test_finalize_speak_only_no_enqueue(paths):
+    """K15: spoke-only (tools_ran False) never outer-continues."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    _finalize_direct(
+        worker,
+        wake_kind="user_message",
+        result=_progress_result(
+            tools_ran=False,
+            ledger_mutated=False,
+            spoke=True,
+        ),
+    )
+    kinds = [p.kind for p in worker._queue.pending()]  # noqa: SLF001
+    assert "moment_continue" not in kinds
+    assert worker._continuous.last_skip_reason in {  # noqa: SLF001
+        "no_progress",
+        "pure_social",
+    }
+
+
+def test_finalize_pending_task_ready_skips_moment_continue(paths):
+    """Prefer *pending* task_ready only — skip moment_continue, never re-arm."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    # Pre-seed a pending task_ready (as ledger hook would).
+    worker._queue.enqueue_task_ready("t_ready", goal_id="g1")  # noqa: SLF001
+    before = [
+        p.id for p in worker._queue.pending_of_kind("task_ready")  # noqa: SLF001
+    ]
+    assert len(before) == 1
+
+    _finalize_direct(
+        worker,
+        wake_kind="user_message",
+        result=_progress_result(tools_ran=True, ledger_mutated=True),
+    )
+    after_tr = worker._queue.pending_of_kind("task_ready")  # noqa: SLF001
+    after_mc = worker._queue.pending_of_kind("moment_continue")  # noqa: SLF001
+    assert len(after_tr) == 1
+    assert after_tr[0].id == before[0]  # same wake — not replaced/re-armed
+    assert after_mc == []
+    assert worker._continuous.last_skip_reason == "pending_task_ready"  # noqa: SLF001
+
+
+def test_finalize_never_calls_enqueue_task_ready(paths):
+    """K4/K16: continuous finalize must not invent task_ready wakes."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    # Open goal with a ready task still in ledger but NO pending wake.
+    g = _open_goal(worker)
+    worker._ensure_goals().create_task(  # noqa: SLF001
+        g["id"], "do it", status="ready"
+    )
+    # Drain any task_ready the store hook may have enqueued so the ledger
+    # has ready work but continuous must NOT backstop re-arm.
+    for item in list(worker._queue.pending_of_kind("task_ready")):  # noqa: SLF001
+        worker._queue.cancel(item.id, "test_drain")  # noqa: SLF001
+
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "x", "goal_id": g["id"]},
+        result=_progress_result(tools_ran=True),
+    )
+    # Progress gates pass → moment_continue OK; task_ready must stay empty.
+    assert worker._queue.pending_of_kind("task_ready") == []  # noqa: SLF001
+    assert len(worker._queue.pending_of_kind("moment_continue")) == 1  # noqa: SLF001
+
+
+def test_finalize_flood_skips_and_starts_cooldown(paths):
+    """Flood thrash → no enqueue; start_cooldown advances last_enqueue_at."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    assert worker._continuous.last_enqueue_at is None  # noqa: SLF001
+
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t1"},
+        result=_progress_result(
+            tools_ran=True,
+            model_beats=2,
+            channel_flood_beats=2,  # majority flood
+            last_stop_hop_was_flood=False,
+        ),
+    )
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+    assert worker._continuous.last_skip_reason == "flood"  # noqa: SLF001
+    assert worker._continuous.last_enqueue_at is not None  # noqa: SLF001
+
+
+def test_finalize_cooldown_blocks_second_enqueue(paths):
+    """Second finalize within cooldown_seconds does not stack continues."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t1"},
+        result=_progress_result(tools_ran=True),
+    )
+    assert len(worker._queue.pending_of_kind("moment_continue")) == 1  # noqa: SLF001
+
+    # Cancel pending so dedupe gate is not the blocker — cooldown is.
+    for item in worker._queue.pending_of_kind("moment_continue"):  # noqa: SLF001
+        worker._queue.cancel(item.id, "test")  # noqa: SLF001
+
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t2"},
+        result=_progress_result(tools_ran=True),
+    )
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+    assert worker._continuous.last_skip_reason == "cooldown"  # noqa: SLF001
+
+
+def test_streak_increments_on_moment_continue_and_resets_on_user(paths):
+    """Streak +1 on moment_continue finalize; user claim resets to 0."""
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+
+    # Increment: finalize a moment_continue wake with progress.
+    worker._continuous.streak = 0  # noqa: SLF001
+    worker._continuous.last_enqueue_at = None  # noqa: SLF001
+    _finalize_direct(
+        worker,
+        wake_kind="moment_continue",
+        payload={"source_moment_id": "prior", "streak": 0},
+        result=_progress_result(tools_ran=True),
+    )
+    assert worker._continuous.streak == 1  # noqa: SLF001
+    # Drain any pending continue so it cannot re-run under the live worker.
+    for item in worker._queue.pending_of_kind("moment_continue"):  # noqa: SLF001
+        worker._queue.cancel(item.id, "test")  # noqa: SLF001
+
+    # Speak-only stub: no outer re-enqueue after user moment (keeps streak stable).
+    stub = _stub_loop(tools_ran=False, spoke=True, ledger_mutated=False)
+    worker._run_do_loop = stub  # noqa: SLF001
+    worker._continuous.streak = 4  # noqa: SLF001
+    worker._continuous.last_enqueue_at = None  # noqa: SLF001
+
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("hello again")
+        assert _wait_until(lambda: len(stub.calls) >= 1, timeout=2.0)
+        assert _wait_until(lambda: not worker.busy, timeout=2.0)
+        # User-band claim resets streak (must stay 0 — no moment_continue ran).
+        assert worker._continuous.streak == 0  # noqa: SLF001
+        assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+        assert stub.calls[0].get("continuous_enabled") is True
+        assert stub.calls[0].get("wake_kind") == "user_message"
+        assert stub.calls[0].get("has_open_goals_slice") is True
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_streak_not_incremented_when_continuous_disabled_mid_flight(paths):
+    """Issue 1: OFF mid-flight then moment_continue finalize must leave streak 0."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    worker._continuous.streak = 0  # noqa: SLF001
+
+    # Simulate toggle OFF while a moment_continue is in flight (after claim).
+    worker.set_continuous_enabled(False)
+    assert worker._continuous.streak == 0  # noqa: SLF001
+    assert worker._continuous.enabled is False  # noqa: SLF001
+
+    _finalize_direct(
+        worker,
+        wake_kind="moment_continue",
+        payload={"source_moment_id": "midflight", "streak": 0},
+        result=_progress_result(tools_ran=True),
+    )
+    assert worker._continuous.streak == 0  # noqa: SLF001
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+
+
+def test_set_continuous_off_cancels_pending_moment_continues(paths):
+    """Toggle OFF cancels only moment_continue; leaves task_ready untouched."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    worker._queue.enqueue(  # noqa: SLF001
+        "moment_continue",
+        {"source_moment_id": "A", "streak": 0},
+    )
+    worker._queue.enqueue(  # noqa: SLF001
+        "moment_continue",
+        {"source_moment_id": "B", "streak": 1},
+    )
+    tr = worker._queue.enqueue_task_ready("t_keep", goal_id="g1")  # noqa: SLF001
+    worker._continuous.streak = 3  # noqa: SLF001
+
+    out = worker.set_continuous_enabled(False)
+    assert out["ok"] is True
+    assert out["enabled"] is False
+    assert len(out["cancelled_moment_continues"]) == 2
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+    assert worker._queue.status(tr.id) == "enqueue"  # noqa: SLF001
+    assert worker._continuous.streak == 0  # noqa: SLF001
+    assert worker._continuous.enabled is False  # noqa: SLF001
+    # Persistence for PR7 path
+    from elyra.loop.continuous_policy import load_continuous_runtime
+
+    reloaded = load_continuous_runtime(
+        paths.data_dir, defaults=default_settings().continuous
+    )
+    assert reloaded.enabled is False
+
+
+def test_run_do_loop_wired_with_continuous_and_wake_kind(paths):
+    """Presence passes wake_kind / continuous_enabled / has_open_goals_slice."""
+    stub = _stub_loop(tools_ran=True)
+    worker, stop = _make_worker(paths, run_do_loop_fn=stub)
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    # Prevent outer chain from racing extra moments during assert.
+    worker.settings = __import__("dataclasses").replace(
+        worker.settings,
+        continuous=__import__("dataclasses").replace(
+            worker.settings.continuous, cooldown_seconds=0, enabled=True
+        ),
+    )
+    # Re-sync runtime flag after settings replace (set_continuous already True).
+    worker._continuous.enabled = True  # noqa: SLF001
+    worker._continuous.last_enqueue_at = None  # noqa: SLF001
+
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("work please")
+        assert _wait_until(lambda: len(stub.calls) >= 1, timeout=2.0)
+        call = stub.calls[0]
+        assert call["wake_kind"] == "user_message"
+        assert call["continuous_enabled"] is True
+        assert call["has_open_goals_slice"] is True
+        assert call["social_wake"] is True
+        # Wait until first moment finishes; may claim moment_continue next.
+        assert _wait_until(lambda: not worker.busy or len(stub.calls) >= 2, timeout=2.0)
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_continuous_off_never_enqueues(paths):
+    """Default continuous OFF: progress + open work still no moment_continue."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    assert worker._continuous.enabled is False  # noqa: SLF001
+    _open_goal(worker)
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t1"},
+        result=_progress_result(tools_ran=True),
+    )
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+
+def test_rebuild_outer_injects_goals_catalog_and_bias(paths):
+    """rebuild_outer passes skill catalog, bias, and goals into assemble_outer_meal."""
+    from elyra.goals import GoalsStore
+    from elyra.loop.orient_slice import BIAS_TALK
+
+    store = GoalsStore(paths)
+    goal = store.create_goal("Ship orient slices", acceptance="meal has goals")
+    store.create_task(goal["id"], "Wire rebuild_outer", status="ready")
+
+    meals: list[list[dict[str, Any]]] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meal = rebuild()
+        meals.append(meal)
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    # Inject goals store so create above is visible (same paths; re-read ok).
+    worker._goals = store  # noqa: SLF001
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("hello orient")
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert _wait_until(lambda: not worker.busy, timeout=2.0)
+        orient_body = meals[0][-1]["content"]
+        assert "Ship orient slices" in orient_body
+        assert "Wire rebuild_outer" in orient_body
+        assert BIAS_TALK in orient_body
+        # Catalog from bundled skills — exact bullet shape, not incidental text.
+        assert "- talk:" in orient_body
+        assert "{{GOALS}}" not in orient_body
+        assert "{{SKILL_CATALOG}}" not in orient_body
+        assert "{{SKILL_BIAS}}" not in orient_body
+        # Held SkillCatalog is reused and injected into tool context extras.
+        assert worker._ensure_skills() is worker._ensure_skills()  # noqa: SLF001
+    finally:
+        _stop_join(worker, stop, t)
+
+def test_tool_context_extras_skills_is_worker_catalog(paths):
+    """install_skill reloads the same SkillCatalog rebuild_outer formats."""
+    seen: list[Any] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        ctx = kwargs["ctx"]
+        seen.append(ctx.extras.get("skills"))
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("check skills extras")
+        assert _wait_until(lambda: len(seen) >= 1, timeout=2.0)
+        assert seen[0] is not None
+        assert seen[0] is worker._ensure_skills()  # noqa: SLF001
+    finally:
+        _stop_join(worker, stop, t)
+
+def test_rebuild_outer_rereads_goals_each_call(paths):
+    """Every rebuild_outer re-reads goals (fresh slice, not cached at open)."""
+    from elyra.goals import GoalsStore
+
+    store = GoalsStore(paths)
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        first = rebuild()[-1]["content"]
+        # Mutate ledger mid-moment, then rebuild again.
+        store.create_goal("Mid-moment goal")
+        second = rebuild()[-1]["content"]
+        meals.extend([first, second])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    worker._goals = store  # noqa: SLF001
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("check reread")
+        assert _wait_until(lambda: len(meals) >= 2, timeout=2.0)
+        assert "Mid-moment goal" not in meals[0]
+        assert "Mid-moment goal" in meals[1]
+    finally:
+        _stop_join(worker, stop, t)
+
+def test_rebuild_outer_task_ready_bias(paths):
+    """task_ready wake gets do-work bias in orient."""
+    from elyra.loop.orient_slice import BIAS_DO_WORK
+
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meals.append(rebuild()[-1]["content"])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        worker.enqueue_wake(
+            "task_ready",
+            {"task_id": "t_xyz", "goal_id": "g_xyz"},
+        )
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert BIAS_DO_WORK in meals[0]
     finally:
         _stop_join(worker, stop, t)

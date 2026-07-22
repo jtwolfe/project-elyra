@@ -22,6 +22,8 @@ def test_default_settings_match_design():
     assert s.loop.in_turn_max_tokens == 24000
     assert s.loop.tool_result_max_chars == 8000
     assert s.loop.generation_max_tokens == 8192
+    assert s.loop.orient_skill_catalog_max_tokens == 400
+    assert s.loop.orient_goals_max_tokens == 600
     assert s.wait.default_timeout_seconds == 120
     assert s.tools.verify_timeout_seconds == 120
     assert s.goals.close_gate == "soft"

@@ -1,8 +1,8 @@
 """HTTP API and static Web UI.
 
 Scope: REST JSON + SPA fallthrough for operator glass.
-In scope: status, messages, wait reply, lean glass catalogs
-  (goals, moments, tools, skills, identity/users).
+In scope: status, messages, wait reply, continuous toggle, full reset,
+  lean glass catalogs (goals, moments, tools, skills, identity/users).
 Out of scope: promote/verify admin, multi-user glass, write identity.
 """
 
@@ -21,7 +21,7 @@ from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.queue import LlamaServerGate
-from elyra.messages import append_message, list_messages
+from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence.interject import REASON_BUFFER_FULL
 from elyra.presence.worker import PresenceWorker
@@ -266,10 +266,93 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_goals(body)
             return
 
+        if path == "/api/reset":
+            self._post_reset(body)
+            return
+
         self._json(404, {"error": "not found"})
 
+    def do_PATCH(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+        body = self._read_json()
+
+        if path == "/api/continuous":
+            self._patch_continuous(body)
+            return
+
+        self._json(404, {"error": "not found"})
+
+    def _patch_continuous(self, body: dict[str, Any]) -> None:
+        """PATCH /api/continuous — ``{ "enabled": bool }`` (K17).
+
+        Calls ``worker.set_continuous_enabled``: persists
+        ``data/runtime/continuous.json``; OFF cancels pending
+        ``moment_continue`` only (not task_ready / timers / user).
+        """
+        if "enabled" not in body:
+            self._json(400, {"ok": False, "error": "enabled required"})
+            return
+        enabled = body["enabled"]
+        if not isinstance(enabled, bool):
+            self._json(400, {"ok": False, "error": "enabled must be a boolean"})
+            return
+        result = self.worker.set_continuous_enabled(enabled)
+        if result.get("error") == "resetting":
+            self._json(503, result)
+            return
+        self._json(200, result)
+
+    def _post_reset(self, body: dict[str, Any]) -> None:
+        """POST /api/reset — full runtime reset with confirm body (design F).
+
+        Body: ``{"confirm": "RESET", "clear_sandbox": true, ...}``.
+        Routes to ``worker.reset_runtime_state`` only (worker-owned lock).
+        """
+        confirm = body.get("confirm")
+        if confirm != "RESET":
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "confirm required",
+                    "detail": 'body.confirm must be the string "RESET"',
+                },
+            )
+            return
+        flags = {
+            k: body[k]
+            for k in (
+                "clear_sandbox",
+                "clear_drafts",
+                "clear_local_tools",
+            )
+            if k in body
+        }
+        # Unsupported flags (skills wipe / reseed) are ignored by normalize;
+        # do not pass them through the allowlist.
+        result = self.worker.reset_runtime_state(flags if flags else None)
+        if result.get("ok"):
+            self._json(200, result)
+            return
+        err = result.get("error")
+        if err == "worker_busy":
+            self._json(409, result)
+            return
+        if err == "resetting":
+            self._json(503, result)
+            return
+        if err == "partial_reset":
+            self._json(500, result)
+            return
+        self._json(500, result)
+
     def _post_goals(self, body: dict[str, Any]) -> None:
-        """POST /api/goals — create a goal (lean glass / operator)."""
+        """POST /api/goals — create a goal (lean glass / operator).
+
+        Gated on worker reset: 503 while full reset is in progress so goals.json
+        cannot be repopulated mid-clear.
+        """
         title = str(body.get("title") or "").strip()
         if not title:
             self._json(400, {"ok": False, "error": "title required"})
@@ -279,7 +362,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             acceptance = str(acceptance)
         status = str(body.get("status") or "open")
         try:
-            goal = self.goals.create_goal(
+            goal, err = self.worker.create_goal_if_allowed(
                 title,
                 acceptance=acceptance,
                 status=status,
@@ -287,10 +370,20 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json(400, {"ok": False, "error": str(exc)})
             return
+        if err is not None:
+            code = 503 if err.get("error") == "resetting" else 400
+            self._json(code, err)
+            return
+        # Keep catalog store in sync when API was constructed with a separate
+        # GoalsStore instance (same path; create already persisted).
         self._json(200, {"ok": True, "goal": goal})
 
     def _post_messages(self, body: dict[str, Any]) -> None:
         """POST /api/messages — glass chat → resolve_user_input (from_wait_api=False).
+
+        Append is gated through ``worker.append_message_if_allowed`` (check +
+        write under worker lock) so concurrent full reset cannot leave chat
+        residue after ``ok: true``.
 
         Routing matrix (worker phase + pending wait):
         - in_moment → interject buffer
@@ -305,7 +398,13 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         if not content:
             self._json(400, {"ok": False, "error": "content required", "reason": "empty_content"})
             return
-        msg = append_message("user", content, user_id=user_id, paths=self.paths)
+        msg, err = self.worker.append_message_if_allowed(
+            "user", content, user_id=user_id
+        )
+        if err is not None:
+            self._json(self._status_for_route(err), err)
+            return
+        assert msg is not None
         result = self.worker.resolve_user_input(
             content,
             user_id=user_id,
@@ -320,6 +419,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         Always sets from_wait_api=True so a durable pending wait for the user
         routes to wait_reply even if phase briefly reads as idle.
+        Message append is reset-gated (same as ``/api/messages``).
         """
         content_raw = body.get("content")
         content = str(content_raw).strip() if content_raw is not None else ""
@@ -345,7 +445,13 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         display = content or (choice or "")
-        msg = append_message("user", display, user_id=user_id, paths=self.paths)
+        msg, err = self.worker.append_message_if_allowed(
+            "user", display, user_id=user_id
+        )
+        if err is not None:
+            self._json(self._status_for_route(err), err)
+            return
+        assert msg is not None
         result = self.worker.resolve_user_input(
             content or (choice or ""),
             user_id=user_id,
@@ -362,12 +468,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         - ok → 200
         - interjection_buffer_full → 200 (message enqueued as wake; glass notice)
+        - resetting → 503 (temporary; full reset in progress)
         - empty / other client errors → 400
         """
         if result.get("ok"):
             return 200
         if result.get("reason") == REASON_BUFFER_FULL:
             return 200
+        if result.get("error") == "resetting" or result.get("reason") == "resetting":
+            return 503
         return 400
 
     def _serve_static(self, path: str) -> None:

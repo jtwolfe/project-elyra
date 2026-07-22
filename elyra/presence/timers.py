@@ -624,3 +624,17 @@ class TimerService:
         waits = self.check_timeouts(now=now_dt)
         timers = self.schedule_due(now=now_dt)
         return wait_orphans + timer_orphans + waits + timers
+
+    def clear_all(self) -> None:
+        """Wipe in-memory timer/wait maps and empty timers.json + waits.json.
+
+        Required for full reset (K10): disk-only clear leaves ghost maps that
+        would re-fire on the next ``schedule_due`` / ``check_timeouts``.
+        Caller (PresenceWorker) must hold worker lock exclusion; this method
+        takes ``self._lock`` briefly and returns (never acquires worker lock).
+        """
+        with self._lock:
+            self._timers.clear()
+            self._waits.clear()
+            self._persist_timers()
+            self._persist_waits()

@@ -204,6 +204,10 @@ pytest -m 'not llm'
 Live qualitative gates (full stack, 3 attempts): see [live-eval.md](live-eval.md) and `scripts/live_eval/`.  
 Root README **Testing** links both. Markers: `@pytest.mark.llm` in `tests/test_doloop.py`, `tests/test_llm_client_tools.py`.
 
+### Continuous work (opt-in)
+
+Continuous work toggle is **default OFF** and does not change ship sampling knobs above. Live scenarios `S-cont-speak-only`, `S-cont-tools`, `S-cont-task-ready-prefer` exercise multi-moment policy under continuous ON (see [live-eval.md](live-eval.md)); re-run `S-social` / `S-tools` / `S-mono` with continuous OFF as the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md).
+
 ## Non-goals
 
 New quants, multi-slot server, cloud default, elyra2 step-profile zoo, GBNF `channel_final` lead, free-text auto-glass, product-default `tool_choice=required`.

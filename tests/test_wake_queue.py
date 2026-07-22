@@ -8,6 +8,8 @@ from pathlib import Path
 from elyra.config import resolve_paths
 from elyra.presence.queue import (
     KIND_PRIORITY,
+    RE_ENQUEUE_ON_RECOVER,
+    REASON_CONTINUOUS_DISABLED,
     REASON_INTERRUPTED,
     REASON_REPLACED,
     WakeItem,
@@ -29,8 +31,10 @@ def test_priority_bands():
     assert priority_for_kind("wait_timeout") == 1
     assert priority_for_kind("timer") == 2
     assert priority_for_kind("task_ready") == 3
+    assert priority_for_kind("moment_continue") == 3  # same band as task_ready
     assert priority_for_kind("background") == 4
     assert KIND_PRIORITY["user_message"] == 0
+    assert "moment_continue" in RE_ENQUEUE_ON_RECOVER
 
 
 def test_fold_events_latest_op_and_item_body():
@@ -355,3 +359,81 @@ def test_recover_wait_reply_and_background_cancel_only(tmp_path):
     assert q2.status(wr.id) == "cancelled"
     assert q2.status(bg.id) == "cancelled"
     assert q2.pending() == []
+
+
+def test_moment_continue_band_fifo_with_task_ready(tmp_path):
+    """moment_continue and task_ready share band 3; FIFO by created_at."""
+    q = _queue(tmp_path)
+    mc = q.enqueue(
+        "moment_continue",
+        {"source_moment_id": "M0"},
+        created_at="2026-01-01T00:00:00Z",
+    )
+    tr = q.enqueue(
+        "task_ready",
+        {"task_id": "T1"},
+        created_at="2026-01-01T00:00:01Z",
+    )
+    pending = q.pending()
+    assert [p.id for p in pending] == [mc.id, tr.id]
+    assert mc.priority == tr.priority == 3
+    first = q.claim("M1")
+    assert first is not None and first.id == mc.id
+
+
+def test_recover_claimed_reenqueues_moment_continue(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    q = WakeQueue(paths)
+    mc = q.enqueue(
+        "moment_continue",
+        {"source_moment_id": "M-src", "source_stop_reason": "no_tools"},
+    )
+    assert q.claim("M1").id == mc.id
+    q2 = WakeQueue(paths)
+    re = q2.recover_claimed()
+    assert q2.status(mc.id) == "cancelled"
+    assert len(re) == 1
+    assert re[0].kind == "moment_continue"
+    assert re[0].id != mc.id
+    assert re[0].payload["source_moment_id"] == "M-src"
+    assert q2.pending()[0].id == re[0].id
+
+
+def test_cancel_all_pending_of_kind_moment_continue(tmp_path):
+    q = _queue(tmp_path)
+    a = q.enqueue("moment_continue", {"source_moment_id": "A"})
+    b = q.enqueue("moment_continue", {"source_moment_id": "B"})
+    tr = q.enqueue_task_ready("T1")
+    timer = q.enqueue("timer", {"reason": "keep"})
+    cancelled = q.cancel_all_pending_of_kind(
+        "moment_continue", REASON_CONTINUOUS_DISABLED
+    )
+    assert set(cancelled) == {a.id, b.id}
+    assert q.status(a.id) == "cancelled"
+    assert q.status(b.id) == "cancelled"
+    # Other kinds untouched
+    assert q.status(tr.id) == "enqueue"
+    assert q.status(timer.id) == "enqueue"
+    pending_kinds = {p.kind for p in q.pending()}
+    assert pending_kinds == {"task_ready", "timer"}
+    assert q.pending_of_kind("moment_continue") == []
+
+    # Claimed moment_continue is not cancelled by helper (only enqueue-state).
+    # Drain higher-priority leftovers so claim hits moment_continue.
+    q.mark_done(tr.id)
+    q.mark_done(timer.id)
+    c = q.enqueue("moment_continue", {"source_moment_id": "C"})
+    claimed = q.claim("M-c")
+    assert claimed is not None and claimed.id == c.id
+    assert q.cancel_all_pending_of_kind("moment_continue", "x") == []
+    assert q.status(c.id) == "claimed"
+
+
+def test_cancel_all_pending_of_kind_unknown_raises(tmp_path):
+    q = _queue(tmp_path)
+    try:
+        q.cancel_all_pending_of_kind("not_a_kind", "x")
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "unknown wake kind" in str(exc)

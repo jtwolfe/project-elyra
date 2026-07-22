@@ -36,15 +36,17 @@ KIND_PRIORITY: dict[str, int] = {
     "wait_timeout": 1,
     "timer": 2,
     "task_ready": 3,
+    "moment_continue": 3,  # same band as task_ready; FIFO by created_at
     "background": 4,
 }
 
 KNOWN_KINDS = frozenset(KIND_PRIORITY)
 TERMINAL_OPS = frozenset({"done", "cancelled"})
 # On crash recovery: re-enqueue durable work; cancel social/wait kinds.
-RE_ENQUEUE_ON_RECOVER = frozenset({"timer", "task_ready"})
+RE_ENQUEUE_ON_RECOVER = frozenset({"timer", "task_ready", "moment_continue"})
 REASON_INTERRUPTED = "interrupted_redelivery"
 REASON_REPLACED = "replaced"
+REASON_CONTINUOUS_DISABLED = "continuous_disabled"
 
 
 def priority_for_kind(kind: str) -> int:
@@ -270,6 +272,17 @@ class WakeQueue:
         """Re-fold events from disk (e.g. after external append — rare)."""
         self._load()
 
+    def reset_empty(self) -> None:
+        """Truncate events.jsonl and fold to empty pending/claimed (full reset).
+
+        Prefer this over cancel-all for dogfood reset: events log does not grow
+        with terminal cancel rows. Caller must hold worker-level exclusion.
+        """
+        with self._lock:
+            self._ensure_parent()
+            self.events_path.write_text("", encoding="utf-8")
+            self._apply_fold({})
+
     def _pop_pending(self) -> WakeItem | None:
         """Pop best pending item from heap, skipping stale entries."""
         while self._heap:
@@ -391,9 +404,10 @@ class WakeQueue:
         """Handle claimed-without-terminal after crash/restart.
 
         - user_message / wait_* / background: cancel with interrupted_redelivery
-        - timer / task_ready: cancel then re-enqueue clone with a new id
+        - timer / task_ready / moment_continue: cancel then re-enqueue clone
+          with a new id
 
-        Returns newly enqueued items (timer/task_ready clones only).
+        Returns newly enqueued items (durable-kind clones only).
         """
         reenqueued: list[WakeItem] = []
         with self._lock:
@@ -410,6 +424,42 @@ class WakeQueue:
                     clone = self.enqueue(item.kind, dict(item.payload))
                     reenqueued.append(clone)
         return reenqueued
+
+    def cancel_all_pending_of_kind(self, kind: str, reason: str) -> list[str]:
+        """Cancel every pending (enqueue-state) wake of ``kind``.
+
+        Used e.g. when continuous work is toggled off (``moment_continue`` only).
+        Does not touch claimed or terminal wakes. Returns cancelled wake ids.
+        """
+        if kind not in KNOWN_KINDS:
+            raise ValueError(f"unknown wake kind: {kind!r}")
+        cancelled: list[str] = []
+        with self._lock:
+            # Snapshot pending ids so cancel mutations are safe.
+            targets = [
+                wid
+                for wid in list(self._pending_ids)
+                if (item := self._items.get(wid)) is not None
+                and item.kind == kind
+                and self._ops.get(wid) == "enqueue"
+            ]
+            for wake_id in targets:
+                self.cancel(wake_id, reason)
+                cancelled.append(wake_id)
+        return cancelled
+
+    def pending_of_kind(self, kind: str) -> list[WakeItem]:
+        """Return pending (enqueue-state) wakes of ``kind``, priority-sorted."""
+        with self._lock:
+            out = [
+                self._items[wid]
+                for wid in self._pending_ids
+                if wid in self._items
+                and self._ops.get(wid) == "enqueue"
+                and self._items[wid].kind == kind
+            ]
+            out.sort(key=_heap_key)
+            return list(out)
 
     def pending(self) -> list[WakeItem]:
         """Return pending wakes sorted by priority (band, created_at, id)."""

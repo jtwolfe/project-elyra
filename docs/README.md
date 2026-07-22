@@ -14,8 +14,9 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, dogfood, create-tool safety |
 | 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, time layers, speak timing |
 | 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` vs sliding ~24k; **ship knobs** (temp 0.6, top_p/k, budget, hygiene, RC re-feed, hop-0 speak pin) |
-| 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes |
+| 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
 | 9 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged plan for sampling / hygiene / tool-speak (design freeze) |
+| 10 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset design, PR plan, eval plan |
 
 **Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime.  
 **Archive:** longer research notes under [archive/](archive/) (not freeze).

@@ -152,7 +152,7 @@ Also ship **create-skill** (same dogfood idea for playbooks).
 
 ## 10. Base catalog (names)
 
-**Tools:** `read_file`, `list_dir`, `grep`, `search_replace`, `run` (sandbox) · `update_task`, `update_goal` · `speak`, `schedule_wake`, wait/questions · `load_skill` · `verify_tool`, `promote_tool` · later `search_tools` / `use_tool`.
+**Tools:** `read_file`, `list_dir`, `grep`, `search_replace`, `run` (sandbox) · `create_goal`, `create_task`, `list_goals`, `get_goal`, `get_task`, `update_task`, `update_goal` · `speak`, `schedule_wake`, wait/questions · `load_skill` · `verify_tool`, `promote_tool` · later `search_tools` / `use_tool`.
 
 **Skills:** `talk`, `plan-work`, `do-work`, `review-work`, `rest`, `create-skill`, `create-tool`.
 
@@ -160,7 +160,15 @@ Formats: [tools-and-skills.md](tools-and-skills.md).
 
 ---
 
-## 11. Non-goals
+## 11. Continuous work (opt-in, post-core)
+
+Default **OFF**. When enabled (Glass / `PATCH /api/continuous`), presence may inject a budgeted in-moment work-continue HOST and, after finalize with non-speak progress + open work, enqueue a gated `moment_continue` wake. Prefer *pending* `task_ready` only — never re-arm ready tasks. Distinct from time-idle continue (`continue_policy.py`).
+
+Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md).
+
+---
+
+## 12. Non-goals
 
 - Sleep / dream / hypergraph / strain product  
 - Subagents / multi-worker  

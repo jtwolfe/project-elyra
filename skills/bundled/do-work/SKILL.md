@@ -9,8 +9,8 @@ Act on one ready task until accepted, blocked, or you need the user.
 
 ## Steps
 
-1. Pick the next ready task from the ledger (why-now / orient).
-2. Re-read acceptance criteria before acting.
+1. Pick the next ready task from the ledger (why-now / orient, or `list_goals` / `get_task`).
+2. Re-read acceptance criteria before acting (`get_goal` / `get_task` when orient is thin).
 3. Use tools in the sandbox and ledger to make progress. Prefer small, checkable steps.
 4. Update the task as you go (`update_task`): notes, status, blocked reason when stuck.
 5. Stop when one of:

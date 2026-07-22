@@ -13,7 +13,7 @@ Turn an open goal into an actionable task list.
 2. Split into small tasks. Each task should be finishable in a short stretch of tool use.
 3. For every task, write **acceptance** (how we know it is done) — not just a title.
 4. Order tasks so dependencies are clear (ready vs blocked).
-5. Persist via ledger tools (`update_goal` / `update_task` as available). Keep the goal status honest (planning → active when tasks are ready).
+5. Persist with `create_goal` / `create_task` / `update_goal` / `update_task`. Keep the goal status honest (planning → active when tasks are ready).
 6. If a human is waiting on glass, `speak` a short summary of the plan. Pure work wakes may stay silent.
 
 ## Rules

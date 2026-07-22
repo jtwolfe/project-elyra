@@ -41,13 +41,25 @@ class ElyraPaths:
     prompts_dir: Path
 
     def ensure_data_dirs(self) -> None:
-        """Create runtime dirs and seed digests once (never overwrite existing files).
+        """Create runtime dirs; seed templates never overwrite existing digests.
+
+        Canonical seed-v1 ``self.md`` may receive an append-only migrate (Drive
+        section + ``<!-- elyra-self-v2 -->``). Customized digests and already-marked
+        v2 self files are left untouched.
 
         Missing seed templates are a quiet no-op (dirs are still created) so a
         tmp ELYRA_HOME without repo prompts does not hard-fail ensure; packaging
         mistakes surface later as empty digests from the stores.
         """
-        for name in ("moments", "wakes", "identity", "users", "goals", "sandbox"):
+        for name in (
+            "moments",
+            "wakes",
+            "identity",
+            "users",
+            "goals",
+            "sandbox",
+            "runtime",  # continuous.json + other process-owned runtime state
+        ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
 
         for path in (
@@ -65,6 +77,10 @@ class ElyraPaths:
             dest=self.data_dir / "users" / "operator" / "profile.md",
             seed_rel=_SEED_OPERATOR,
         )
+        # Lazy import avoids config↔identity cycle at module load.
+        from elyra.identity.store import maybe_migrate_self_v2
+
+        maybe_migrate_self_v2(self.data_dir / "identity" / "self.md")
 
     def resolve_seed(self, seed_rel: Path | str) -> Path | None:
         """Locate a seed template: home prompts first, then project-root prompts.

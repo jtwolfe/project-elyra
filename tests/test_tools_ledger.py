@@ -1,4 +1,4 @@
-"""Tests for ledger tools: update_task and update_goal."""
+"""Tests for ledger tools: create/list/get/update goal and task."""
 
 from __future__ import annotations
 
@@ -10,7 +10,15 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.goals import GoalsStore, SOFT_CLOSE_WARNING
 from elyra.tools import ToolContext, ToolRegistry, resolve_bundled_tools_root
-from elyra.tools.builtin.ledger import update_goal, update_task
+from elyra.tools.builtin.ledger import (
+    create_goal,
+    create_task,
+    get_goal,
+    get_task,
+    list_goals,
+    update_goal,
+    update_task,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -60,27 +68,338 @@ def _ctx(
 # ---------------------------------------------------------------------------
 
 
+_LEDGER_MUTATE = (
+    "create_goal",
+    "create_task",
+    "update_task",
+    "update_goal",
+)
+_LEDGER_READ = ("list_goals", "get_goal", "get_task")
+_LEDGER_ALL = _LEDGER_MUTATE + _LEDGER_READ
+
+
 def test_discover_ledger_packages(registry: ToolRegistry) -> None:
-    assert registry.has("update_task")
-    assert registry.has("update_goal")
-    task_pkg = registry.get("update_task")
-    goal_pkg = registry.get("update_goal")
-    assert task_pkg is not None and task_pkg.meta.kind == "mutate"
-    assert goal_pkg is not None and goal_pkg.meta.kind == "mutate"
-    assert task_pkg.handler is not None
-    assert goal_pkg.handler is not None
+    for name in _LEDGER_ALL:
+        assert registry.has(name), name
+        pkg = registry.get(name)
+        assert pkg is not None and pkg.handler is not None
+    for name in _LEDGER_MUTATE:
+        assert registry.get(name).meta.kind == "mutate"  # type: ignore[union-attr]
+    for name in _LEDGER_READ:
+        assert registry.get(name).meta.kind == "read"  # type: ignore[union-attr]
     names = registry.names()
-    assert "update_task" in names
-    assert "update_goal" in names
+    for name in _LEDGER_ALL:
+        assert name in names
 
 
 def test_openai_tools_include_ledger(registry: ToolRegistry) -> None:
     tools = {t["function"]["name"]: t for t in registry.openai_tools()}
-    assert "update_task" in tools
-    assert "update_goal" in tools
+    for name in _LEDGER_ALL:
+        assert name in tools, name
     assert "task_id" in tools["update_task"]["function"]["parameters"]["properties"]
     assert "goal_id" in tools["update_goal"]["function"]["parameters"]["properties"]
     assert "force" in tools["update_goal"]["function"]["parameters"]["properties"]
+    assert "title" in tools["create_goal"]["function"]["parameters"]["properties"]
+    assert "goal_id" in tools["create_task"]["function"]["parameters"]["properties"]
+    assert "title" in tools["create_task"]["function"]["parameters"]["properties"]
+    assert "goal_id" in tools["get_goal"]["function"]["parameters"]["properties"]
+    assert "task_id" in tools["get_task"]["function"]["parameters"]["properties"]
+
+
+# ---------------------------------------------------------------------------
+# create_goal / create_task
+# ---------------------------------------------------------------------------
+
+
+def test_create_goal_works_and_marks_changed(paths, store: GoalsStore) -> None:
+    changed: list[bool] = []
+    result = create_goal(
+        {"title": "Inventory sandbox", "acceptance": "list exists"},
+        _ctx(paths, store, mark_task_changed=lambda: changed.append(True)),
+    )
+    assert result.ok is True
+    assert result.error_reason is None
+    goal = result.payload["goal"]
+    assert goal["title"] == "Inventory sandbox"
+    assert goal["status"] == "open"
+    assert goal["acceptance"] == "list exists"
+    assert goal["id"].startswith("g_")
+    assert store.get_goal(goal["id"]) is not None
+    assert changed == [True]
+
+
+def test_create_goal_via_registry(
+    registry: ToolRegistry, paths, store: GoalsStore
+) -> None:
+    changed: list[bool] = []
+    result = registry.execute(
+        "create_goal",
+        {"title": "Via reg"},
+        ToolContext(
+            paths=paths,
+            goals=store,
+            mark_task_changed=lambda: changed.append(True),
+        ),
+    )
+    assert result.ok is True
+    assert result.payload["goal"]["title"] == "Via reg"
+    assert changed == [True]
+    assert result.ends_moment is False
+    assert result.counts_as_speak is False
+
+
+def test_create_goal_missing_title(paths, store: GoalsStore) -> None:
+    result = create_goal({}, _ctx(paths, store))
+    assert result.ok is False
+    assert result.error_reason == "missing_title"
+
+
+def test_create_goal_closed_rejected(paths, store: GoalsStore) -> None:
+    result = create_goal(
+        {"title": "X", "status": "closed"},
+        _ctx(paths, store),
+    )
+    assert result.ok is False
+    assert result.error_reason is not None
+    assert result.error_reason.startswith("invalid_args:")
+
+
+def test_create_goal_missing_goals(paths) -> None:
+    result = create_goal({"title": "X"}, _ctx(paths, None))
+    assert result.ok is False
+    assert result.error_reason == "goals_not_configured"
+
+
+def test_create_task_works_and_marks_changed(paths, store: GoalsStore) -> None:
+    changed: list[bool] = []
+    g = store.create_goal("Parent")
+    result = create_task(
+        {"goal_id": g["id"], "title": "First step", "notes": "n1"},
+        _ctx(paths, store, mark_task_changed=lambda: changed.append(True)),
+    )
+    assert result.ok is True
+    task = result.payload["task"]
+    assert task["title"] == "First step"
+    assert task["status"] == "pending"
+    assert task["goal_id"] == g["id"]
+    assert task["notes"] == "n1"
+    assert result.payload.get("became_ready") is False
+    assert store.get_task(task["id"]) is not None
+    assert changed == [True]
+
+
+def test_create_task_ready_enqueues_and_marks(paths, store: GoalsStore) -> None:
+    wakes: list[dict[str, Any]] = []
+    changed: list[bool] = []
+    g = store.create_goal("G")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Ready now", "status": "ready"},
+        _ctx(
+            paths,
+            store,
+            enqueue_wake=lambda **kw: wakes.append(kw) or "w1",
+            mark_task_changed=lambda: changed.append(True),
+        ),
+    )
+    assert result.ok is True
+    assert result.payload["task"]["status"] == "ready"
+    assert result.payload["became_ready"] is True
+    assert len(wakes) == 1
+    assert wakes[0]["kind"] == "task_ready"
+    assert wakes[0]["task_id"] == result.payload["task"]["id"]
+    assert wakes[0]["goal_id"] == g["id"]
+    assert changed == [True]
+
+
+def test_create_task_enqueue_wake_failure_after_ready_still_ok(
+    paths, store: GoalsStore
+) -> None:
+    """Enqueue raise after durable create-as-ready must not fail the tool."""
+
+    def boom(**_kwargs: Any) -> str:
+        raise RuntimeError("wake queue down")
+
+    g = store.create_goal("G")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Ready now", "status": "ready"},
+        _ctx(paths, store, enqueue_wake=boom),
+    )
+    assert result.ok is True
+    assert result.payload["task"]["status"] == "ready"
+    assert result.payload["became_ready"] is True
+    assert result.payload.get("warning", "").startswith("task_ready_enqueue_failed:")
+    assert store.get_task(result.payload["task"]["id"])["status"] == "ready"
+
+
+def test_create_task_dual_path_store_hook_and_tool_enqueue_both_fire(
+    tmp_path: Path,
+) -> None:
+    """Documented dual path on create-as-ready: both may fire; host must dedupe."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store_calls: list[tuple[str, str]] = []
+    tool_wakes: list[dict[str, Any]] = []
+
+    store = GoalsStore(
+        paths,
+        on_task_ready=lambda tid, gid: store_calls.append((tid, gid)),
+    )
+    g = store.create_goal("G")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Ready now", "status": "ready"},
+        _ctx(
+            paths,
+            store,
+            enqueue_wake=lambda **kw: tool_wakes.append(kw) or "w1",
+        ),
+    )
+    assert result.ok is True
+    tid = result.payload["task"]["id"]
+    assert store_calls == [(tid, g["id"])]
+    assert len(tool_wakes) == 1
+    assert tool_wakes[0]["kind"] == "task_ready"
+    assert tool_wakes[0]["task_id"] == tid
+    assert tool_wakes[0]["goal_id"] == g["id"]
+
+
+def test_create_task_goal_not_found(paths, store: GoalsStore) -> None:
+    result = create_task(
+        {"goal_id": "g_missing", "title": "Orphan"},
+        _ctx(paths, store),
+    )
+    assert result.ok is False
+    assert result.error_reason == "goal_not_found"
+
+
+def test_create_task_missing_fields(paths, store: GoalsStore) -> None:
+    g = store.create_goal("G")
+    r1 = create_task({"title": "No goal"}, _ctx(paths, store))
+    assert r1.ok is False
+    assert r1.error_reason == "missing_goal_id"
+    r2 = create_task({"goal_id": g["id"]}, _ctx(paths, store))
+    assert r2.ok is False
+    assert r2.error_reason == "missing_title"
+
+
+# ---------------------------------------------------------------------------
+# list_goals / get_goal / get_task
+# ---------------------------------------------------------------------------
+
+
+def test_list_goals_compact_and_no_mark(paths, store: GoalsStore) -> None:
+    changed: list[bool] = []
+    g = store.create_goal("Alpha")
+    store.create_task(g["id"], "T1", status="ready")
+    store.create_task(g["id"], "T2")
+    store.create_goal("Beta", status="review")
+
+    result = list_goals(
+        {},
+        _ctx(paths, store, mark_task_changed=lambda: changed.append(True)),
+    )
+    assert result.ok is True
+    assert changed == []  # read-only
+    goals = result.payload["goals"]
+    assert len(goals) == 2
+    by_title = {x["title"]: x for x in goals}
+    assert by_title["Alpha"]["task_count"] == 2
+    assert len(by_title["Alpha"]["tasks"]) == 2
+    assert set(by_title["Alpha"]["tasks"][0].keys()) <= {
+        "id",
+        "title",
+        "status",
+    }
+    # Compact: no acceptance/created_at at top level of compact entry shape
+    assert "acceptance" not in by_title["Alpha"]
+
+
+def test_list_goals_status_filter(paths, store: GoalsStore) -> None:
+    store.create_goal("Open one")
+    store.create_goal("Review one", status="review")
+    result = list_goals({"status": "review"}, _ctx(paths, store))
+    assert result.ok is True
+    goals = result.payload["goals"]
+    assert len(goals) == 1
+    assert goals[0]["title"] == "Review one"
+    assert goals[0]["status"] == "review"
+
+
+def test_list_goals_invalid_status(paths, store: GoalsStore) -> None:
+    result = list_goals({"status": "bogus"}, _ctx(paths, store))
+    assert result.ok is False
+    assert result.error_reason is not None
+    assert result.error_reason.startswith("invalid_args:")
+
+
+def test_get_goal_full_and_no_mark(paths, store: GoalsStore) -> None:
+    changed: list[bool] = []
+    g = store.create_goal("Detail", acceptance="done when listed")
+    t = store.create_task(g["id"], "Sub", notes="n")
+    result = get_goal(
+        {"goal_id": g["id"]},
+        _ctx(paths, store, mark_task_changed=lambda: changed.append(True)),
+    )
+    assert result.ok is True
+    assert changed == []
+    goal = result.payload["goal"]
+    assert goal["acceptance"] == "done when listed"
+    assert len(goal["tasks"]) == 1
+    assert goal["tasks"][0]["id"] == t["id"]
+    assert goal["tasks"][0]["notes"] == "n"
+
+
+def test_get_goal_not_found(paths, store: GoalsStore) -> None:
+    result = get_goal({"goal_id": "g_missing"}, _ctx(paths, store))
+    assert result.ok is False
+    assert result.error_reason == "goal_not_found"
+
+
+def test_get_task_and_no_mark(paths, store: GoalsStore) -> None:
+    changed: list[bool] = []
+    g = store.create_goal("G")
+    t = store.create_task(g["id"], "Work", notes="hello")
+    result = get_task(
+        {"task_id": t["id"]},
+        _ctx(paths, store, mark_task_changed=lambda: changed.append(True)),
+    )
+    assert result.ok is True
+    assert changed == []
+    task = result.payload["task"]
+    assert task["id"] == t["id"]
+    assert task["goal_id"] == g["id"]
+    assert task["notes"] == "hello"
+
+
+def test_get_task_not_found(paths, store: GoalsStore) -> None:
+    result = get_task({"task_id": "t_missing"}, _ctx(paths, store))
+    assert result.ok is False
+    assert result.error_reason == "task_not_found"
+
+
+def test_read_tools_via_registry(
+    registry: ToolRegistry, paths, store: GoalsStore
+) -> None:
+    g = store.create_goal("R")
+    t = store.create_task(g["id"], "T")
+    lg = registry.execute(
+        "list_goals", {}, ToolContext(paths=paths, goals=store)
+    )
+    assert lg.ok is True
+    assert any(x["id"] == g["id"] for x in lg.payload["goals"])
+    gg = registry.execute(
+        "get_goal",
+        {"goal_id": g["id"]},
+        ToolContext(paths=paths, goals=store),
+    )
+    assert gg.ok is True
+    assert gg.payload["goal"]["id"] == g["id"]
+    gt = registry.execute(
+        "get_task",
+        {"task_id": t["id"]},
+        ToolContext(paths=paths, goals=store),
+    )
+    assert gt.ok is True
+    assert gt.payload["task"]["id"] == t["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +681,35 @@ def test_update_goal_soft_close_warning(paths, store: GoalsStore) -> None:
     )
     assert result.payload["goal"]["status"] == "closed"
     assert store.goal_close_without_review == 1
+
+
+def test_update_goal_mark_changed_on_success(paths, store: GoalsStore) -> None:
+    """Normative: update_goal must call mark_task_changed (like update_task)."""
+    changed: list[bool] = []
+    g = store.create_goal("G")
+    result = update_goal(
+        {"goal_id": g["id"], "title": "Renamed goal"},
+        _ctx(paths, store, mark_task_changed=lambda: changed.append(True)),
+    )
+    assert result.ok is True
+    assert result.payload["goal"]["title"] == "Renamed goal"
+    assert changed == [True]
+
+
+def test_update_goal_mark_changed_failure_still_ok(
+    paths, store: GoalsStore
+) -> None:
+    def boom() -> None:
+        raise RuntimeError("continue clock down")
+
+    g = store.create_goal("G")
+    result = update_goal(
+        {"goal_id": g["id"], "title": "Still saved"},
+        _ctx(paths, store, mark_task_changed=boom),
+    )
+    assert result.ok is True
+    assert result.payload["goal"]["title"] == "Still saved"
+    assert store.get_goal(g["id"])["title"] == "Still saved"
 
 
 def test_update_goal_force_close_no_warning(paths, store: GoalsStore) -> None:
