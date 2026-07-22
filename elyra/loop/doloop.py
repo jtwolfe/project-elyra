@@ -168,8 +168,9 @@ class _LoopState:
     lesson_request_sent: bool = False
     lesson_captured: bool = False
     lesson_pin_message: str | None = None
-    # Identical-fail updates after lesson request (synthesize after K).
+    # Identical-fail streak after lesson request (same fingerprint; synthesize after K).
     lesson_fails_since_request: int = 0
+    lesson_synth_fp: str | None = None  # fp being counted for HOST-synthesize
 
 
 def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
@@ -1025,12 +1026,21 @@ def _handle_tool_batch(
             if len(state.thrash_tried) > THRASH_TRIED_CAP:
                 state.thrash_tried = state.thrash_tried[-THRASH_TRIED_CAP:]
 
-        # Phase C: count fail updates after lesson request for HOST-synthesize.
+        # Phase C: identical-fail streak after lesson request (HOST-synthesize).
+        # Only count continuing same fingerprint; diversified fails / ok reset.
         if state.lesson_request_sent and not state.lesson_captured:
-            if not upd.ok:
+            if not upd.ok and (
+                state.lesson_synth_fp is not None
+                and upd.fingerprint == state.lesson_synth_fp
+            ):
                 state.lesson_fails_since_request += 1
+            elif not upd.ok:
+                # New fail fingerprint — start a fresh identical streak.
+                state.lesson_synth_fp = upd.fingerprint
+                state.lesson_fails_since_request = 1
             else:
                 state.lesson_fails_since_request = 0
+                state.lesson_synth_fp = None
 
         # Enrich attempt# into payload via replace (ToolResult is frozen).
         payload = dict(tr.payload) if isinstance(tr.payload, dict) else {}
@@ -1143,6 +1153,8 @@ def _handle_tool_batch(
         state.chain_messages.append(_obs_user_message(lesson_req))
         state.lesson_request_sent = True
         state.lesson_fails_since_request = 0
+        # Count further identical fails of the thrashing fingerprint only.
+        state.lesson_synth_fp = state.thrash_last_fp
         _LOG.info("thrash lesson request moment_id=%s", moment_id)
         _append_beat(
             moments,
@@ -1154,7 +1166,7 @@ def _handle_tool_batch(
             },
         )
 
-    # Phase C: HOST-synthesized lesson after K additional fails without free-text.
+    # Phase C: HOST-synthesized lesson after K additional *identical* fails.
     if (
         state.lesson_request_sent
         and not state.lesson_captured

@@ -21,7 +21,7 @@ OK_STREAK_THRESHOLD = 5
 MAX_THRASH_HOSTS = 1
 THRASH_TRIED_CAP = 8
 MAX_LESSON_PINS = 2  # last L=1–2 moment-scoped lessons
-# Additional identical fail updates after lesson request before HOST-synthesize.
+# Additional identical-fingerprint fail updates after lesson request before HOST-synthesize.
 LESSON_SYNTH_FAIL_STREAK = 3
 # Compact lesson max chars (1–3 sentences target).
 _LESSON_MAX_CHARS = 480

@@ -2856,10 +2856,43 @@ def test_host_synthesized_lesson_after_fail_streak(
     assert not any("HOST-synthesized" in (m.get("content") or "") for m in glass)
 
 
+def test_diversified_fails_after_lesson_request_do_not_synthesize(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Three *different* fail fingerprints after request must not HOST-synthesize.
+
+    Synth counter is identical-fingerprint only (design C2); diversified recovery
+    is not thrash continuation.
+    """
+    mid = moments.open_moment(why_now="lesson diversify", moment_id="mlessondiv")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", {"path": "a.md"}, call_id="c1"),
+            _tc("read_file", {"path": "a.md"}, call_id="c2"),
+            _tc("read_file", {"path": "a.md"}, call_id="c3"),  # thrash + lesson req
+            # Different paths → different fingerprints; no identical streak of 3
+            _tc("read_file", {"path": "b.md"}, call_id="c4"),
+            _tc("read_file", {"path": "c.md"}, call_id="c5"),
+            _tc("read_file", {"path": "d.md"}, call_id="c6"),
+            _text("changed approach"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_host_injects == 1
+    beats = moments.list_beats(mid)
+    assert any(b.get("kind") == "thrash_lesson" for b in beats)
+    # Free-text captures model lesson — but no HOST-synthesized pin before that
+    pin_obs = [b for b in beats if b.get("kind") == "lesson_pin"]
+    assert len(pin_obs) == 1
+    assert pin_obs[0].get("synthesized") is False
+    assert "HOST-synthesized" not in (pin_obs[0].get("content") or "")
+
+
 def test_lesson_pin_survives_in_turn_reouter(
     ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
 ) -> None:
-    """lesson_pin_message materializes as HOST inject kept across compress/re-outer."""
+    """lesson_pin HOST inject survives compress/re-outer (kept + sticky ensure)."""
     from elyra.loop.doloop import (
         _LoopState,
         _compress_chain_for_reouter,
@@ -2919,13 +2952,13 @@ def test_lesson_pin_survives_in_turn_reouter(
     state = _LoopState(outer_prefix=[{"role": "system", "content": "sys"}])
     state.lesson_pin_message = pin
     state.chain_messages = [m for m in compressed if m.get("content") != pin]
+    assert not any(m.get("content") == pin for m in state.chain_messages)
     _ensure_lesson_pin_in_chain(state)
     assert any(m.get("content") == pin for m in state.chain_messages)
 
-    # enforce_in_turn_budget under pressure still leaves room for pin re-ensure pattern
+    # Budget pressure: compress keeps HOST inject spans — pin present without ensure.
     outer = [{"role": "system", "content": "S" * 20}]
     fat_chain = list(chain)
-    # Tiny budget forces compress path
     new_outer, new_chain, did = enforce_in_turn_budget(
         outer,
         fat_chain,
@@ -2933,12 +2966,100 @@ def test_lesson_pin_survives_in_turn_reouter(
         tool_result_max_chars=20,
         rebuild_outer=lambda: [{"role": "system", "content": "rebuilt"}],
     )
-    assert did is True or len(new_chain) <= len(fat_chain)
-    # Pin inject span is preserved by compress when present
-    if any(m.get("content") == pin for m in fat_chain):
-        # After budget enforce, pin may still be there via inject keep
-        state2 = _LoopState(outer_prefix=new_outer)
-        state2.lesson_pin_message = pin
-        state2.chain_messages = list(new_chain)
-        _ensure_lesson_pin_in_chain(state2)
-        assert any(m.get("content") == pin for m in state2.chain_messages)
+    assert did is True
+    assert new_outer[0]["content"] == "rebuilt"
+    pin_after_budget = [
+        m for m in new_chain if m.get("role") == "user" and m.get("content") == pin
+    ]
+    assert len(pin_after_budget) == 1, (
+        "compress/re-outer must keep lesson pin HOST inject without sticky re-append"
+    )
+
+
+def test_lesson_pin_survives_run_do_loop_reouter(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """End-to-end: HOST-synth pin still present in model messages after re-outer.
+
+    Tool-path synth keeps the loop running so fat payloads can force re-outer
+    without free-text auto-stop after capture.
+    """
+    mid = moments.open_moment(why_now="lesson pin e2e", moment_id="mlessonpin")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/pin/TOOL.md"}
+    messages_seen: list[list[dict[str, Any]]] = []
+    script = [
+        _tc("read_file", missing, call_id="c1"),
+        _tc("read_file", missing, call_id="c2"),
+        _tc("read_file", missing, call_id="c3"),  # thrash + lesson request
+        _tc("read_file", missing, call_id="c4"),
+        _tc("read_file", missing, call_id="c5"),
+        _tc("read_file", missing, call_id="c6"),  # K fails → HOST-synth pin
+        # Fat tools force re-outer; pin must survive into later completions
+        _tc("list_dir", {"path": "."}, call_id="fat1"),
+        _tc("list_dir", {"path": "."}, call_id="fat2"),
+        _text("done after reouter"),
+    ]
+    idx = {"i": 0}
+
+    def recording_client(
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> ChatCompletionResult:
+        messages_seen.append([dict(m) for m in messages])
+        i = idx["i"]
+        idx["i"] += 1
+        resp = script[min(i, len(script) - 1)]
+        if isinstance(resp, ChatCompletionResult):
+            return resp
+        return StubChatClient.scripted([resp]).chat_completion(messages, **kwargs)
+
+    client = StubChatClient(responses=recording_client)
+    fat = _FatPayloadRegistry(registry, blob_chars=30_000)
+    rebuilds = {"n": 0}
+
+    def rebuild() -> list[dict[str, Any]]:
+        rebuilds["n"] += 1
+        return [
+            {"role": "system", "content": f"outer-{rebuilds['n']}"},
+            {"role": "user", "content": "work"},
+        ]
+
+    settings = _settings(
+        max_tool_hops=20,
+        in_turn_max_tokens=80,
+        sliding_input_tokens=80,
+        tool_result_max_chars=2000,
+    )
+    result = run_do_loop(
+        client=client,
+        registry=fat,  # type: ignore[arg-type]
+        ctx=ctx,
+        rebuild_outer=rebuild,
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.thrash_host_injects == 1
+    assert result.reouter_count >= 1, result
+    beats = moments.list_beats(mid)
+    pin_obs = [b for b in beats if b.get("kind") == "lesson_pin"]
+    assert len(pin_obs) == 1
+    assert pin_obs[0].get("synthesized") is True
+    pin_content = pin_obs[0].get("content") or ""
+    assert "moment lesson pin" in pin_content
+    assert "HOST-synthesized" in pin_content
+    # Pin is injected at end of hop 6 (index 5). Completions from hop 7+
+    # (messages_seen[6:]) must still include the pin after re-outer.
+    post_pin_msgs = messages_seen[6:]
+    assert post_pin_msgs, (
+        f"expected completions after synth pin; saw {len(messages_seen)} total"
+    )
+    saw_pin = any(
+        any(
+            m.get("role") == "user" and (m.get("content") or "") == pin_content
+            for m in msgs
+        )
+        for msgs in post_pin_msgs
+    )
+    assert saw_pin, "lesson pin HOST must appear in chain after re-outer"
