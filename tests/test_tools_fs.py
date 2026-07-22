@@ -325,6 +325,7 @@ def test_search_replace_empty_old(ctx: ToolContext, sandbox: Sandbox) -> None:
     )
     assert result.ok is False
     assert result.error_reason == "empty_old"
+    assert result.payload.get("path") == "e.txt"
 
 
 def test_search_replace_missing_args(ctx: ToolContext) -> None:
