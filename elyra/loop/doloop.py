@@ -2,7 +2,8 @@
 
 Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak
 nudge, budgeted in-moment work-continue HOST (continuous policy), post-load
-skill-commit HOST (skill_commit_policy).
+skill-commit HOST (skill_commit_policy), optional post-load tool_choice pin
+(default OFF).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
           completion-ingress channel hygiene (sanitize before beat/chain),
           tools_ran / ledger_mutated / flood counters on DoLoopResult.
@@ -41,6 +42,7 @@ from elyra.loop.continuous_policy import (
 from elyra.loop.skill_commit_policy import (
     format_playbook_active,
     is_commit_eligible_skill,
+    post_load_skill_tool_choice,
     should_allow_no_speak,
     should_skill_commit_nudge,
     skill_commit_host_message,
@@ -741,11 +743,17 @@ def _run_loop_body(
 
         messages = list(state.outer_prefix) + list(state.chain_messages)
         # Stage 5 L4: pin speak only on social first completion (hop==0 pre-call).
-        # Omit tool_choice otherwise — never product-default tool_choice=required.
+        # Optional K12 post-load required pin only when speak pin does not apply —
+        # hop-0 social speak always wins. Flag defaults OFF.
         tool_choice = social_first_hop_tool_choice(
             social_wake=social_wake,
             hop=state.hop,
         )
+        if tool_choice is None:
+            tool_choice = post_load_skill_tool_choice(
+                pending_skill_name=state.pending_skill_commit,
+                enabled=loop.post_load_skill_tool_choice_required,
+            )
         result = client.chat_completion(
             messages,
             max_tokens=gen_max,

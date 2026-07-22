@@ -1691,6 +1691,231 @@ def test_skill_commit_once_per_moment_budget(
 
 
 # ---------------------------------------------------------------------------
+# 5d. Optional post-load tool_choice=required (PR4; default OFF)
+# ---------------------------------------------------------------------------
+
+
+def test_post_load_tool_choice_flag_off_stays_none(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Default flag OFF → tool_choice is None after load_skill arm."""
+    mid = moments.open_moment(why_now="tc off", moment_id="mtcoff")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._n = 0
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+                    _tc("list_dir", {"path": "."}, call_id="c2"),
+                    _text("done"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=default_settings(),  # flag default False
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.tools_ran is True
+    assert len(captured) >= 2
+    # hop0: no pending yet → None; hop1: pending armed but flag OFF → None
+    assert captured[0] is None
+    assert captured[1] is None
+
+
+def test_post_load_tool_choice_flag_on_required_after_load(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Flag ON + eligible pending → tool_choice == \"required\" on next hop only."""
+    mid = moments.open_moment(why_now="tc on", moment_id="mtcon")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+                    # Hop after arm: model obeys required with a real tool.
+                    _tc("list_dir", {"path": "."}, call_id="c2"),
+                    _text("done"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.tools_ran is True
+    assert len(captured) >= 3
+    # hop0 pre-load: no pending → None
+    assert captured[0] is None
+    # hop1 after load_skill arm: required
+    assert captured[1] == "required"
+    # hop2 after non-load clear: pending cleared → None
+    assert captured[2] is None
+
+
+def test_post_load_tool_choice_cleared_after_commit_spent(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Flag ON: free-text spends skill_commit → later hop tool_choice is None."""
+    mid = moments.open_moment(why_now="tc spent", moment_id="mtcsp")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "plan-work"}, call_id="c1"),
+                    # Free-text while armed → skill_commit injects, clears pending
+                    _text("planning in prose..."),
+                    # After commit spent: no more required
+                    _text("still free-text"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.skill_commit_injects == 1
+    assert len(captured) >= 3
+    assert captured[0] is None
+    assert captured[1] == "required"  # armed on free-text hop
+    assert captured[2] is None  # after commit spent / pending cleared
+
+
+def test_post_load_tool_choice_rest_load_never_required(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """rest is not commit-eligible; flag ON still yields None after load rest."""
+    mid = moments.open_moment(why_now="tc rest", moment_id="mtcrest")
+    ctx.moment_id = mid
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    _tc("load_skill", {"name": "rest"}, call_id="c1"),
+                    _text("idle"),
+                ]
+            )
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            return self._inner.chat_completion(messages, **kwargs)
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.skill_commit_injects == 0
+    assert len(captured) >= 2
+    assert captured[0] is None
+    assert captured[1] is None  # rest never arms
+
+
+def test_social_hop0_speak_pin_wins_over_post_load_flag(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Social hop==0 speak pin is never overridden by post-load required flag.
+
+    pending_skill_commit cannot arm before hop 0 in real runs; this locks the
+    wire order (speak pin first) independent of arm state / flag.
+    """
+    from elyra.llm.client import ToolCall as LlmToolCall
+
+    captured: list[Any] = []
+
+    class _CaptureChoice:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            captured.append(kwargs.get("tool_choice"))
+            self._n += 1
+            if self._n == 1:
+                return ChatCompletionResult(
+                    content="",
+                    reasoning_content="",
+                    raw_json="{}",
+                    tool_calls=[
+                        LlmToolCall(
+                            id="c1",
+                            name="speak",
+                            arguments={"text": "Hello."},
+                            arguments_raw='{"text":"Hello."}',
+                            arguments_parse_ok=True,
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                )
+            return ChatCompletionResult(
+                content="",
+                reasoning_content="",
+                raw_json="{}",
+                tool_calls=[],
+                finish_reason="stop",
+            )
+
+    settings = _settings(post_load_skill_tool_choice_required=True)
+    result = run_do_loop(
+        client=_CaptureChoice(),  # type: ignore[arg-type]
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=[{"role": "system", "content": "test"}],
+        settings=settings,
+        moments=moments,
+        social_wake=True,
+    )
+    assert result.spoke is True
+    assert len(captured) >= 1
+    # Hop-0 social: speak function pin, not "required"
+    assert captured[0] == {"type": "function", "function": {"name": "speak"}}
+    assert captured[0] != "required"
+
+
+# ---------------------------------------------------------------------------
 # 6. max_hops
 # ---------------------------------------------------------------------------
 

@@ -1,9 +1,9 @@
 """Skill classification + playbook framing + post-load commit / no_speak policy.
 
 Scope: work/social/no-commit name sets, pure classifiers, ``format_playbook_active``
-for model-facing ``load_skill`` wire content, skill-commit HOST builder, and pure
-predicates for skill-commit inject + no_speak de-conflict (PR2).
-Out of scope: post-load tool_choice lever (later PR).
+for model-facing ``load_skill`` wire content, skill-commit HOST builder, pure
+predicates for skill-commit inject + no_speak de-conflict (PR2), and optional
+post-load ``tool_choice=required`` lever (PR4, default OFF).
 """
 
 from __future__ import annotations
@@ -173,6 +173,26 @@ def should_allow_no_speak(
     return True
 
 
+def post_load_skill_tool_choice(
+    *,
+    pending_skill_name: str | None,
+    enabled: bool,
+) -> str | None:
+    """When enabled, pin ``tool_choice=required`` while a commit-eligible skill is pending.
+
+    Default ``enabled=False`` (evidence-gated; never product-default required for
+    all hops). ``rest`` / empty / None pending → None even when enabled.
+
+    Wire after social hop-0 speak pin: only apply when that pin returned None so
+    hop-0 social speak is never overridden.
+    """
+    if not enabled:
+        return None
+    if not pending_skill_name or not is_commit_eligible_skill(pending_skill_name):
+        return None
+    return "required"
+
+
 __all__ = [
     "NO_COMMIT_SKILLS",
     "SKILL_COMMIT_HOST",
@@ -184,6 +204,7 @@ __all__ = [
     "is_social_skill",
     "is_work_skill",
     "is_work_skill_or_unknown",
+    "post_load_skill_tool_choice",
     "should_allow_no_speak",
     "should_skill_commit_nudge",
     "skill_commit_host_message",

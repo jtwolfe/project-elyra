@@ -12,6 +12,7 @@ from elyra.loop.skill_commit_policy import (
     is_social_skill,
     is_work_skill,
     is_work_skill_or_unknown,
+    post_load_skill_tool_choice,
     should_allow_no_speak,
     should_skill_commit_nudge,
     skill_commit_host_message,
@@ -287,4 +288,78 @@ def test_should_allow_no_speak_table() -> None:
         no_speak_nudge_sent=False,
         pending_skill_name="plan-work",
         skill_commit_sent=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR4 — optional post-load tool_choice=required (default OFF)
+# ---------------------------------------------------------------------------
+
+
+def test_post_load_skill_tool_choice_default_off() -> None:
+    """Flag OFF → always None even with eligible pending."""
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name="plan-work",
+            enabled=False,
+        )
+        is None
+    )
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name="talk",
+            enabled=False,
+        )
+        is None
+    )
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name=None,
+            enabled=False,
+        )
+        is None
+    )
+
+
+def test_post_load_skill_tool_choice_on_eligible() -> None:
+    """Flag ON + commit-eligible pending → \"required\"."""
+    for name in ("plan-work", "do-work", "talk", "create-tool", "my-local"):
+        assert (
+            post_load_skill_tool_choice(
+                pending_skill_name=name,
+                enabled=True,
+            )
+            == "required"
+        ), name
+
+
+def test_post_load_skill_tool_choice_on_not_eligible() -> None:
+    """Flag ON but no pending / rest / empty → None."""
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name=None,
+            enabled=True,
+        )
+        is None
+    )
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name="",
+            enabled=True,
+        )
+        is None
+    )
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name="rest",
+            enabled=True,
+        )
+        is None
+    )
+    assert (
+        post_load_skill_tool_choice(
+            pending_skill_name="REST",
+            enabled=True,
+        )
+        is None
     )

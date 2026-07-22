@@ -30,6 +30,10 @@ class LoopSettings:
     # Orient slice budgets (skill catalog + goals/tasks in outer meal).
     orient_skill_catalog_max_tokens: int = 400
     orient_goals_max_tokens: int = 600
+    # Optional generation lever (K12 / item 5): pin tool_choice=required on the
+    # hop while a commit-eligible skill is pending after load_skill. Default OFF;
+    # evidence-gated — do not enable until Phase A live gate fails.
+    post_load_skill_tool_choice_required: bool = False
 
 
 @dataclass(frozen=True)
