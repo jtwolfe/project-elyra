@@ -21,7 +21,7 @@ from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.queue import LlamaServerGate
-from elyra.messages import append_message, list_messages
+from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence.interject import REASON_BUFFER_FULL
 from elyra.presence.worker import PresenceWorker
@@ -326,10 +326,11 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "clear_sandbox",
                 "clear_drafts",
                 "clear_local_tools",
-                "reseed_self_if_default",
             )
             if k in body
         }
+        # Unsupported flags (skills wipe / reseed) are ignored by normalize;
+        # do not pass them through the allowlist.
         result = self.worker.reset_runtime_state(flags if flags else None)
         if result.get("ok"):
             self._json(200, result)
@@ -347,7 +348,11 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         self._json(500, result)
 
     def _post_goals(self, body: dict[str, Any]) -> None:
-        """POST /api/goals — create a goal (lean glass / operator)."""
+        """POST /api/goals — create a goal (lean glass / operator).
+
+        Gated on worker reset: 503 while full reset is in progress so goals.json
+        cannot be repopulated mid-clear.
+        """
         title = str(body.get("title") or "").strip()
         if not title:
             self._json(400, {"ok": False, "error": "title required"})
@@ -357,7 +362,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             acceptance = str(acceptance)
         status = str(body.get("status") or "open")
         try:
-            goal = self.goals.create_goal(
+            goal, err = self.worker.create_goal_if_allowed(
                 title,
                 acceptance=acceptance,
                 status=status,
@@ -365,10 +370,20 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json(400, {"ok": False, "error": str(exc)})
             return
+        if err is not None:
+            code = 503 if err.get("error") == "resetting" else 400
+            self._json(code, err)
+            return
+        # Keep catalog store in sync when API was constructed with a separate
+        # GoalsStore instance (same path; create already persisted).
         self._json(200, {"ok": True, "goal": goal})
 
     def _post_messages(self, body: dict[str, Any]) -> None:
         """POST /api/messages — glass chat → resolve_user_input (from_wait_api=False).
+
+        Append is gated through ``worker.append_message_if_allowed`` (check +
+        write under worker lock) so concurrent full reset cannot leave chat
+        residue after ``ok: true``.
 
         Routing matrix (worker phase + pending wait):
         - in_moment → interject buffer
@@ -383,7 +398,13 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         if not content:
             self._json(400, {"ok": False, "error": "content required", "reason": "empty_content"})
             return
-        msg = append_message("user", content, user_id=user_id, paths=self.paths)
+        msg, err = self.worker.append_message_if_allowed(
+            "user", content, user_id=user_id
+        )
+        if err is not None:
+            self._json(self._status_for_route(err), err)
+            return
+        assert msg is not None
         result = self.worker.resolve_user_input(
             content,
             user_id=user_id,
@@ -398,6 +419,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         Always sets from_wait_api=True so a durable pending wait for the user
         routes to wait_reply even if phase briefly reads as idle.
+        Message append is reset-gated (same as ``/api/messages``).
         """
         content_raw = body.get("content")
         content = str(content_raw).strip() if content_raw is not None else ""
@@ -423,7 +445,13 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         display = content or (choice or "")
-        msg = append_message("user", display, user_id=user_id, paths=self.paths)
+        msg, err = self.worker.append_message_if_allowed(
+            "user", display, user_id=user_id
+        )
+        if err is not None:
+            self._json(self._status_for_route(err), err)
+            return
+        assert msg is not None
         result = self.worker.resolve_user_input(
             content or (choice or ""),
             user_id=user_id,

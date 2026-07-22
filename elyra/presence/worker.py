@@ -24,6 +24,11 @@ from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.client import ChatClient
 from elyra.loop.context import assemble_outer_meal
+from elyra.loop.orient_slice import (
+    format_goals_slice,
+    format_skill_bias,
+    format_skill_catalog,
+)
 from elyra.loop.continuous_policy import (
     SOCIAL_WAKE_KINDS,
     ContinuousRuntimeState,
@@ -33,12 +38,7 @@ from elyra.loop.continuous_policy import (
     should_enqueue_moment_continue,
 )
 from elyra.loop.doloop import DoLoopResult, run_do_loop
-from elyra.loop.orient_slice import (
-    format_goals_slice,
-    format_skill_bias,
-    format_skill_catalog,
-)
-from elyra.messages import list_messages
+from elyra.messages import Message, append_message, list_messages
 from elyra.moment import MomentStore
 from elyra.moment.types import STOP_REASONS
 from elyra.presence.interject import (
@@ -74,8 +74,8 @@ from elyra.runtime.reset import (
     normalize_reset_flags,
 )
 from elyra.sandbox import Sandbox
-from elyra.settings import Settings, load_settings
 from elyra.skills import SkillCatalog
+from elyra.settings import Settings, load_settings
 from elyra.speak import SpeakTransport
 from elyra.tools import ToolContext, ToolRegistry
 from elyra.tools.policy import resolve_bundled_tools_root
@@ -242,9 +242,17 @@ class PresenceWorker:
         Precondition: not busy and phase != in_moment. Else
         ``{"ok": False, "error": "worker_busy", "phase": ...}``.
 
-        Under ``self._lock``: set ``resetting=True``, clear queue/timer memory +
-        disk helpers, zero continuous streak fields (preserve enabled), assert
-        empty pending/claimed. Concurrent ops see ``error=resetting``.
+        Protocol (concurrent-safe 503 + path-store integrity)::
+
+            acquire lock → reject busy/already-resetting → resetting=True → release
+            disk path clears (flag visible; claim/enqueue/API writers refuse)
+            acquire lock → timer/queue memory wipe + final messages/goals re-clear
+                         → soft state + asserts → release
+            finally: resetting=False under lock
+
+        Concurrent API observes ``error=resetting`` (HTTP 503) without blocking
+        on the full disk clear. Final messages/goals re-clear under lock closes
+        TOCTOU windows where a writer raced mid-clear.
 
         Never clears ``skills/local``, identity, users, continuous.json enabled,
         model paths, or settings. Optional flags via ``normalize_reset_flags``.
@@ -261,10 +269,69 @@ class PresenceWorker:
                     "worker_busy": self._busy,
                 }
             self._continuous.resetting = True
-            try:
-                return self._reset_runtime_state_unlocked(norm)
-            finally:
+        try:
+            return self._run_full_reset(norm)
+        finally:
+            with self._lock:
                 self._continuous.resetting = False
+
+    @property
+    def is_resetting(self) -> bool:
+        """True while a full reset is in progress (lock-free for writers to poll)."""
+        with self._lock:
+            return bool(self._continuous.resetting)
+
+    def append_message_if_allowed(
+        self,
+        role: str,
+        content: str,
+        *,
+        user_id: str | None = "operator",
+        reasoning: str = "",
+        moment_id: str | None = None,
+    ) -> tuple[Message | None, dict[str, Any] | None]:
+        """Append a chat message only when not resetting.
+
+        Holds ``self._lock`` for the check + append so reset's final re-clear
+        cannot interleave mid-write without also holding the lock.
+        Returns ``(message, None)`` on success or ``(None, error_dict)``.
+        """
+        with self._lock:
+            if self._continuous.resetting:
+                return None, {
+                    "ok": False,
+                    "error": "resetting",
+                    "reason": "resetting",
+                }
+            msg = append_message(
+                role,
+                content,
+                user_id=user_id,
+                reasoning=reasoning,
+                moment_id=moment_id,
+                paths=self.paths,
+            )
+            return msg, None
+
+    def create_goal_if_allowed(
+        self,
+        title: str,
+        *,
+        acceptance: str | None = None,
+        status: str = "open",
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Create a goal only when not resetting (path-store gate)."""
+        with self._lock:
+            if self._continuous.resetting:
+                return None, {
+                    "ok": False,
+                    "error": "resetting",
+                    "reason": "resetting",
+                }
+            goal = self._ensure_goals().create_goal(
+                title, acceptance=acceptance, status=status
+            )
+            return goal, None
 
     @property
     def busy(self) -> bool:
@@ -1018,6 +1085,11 @@ class PresenceWorker:
             self._speak = SpeakTransport(self.paths)
         return self._speak
 
+    def _ensure_skills(self) -> SkillCatalog:
+        if self._skills is None:
+            self._skills = SkillCatalog(self.paths)
+        return self._skills
+
     def _ensure_goals(self) -> GoalsStore:
         if self._goals is None:
             self._goals = GoalsStore(
@@ -1026,14 +1098,15 @@ class PresenceWorker:
             )
         return self._goals
 
-    def _ensure_skills(self) -> SkillCatalog:
-        if self._skills is None:
-            self._skills = SkillCatalog(self.paths)
-        return self._skills
-
     def _on_task_ready(self, task_id: str, goal_id: str) -> None:
         try:
             with self._lock:
+                if self._continuous.resetting:
+                    _LOG.info(
+                        "skip task_ready enqueue while resetting task_id=%s",
+                        task_id,
+                    )
+                    return
                 self._queue.enqueue_task_ready(task_id, goal_id=goal_id)
         except Exception:  # noqa: BLE001 — best-effort notify
             _LOG.exception(
@@ -1057,9 +1130,7 @@ class PresenceWorker:
             skills_used=[],
             enqueue_wake=self._tool_enqueue_wake,
             cancel_wait=self._tool_cancel_wait,
-            # Same SkillCatalog instance as rebuild_outer so install_skill
-            # can reload() and the next outer meal sees new skills.
-            extras={"wake": wake, "skills": self._ensure_skills()},
+            extras={"wake": wake},
         )
 
     def _tool_enqueue_wake(
@@ -1090,6 +1161,7 @@ class PresenceWorker:
                     if k != "wake_id" and k not in payload:
                         payload[k] = v
         with self._lock:
+            self._raise_if_resetting_unlocked()
             if kind == "task_ready" and payload and payload.get("task_id"):
                 item = self._queue.enqueue_task_ready(
                     str(payload["task_id"]),
@@ -1116,37 +1188,36 @@ class PresenceWorker:
                 self._phase = PHASE_IDLE
 
     # ------------------------------------------------------------------
-    # Full reset (disk helpers + memory; caller sets resetting flag)
+    # Full reset (disk helpers + memory; resetting flag set by caller)
     # ------------------------------------------------------------------
 
     def _raise_if_resetting_unlocked(self) -> None:
         if self._continuous.resetting:
             raise RuntimeError("resetting")
 
-    def _reset_runtime_state_unlocked(
-        self, flags: dict[str, bool]
-    ) -> dict[str, Any]:
-        """Execute clear steps; caller holds lock and ``resetting=True``."""
+    def _run_full_reset(self, flags: dict[str, bool]) -> dict[str, Any]:
+        """Two-phase reset: path clears without worker lock; memory under lock.
+
+        Caller has set ``resetting=True`` and released the lock. Concurrent
+        writers must observe the flag via ``is_resetting`` / enqueue guards.
+        """
         cleared: list[str] = []
         errors: list[dict[str, str]] = []
 
         def _step(name: str, fn: Callable[[], Any]) -> None:
             try:
                 fn()
-                cleared.append(name)
+                if name not in cleared:
+                    cleared.append(name)
             except Exception as exc:  # noqa: BLE001 — partial reset shape
                 _LOG.exception("reset step %s failed: %s", name, exc)
-                errors.append({"step": name, "detail": f"{type(exc).__name__}: {exc}"})
+                errors.append(
+                    {"step": name, "detail": f"{type(exc).__name__}: {exc}"}
+                )
 
-        # a/b: wakes disk + queue/timer memory (order: disk then memory reload)
-        def _wakes() -> None:
-            clear_wakes_disk(self.paths)
-            self._timers.clear_all()
-            self._queue.reset_empty()
+        # --- Phase 1: disk path clears (lock free; flag blocks writers) ---
+        _step("wakes", lambda: clear_wakes_disk(self.paths))
 
-        _step("wakes", _wakes)
-
-        # c: open moments → interrupted then wipe tapes/index
         def _moments() -> None:
             try:
                 self._moments.recover_open_moments()
@@ -1155,7 +1226,6 @@ class PresenceWorker:
             clear_moments(self.paths)
 
         _step("moments", _moments)
-
         _step("messages", lambda: clear_messages(self.paths))
         _step("goals", lambda: clear_goals(self.paths))
 
@@ -1166,69 +1236,78 @@ class PresenceWorker:
         if flags.get("clear_local_tools", False):
             _step("local_tools", lambda: clear_local_tools(self.paths))
 
-        # h: continuous streak zero; preserve enabled (and continuous.json)
-        def _continuous_zero() -> None:
-            cont = self._continuous
-            cont.streak = 0
-            cont.last_enqueue_at = None
-            cont.last_continue_wake_id = None
-            cont.last_source_moment_id = None
-            cont.last_skip_reason = None
-
-        _step("continuous_streak", _continuous_zero)
-
-        # Ensure dirs still present (sandbox empty, skills/local untouched).
         try:
             ensure_preserved_dirs(self.paths)
         except OSError as exc:
             _LOG.warning("ensure_preserved_dirs after reset: %s", exc)
 
-        # Worker soft state
-        self._interject.clear()
-        self._active_moment_id = None
-        self._busy = False
-        self._worker_error = None
-        self._hop_count = 0
-        self._last_tool = None
-        self._continue_injects = 0
-        self._phase = PHASE_IDLE
+        # --- Phase 2: memory + final path re-clear under worker lock ---
+        with self._lock:
+            def _memory() -> None:
+                # Disk wakes already truncated; wipe maps and events fold.
+                self._timers.clear_all()
+                self._queue.reset_empty()
 
-        # i: assert queue empty
-        pending = self._queue.pending()
-        claimed = self._queue.claimed()
-        if pending or claimed:
-            detail = f"pending={len(pending)} claimed={len(claimed)}"
-            errors.append({"step": "queue_assert", "detail": detail})
-            _LOG.error("reset queue not empty after clear: %s", detail)
+            _step("wakes_memory", _memory)
 
-        # j: no pending waits
-        waits = self._timers.list_waits(status=STATUS_PENDING)
-        if waits:
-            errors.append(
-                {
-                    "step": "waits_assert",
-                    "detail": f"pending_waits={len(waits)}",
+            # Final re-clear closes TOCTOU: concurrent append/create that raced
+            # phase-1 clears (or bypassed API gates) cannot survive ok:true.
+            _step("messages", lambda: clear_messages(self.paths))
+            _step("goals", lambda: clear_goals(self.paths))
+
+            def _continuous_zero() -> None:
+                cont = self._continuous
+                cont.streak = 0
+                cont.last_enqueue_at = None
+                cont.last_continue_wake_id = None
+                cont.last_source_moment_id = None
+                cont.last_skip_reason = None
+
+            _step("continuous_streak", _continuous_zero)
+
+            self._interject.clear()
+            self._active_moment_id = None
+            self._busy = False
+            self._worker_error = None
+            self._hop_count = 0
+            self._last_tool = None
+            self._continue_injects = 0
+            self._phase = PHASE_IDLE
+
+            pending = self._queue.pending()
+            claimed = self._queue.claimed()
+            if pending or claimed:
+                detail = f"pending={len(pending)} claimed={len(claimed)}"
+                errors.append({"step": "queue_assert", "detail": detail})
+                _LOG.error("reset queue not empty after clear: %s", detail)
+
+            waits = self._timers.list_waits(status=STATUS_PENDING)
+            if waits:
+                errors.append(
+                    {
+                        "step": "waits_assert",
+                        "detail": f"pending_waits={len(waits)}",
+                    }
+                )
+
+            if errors:
+                return {
+                    "ok": False,
+                    "error": "partial_reset",
+                    "cleared": cleared,
+                    "errors": errors,
+                    "phase": self._phase,
                 }
-            )
-
-        if errors:
             return {
-                "ok": False,
-                "error": "partial_reset",
+                "ok": True,
                 "cleared": cleared,
-                "errors": errors,
                 "phase": self._phase,
+                "continuous": continuous_status_block(
+                    self._continuous,
+                    self.settings.continuous,
+                    pending_moment_continues=0,
+                ),
             }
-        return {
-            "ok": True,
-            "cleared": cleared,
-            "phase": self._phase,
-            "continuous": continuous_status_block(
-                self._continuous,
-                self.settings.continuous,
-                pending_moment_continues=0,
-            ),
-        }
 
     # ------------------------------------------------------------------
     # Internals

@@ -184,13 +184,20 @@ def test_normalize_reset_flags_defaults_and_ignores_skills():
     assert flags["clear_drafts"] is True
     assert flags["clear_local_tools"] is False
     assert "clear_local_skills" not in flags
+    assert "reseed_self_if_default" not in flags
 
     flags2 = normalize_reset_flags(
-        {"clear_sandbox": False, "clear_local_skills": True, "clear_drafts": False}
+        {
+            "clear_sandbox": False,
+            "clear_local_skills": True,
+            "clear_drafts": False,
+            "reseed_self_if_default": True,
+        }
     )
     assert flags2["clear_sandbox"] is False
     assert flags2["clear_drafts"] is False
     assert "clear_local_skills" not in flags2
+    assert "reseed_self_if_default" not in flags2
 
 
 def test_clear_helpers_preserve_identity_users_skills_local(paths):
@@ -348,6 +355,119 @@ def test_concurrent_ops_while_resetting(paths):
         w._continuous.resetting = False  # noqa: SLF001
 
 
+def test_live_concurrent_503_during_disk_clear(paths):
+    """Production path: flag set, lock released during sandbox clear → 503.
+
+    Does not inject resetting outside reset_runtime_state; drives a real
+    in-flight reset so concurrent resolve/enqueue observe error=resetting.
+    """
+    from elyra.runtime.reset import clear_sandbox as real_clear_sandbox
+
+    w = _worker(paths)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_sandbox(p):
+        entered.set()
+        assert release.wait(timeout=5.0)
+        return real_clear_sandbox(p)
+
+    results: dict[str, Any] = {}
+
+    def run_reset() -> None:
+        with patch(
+            "elyra.presence.worker.clear_sandbox", side_effect=slow_sandbox
+        ):
+            results["reset"] = w.reset_runtime_state()
+
+    t = threading.Thread(target=run_reset, name="reset-thread")
+    t.start()
+    assert entered.wait(timeout=5.0)
+    assert w.is_resetting is True
+
+    r = w.resolve_user_input("hi during reset")
+    assert r["ok"] is False
+    assert r["error"] == "resetting"
+
+    with pytest.raises(RuntimeError, match="resetting"):
+        w.enqueue_wake("background", {})
+
+    msg, err = w.append_message_if_allowed("user", "blocked")
+    assert msg is None
+    assert err is not None and err["error"] == "resetting"
+
+    goal, gerr = w.create_goal_if_allowed("blocked")
+    assert goal is None
+    assert gerr is not None and gerr["error"] == "resetting"
+
+    out2 = w.reset_runtime_state()
+    assert out2["ok"] is False
+    assert out2["error"] == "resetting"
+
+    release.set()
+    t.join(timeout=10.0)
+    assert not t.is_alive()
+    assert results["reset"]["ok"] is True
+    assert w.is_resetting is False
+
+
+def test_final_reclear_wipes_racy_message_append(paths):
+    """Ungated append mid phase-1 clear is wiped by final messages re-clear."""
+    from elyra.runtime.reset import clear_messages as real_clear_messages
+
+    w = _worker(paths)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = {"n": 0}
+
+    def gated_messages(p):
+        calls["n"] += 1
+        real_clear_messages(p)
+        if calls["n"] == 1:
+            # Pause after first (phase-1) clear so a racy writer can land.
+            entered.set()
+            assert release.wait(timeout=5.0)
+
+    results: dict[str, Any] = {}
+
+    def run_reset() -> None:
+        with patch(
+            "elyra.presence.worker.clear_messages", side_effect=gated_messages
+        ):
+            results["reset"] = w.reset_runtime_state()
+
+    t = threading.Thread(target=run_reset, name="reset-reclear")
+    t.start()
+    assert entered.wait(timeout=5.0)
+    # Bypass worker gate (raw path write) — the residue class Issue 1 covered.
+    append_message("user", "during-reset-residue", paths=paths)
+    assert any(
+        m.get("content") == "during-reset-residue"
+        for m in list_messages(paths=paths)
+    )
+    release.set()
+    t.join(timeout=10.0)
+    assert not t.is_alive()
+    assert results["reset"]["ok"] is True
+    assert list_messages(paths=paths) == []
+    assert calls["n"] >= 2  # phase-1 + final re-clear
+
+
+def test_on_task_ready_and_tool_enqueue_skip_while_resetting(paths):
+    w = _worker(paths)
+    with w._lock:  # noqa: SLF001
+        w._continuous.resetting = True  # noqa: SLF001
+
+    w._on_task_ready("task_x", "goal_y")  # noqa: SLF001
+    assert w._queue.pending() == []  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="resetting"):
+        w._tool_enqueue_wake(kind="background", payload={"n": 1})  # noqa: SLF001
+
+    with w._lock:  # noqa: SLF001
+        w._continuous.resetting = False  # noqa: SLF001
+
+
 def test_partial_reset_shape(paths):
     """If a step fails, body is partial_reset with cleared + errors."""
     w = _worker(paths)
@@ -469,6 +589,10 @@ def test_api_resetting_503_on_messages(paths):
         )
         assert code == 503, body
         assert body.get("error") == "resetting" or body.get("reason") == "resetting"
+
+        code, body = h.post("/api/goals", {"title": "nope"})
+        assert code == 503, body
+        assert body.get("error") == "resetting"
     finally:
         with h.worker._lock:  # noqa: SLF001
             h.worker._continuous.resetting = False  # noqa: SLF001
@@ -486,6 +610,56 @@ def test_api_second_reset_while_resetting_503(paths):
     finally:
         with h.worker._lock:  # noqa: SLF001
             h.worker._continuous.resetting = False  # noqa: SLF001
+        h.close()
+
+
+def test_api_live_503_messages_and_goals_during_reset(paths):
+    """HTTP concurrent posts get 503 without artificial flag injection."""
+    from elyra.runtime.reset import clear_sandbox as real_clear_sandbox
+
+    h = _ApiHarness(paths)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_sandbox(p):
+        entered.set()
+        assert release.wait(timeout=5.0)
+        return real_clear_sandbox(p)
+
+    results: dict[str, Any] = {}
+
+    def run_reset() -> None:
+        with patch(
+            "elyra.presence.worker.clear_sandbox", side_effect=slow_sandbox
+        ):
+            results["code"], results["body"] = h.post(
+                "/api/reset", {"confirm": "RESET"}
+            )
+
+    try:
+        t = threading.Thread(target=run_reset, name="api-reset")
+        t.start()
+        assert entered.wait(timeout=5.0)
+
+        code, body = h.post(
+            "/api/messages", {"content": "during", "user_id": "operator"}
+        )
+        assert code == 503, body
+        assert body.get("error") == "resetting"
+
+        code, body = h.post("/api/goals", {"title": "during"})
+        assert code == 503, body
+        assert body.get("error") == "resetting"
+
+        release.set()
+        t.join(timeout=10.0)
+        assert not t.is_alive()
+        assert results["code"] == 200, results
+        assert results["body"]["ok"] is True
+        assert list_messages(paths=paths) == []
+        assert GoalsStore(paths).list_goals() == []
+    finally:
+        release.set()
         h.close()
 
 

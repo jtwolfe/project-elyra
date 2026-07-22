@@ -166,25 +166,34 @@ def ensure_preserved_dirs(paths: ElyraPaths) -> None:
 
 
 # Default flags for full reset (design F).
+# ``reseed_self_if_default`` is intentionally not accepted until implemented.
 DEFAULT_RESET_FLAGS: dict[str, bool] = {
     "clear_sandbox": True,
     "clear_drafts": True,
     "clear_local_tools": False,
-    "reseed_self_if_default": False,
 }
+
+# Accepted by API/normalize only — unknown keys ignored with warning.
+_UNSUPPORTED_RESET_FLAGS = frozenset(
+    {
+        "clear_local_skills",  # always preserve skills/local (K11)
+        "reseed_self_if_default",  # not implemented; reject until follow-up
+    }
+)
 
 
 def normalize_reset_flags(raw: dict[str, Any] | None) -> dict[str, bool]:
-    """Merge caller flags with defaults; ignore unknown / skills keys."""
+    """Merge caller flags with defaults; ignore unknown / unsupported keys."""
     out = dict(DEFAULT_RESET_FLAGS)
     if not raw:
         return out
     for key in DEFAULT_RESET_FLAGS:
         if key in raw:
             out[key] = bool(raw[key])
-    # Explicitly reject / ignore clear_local_skills — always preserve.
-    if raw.get("clear_local_skills"):
-        _LOG.warning(
-            "clear_local_skills requested but ignored (skills/local always preserved)"
-        )
+    for bad in _UNSUPPORTED_RESET_FLAGS:
+        if raw.get(bad):
+            _LOG.warning(
+                "reset flag %s requested but ignored (unsupported / always-preserve)",
+                bad,
+            )
     return out
