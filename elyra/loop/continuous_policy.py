@@ -58,11 +58,17 @@ class MomentContinueDecision:
 
     ``skip_for_pending_task_ready`` is True only when a *pending* task_ready
     already exists — host must NOT synthesize / re-arm one (K4/K16).
+
+    ``start_cooldown`` is True when finalize (PR6) must advance
+    ``last_enqueue_at`` as if an enqueue attempt occurred: successful enqueue
+    **and** flood thrash skip (design gate 11 rate-limits flood loops). Other
+    denies leave cooldown untouched.
     """
 
     enqueue: bool
     reason: str
     skip_for_pending_task_ready: bool = False
+    start_cooldown: bool = False
 
 
 @dataclass
@@ -95,18 +101,14 @@ def flood_majority_or_last_stop(
 ) -> bool:
     """Single normative flood thrash formula (outer + hard-stop sibling).
 
-    Skip/hard-stop when either:
-      (flood_beats >= 1 and flood_beats * 2 >= model_beats)  # majority
-      OR last_stop_hop_was_flood
+    Exactly one expression (design C)::
+
+        (flood_beats >= 1 and flood_beats * 2 >= model_beats)
+        OR last_stop_hop_was_flood
     """
-    if last_stop_hop_was_flood:
-        return True
-    if flood_beats >= 1 and model_beats > 0 and flood_beats * 2 >= model_beats:
-        return True
-    # flood_beats >= 1 with model_beats == 0 is degenerate; treat as thrash
-    if flood_beats >= 1 and model_beats <= 0:
-        return True
-    return False
+    return bool(last_stop_hop_was_flood) or (
+        flood_beats >= 1 and flood_beats * 2 >= model_beats
+    )
 
 
 def should_in_moment_work_nudge(
@@ -117,8 +119,6 @@ def should_in_moment_work_nudge(
     no_speak_nudge_pending_or_needed: bool,
     work_nudge_sent: int,
     max_nudges: int,
-    tools_ran: bool,
-    ledger_mutated: bool,
     work_context: bool,
     last_hop_was_flood: bool,
 ) -> InMomentNudgeDecision:
@@ -126,6 +126,9 @@ def should_in_moment_work_nudge(
 
     Full do-loop wire is PR5; this function is pure and testable now.
     Social no-speak nudge wins first when still needed (K8).
+
+    Progress inputs are folded into ``work_context`` by the caller via
+    ``in_moment_work_context`` (tools_ran / ledger_mutated not re-checked here).
     """
     if not continuous_enabled:
         return InMomentNudgeDecision(inject=False, reason="disabled")
@@ -137,9 +140,6 @@ def should_in_moment_work_nudge(
         return InMomentNudgeDecision(inject=False, reason="budget")
     if not work_context:
         return InMomentNudgeDecision(inject=False, reason="not_workish")
-    # work_context already encodes social vs non-social rules for the caller;
-    # tools_ran / ledger_mutated remain available for callers / future gates.
-    _ = (tools_ran, ledger_mutated)
     return InMomentNudgeDecision(inject=True, reason="injected")
 
 
@@ -165,6 +165,22 @@ def in_moment_work_context(
     return bool(has_open_goals_slice)
 
 
+def _moment_continue_decision(
+    enqueue: bool,
+    reason: str,
+    *,
+    skip_for_pending_task_ready: bool = False,
+) -> MomentContinueDecision:
+    """Build a decision; flood deny and successful enqueue tick cooldown (gate 11)."""
+    start_cooldown = reason in {"flood", "enqueued"}
+    return MomentContinueDecision(
+        enqueue=enqueue,
+        reason=reason,
+        skip_for_pending_task_ready=skip_for_pending_task_ready,
+        start_cooldown=start_cooldown,
+    )
+
+
 def should_enqueue_moment_continue(
     *,
     continuous_enabled: bool,
@@ -183,7 +199,6 @@ def should_enqueue_moment_continue(
     model_beats: int,
     flood_beats: int,
     last_stop_hop_was_flood: bool,
-    require_open_work: bool = True,
     require_progress: bool = True,
     skip_pure_social: bool = True,
     max_pending_continues: int = 1,
@@ -192,26 +207,29 @@ def should_enqueue_moment_continue(
 
     Normative order (design C gates 1–11). Never synthesizes task_ready (K4/K16).
     ``tools_ran`` must mean ≥1 successful non-speak tool (counts_as_speak False).
+
+    Open work is **always** required (K18) — no empty-ledger outer continue and
+    no ``require_open_work`` opt-out parameter. Product settings reject False.
     """
     # 1. Toggle
     if not continuous_enabled:
-        return MomentContinueDecision(enqueue=False, reason="disabled")
+        return _moment_continue_decision(False, "disabled")
 
     # 2. stop_reason allowlist
     if stop_reason not in MOMENT_CONTINUE_STOP_ALLOWLIST:
-        return MomentContinueDecision(enqueue=False, reason="stop_reason")
+        return _moment_continue_decision(False, "stop_reason")
 
     # 3. Not while pending wait
     if has_pending_wait:
-        return MomentContinueDecision(enqueue=False, reason="pending_wait")
+        return _moment_continue_decision(False, "pending_wait")
 
     # 4. At most max_pending_continues pending moment_continue
     if pending_moment_continues >= max_pending_continues:
-        return MomentContinueDecision(enqueue=False, reason="dedupe")
+        return _moment_continue_decision(False, "dedupe")
 
     # 5. Streak budget
     if streak >= max_streak:
-        return MomentContinueDecision(enqueue=False, reason="streak")
+        return _moment_continue_decision(False, "streak")
 
     # 6. Cooldown (None = never enqueued → elapsed)
     if (
@@ -219,11 +237,11 @@ def should_enqueue_moment_continue(
         and cooldown_seconds > 0
         and seconds_since_last_enqueue < cooldown_seconds
     ):
-        return MomentContinueDecision(enqueue=False, reason="cooldown")
+        return _moment_continue_decision(False, "cooldown")
 
     # 7. Non-speak progress (tools_ran OR ledger_mutated); speak alone fails
     if require_progress and not (tools_ran or ledger_mutated):
-        return MomentContinueDecision(enqueue=False, reason="no_progress")
+        return _moment_continue_decision(False, "no_progress")
 
     # 8. Pure social (social wake + no tools/ledger) — even if require_progress off
     if (
@@ -232,29 +250,29 @@ def should_enqueue_moment_continue(
         and not tools_ran
         and not ledger_mutated
     ):
-        return MomentContinueDecision(enqueue=False, reason="pure_social")
+        return _moment_continue_decision(False, "pure_social")
 
     # 9. Prefer *pending* task_ready only — never synthesize
     if pending_task_ready_count > 0:
-        return MomentContinueDecision(
-            enqueue=False,
-            reason="pending_task_ready",
+        return _moment_continue_decision(
+            False,
+            "pending_task_ready",
             skip_for_pending_task_ready=True,
         )
 
-    # 10. Open work required (require_open_work=True only in product)
-    if require_open_work and not has_open_work:
-        return MomentContinueDecision(enqueue=False, reason="no_open_work")
+    # 10. Open work always required (K18 — no empty-ledger outer continue)
+    if not has_open_work:
+        return _moment_continue_decision(False, "no_open_work")
 
-    # 11. Flood thrash (single formula)
+    # 11. Flood thrash (single formula); start_cooldown on deny
     if flood_majority_or_last_stop(
         model_beats=model_beats,
         flood_beats=flood_beats,
         last_stop_hop_was_flood=last_stop_hop_was_flood,
     ):
-        return MomentContinueDecision(enqueue=False, reason="flood")
+        return _moment_continue_decision(False, "flood")
 
-    return MomentContinueDecision(enqueue=True, reason="enqueued")
+    return _moment_continue_decision(True, "enqueued")
 
 
 def continuous_status_block(

@@ -39,7 +39,15 @@ def test_ensure_data_dirs_creates_runtime_layout(tmp_path):
     paths = resolve_paths(tmp_path)
     paths.ensure_data_dirs()
 
-    for name in ("moments", "wakes", "identity", "users", "goals", "sandbox"):
+    for name in (
+        "moments",
+        "wakes",
+        "identity",
+        "users",
+        "goals",
+        "sandbox",
+        "runtime",
+    ):
         assert (paths.data_dir / name).is_dir()
     assert (paths.skills_dir / "local").is_dir()
     assert (paths.tools_dir / "local").is_dir()

@@ -22,6 +22,7 @@ from elyra.identity import IdentityStore
 from elyra.llm.client import ChatClient
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.continuous_policy import (
+    SOCIAL_WAKE_KINDS,
     ContinuousRuntimeState,
     continuous_status_block,
     load_continuous_runtime,
@@ -62,10 +63,8 @@ from elyra.users import UsersStore
 
 _LOG = logging.getLogger(__name__)
 
-# Social wakes get the no-speak nudge path inside the do-loop.
-SOCIAL_WAKE_KINDS = frozenset({"user_message", "wait_reply"})
-
 # Injectable do-loop port (tests inject stubs; production uses run_do_loop).
+# SOCIAL_WAKE_KINDS: imported from continuous_policy (single source of truth).
 RunDoLoopFn = Callable[..., DoLoopResult]
 
 

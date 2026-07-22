@@ -51,7 +51,15 @@ class ElyraPaths:
         tmp ELYRA_HOME without repo prompts does not hard-fail ensure; packaging
         mistakes surface later as empty digests from the stores.
         """
-        for name in ("moments", "wakes", "identity", "users", "goals", "sandbox"):
+        for name in (
+            "moments",
+            "wakes",
+            "identity",
+            "users",
+            "goals",
+            "sandbox",
+            "runtime",  # continuous.json + other process-owned runtime state
+        ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
 
         for path in (

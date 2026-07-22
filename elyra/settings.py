@@ -51,8 +51,10 @@ class GoalsSettings:
 class ContinuousSettings:
     """Hybrid continuous work knobs (in-moment nudge + outer moment_continue).
 
-    Default ``enabled=False`` (safe dogfood). ``require_open_work=True`` only —
-    no empty-ledger outer continue (K18). Runtime toggle lives in
+    Default ``enabled=False`` (safe dogfood). Open work is **always** required
+    for outer ``moment_continue`` (K18) — hardcoded in policy; the
+    ``require_open_work`` field is informational and **must stay True**
+    (toml/CLI False is rejected). Runtime toggle lives in
     ``data/runtime/continuous.json`` and does not mutate frozen Settings.
     """
 
@@ -64,7 +66,8 @@ class ContinuousSettings:
     cooldown_seconds: int = 30  # min wall time between moment_continue enqueues
     max_pending_continues: int = 1  # dedupe: at most one pending moment_continue
     require_progress: bool = True  # tools_ran (non-speak) OR ledger_mutated
-    require_open_work: bool = True  # always require open work (no empty-ledger)
+    # K18: always True; product has no empty-ledger outer continue mode.
+    require_open_work: bool = True
     skip_pure_social: bool = True  # social + no tools/ledger → no outer continue
 
 
@@ -154,6 +157,12 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         if path == "goals.close_gate" and coerced not in _CLOSE_GATES:
             raise ValueError(
                 f"{path}: expected one of {sorted(_CLOSE_GATES)}, got {coerced!r}"
+            )
+        # K18: continuous outer re-entry always requires open work — no opt-out.
+        if path == "continuous.require_open_work" and coerced is not True:
+            raise ValueError(
+                f"{path}: must be true (K18 — no empty-ledger outer continue); "
+                f"got {coerced!r}"
             )
         filtered[k] = coerced
     return replace(section, **filtered) if filtered else section

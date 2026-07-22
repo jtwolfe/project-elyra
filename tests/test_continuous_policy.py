@@ -21,6 +21,7 @@ from elyra.loop.continuous_policy import (
     should_in_moment_work_nudge,
     work_continue_host_message,
 )
+from elyra.loop.doloop import _is_host_inject
 from elyra.settings import ContinuousSettings, default_settings, load_settings
 
 
@@ -48,7 +49,6 @@ def _ok_kwargs(**overrides):
         model_beats=4,
         flood_beats=0,
         last_stop_hop_was_flood=False,
-        require_open_work=True,
         require_progress=True,
         skip_pure_social=True,
         max_pending_continues=1,
@@ -72,6 +72,9 @@ def test_work_continue_host_starts_with_host():
     assert text.startswith("HOST:")
     assert "load_skill" in text
     assert "ledger" in text
+    # Do-loop host-inject classifier (design D)
+    assert _is_host_inject({"role": "user", "content": WORK_CONTINUE_HOST})
+    assert not _is_host_inject({"role": "assistant", "content": WORK_CONTINUE_HOST})
 
 
 def test_continuous_settings_defaults():
@@ -104,6 +107,16 @@ require_open_work = true
     assert s.continuous.cooldown_seconds == 10
 
 
+def test_require_open_work_false_rejected_in_toml(tmp_path: Path):
+    """K18: product load path cannot opt out of require_open_work."""
+    (tmp_path / "elyra.toml").write_text(
+        "[continuous]\nrequire_open_work = false\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="require_open_work"):
+        load_settings(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Outer gate table
 # ---------------------------------------------------------------------------
@@ -114,6 +127,7 @@ def test_happy_path_enqueues():
     assert d.enqueue is True
     assert d.reason == "enqueued"
     assert d.skip_for_pending_task_ready is False
+    assert d.start_cooldown is True  # PR6 must tick last_enqueue_at
 
 
 @pytest.mark.parametrize(
@@ -221,13 +235,12 @@ def test_pending_task_ready_skips_without_synthesize():
     # Policy never invents task_ready — flag is advisory for finalize (PR6).
 
 
-def test_no_open_work_when_required():
-    d = _decide(has_open_work=False, require_open_work=True)
+def test_no_open_work_always_required_k18():
+    """K18: open work is always required — no require_open_work opt-out param."""
+    d = _decide(has_open_work=False)
     assert d.enqueue is False
     assert d.reason == "no_open_work"
-    # Product always requires open work; if flag ever false, allow empty ledger.
-    d2 = _decide(has_open_work=False, require_open_work=False)
-    assert d2.enqueue is True
+    assert d.start_cooldown is False
 
 
 def test_flood_majority_skips():
@@ -235,13 +248,16 @@ def test_flood_majority_skips():
     d = _decide(model_beats=4, flood_beats=3, last_stop_hop_was_flood=False)
     assert d.enqueue is False
     assert d.reason == "flood"
+    assert d.start_cooldown is True  # gate 11: flood skip ticks cooldown
     # Exactly half: 2*2 >= 4 → thrash
     d2 = _decide(model_beats=4, flood_beats=2)
     assert d2.enqueue is False
     assert d2.reason == "flood"
+    assert d2.start_cooldown is True
     # Minority flood ok
     d3 = _decide(model_beats=5, flood_beats=2)
     assert d3.enqueue is True
+    assert d3.start_cooldown is True
 
 
 def test_last_stop_hop_flood_skips():
@@ -252,6 +268,7 @@ def test_last_stop_hop_flood_skips():
     )
     assert d.enqueue is False
     assert d.reason == "flood"
+    assert d.start_cooldown is True
 
 
 def test_flood_formula_helper():
@@ -301,8 +318,6 @@ def test_in_moment_nudge_injects_when_workish():
         no_speak_nudge_pending_or_needed=False,
         work_nudge_sent=0,
         max_nudges=1,
-        tools_ran=True,
-        ledger_mutated=False,
         work_context=True,
         last_hop_was_flood=False,
     )
@@ -318,8 +333,6 @@ def test_in_moment_nudge_disabled():
         no_speak_nudge_pending_or_needed=False,
         work_nudge_sent=0,
         max_nudges=1,
-        tools_ran=True,
-        ledger_mutated=False,
         work_context=True,
         last_hop_was_flood=False,
     )
@@ -335,8 +348,6 @@ def test_in_moment_nudge_flood_hard_stop():
         no_speak_nudge_pending_or_needed=False,
         work_nudge_sent=0,
         max_nudges=1,
-        tools_ran=True,
-        ledger_mutated=False,
         work_context=True,
         last_hop_was_flood=True,
     )
@@ -352,8 +363,6 @@ def test_in_moment_nudge_social_nudge_first():
         no_speak_nudge_pending_or_needed=True,
         work_nudge_sent=0,
         max_nudges=1,
-        tools_ran=True,
-        ledger_mutated=False,
         work_context=True,
         last_hop_was_flood=False,
     )
@@ -369,8 +378,6 @@ def test_in_moment_nudge_budget():
         no_speak_nudge_pending_or_needed=False,
         work_nudge_sent=1,
         max_nudges=1,
-        tools_ran=True,
-        ledger_mutated=False,
         work_context=True,
         last_hop_was_flood=False,
     )
@@ -386,8 +393,6 @@ def test_in_moment_nudge_not_workish():
         no_speak_nudge_pending_or_needed=False,
         work_nudge_sent=0,
         max_nudges=1,
-        tools_ran=False,
-        ledger_mutated=False,
         work_context=False,
         last_hop_was_flood=False,
     )

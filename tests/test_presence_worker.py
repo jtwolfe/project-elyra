@@ -519,6 +519,51 @@ def test_enqueue_wake_public_api(paths):
     assert snap["queue_depth_by_band"]["background"] == 1
 
 
+def test_status_snapshot_continuous_defaults(paths):
+    """Additive continuous status block (PR4 stub; default OFF)."""
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    snap = worker.status_snapshot()
+    cont = snap["continuous"]
+    assert cont["enabled"] is False
+    assert cont["streak"] == 0
+    assert cont["max_streak"] == 8
+    assert cont["cooldown_seconds"] == 30
+    assert cont["last_enqueue_at"] is None
+    assert cont["last_skip_reason"] is None
+    assert cont["pending_moment_continues"] == 0
+    assert set(cont) >= {
+        "enabled",
+        "streak",
+        "max_streak",
+        "cooldown_seconds",
+        "last_enqueue_at",
+        "last_skip_reason",
+        "pending_moment_continues",
+    }
+
+
+def test_why_now_moment_continue():
+    from elyra.presence.queue import WakeItem
+    from elyra.presence.worker import _why_now
+
+    wake = WakeItem(
+        id="W1",
+        kind="moment_continue",
+        priority=3,
+        created_at="2026-01-01T00:00:00Z",
+        payload={"source_moment_id": "M-abc", "source_stop_reason": "no_tools"},
+    )
+    assert _why_now(wake) == "continue work (from moment M-abc)"
+    wake2 = WakeItem(
+        id="W2",
+        kind="moment_continue",
+        priority=3,
+        created_at="2026-01-01T00:00:00Z",
+        payload={},
+    )
+    assert _why_now(wake2) == "continue work (from moment ?)"
+
+
 def test_startup_recovers_open_moments(paths):
     moments = MomentStore(paths)
     orphan = moments.open_moment(why_now="crashed", user_id="operator")
