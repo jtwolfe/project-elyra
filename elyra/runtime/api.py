@@ -1,9 +1,9 @@
 """HTTP API and static Web UI.
 
 Scope: REST JSON + SPA fallthrough for operator glass.
-In scope: status, messages, wait reply, lean glass catalogs
-  (goals, moments, tools, skills, identity/users).
-Out of scope: promote/verify admin, multi-user glass, write identity.
+In scope: status, messages, wait reply, continuous toggle,
+  lean glass catalogs (goals, moments, tools, skills, identity/users).
+Out of scope: promote/verify admin, multi-user glass, write identity, full reset.
 """
 
 from __future__ import annotations
@@ -267,6 +267,34 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         self._json(404, {"error": "not found"})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+        body = self._read_json()
+
+        if path == "/api/continuous":
+            self._patch_continuous(body)
+            return
+
+        self._json(404, {"error": "not found"})
+
+    def _patch_continuous(self, body: dict[str, Any]) -> None:
+        """PATCH /api/continuous — ``{ "enabled": bool }`` (K17).
+
+        Calls ``worker.set_continuous_enabled``: persists
+        ``data/runtime/continuous.json``; OFF cancels pending
+        ``moment_continue`` only (not task_ready / timers / user).
+        """
+        if "enabled" not in body:
+            self._json(400, {"ok": False, "error": "enabled required"})
+            return
+        enabled = body["enabled"]
+        if not isinstance(enabled, bool):
+            self._json(400, {"ok": False, "error": "enabled must be a boolean"})
+            return
+        result = self.worker.set_continuous_enabled(enabled)
+        self._json(200, result)
 
     def _post_goals(self, body: dict[str, Any]) -> None:
         """POST /api/goals — create a goal (lean glass / operator)."""

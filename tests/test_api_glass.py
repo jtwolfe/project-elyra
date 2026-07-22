@@ -154,6 +154,24 @@ class _ApiHarness:
             except json.JSONDecodeError:
                 return exc.code, body
 
+    def patch(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self.base + path,
+            data=data,
+            method="PATCH",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            try:
+                return exc.code, json.loads(body)
+            except json.JSONDecodeError:
+                return exc.code, body
+
 
 def test_get_goals_empty_then_create(paths):
     h = _ApiHarness(paths)
@@ -313,10 +331,132 @@ def test_existing_status_and_messages_still_work(paths):
         assert code == 200
         assert "phase" in st
         assert "pending_wait" in st
+        # Continuous status block is additive on GET /api/status (PR4/PR7).
+        assert "continuous" in st
+        cont = st["continuous"]
+        assert cont["enabled"] is False
+        assert cont["streak"] == 0
+        assert "max_streak" in cont
+        assert "cooldown_seconds" in cont
+        assert cont["pending_moment_continues"] == 0
+        assert cont["last_enqueue_at"] is None
+        assert cont["last_skip_reason"] is None
 
         code, msgs = h.get("/api/messages?limit=10")
         assert code == 200
         assert "messages" in msgs
+    finally:
+        h.close()
+
+
+def test_patch_continuous_enable_disable_and_persist(paths):
+    """PATCH /api/continuous toggles runtime flag and writes continuous.json."""
+    from elyra.loop.continuous_policy import (
+        continuous_runtime_path,
+        load_continuous_runtime,
+    )
+
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch("/api/continuous", {"enabled": True})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["enabled"] is True
+        assert body["changed"] is True
+        assert body["cancelled_moment_continues"] == []
+        assert body["continuous"]["enabled"] is True
+
+        code, st = h.get("/api/status")
+        assert code == 200
+        assert st["continuous"]["enabled"] is True
+
+        path = continuous_runtime_path(paths.data_dir)
+        assert path.is_file()
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["enabled"] is True
+        assert "updated_at" in raw
+
+        code, body = h.patch("/api/continuous", {"enabled": False})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["enabled"] is False
+        assert body["changed"] is True
+        assert body["continuous"]["enabled"] is False
+        assert body["continuous"]["streak"] == 0
+
+        reloaded = load_continuous_runtime(
+            paths.data_dir, defaults=default_settings().continuous
+        )
+        assert reloaded.enabled is False
+    finally:
+        h.close()
+
+
+def test_patch_continuous_off_cancels_pending_moment_continues(paths):
+    """OFF cancels only moment_continue; leaves task_ready pending."""
+    h = _ApiHarness(paths)
+    try:
+        h.worker.set_continuous_enabled(True)
+        mc_a = h.worker._queue.enqueue(  # noqa: SLF001
+            "moment_continue",
+            {"source_moment_id": "m1"},
+        )
+        mc_b = h.worker._queue.enqueue(  # noqa: SLF001
+            "moment_continue",
+            {"source_moment_id": "m2"},
+        )
+        tr = h.worker._queue.enqueue(  # noqa: SLF001
+            "task_ready",
+            {"task_id": "t1", "goal_id": "g1"},
+        )
+
+        code, body = h.patch("/api/continuous", {"enabled": False})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["enabled"] is False
+        cancelled = set(body["cancelled_moment_continues"])
+        assert cancelled == {mc_a.id, mc_b.id}
+        assert body["continuous"]["pending_moment_continues"] == 0
+
+        pending_kinds = {p.kind for p in h.worker._queue.pending()}  # noqa: SLF001
+        assert "moment_continue" not in pending_kinds
+        assert "task_ready" in pending_kinds
+        assert any(p.id == tr.id for p in h.worker._queue.pending())  # noqa: SLF001
+    finally:
+        h.close()
+
+
+def test_patch_continuous_validation(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch("/api/continuous", {})
+        assert code == 400
+        assert body["ok"] is False
+        assert "enabled" in body["error"]
+
+        code, body = h.patch("/api/continuous", {"enabled": "yes"})
+        assert code == 400
+        assert body["ok"] is False
+
+        code, body = h.patch("/api/continuous", {"enabled": 1})
+        assert code == 400
+        assert body["ok"] is False
+
+        # Idempotent same-value toggle is still ok.
+        code, body = h.patch("/api/continuous", {"enabled": False})
+        assert code == 200
+        assert body["ok"] is True
+        assert body["changed"] is False
+        assert body["enabled"] is False
+    finally:
+        h.close()
+
+
+def test_patch_unknown_path_404(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch("/api/settings/continuous", {"enabled": True})
+        assert code == 404
     finally:
         h.close()
 
@@ -333,5 +473,8 @@ def test_static_index_served(paths):
         assert "panel-tools" in html
         assert "wait-choices" in html
         assert "notice" in html
+        assert "continuous-toggle" in html
+        assert "Continuous work" in html
+        assert "pill-autopilot" in html
     finally:
         h.close()

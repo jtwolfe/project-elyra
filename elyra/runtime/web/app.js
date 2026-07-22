@@ -8,6 +8,7 @@ const statusJson = $("#status-json");
 const pillLlama = $("#pill-llama");
 const pillWorker = $("#pill-worker");
 const pillPhase = $("#pill-phase");
+const pillAutopilot = $("#pill-autopilot");
 const noticeEl = $("#notice");
 const waitBar = $("#wait-bar");
 const waitPrompt = $("#wait-prompt");
@@ -19,6 +20,14 @@ const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
+const continuousToggles = document.querySelectorAll(".continuous-toggle");
+const continuousMetaEls = [
+  $("#continuous-status-chat"),
+  $("#continuous-status-status"),
+].filter(Boolean);
+const continuousSummary = $("#continuous-summary");
+const continuousBadge = $("#continuous-badge");
+const continuousDetail = $("#continuous-detail");
 
 const USER_ID = "operator";
 const REASON_BUFFER_FULL = "interjection_buffer_full";
@@ -27,6 +36,10 @@ let lastPendingWaitId = null;
 let noticeTimer = null;
 /** True while a wait-choice POST is in flight (blocks double-submit). */
 let waitReplyInFlight = false;
+/** True while PATCH /api/continuous is in flight (avoid double-toggle thrash). */
+let continuousToggleInFlight = false;
+/** Last known continuous.enabled from status (for toggle change detection). */
+let lastContinuousEnabled = false;
 
 function setPill(el, label, mode) {
   el.textContent = label;
@@ -169,6 +182,104 @@ async function refreshMessages() {
   renderMessages(data.messages || []);
 }
 
+function formatContinuousMeta(c) {
+  if (!c || !c.enabled) return "off";
+  const streak = Number(c.streak) || 0;
+  const max = Number(c.max_streak) || 0;
+  const pending = Number(c.pending_moment_continues) || 0;
+  const parts = [`streak ${streak}/${max}`];
+  if (pending > 0) parts.push(`pending ${pending}`);
+  if (c.last_skip_reason) parts.push(`skip ${c.last_skip_reason}`);
+  return parts.join(" · ");
+}
+
+function renderContinuous(s) {
+  const c = (s && s.continuous) || {};
+  const enabled = Boolean(c.enabled);
+  lastContinuousEnabled = enabled;
+
+  if (!continuousToggleInFlight) {
+    continuousToggles.forEach((el) => {
+      el.checked = enabled;
+    });
+  }
+
+  const meta = formatContinuousMeta(c);
+  continuousMetaEls.forEach((el) => {
+    el.textContent = meta;
+  });
+
+  if (continuousSummary) {
+    continuousSummary.hidden = false;
+    if (continuousBadge) {
+      continuousBadge.textContent = enabled ? "on" : "off";
+      continuousBadge.classList.toggle("badge-open", enabled);
+    }
+    if (continuousDetail) {
+      const lines = [
+        `enabled: ${enabled}`,
+        `streak: ${c.streak ?? 0} / ${c.max_streak ?? "—"}`,
+        `cooldown: ${c.cooldown_seconds ?? "—"}s`,
+        `pending continues: ${c.pending_moment_continues ?? 0}`,
+        `last enqueue: ${c.last_enqueue_at || "—"}`,
+        `last skip: ${c.last_skip_reason || "—"}`,
+      ];
+      continuousDetail.textContent = lines.join(" · ");
+    }
+  }
+
+  // Optional autopilot pill: on when continuous enabled; busy if pending continue.
+  if (pillAutopilot) {
+    if (enabled) {
+      pillAutopilot.hidden = false;
+      const pending = Number(c.pending_moment_continues) || 0;
+      if (pending > 0) {
+        setPill(pillAutopilot, `autopilot · ${pending}`, "pill-busy");
+      } else {
+        setPill(pillAutopilot, "autopilot", "pill-on");
+      }
+    } else {
+      pillAutopilot.hidden = true;
+      setPill(pillAutopilot, "autopilot", "pill-off");
+    }
+  }
+}
+
+async function setContinuousEnabled(enabled) {
+  if (continuousToggleInFlight) return;
+  continuousToggleInFlight = true;
+  continuousToggles.forEach((el) => {
+    el.disabled = true;
+    el.checked = enabled;
+  });
+  try {
+    const data = await fetchJson("/api/continuous", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: Boolean(enabled) }),
+    });
+    const cancelled = (data && data.cancelled_moment_continues) || [];
+    if (!enabled && cancelled.length) {
+      showNotice(
+        `Continuous off — cancelled ${cancelled.length} pending continue${
+          cancelled.length === 1 ? "" : "s"
+        }.`
+      );
+    }
+    await refreshStatus();
+  } catch (err) {
+    continuousToggles.forEach((el) => {
+      el.checked = lastContinuousEnabled;
+    });
+    showNotice(String(err.message || err));
+  } finally {
+    continuousToggleInFlight = false;
+    continuousToggles.forEach((el) => {
+      el.disabled = false;
+    });
+  }
+}
+
 async function refreshStatus() {
   const s = await fetchJson("/api/status");
   statusJson.textContent = JSON.stringify(s, null, 2);
@@ -199,6 +310,7 @@ async function refreshStatus() {
   else if (phase === "waiting") phaseMode = "pill-busy";
   setPill(pillPhase, phase, phaseMode);
 
+  renderContinuous(s);
   renderWaitBar(s.pending_wait || null);
   return s;
 }
@@ -421,6 +533,12 @@ async function refreshIdentity() {
     (self.self && self.self.digest) || "(empty self digest)";
   identityUser.textContent = user.profile || "(empty profile)";
 }
+
+continuousToggles.forEach((el) => {
+  el.addEventListener("change", () => {
+    setContinuousEnabled(el.checked);
+  });
+});
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();

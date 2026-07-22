@@ -477,6 +477,101 @@ body {
   color: #c5d0e0;
 }
 
+.panel-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.continuous-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  min-width: 9.5rem;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.toggle-label input.continuous-toggle {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.continuous-toggle:checked + .toggle-track {
+  background: rgba(62, 207, 142, 0.2);
+  border-color: rgba(62, 207, 142, 0.55);
+}
+
+.continuous-toggle:checked + .toggle-track::after {
+  transform: translateX(16px);
+  background: var(--good);
+}
+
+.continuous-toggle:disabled + .toggle-track {
+  opacity: 0.55;
+}
+
+.continuous-toggle:focus-visible + .toggle-track {
+  outline: 1px solid var(--accent-dim);
+  outline-offset: 2px;
+}
+
+.toggle-text {
+  white-space: nowrap;
+}
+
+.continuous-meta {
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  text-align: right;
+  max-width: 16rem;
+}
+
+.continuous-summary {
+  padding: 0.75rem 1.5rem 0;
+}
+
+.continuous-card {
+  max-width: 720px;
+}
+
 @media (max-width: 720px) {
   .app {
     grid-template-columns: 1fr;
