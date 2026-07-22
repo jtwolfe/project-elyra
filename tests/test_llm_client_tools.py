@@ -407,9 +407,11 @@ def test_product_defaults_send_gemma_card_truncation(fake_chat_server):
         reasoning=False,
     )
     sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    from elyra.llm.constants import DEFAULT_CHAT_TEMPERATURE
+
     assert sent["top_p"] == GEMMA_TOP_P
     assert sent["top_k"] == GEMMA_TOP_K
-    assert sent["temperature"] == 0.6
+    assert sent["temperature"] == DEFAULT_CHAT_TEMPERATURE
 
 
 def test_product_defaults_send_reasoning_budget_when_reasoning_true(fake_chat_server):

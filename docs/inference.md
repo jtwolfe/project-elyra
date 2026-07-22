@@ -100,7 +100,7 @@ Defaults live on `LlamaServerConfig` (KD13). Do-loop does **not** hardcode sampl
 
 | Knob | Ship default | Constant / source |
 |------|--------------|-------------------|
-| **temperature** | **0.6** | `DEFAULT_CHAT_TEMPERATURE` — Stage 1 live OFAT (S-mono 0.2/0.4/0.6 × 3; 0.6 cleanest flood + tools) |
+| **temperature** | **1.0** | `DEFAULT_CHAT_TEMPERATURE` — dogfood thrash experiment (was 0.6 after Stage 1 OFAT; re-measure before permanent ship) |
 | **top_p** | **0.95** | `GEMMA_TOP_P` (Gemma card / elyra2 freeze) |
 | **top_k** | **64** | `GEMMA_TOP_K` |
 | **reasoning budget** | **2048** | `DEFAULT_REASONING_BUDGET_TOKENS` → wire **`thinking_budget_tokens`** (Stage 2 OFAT; relative to do-loop `generation_max_tokens=8192`) |

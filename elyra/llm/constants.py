@@ -24,8 +24,10 @@ DEFAULT_SLIDING_INPUT_TOKENS = 24_000
 GEMMA_TOP_P = 0.95
 GEMMA_TOP_K = 64
 
-# Chat temperature product default (Stage 1 live OFAT → 0.6 + card trunc).
-DEFAULT_CHAT_TEMPERATURE = 0.6
+# Chat temperature product default.
+# Stage 1 live OFAT shipped 0.6 + card trunc; dogfood thrash experiment → 1.0
+# (Gemma card-ish; re-measure before treating as permanent ship default).
+DEFAULT_CHAT_TEMPERATURE = 1.0
 
 # Per-request private-channel budget (Python name → wire thinking_budget_tokens).
 # Relative to do-loop generation_max_tokens=8192. Stage 2 live OFAT: ship 2048

@@ -28,7 +28,7 @@ class LlamaServerConfig:
     reasoning_budget: int | None = None
     connect_timeout: float = 10.0
     read_timeout: float = 600.0
-    # Stage 1 product default (live OFAT on S-mono: 0.6 beat 0.2/0.4 + card trunc).
+    # Product default from constants (dogfood thrash: 1.0; Stage 1 OFAT was 0.6).
     temperature: float = DEFAULT_CHAT_TEMPERATURE
     # Gemma card nucleus / top-k truncation (KD7). None → omit from chat payload.
     top_p: float | None = GEMMA_TOP_P

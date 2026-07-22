@@ -444,7 +444,9 @@ function renderBeats(beats) {
     wrap.innerHTML = `<p class="muted">No beats.</p>`;
     return wrap;
   }
-  for (const b of beats) {
+  // Tape is chronological (oldest first); show newest at top for inspection.
+  const ordered = beats.slice().reverse();
+  for (const b of ordered) {
     const row = document.createElement("div");
     row.className = "beat";
     const type = b.type || "beat";
@@ -543,10 +545,20 @@ function captureMomentDetailUi() {
 function restoreMomentDetailUi(saved) {
   if (!saved) return;
   const details = momentDetail.querySelectorAll("details.reason-fold");
+  // Newest-first display: new beats land at the top, so pad fold state from the front.
+  let folds = Array.isArray(saved.openFolds) ? saved.openFolds.slice() : [];
+  if (folds.length < details.length) {
+    folds = Array(details.length - folds.length)
+      .fill(false)
+      .concat(folds);
+  } else if (folds.length > details.length) {
+    folds = folds.slice(0, details.length);
+  }
   details.forEach((d, i) => {
-    if (saved.openFolds[i]) d.open = true;
+    if (folds[i]) d.open = true;
   });
-  momentDetail.scrollTop = saved.scrollTop;
+  // Keep viewport near the top (newest activity) after soft rebuilds.
+  momentDetail.scrollTop = 0;
 }
 
 /**
