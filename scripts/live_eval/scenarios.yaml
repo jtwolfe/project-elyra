@@ -1,9 +1,18 @@
-# Stage 5 tool/speak reliability scenarios — fixed prompts (same as Stage 0–2).
-# Ship knobs: temp 0.6 + card trunc + budget 2048 + PR6 sanitize + PR7 flood-safe RC.
+# Stage 5 ship knobs + continuous multi-moment scenarios (PR9 / design §Eval Plan).
+#
+# Continuous OFF (default product) — S-social / S-tools / S-mono remain the
+# regression gate. Enabling continuous must not change their expects when the
+# harness leaves continuous disabled (default).
+#
+# Continuous ON — S-cont-* scenarios: harness PATCHes /api/continuous before
+# the user message. Live GPU only; not CI-gated. Hermetic coverage is YAML parse
+# + continuous_policy / presence unit tests (see tests/test_live_eval_scenarios.py).
+#
+# Ship knobs: temp 0.6 + card trunc + budget 2048 + sanitize + flood-safe RC.
 # Stage 5 L4: social_wake hop==0 speak pin (product doloop; not tool_choice=required).
 
 stage: 5
-name: tool_speak_reliability
+name: tool_speak_reliability_and_continuous
 knobs:
   # Product ship: temp 0.6 + card trunc + budget 2048.
   temperature: 0.6
@@ -15,30 +24,79 @@ knobs:
 eval_caps:
   max_tool_hops: 12
   moment_wall_clock_minutes: 10
-  # Harness poll timeout (seconds) — slightly above wall clock so product stop wins
+  # Harness poll timeout (seconds) — slightly above wall clock so product stop wins.
+  # Continuous multi-moment runs may need a longer settle; harness adds settle window
+  # when continuous: true (see run_stage.py).
   poll_timeout_seconds: 620
 
 scenarios:
+  # ---------------------------------------------------------------------------
+  # Continuous OFF — Stage 0–5 regression baselines (must stay valid with default OFF)
+  # ---------------------------------------------------------------------------
   - id: S-social
+    continuous: false
     intent: Social greeting → speak
     prompt: "Hi Elyra — just saying hello."
+    notes: "Continuous OFF. Expect speak on glass; no moment_continue path."
     expects:
       tools: true
       speak: true
       flood: false
 
   - id: S-tools
+    continuous: false
     intent: Force tool then speak
     prompt: "List the sandbox directory with list_dir, then greet me via speak."
+    notes: "Continuous OFF. list_dir + speak; regression for tool path."
     expects:
       tools: true
       speak: true
       flood: false
 
   - id: S-mono
+    continuous: false
     intent: Monologue-heavy / planning pressure (stress for channel flood)
     prompt: "Think carefully about how you would organize the sandbox, then tell me your plan via speak. Prefer tools over prose-only."
+    notes: "Continuous OFF. Flood stress under ship knobs."
     expects:
       tools: true
       speak: true
       flood: false
+
+  # ---------------------------------------------------------------------------
+  # Continuous ON — multi-moment / policy guards (design §Eval Plan + PR9)
+  # Operator: --scenario S-cont-speak-only (etc.) or --all-scenarios
+  # ---------------------------------------------------------------------------
+  - id: S-cont-speak-only
+    continuous: true
+    intent: Speak-only must not outer-continue (glass monologue storm guard)
+    prompt: "Hi Elyra — just saying hello. No tools needed beyond speak."
+    notes: "Continuous ON. Expect speak only (tools_ran=False for non-speak); no moment_continue after finalize; no in-moment work HOST on pure social hello. Score: status.continuous.pending_moment_continues stays 0 after settle; no second moment."
+    expects:
+      tools: true
+      speak: true
+      flood: false
+      moment_continue: false
+
+  - id: S-cont-tools
+    continuous: true
+    intent: list_dir + create_goal ledger path under continuous ON
+    prompt: "List the sandbox directory with list_dir, create a goal to inventory the sandbox using create_goal, then greet me via speak."
+    notes: "Continuous ON. Expect list_dir and create_goal (and speak) tool beats. Continuous must not break the ledger create path; tools_ran True allows outer continue only when open work remains and other gates pass."
+    expects:
+      tools: true
+      speak: true
+      flood: false
+
+  - id: S-cont-task-ready-prefer
+    continuous: true
+    preseed_ready_task: true
+    intent: Pending task_ready owns work — prefer ready over moment_continue; no re-arm storm
+    prompt: "You have a ready task. Briefly acknowledge ready work via speak, then stop. Do not recreate or re-arm the ready task."
+    notes: "Continuous ON. Harness preseeds open goal + ready task (on_task_ready enqueues task_ready). Expect: after moment(s) settle, no infinite task_ready re-arm storm; continuous prefers *pending* task_ready over synthesizing moment_continue or re-arming ready. Unit-tested in presence finalize; live scores wake events + queue depth."
+    expects:
+      tools: true
+      speak: true
+      flood: false
+      task_ready_storm: false
+      moment_continue: false

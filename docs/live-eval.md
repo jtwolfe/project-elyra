@@ -49,11 +49,34 @@ scripts/live_eval/
 
 ### Fixed scenarios
 
+**Continuous OFF (default product)** — Stage 0–5 regression baselines. Continuous is **not** enabled; these remain the go/no-go gate for flood + tools/speak under ship knobs.
+
 | ID | Intent | Prompt (canonical) |
 |----|--------|--------------------|
 | `S-social` | Greeting → speak | `Hi Elyra — just saying hello.` |
 | `S-tools` | Tool then speak | `List the sandbox directory with list_dir, then greet me via speak.` |
 | `S-mono` | Monologue / flood stress | `Think carefully about how you would organize the sandbox, then tell me your plan via speak. Prefer tools over prose-only.` |
+
+**Continuous ON** — multi-moment / policy guards (design [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) §Eval Plan). Harness `PATCH /api/continuous` before the user message. **Not CI-gated** (GPU live only); hermetic YAML parse lives in `tests/test_live_eval_scenarios.py`.
+
+| ID | Intent | Expect (operator score) |
+|----|--------|-------------------------|
+| `S-cont-speak-only` | Hello with continuous ON | Speak only → **no** outer `moment_continue` (glass monologue storm guard) |
+| `S-cont-tools` | `list_dir` + `create_goal` + speak under continuous ON | Ledger create path works; tools + speak |
+| `S-cont-task-ready-prefer` | Preseed ready task + continuous ON | Prefer *pending* `task_ready`; **no** re-arm storm; no synthetic continue |
+
+```bash
+# Continuous OFF regression (same as Stage 5 baselines)
+python scripts/live_eval/run_stage.py --stage 5 \
+  --scenario S-social --scenario S-tools --scenario S-mono --tries 3
+
+# Continuous ON scenarios (longer; settle window after first close)
+python scripts/live_eval/run_stage.py --stage 5 --scenario S-cont-speak-only --try 1
+python scripts/live_eval/run_stage.py --stage 5 --scenario S-cont-tools --try 1
+python scripts/live_eval/run_stage.py --stage 5 --scenario S-cont-task-ready-prefer --try 1
+```
+
+Continuous exports add `continuous_status.json`, `wake_events.jsonl`, `moments_index.json` under the attempt export dir for scoring pending continues / wake kinds.
 
 ### Isolation contract
 
@@ -214,9 +237,20 @@ Wrong fix examples:
 
 ---
 
+## Continuous work (optional live gate)
+
+Continuous work (in-moment work-continue HOST + gated outer `moment_continue`) is **default OFF**. Enabling it for live-eval does **not** change the OFF baselines: re-run `S-social` / `S-tools` / `S-mono` with continuous left disabled after any continuous feature merge.
+
+Policy gates (speak-only no outer continue, prefer pending `task_ready`, flood majority, etc.) are hermetically covered in `tests/test_continuous_policy.py` and presence finalize tests. Live `S-cont-*` scenarios exercise the product path with a real model.
+
+Design: [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md).
+
+---
+
 ## See also
 
 - [inference.md](inference.md) — ship knobs, hygiene, RC policy, P0 summary
 - [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) — full staged plan + adaptive protocol
+- [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) — continuous / orient / ledger / reset design + eval plan
 - `scripts/live_eval/logs/stage-0.md` … `stage-5.md` — executed Stage Logs
 - Root README **Testing** — links into this protocol

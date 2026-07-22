@@ -77,6 +77,12 @@ class Scenario:
     expects_tools: bool = True
     expects_speak: bool = True
     expects_no_flood: bool = True
+    # Continuous multi-moment (PR9 / design §Eval Plan)
+    continuous: bool = False
+    preseed_ready_task: bool = False
+    notes: str = ""
+    expects_no_moment_continue: bool | None = None
+    expects_no_task_ready_storm: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +144,15 @@ def load_scenarios(path: Path | None = None) -> StageConfig:
     def _flush() -> None:
         nonlocal cur, cur_expects
         if cur and cur.get("id") and cur.get("prompt") is not None:
+            # expects.moment_continue: false → no outer continue after settle
+            mc_raw = cur_expects.get("moment_continue")
+            expects_no_mc: bool | None = None
+            if mc_raw is not None:
+                expects_no_mc = not bool(mc_raw)
+            storm_raw = cur_expects.get("task_ready_storm")
+            expects_no_storm: bool | None = None
+            if storm_raw is not None:
+                expects_no_storm = not bool(storm_raw)
             scenarios.append(
                 Scenario(
                     id=str(cur["id"]),
@@ -148,6 +163,11 @@ def load_scenarios(path: Path | None = None) -> StageConfig:
                     expects_no_flood=not bool(
                         cur_expects.get("flood", False)
                     ),  # flood: false → expect no flood
+                    continuous=bool(cur.get("continuous", False)),
+                    preseed_ready_task=bool(cur.get("preseed_ready_task", False)),
+                    notes=str(cur.get("notes") or ""),
+                    expects_no_moment_continue=expects_no_mc,
+                    expects_no_task_ready_storm=expects_no_storm,
                 )
             )
         cur = None
@@ -207,7 +227,13 @@ def load_scenarios(path: Path | None = None) -> StageConfig:
             if ":" in stripped:
                 k, _, v = stripped.partition(":")
                 k, v = k.strip(), v.strip()
-                if k in ("tools", "speak", "flood"):
+                if k in (
+                    "tools",
+                    "speak",
+                    "flood",
+                    "moment_continue",
+                    "task_ready_storm",
+                ):
                     cur_expects[k] = _parse_scalar(v) if v else None
                 else:
                     cur[k] = _parse_scalar(v) if v else ""
@@ -863,6 +889,82 @@ def client_config_from_stage(
     )
 
 
+# Extra settle after first close when continuous ON — catch thrash / re-entry.
+CONTINUOUS_SETTLE_SECONDS = 20.0
+
+
+def _enable_continuous(stack: ProductStack, *, enabled: bool = True) -> dict[str, Any]:
+    code, body = _http_json(
+        "PATCH",
+        f"{stack.base_url}/api/continuous",
+        {"enabled": enabled},
+        timeout=15.0,
+    )
+    if code != 200:
+        raise RuntimeError(f"PATCH /api/continuous -> {code} {body}")
+    return body if isinstance(body, dict) else {}
+
+
+def _preseed_ready_task(stack: ProductStack) -> dict[str, Any]:
+    """Open goal + ready task so on_task_ready enqueues task_ready (prefer path)."""
+    goals = stack.worker._ensure_goals()  # noqa: SLF001 — eval preseed
+    goal = goals.create_goal(
+        "Live-eval ready work (S-cont-task-ready-prefer)",
+        acceptance="Acknowledge ready work without re-arming",
+        status="open",
+    )
+    task = goals.create_task(
+        str(goal["id"]),
+        "Acknowledge ready task via speak",
+        status="ready",
+        notes="preseed for continuous prefer-pending task_ready",
+    )
+    return {"goal": goal, "task": task}
+
+
+def _export_continuous_artifacts(
+    stack: ProductStack,
+    export_dir: Path,
+    *,
+    last_status: dict[str, Any] | None = None,
+    preseed: dict[str, Any] | None = None,
+) -> None:
+    """Write continuous status + wake events for multi-moment scoring."""
+    export_dir.mkdir(parents=True, exist_ok=True)
+    status_body = last_status
+    if status_body is None:
+        sc, status_body = _http_json(
+            "GET", f"{stack.base_url}/api/status", timeout=5.0
+        )
+        if sc != 200 or not isinstance(status_body, dict):
+            status_body = {"error": f"status {sc}", "raw": status_body}
+    (export_dir / "continuous_status.json").write_text(
+        json.dumps(status_body, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+    if preseed is not None:
+        (export_dir / "preseed.json").write_text(
+            json.dumps(preseed, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+    # Wake events (kinds + task_ready storm detection)
+    try:
+        events_path = stack.paths.data_dir / "wakes" / "events.jsonl"
+        if events_path.is_file():
+            shutil.copy2(events_path, export_dir / "wake_events.jsonl")
+    except OSError:
+        pass
+    # All moments index for multi-moment runs
+    try:
+        moments = stack.worker._moments.list_moments(limit=50)  # noqa: SLF001
+        (export_dir / "moments_index.json").write_text(
+            json.dumps(moments, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def run_attempt(
     scenario: Scenario,
     *,
@@ -889,18 +991,36 @@ def run_attempt(
     status = "ok"
     error = ""
     moment_id: str | None = None
+    preseed_info: dict[str, Any] | None = None
+    last_status: dict[str, Any] | None = None
 
     try:
         # Apply stage knobs (temp / top_p / top_k) to the product client config.
         client_cfg = client_config_from_stage(llama.config, stage_cfg)
         stack = start_product_stack(home, client_cfg)
         _LOG.info(
-            "[%s] API %s home=%s prompt=%r",
+            "[%s] API %s home=%s continuous=%s prompt=%r",
             attempt_id,
             stack.base_url,
             home,
+            scenario.continuous,
             scenario.prompt[:80],
         )
+
+        # Continuous ON before preseed / user message (default product is OFF).
+        if scenario.continuous:
+            cont_body = _enable_continuous(stack, enabled=True)
+            _LOG.info("[%s] continuous enabled: %s", attempt_id, cont_body)
+            if scenario.preseed_ready_task:
+                preseed_info = _preseed_ready_task(stack)
+                _LOG.info(
+                    "[%s] preseed ready task: goal=%s task=%s",
+                    attempt_id,
+                    (preseed_info.get("goal") or {}).get("id"),
+                    (preseed_info.get("task") or {}).get("id"),
+                )
+                # Brief pause so task_ready may claim before user message
+                time.sleep(0.5)
 
         # Snapshot open moments before post
         code, before = _http_json("GET", f"{stack.base_url}/api/moments?limit=5")
@@ -935,6 +1055,7 @@ def run_attempt(
                 )
                 phase = ""
                 if sc == 200 and isinstance(status_body, dict):
+                    last_status = status_body
                     phase = str(status_body.get("phase") or "")
                     active = status_body.get("active_moment_id")
                     if active:
@@ -967,10 +1088,12 @@ def run_attempt(
                     sc2, st2 = _http_json(
                         "GET", f"{stack.base_url}/api/status", timeout=5.0
                     )
-                    if sc2 == 200 and str(st2.get("phase") or "") != "in_moment":
-                        break
-                    if sc2 == 200 and not st2.get("busy"):
-                        break
+                    if sc2 == 200 and isinstance(st2, dict):
+                        last_status = st2
+                        if str(st2.get("phase") or "") != "in_moment":
+                            break
+                        if not st2.get("busy") and not st2.get("worker_busy"):
+                            break
 
                 time.sleep(1.0)
             else:
@@ -984,7 +1107,56 @@ def run_attempt(
             if closed_id:
                 moment_id = closed_id
 
+            # Continuous: settle window to observe no thrash / no re-entry
+            # when expects forbid moment_continue (or always for continuous ON).
+            if (
+                scenario.continuous
+                and status == "ok"
+                and closed_id
+            ):
+                overall_deadline = time.monotonic() + stage_cfg.poll_timeout_seconds
+                settle_deadline = time.monotonic() + CONTINUOUS_SETTLE_SECONDS
+                while time.monotonic() < settle_deadline:
+                    if time.monotonic() >= overall_deadline:
+                        break
+                    sc, st = _http_json(
+                        "GET", f"{stack.base_url}/api/status", timeout=5.0
+                    )
+                    if sc == 200 and isinstance(st, dict):
+                        last_status = st
+                        phase = str(st.get("phase") or "")
+                        if phase == "in_moment" or st.get("busy") or st.get(
+                            "worker_busy"
+                        ):
+                            # Multi-moment re-entry — wait for idle again
+                            while time.monotonic() < overall_deadline:
+                                sc3, st3 = _http_json(
+                                    "GET",
+                                    f"{stack.base_url}/api/status",
+                                    timeout=5.0,
+                                )
+                                if sc3 == 200 and isinstance(st3, dict):
+                                    last_status = st3
+                                    p3 = str(st3.get("phase") or "")
+                                    if p3 in ("idle", "waiting", "") and not (
+                                        st3.get("busy") or st3.get("worker_busy")
+                                    ):
+                                        break
+                                time.sleep(1.0)
+                            # Reset settle after re-entry completes
+                            settle_deadline = (
+                                time.monotonic() + CONTINUOUS_SETTLE_SECONDS
+                            )
+                    time.sleep(1.0)
+
         export_attempt(stack, export_dir, moment_id)
+        if scenario.continuous:
+            _export_continuous_artifacts(
+                stack,
+                export_dir,
+                last_status=last_status,
+                preseed=preseed_info,
+            )
     except Exception as exc:  # noqa: BLE001
         status = "infra_error"
         error = f"{type(exc).__name__}: {exc}"
@@ -992,6 +1164,13 @@ def run_attempt(
         if stack is not None:
             try:
                 export_attempt(stack, export_dir, moment_id)
+                if scenario.continuous:
+                    _export_continuous_artifacts(
+                        stack,
+                        export_dir,
+                        last_status=last_status,
+                        preseed=preseed_info,
+                    )
             except Exception:  # noqa: BLE001
                 pass
     finally:
@@ -1039,12 +1218,18 @@ def run_attempt(
         result.error = error
         result.notes = (result.notes + "; " if result.notes else "") + error
 
+    cont_notes = _score_continuous_expects(export_dir, scenario)
+    if cont_notes:
+        result.notes = (result.notes + "; " if result.notes else "") + cont_notes
+
     # Persist machine-readable result
     (export_dir / "result.json").write_text(
         json.dumps(
             {
                 "attempt_id": result.attempt_id,
                 "status": result.status,
+                "scenario_id": result.scenario_id,
+                "continuous": scenario.continuous,
                 "moment_id": result.moment_id,
                 "hop_count": result.hop_count,
                 "stop_reason": result.stop_reason,
@@ -1057,6 +1242,7 @@ def run_attempt(
                 "markers_content": result.markers_content,
                 "markers_reasoning": result.markers_reasoning,
                 "feel": result.feel,
+                "notes": result.notes,
                 "dims": {
                     "flood": result.dim_flood,
                     "tools": result.dim_tools,
@@ -1073,6 +1259,78 @@ def run_attempt(
         encoding="utf-8",
     )
     return result
+
+
+def _score_continuous_expects(export_dir: Path, scenario: Scenario) -> str:
+    """Append operator hints for continuous expects (not CI-gated)."""
+    if not scenario.continuous:
+        return ""
+    parts: list[str] = ["continuous=ON"]
+    cont_path = export_dir / "continuous_status.json"
+    cont: dict[str, Any] = {}
+    if cont_path.is_file():
+        try:
+            cont = json.loads(cont_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            cont = {}
+    cont_block = cont.get("continuous") if isinstance(cont, dict) else None
+    if not isinstance(cont_block, dict):
+        cont_block = {}
+    pending_mc = cont_block.get("pending_moment_continues")
+    if pending_mc is None:
+        pending_mc = cont_block.get("pending_continues")
+    if scenario.expects_no_moment_continue is True:
+        if pending_mc is not None and int(pending_mc) > 0:
+            parts.append(f"FAIL moment_continue pending={pending_mc}")
+        else:
+            parts.append(f"moment_continue pending={pending_mc if pending_mc is not None else '?'}")
+
+    moments_path = export_dir / "moments_index.json"
+    n_moments = 0
+    if moments_path.is_file():
+        try:
+            raw = json.loads(moments_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                n_moments = len(raw)
+        except (json.JSONDecodeError, OSError):
+            pass
+    if n_moments:
+        parts.append(f"moments={n_moments}")
+
+    events_path = export_dir / "wake_events.jsonl"
+    enqueue_kind_counts: dict[str, int] = {}
+    if events_path.is_file():
+        try:
+            for line in events_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                ev = json.loads(line)
+                if str(ev.get("op") or "") != "enqueue":
+                    continue
+                kind = ""
+                if isinstance(ev.get("item"), dict):
+                    kind = str(ev["item"].get("kind") or "")
+                kind = kind or str(ev.get("kind") or "")
+                if kind:
+                    enqueue_kind_counts[kind] = enqueue_kind_counts.get(kind, 0) + 1
+        except (json.JSONDecodeError, OSError):
+            pass
+    if enqueue_kind_counts:
+        parts.append(
+            "enqueue_kinds="
+            + ",".join(f"{k}:{v}" for k, v in sorted(enqueue_kind_counts.items()))
+        )
+    if scenario.expects_no_task_ready_storm is True:
+        tr = enqueue_kind_counts.get("task_ready", 0)
+        # One enqueue from preseed is OK; storm = many re-arms (heuristic ≥ 5)
+        if tr >= 5:
+            parts.append(f"FAIL task_ready_storm count={tr}")
+        else:
+            parts.append(f"task_ready_enqueues={tr}")
+    if scenario.notes:
+        parts.append("scenario_notes=" + scenario.notes[:200])
+    return "; ".join(parts)
 
 
 # ---------------------------------------------------------------------------

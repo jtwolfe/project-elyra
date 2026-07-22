@@ -2,11 +2,14 @@
 
 Fixed scenarios + product-path orchestration for **full-stack real-LLM**
 gates (Gemma via llama-server). Stage go/no-go is human-reviewed 3-attempt
-scorecards — not green pytest alone.
+scorecards — not green pytest alone. Continuous multi-moment scenarios
+(`S-cont-*`) are live/operator only; hermetic YAML parse is
+`tests/test_live_eval_scenarios.py` (no GPU in CI).
 
 Operator protocol (3-attempt rule, A/B modes, P0 exit): **`docs/live-eval.md`**.  
 Design stages + Adaptive Execution Protocol:
-`docs/design-gemma-sampling-hygiene-staged.md`. Ship knobs: `docs/inference.md`.
+`docs/design-gemma-sampling-hygiene-staged.md`. Ship knobs: `docs/inference.md`.  
+Continuous design + eval plan: `docs/design-continuous-work-orient-ledger-reset.md`.
 
 ## Layout
 
@@ -131,6 +134,31 @@ with: what we saw, intuition, baseline summary table, decision, next knobs.
 
 Score **(A) flood** and **(B) tools/speak** independently.
 
+## Continuous scenarios (`S-cont-*`)
+
+| ID | continuous | Setup | Score focus |
+|----|------------|-------|-------------|
+| `S-social` / `S-tools` / `S-mono` | **OFF** | none | Stage 5 regression — must stay valid with continuous disabled |
+| `S-cont-speak-only` | ON | PATCH continuous | Speak-only → **no** outer `moment_continue` |
+| `S-cont-tools` | ON | PATCH continuous | `list_dir` + `create_goal` + speak under continuous |
+| `S-cont-task-ready-prefer` | ON | PATCH + preseed ready task | Prefer pending `task_ready`; no re-arm storm |
+
+```bash
+# Continuous OFF baselines only
+python scripts/live_eval/run_stage.py --stage 5 \
+  --scenario S-social --scenario S-tools --scenario S-mono --tries 3
+
+# One continuous scenario (longer poll + ~20s settle)
+python scripts/live_eval/run_stage.py --stage 5 --scenario S-cont-speak-only --try 1
+```
+
+When `continuous: true` in `scenarios.yaml`, the harness:
+
+1. `PATCH /api/continuous` `{ "enabled": true }` after stack start.
+2. Optionally preseeds open goal + ready task (`preseed_ready_task`).
+3. POSTs the scenario prompt; polls close; **settles** ~20s to observe thrash.
+4. Exports `continuous_status.json`, `wake_events.jsonl`, `moments_index.json`.
+
 ## Notes
 
 - Flood scoring uses **only** `elyra.llm.reasoning_hygiene` — do not vendor a
@@ -138,3 +166,5 @@ Score **(A) flood** and **(B) tools/speak** independently.
 - Hygiene is **boundary defense scoring** here; Stage 0 does not change product
   sampling or wire sanitize at ingress.
 - Timeout without close → status `infra_timeout` (distinct from model fail).
+- Continuous policy unit tests: `tests/test_continuous_policy.py` (hermetic).
+- Scenario YAML hermetic: `tests/test_live_eval_scenarios.py` (no GPU).
