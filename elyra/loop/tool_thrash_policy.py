@@ -1,10 +1,9 @@
 """Tool thrash policy (pure decisions).
 
 Scope: fingerprints, streak updates, thrash HOST decision, HOST builders,
-lesson request/pin/compact/synthesize (Phase C ceremony). Peer to
-skill_commit_policy / continuous_policy. No I/O. No glass.
-
-Out of scope here: skip-identical re-exec (PR3b).
+lesson request/pin/compact/synthesize (Phase C ceremony), optional
+skip-identical re-exec (default OFF). Peer to skill_commit_policy /
+continuous_policy. No I/O. No glass.
 """
 
 from __future__ import annotations
@@ -25,6 +24,11 @@ MAX_LESSON_PINS = 2  # last L=1–2 moment-scoped lessons
 LESSON_SYNTH_FAIL_STREAK = 3
 # Compact lesson max chars (1–3 sentences target).
 _LESSON_MAX_CHARS = 480
+
+# Phase C3 optional skip-re-exec (default OFF — product strategy remains thrash HOST).
+SKIP_IDENTICAL_ENABLED = False
+SKIP_IDENTICAL_AFTER = 5
+MAX_SKIPS_PER_MOMENT = 8
 
 # Large string values hashed above this length (fingerprint only).
 _LARGE_STR_THRESHOLD = 64
@@ -76,6 +80,14 @@ class ThrashHostDecision:
     inject: bool
     reason: str  # injected | below_threshold | budget | no_tool | ...
     kind: str  # thrash_fail_streak | thrash_speak_repeat | thrash_repeat | ""
+
+
+@dataclass(frozen=True)
+class SkipIdenticalDecision:
+    """Result of should_skip_identical (pre-exec gate)."""
+
+    skip: bool
+    reason: str  # skip | disabled | below_threshold | budget | last_was_ok | ...
 
 
 def _normalize_tool_name(tool_name: str) -> str:
@@ -242,6 +254,34 @@ def thrash_detail(*, last_ok: bool | None, last_error: str | None) -> str:
     return "unknown"
 
 
+def should_skip_identical(
+    *,
+    enabled: bool,
+    streak: int,
+    last_ok: bool | None,
+    skip_count: int,
+    skip_after: int = SKIP_IDENTICAL_AFTER,
+    max_skips: int = MAX_SKIPS_PER_MOMENT,
+) -> SkipIdenticalDecision:
+    """Decide whether to skip re-exec of an identical failing tool call.
+
+    Caller must only invoke when the current call fingerprint matches the
+    streak fingerprint. Default ``enabled=False`` → never skip (product OFF).
+
+    When skip=True the host must return a model-visible synthetic ToolResult
+    (``error_reason=skipped_identical``) — never silent.
+    """
+    if not enabled:
+        return SkipIdenticalDecision(skip=False, reason="disabled")
+    if last_ok is not False:
+        return SkipIdenticalDecision(skip=False, reason="last_was_ok")
+    if streak < skip_after:
+        return SkipIdenticalDecision(skip=False, reason="below_threshold")
+    if max_skips <= 0 or skip_count >= max_skips:
+        return SkipIdenticalDecision(skip=False, reason="budget")
+    return SkipIdenticalDecision(skip=True, reason="skip")
+
+
 # ---------------------------------------------------------------------------
 # Phase C — thin first-person lessons (moment-scoped; not self.md)
 # ---------------------------------------------------------------------------
@@ -322,11 +362,15 @@ __all__ = [
     "LESSON_PIN_HOST",
     "LESSON_SYNTH_FAIL_STREAK",
     "MAX_LESSON_PINS",
+    "MAX_SKIPS_PER_MOMENT",
     "MAX_THRASH_HOSTS",
     "OK_STREAK_THRESHOLD",
+    "SKIP_IDENTICAL_AFTER",
+    "SKIP_IDENTICAL_ENABLED",
     "THRASH_HOST",
     "THRASH_LESSON_REQUEST",
     "THRASH_TRIED_CAP",
+    "SkipIdenticalDecision",
     "ThrashHostDecision",
     "ThrashUpdate",
     "canonical_args",
@@ -334,6 +378,7 @@ __all__ = [
     "lesson_pin_host_message",
     "lesson_request_host_message",
     "should_inject_thrash_host",
+    "should_skip_identical",
     "synthesize_lesson",
     "thrash_detail",
     "thrash_host_message",

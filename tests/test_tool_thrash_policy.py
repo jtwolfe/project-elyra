@@ -1,4 +1,4 @@
-"""Pure table tests for tool_thrash_policy (Phase B + C lessons)."""
+"""Pure table tests for tool_thrash_policy (Phase B + C lessons + C3 skip)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,11 @@ from elyra.loop.tool_thrash_policy import (
     FAIL_STREAK_THRESHOLD,
     LESSON_SYNTH_FAIL_STREAK,
     MAX_LESSON_PINS,
+    MAX_SKIPS_PER_MOMENT,
     MAX_THRASH_HOSTS,
     OK_STREAK_THRESHOLD,
+    SKIP_IDENTICAL_AFTER,
+    SKIP_IDENTICAL_ENABLED,
     THRASH_HOST,
     THRASH_LESSON_REQUEST,
     canonical_args,
@@ -18,6 +21,7 @@ from elyra.loop.tool_thrash_policy import (
     lesson_pin_host_message,
     lesson_request_host_message,
     should_inject_thrash_host,
+    should_skip_identical,
     synthesize_lesson,
     thrash_detail,
     thrash_host_message,
@@ -349,3 +353,118 @@ def test_synthesize_lesson_labeled() -> None:
 def test_lesson_constants() -> None:
     assert MAX_LESSON_PINS == 2
     assert LESSON_SYNTH_FAIL_STREAK == 3
+
+
+# ---------------------------------------------------------------------------
+# Phase C3: should_skip_identical (default OFF)
+# ---------------------------------------------------------------------------
+
+
+def test_skip_identical_defaults_off() -> None:
+    assert SKIP_IDENTICAL_ENABLED is False
+    assert SKIP_IDENTICAL_AFTER == 5
+    assert MAX_SKIPS_PER_MOMENT == 8
+
+
+def test_should_skip_identical_disabled() -> None:
+    d = should_skip_identical(
+        enabled=False,
+        streak=10,
+        last_ok=False,
+        skip_count=0,
+    )
+    assert d.skip is False
+    assert d.reason == "disabled"
+
+
+def test_should_skip_identical_below_threshold() -> None:
+    d = should_skip_identical(
+        enabled=True,
+        streak=SKIP_IDENTICAL_AFTER - 1,
+        last_ok=False,
+        skip_count=0,
+    )
+    assert d.skip is False
+    assert d.reason == "below_threshold"
+
+
+def test_should_skip_identical_at_threshold() -> None:
+    d = should_skip_identical(
+        enabled=True,
+        streak=SKIP_IDENTICAL_AFTER,
+        last_ok=False,
+        skip_count=0,
+    )
+    assert d.skip is True
+    assert d.reason == "skip"
+
+
+def test_should_skip_identical_last_was_ok() -> None:
+    d = should_skip_identical(
+        enabled=True,
+        streak=10,
+        last_ok=True,
+        skip_count=0,
+    )
+    assert d.skip is False
+    assert d.reason == "last_was_ok"
+
+    d_none = should_skip_identical(
+        enabled=True,
+        streak=10,
+        last_ok=None,
+        skip_count=0,
+    )
+    assert d_none.skip is False
+    assert d_none.reason == "last_was_ok"
+
+
+def test_should_skip_identical_budget() -> None:
+    d = should_skip_identical(
+        enabled=True,
+        streak=10,
+        last_ok=False,
+        skip_count=MAX_SKIPS_PER_MOMENT,
+    )
+    assert d.skip is False
+    assert d.reason == "budget"
+
+    d_zero = should_skip_identical(
+        enabled=True,
+        streak=10,
+        last_ok=False,
+        skip_count=0,
+        max_skips=0,
+    )
+    assert d_zero.skip is False
+    assert d_zero.reason == "budget"
+
+
+def test_skip_identical_table_five_fails_then_skip() -> None:
+    """Streak build to 5 → skip decision True; below 5 False."""
+    prev_fp = None
+    prev_streak = 0
+    for i in range(1, SKIP_IDENTICAL_AFTER + 1):
+        u = update_thrash_streak(
+            prev_fp=prev_fp,
+            prev_streak=prev_streak,
+            tool_name="read_file",
+            args={"path": "missing.md"},
+            ok=False,
+            error_reason="not_found",
+        )
+        prev_fp = u.fingerprint
+        prev_streak = u.streak
+        # Pre-exec decision uses streak *after* prior call (state before next).
+        d = should_skip_identical(
+            enabled=True,
+            streak=u.streak,
+            last_ok=u.ok,
+            skip_count=0,
+        )
+        if i < SKIP_IDENTICAL_AFTER:
+            assert d.skip is False
+            assert d.reason == "below_threshold"
+        else:
+            assert d.skip is True
+            assert d.reason == "skip"
