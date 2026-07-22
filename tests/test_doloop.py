@@ -3063,3 +3063,142 @@ def test_lesson_pin_survives_run_do_loop_reouter(
         for msgs in post_pin_msgs
     )
     assert saw_pin, "lesson pin HOST must appear in chain after re-outer"
+
+
+# ---------------------------------------------------------------------------
+# Phase C3: optional skip-identical (default OFF)
+# ---------------------------------------------------------------------------
+
+
+def test_skip_identical_default_off_still_executes(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """Default OFF: 6+ identical fails still call registry; no skip obs."""
+    # Ensure product default (and do not enable via monkeypatch).
+    import elyra.loop.doloop as doloop_mod
+
+    assert doloop_mod.SKIP_IDENTICAL_ENABLED is False
+
+    mid = moments.open_moment(why_now="skip off", moment_id="mskipoff")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/missing/TOOL.md"}
+    # 6 identical fails — would skip if enabled after streak 5.
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id=f"c{i}")
+            for i in range(1, 7)
+        ]
+        + [_text("stop")]
+    )
+    execute_calls: list[str] = []
+    real_execute = registry.execute
+
+    def counting_execute(name: str, args: dict[str, Any] | None, c: ToolContext) -> ToolResult:
+        execute_calls.append(name)
+        return real_execute(name, args, c)
+
+    monkeypatch.setattr(registry, "execute", counting_execute)
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_skips == 0
+    assert execute_calls.count("read_file") == 6
+    beats = moments.list_beats(mid)
+    assert not any(
+        b.get("type") == "obs" and b.get("kind") == "tool_skip_identical" for b in beats
+    )
+    tool_beats = [b for b in beats if b.get("type") == "tool" and b.get("name") == "read_file"]
+    assert len(tool_beats) == 6
+    # Real fails — not synthetic skip
+    assert all(b.get("error_reason") != "skipped_identical" for b in tool_beats)
+
+
+def test_skip_identical_enabled_skips_and_is_visible(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """Enabled: after 5 identical fails, 6th is synthetic skip — never silent."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    mid = moments.open_moment(why_now="skip on", moment_id="mskipon")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/search_web/TOOL.md"}
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id=f"c{i}")
+            for i in range(1, 7)
+        ]
+        + [_text("I'll change approach")]
+    )
+    execute_calls: list[str] = []
+    real_execute = registry.execute
+
+    def counting_execute(name: str, args: dict[str, Any] | None, c: ToolContext) -> ToolResult:
+        execute_calls.append(name)
+        return real_execute(name, args, c)
+
+    monkeypatch.setattr(registry, "execute", counting_execute)
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+
+    assert result.thrash_skips == 1
+    # First 5 executed; 6th skipped
+    assert execute_calls.count("read_file") == 5
+    beats = moments.list_beats(mid)
+    skip_obs = [
+        b
+        for b in beats
+        if b.get("type") == "obs" and b.get("kind") == "tool_skip_identical"
+    ]
+    assert len(skip_obs) == 1
+    assert skip_obs[0].get("prior_error_reason") in ("not_found", "path_not_found") or (
+        skip_obs[0].get("prior_error_reason") is not None
+    )
+    tool_beats = [b for b in beats if b.get("type") == "tool" and b.get("name") == "read_file"]
+    assert len(tool_beats) == 6
+    skip_tools = [b for b in tool_beats if b.get("error_reason") == "skipped_identical"]
+    assert len(skip_tools) == 1
+    assert skip_tools[0].get("ends_moment") is False
+    # Model-visible payload fields (never silent)
+    body = json.loads(skip_tools[0]["content"])
+    assert body["ok"] is False
+    assert body["error_reason"] == "skipped_identical"
+    assert body["blocked_duplicate"] is True
+    assert body.get("prior_error_reason")
+    assert body.get("attempt") == 6
+    assert body.get("args_echo") == missing
+    assert body.get("next_actions")
+    assert body.get("do_not")
+    assert "HOST skipped re-exec" in (body.get("host_note") or "")
+    # Stop still free-text; skip never ends moment
+    assert result.stop_reason == "no_tools"
+
+
+def test_skip_identical_never_ends_moment(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """Skip synthetic results must not set ends_moment / stop the moment alone."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    mid = moments.open_moment(why_now="skip no end", moment_id="mskipend")
+    ctx.moment_id = mid
+    missing = {"path": "nope.md"}
+    # 5 real fails + 2 skips + free text stop
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id=f"c{i}")
+            for i in range(1, 8)
+        ]
+        + [_text("done")]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_skips == 2
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    for b in beats:
+        if b.get("error_reason") == "skipped_identical":
+            assert b.get("ends_moment") is False
+    stop_beats = [b for b in beats if b.get("type") == "stop"]
+    assert len(stop_beats) == 1
+    assert stop_beats[0].get("stop_reason") == "no_tools"
+    assert stop_beats[0].get("thrash_skips") == 2

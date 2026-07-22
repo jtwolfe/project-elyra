@@ -4,7 +4,8 @@ Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak
 nudge, budgeted in-moment work-continue HOST (continuous policy), post-load
 skill-commit HOST (skill_commit_policy), post-batch tool thrash HOST
 (tool_thrash_policy), thrash lesson request/capture/HOST-synthesized pin
-(Phase C), optional post-load tool_choice pin (default OFF).
+(Phase C), optional skip-identical re-exec (default OFF),
+optional post-load tool_choice pin (default OFF).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
           completion-ingress channel hygiene (sanitize before beat/chain),
           tools_ran / ledger_mutated / flood / thrash counters on DoLoopResult.
@@ -51,14 +52,17 @@ from elyra.loop.skill_commit_policy import (
 from elyra.loop.tool_thrash_policy import (
     LESSON_SYNTH_FAIL_STREAK,
     MAX_LESSON_PINS,
+    SKIP_IDENTICAL_ENABLED,
     THRASH_TRIED_CAP,
     compact_lesson,
     lesson_pin_host_message,
     should_inject_thrash_host,
+    should_skip_identical,
     synthesize_lesson,
     thrash_detail,
     thrash_host_message,
     thrash_lesson_request_message,
+    tool_fingerprint,
     update_thrash_streak,
 )
 from elyra.loop.stop import (
@@ -124,6 +128,7 @@ class DoLoopResult:
     work_continue_injects: int = 0  # continuous work-continue HOST injects
     skill_commit_injects: int = 0  # post-load_skill commit HOST injects
     thrash_host_injects: int = 0  # post-batch tool thrash HOST injects
+    thrash_skips: int = 0  # skip-identical synthetic results this moment
     # K15: ≥1 successful non-speak tool (ok and not counts_as_speak); speak alone False
     tools_ran: bool = False
     ledger_mutated: bool = False  # mark_task_changed fired this moment
@@ -171,6 +176,7 @@ class _LoopState:
     # Identical-fail streak after lesson request (same fingerprint; synthesize after K).
     lesson_fails_since_request: int = 0
     lesson_synth_fp: str | None = None  # fp being counted for HOST-synthesize
+    thrash_skip_count: int = 0  # skip-identical budget used this moment
 
 
 def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
@@ -690,6 +696,7 @@ def run_do_loop(
             work_continue_injects=state.work_continue_injects,
             skill_commit_injects=state.skill_commit_injects,
             thrash_host_injects=state.thrash_host_sent,
+            thrash_skips=state.thrash_skip_count,
             tools_ran=state.tools_ran,
             ledger_mutated=state.ledger_mutated,
             model_beats=state.model_beats,
@@ -999,14 +1006,55 @@ def _handle_tool_batch(
     state.chain_messages.append(assistant_message_from_result(result))
 
     for tc in result.tool_calls:
-        tr = _execute_one(tc, registry=registry, ctx=ctx)
-
-        # Thrash fingerprint streak (Phase B) — pure update then apply to state.
         args: Mapping[str, Any] = (
             tc.arguments
             if tc.arguments_parse_ok and isinstance(tc.arguments, dict)
             else {}
         )
+        # Phase C3: optional skip-identical BEFORE registry execute (default OFF).
+        fp = tool_fingerprint(tc.name, args)
+        same_fp = state.thrash_last_fp is not None and fp == state.thrash_last_fp
+        skipped = False
+        prior_error: str | None = None
+        if same_fp:
+            skip_dec = should_skip_identical(
+                enabled=SKIP_IDENTICAL_ENABLED,
+                streak=state.thrash_streak,
+                last_ok=state.thrash_last_ok,
+                skip_count=state.thrash_skip_count,
+            )
+            if skip_dec.skip:
+                prior_error = state.thrash_last_error
+                # Synthetic model-visible result — never silent, never ends_moment.
+                tr = ToolResult(
+                    ok=False,
+                    error_reason="skipped_identical",
+                    ends_moment=False,
+                    payload={
+                        "blocked_duplicate": True,
+                        "prior_error_reason": prior_error,
+                        "attempt": state.thrash_streak + 1,
+                        "args_echo": dict(args),
+                        "next_actions": [
+                            "change tool or arguments",
+                            "or free-text stop / thrash lesson",
+                        ],
+                        "do_not": ["repeat this exact call"],
+                        "host_note": (
+                            "HOST skipped re-exec of identical failing call "
+                            "— visible by design"
+                        ),
+                    },
+                )
+                state.thrash_skip_count += 1
+                skipped = True
+            else:
+                tr = _execute_one(tc, registry=registry, ctx=ctx)
+        else:
+            tr = _execute_one(tc, registry=registry, ctx=ctx)
+
+        # Thrash fingerprint streak (Phase B) — pure update then apply to state.
+        # Synthetic skips still update streak so thrash HOST / further skips work.
         upd = update_thrash_streak(
             prev_fp=state.thrash_last_fp,
             prev_streak=state.thrash_streak,
@@ -1068,6 +1116,29 @@ def _handle_tool_batch(
                 "content": content[:500],
             },
         )
+        if skipped:
+            _append_beat(
+                moments,
+                moment_id,
+                {
+                    "type": "obs",
+                    "kind": "tool_skip_identical",
+                    "name": tc.name,
+                    "fingerprint": upd.fingerprint,
+                    "streak": upd.streak,
+                    "skip_count": state.thrash_skip_count,
+                    "prior_error_reason": prior_error,
+                    "content": content[:500],
+                },
+            )
+            _LOG.info(
+                "skip-identical moment_id=%s tool=%s streak=%s skip_count=%s fp=%s",
+                moment_id,
+                tc.name,
+                upd.streak,
+                state.thrash_skip_count,
+                upd.fingerprint,
+            )
 
         # Arm / clear skill-commit pending (K17 replace-not-sticky; OQ1 same-batch).
         # Failed tools do not arm or clear. Clears do NOT set skill_commit_sent.
@@ -1286,6 +1357,7 @@ def _finish(
             "work_continue_injects": state.work_continue_injects,
             "skill_commit_injects": state.skill_commit_injects,
             "thrash_host_injects": state.thrash_host_sent,
+            "thrash_skips": state.thrash_skip_count,
         },
     )
     return DoLoopResult(
@@ -1299,6 +1371,7 @@ def _finish(
         work_continue_injects=state.work_continue_injects,
         skill_commit_injects=state.skill_commit_injects,
         thrash_host_injects=state.thrash_host_sent,
+        thrash_skips=state.thrash_skip_count,
         tools_ran=state.tools_ran,
         ledger_mutated=state.ledger_mutated,
         model_beats=state.model_beats,
