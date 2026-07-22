@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from datetime import UTC, datetime
 from typing import Any, Callable, Sequence
 
 from elyra.config import ElyraPaths
@@ -26,6 +27,8 @@ from elyra.loop.continuous_policy import (
     ContinuousRuntimeState,
     continuous_status_block,
     load_continuous_runtime,
+    save_continuous_enabled,
+    should_enqueue_moment_continue,
 )
 from elyra.loop.doloop import DoLoopResult, run_do_loop
 from elyra.loop.orient_slice import (
@@ -41,7 +44,12 @@ from elyra.presence.interject import (
     InterjectBuffer,
     InterjectItem,
 )
-from elyra.presence.queue import KIND_PRIORITY, WakeItem, WakeQueue
+from elyra.presence.queue import (
+    KIND_PRIORITY,
+    REASON_CONTINUOUS_DISABLED,
+    WakeItem,
+    WakeQueue,
+)
 from elyra.presence.timers import STATUS_PENDING, TimerService
 from elyra.presence.user_input import (
     PHASE_IDLE,
@@ -66,6 +74,10 @@ _LOG = logging.getLogger(__name__)
 # Injectable do-loop port (tests inject stubs; production uses run_do_loop).
 # SOCIAL_WAKE_KINDS: imported from continuous_policy (single source of truth).
 RunDoLoopFn = Callable[..., DoLoopResult]
+
+# Goal / task statuses that count as open work for outer moment_continue (K18).
+_OPEN_GOAL_STATUSES = frozenset({"open", "review"})
+_OPEN_TASK_STATUSES = frozenset({"ready", "in_progress", "blocked"})
 
 
 def _why_now(wake: WakeItem) -> str:
@@ -144,8 +156,8 @@ class PresenceWorker:
         self._identity = IdentityStore(paths)
         self._users = UsersStore(paths)
 
-        # Continuous work runtime stub (PR4): load defaults + JSON override.
-        # Finalize does NOT enqueue moment_continue here (PR6 owns that).
+        # Continuous work runtime: defaults + JSON override; finalize enqueues
+        # moment_continue when gates pass (progress-gated; never task_ready).
         self._continuous: ContinuousRuntimeState = load_continuous_runtime(
             paths.data_dir,
             defaults=self.settings.continuous,
@@ -164,6 +176,44 @@ class PresenceWorker:
     # ------------------------------------------------------------------
     # Public API (lock-guarded)
     # ------------------------------------------------------------------
+
+    def set_continuous_enabled(self, enabled: bool) -> dict[str, Any]:
+        """Toggle continuous work; persist JSON; cancel pending continues on OFF.
+
+        PR7 wires ``PATCH /api/continuous`` to this method. Does not invent wakes
+        on ON. On OFF: cancel only pending ``moment_continue`` (not task_ready /
+        timers / user), reset streak, clear last_skip_reason.
+        """
+        want = bool(enabled)
+        with self._lock:
+            prev = bool(self._continuous.enabled)
+            self._continuous.enabled = want
+            try:
+                save_continuous_enabled(self.paths.data_dir, want)
+            except OSError as exc:
+                _LOG.warning("persist continuous.json failed: %s", exc)
+            cancelled: list[str] = []
+            if not want:
+                cancelled = self._queue.cancel_all_pending_of_kind(
+                    "moment_continue", REASON_CONTINUOUS_DISABLED
+                )
+                self._continuous.streak = 0
+                self._continuous.last_skip_reason = None
+            pending_continues = len(
+                self._queue.pending_of_kind("moment_continue")
+            )
+            block = continuous_status_block(
+                self._continuous,
+                self.settings.continuous,
+                pending_moment_continues=pending_continues,
+            )
+            return {
+                "ok": True,
+                "enabled": want,
+                "changed": prev != want,
+                "cancelled_moment_continues": cancelled,
+                "continuous": block,
+            }
 
     @property
     def busy(self) -> bool:
@@ -475,6 +525,10 @@ class PresenceWorker:
                 except KeyError:
                     pass
                 raise
+            # User-band claim resets continuous streak (design C runtime state).
+            if wake.kind in SOCIAL_WAKE_KINDS:
+                self._continuous.streak = 0
+
             self._phase = PHASE_IN_MOMENT
             self._busy = True
             self._active_moment_id = moment_id
@@ -506,6 +560,12 @@ class PresenceWorker:
         )
         why = _why_now(wake)
         user_id = _user_id_from_wake(wake) or "operator"
+
+        # Snapshot continuous + open-work for in-moment work_context (no lock
+        # held during do-loop; toggle mid-moment takes effect next moment).
+        with self._lock:
+            cont_on = bool(self._continuous.enabled)
+        has_open = self._has_open_work()
 
         def rebuild_outer() -> list[dict[str, Any]]:
             # Re-read glass + goals from disk every rebuild (ledger edits mid-moment
@@ -558,6 +618,9 @@ class PresenceWorker:
             settings=self.settings,
             moments=self._moments,
             social_wake=social,
+            wake_kind=wake.kind,
+            has_open_goals_slice=has_open,
+            continuous_enabled=cont_on,
             drain_interjections=self._drain_interjections,
         )
         return result, list(ctx.skills_used)
@@ -570,7 +633,7 @@ class PresenceWorker:
         *,
         skills_used: list[str] | None = None,
     ) -> None:
-        """Close moment, mark wake done, phase → waiting|idle (under lock)."""
+        """Close moment, mark wake done, phase → waiting|idle; maybe continue."""
         with self._lock:
             stop = result.stop_reason if result else "error"
             if stop not in STOP_REASONS:
@@ -614,10 +677,146 @@ class PresenceWorker:
                     arm.wait_id if arm is not None else None,
                 )
 
+            # Streak: consecutive moment_continue moments completed (not
+            # task_ready). Increment after mark_done so chain length is honest.
+            if wake.kind == "moment_continue":
+                self._continuous.streak = int(self._continuous.streak) + 1
+
+            # Continuous outer re-entry (K4/K15/K16): never enqueue_task_ready.
+            self._maybe_enqueue_moment_continue_unlocked(
+                wake, moment_id, result
+            )
+
             self._busy = False
             self._active_moment_id = None
             if result and result.error:
                 self._worker_error = result.error
+
+    def _maybe_enqueue_moment_continue_unlocked(
+        self,
+        wake: WakeItem,
+        moment_id: str,
+        result: DoLoopResult | None,
+    ) -> None:
+        """Progress-gated outer re-wake after close (caller holds lock).
+
+        Prefer *pending* ``task_ready`` only — never call ``enqueue_task_ready``
+        / re-arm ledger ready tasks (K4/K16). Speak-only moments never continue
+        (K15: tools_ran is non-speak only).
+        """
+        cont = self._continuous
+        cfg = self.settings.continuous
+        stop = (result.stop_reason if result else "error") or "error"
+        if stop not in STOP_REASONS:
+            stop = "error"
+
+        tools_ran = bool(result.tools_ran) if result else False
+        ledger_mutated = bool(result.ledger_mutated) if result else False
+        model_beats = int(result.model_beats) if result else 0
+        flood_beats = int(result.channel_flood_beats) if result else 0
+        last_flood = bool(result.last_stop_hop_was_flood) if result else False
+
+        pending_task_ready = len(self._queue.pending_of_kind("task_ready"))
+        pending_continues = len(self._queue.pending_of_kind("moment_continue"))
+        has_pending_wait = bool(
+            self._timers.list_waits(status=STATUS_PENDING)
+        )
+        # Re-read ledger at finalize so mid-moment closes are respected (K18).
+        has_open = self._has_open_work()
+
+        seconds_since: float | None = None
+        if cont.last_enqueue_at is not None:
+            last = cont.last_enqueue_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=UTC)
+            seconds_since = (
+                datetime.now(UTC) - last.astimezone(UTC)
+            ).total_seconds()
+
+        decision = should_enqueue_moment_continue(
+            continuous_enabled=bool(cont.enabled),
+            stop_reason=stop,
+            wake_kind=wake.kind,
+            tools_ran=tools_ran,
+            ledger_mutated=ledger_mutated,
+            has_pending_wait=has_pending_wait,
+            pending_task_ready_count=pending_task_ready,
+            has_open_work=has_open,
+            pending_moment_continues=pending_continues,
+            streak=int(cont.streak),
+            max_streak=int(cfg.max_continue_streak),
+            seconds_since_last_enqueue=seconds_since,
+            cooldown_seconds=int(cfg.cooldown_seconds),
+            model_beats=model_beats,
+            flood_beats=flood_beats,
+            last_stop_hop_was_flood=last_flood,
+            require_progress=bool(cfg.require_progress),
+            skip_pure_social=bool(cfg.skip_pure_social),
+            max_pending_continues=int(cfg.max_pending_continues),
+        )
+
+        now = datetime.now(UTC)
+        if decision.start_cooldown:
+            # Successful enqueue *and* flood thrash skip tick cooldown (gate 11).
+            cont.last_enqueue_at = now
+
+        if not decision.enqueue:
+            # Do not clobber status with "disabled" on every OFF moment.
+            if decision.reason != "disabled":
+                cont.last_skip_reason = decision.reason
+                _LOG.info(
+                    "moment_continue skip reason=%s moment_id=%s "
+                    "wake_kind=%s tools_ran=%s ledger_mutated=%s "
+                    "pending_task_ready=%d",
+                    decision.reason,
+                    moment_id,
+                    wake.kind,
+                    tools_ran,
+                    ledger_mutated,
+                    pending_task_ready,
+                )
+            return
+
+        cont.last_skip_reason = None
+
+        # K4/K16: enqueue moment_continue only — never enqueue_task_ready.
+        payload = {
+            "source_moment_id": moment_id,
+            "source_wake_kind": wake.kind,
+            "source_stop_reason": stop,
+            "streak": int(cont.streak),
+        }
+        item = self._queue.enqueue("moment_continue", payload)
+        cont.last_continue_wake_id = item.id
+        cont.last_source_moment_id = moment_id
+        _LOG.info(
+            "moment_continue enqueued wake_id=%s source_moment=%s "
+            "streak=%s stop=%s",
+            item.id,
+            moment_id,
+            cont.streak,
+            stop,
+        )
+
+    def _has_open_work(self) -> bool:
+        """True if any goal open|review or task ready|in_progress|blocked."""
+        try:
+            goals = self._ensure_goals().list_goals()
+        except (OSError, ValueError, TypeError) as exc:
+            _LOG.warning("has_open_work list_goals failed: %s", exc)
+            return False
+        for g in goals:
+            if not isinstance(g, dict):
+                continue
+            if g.get("status") in _OPEN_GOAL_STATUSES:
+                return True
+            tasks = g.get("tasks") or []
+            if not isinstance(tasks, list):
+                continue
+            for t in tasks:
+                if isinstance(t, dict) and t.get("status") in _OPEN_TASK_STATUSES:
+                    return True
+        return False
 
     def _fail_in_flight(
         self,
