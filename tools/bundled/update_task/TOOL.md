@@ -12,4 +12,5 @@ Patch fields on an existing task in the goals/tasks ledger.
 - Optional: `title`, `status` (pending|ready|in_progress|blocked|done|cancelled), `notes`
 - On **transition** to `status=ready` (not when already ready), durable-enqueues a
   `task_ready` wake when the host port is set (deduped by the host).
+- On success, marks ledger activity (`mark_task_changed`) for continue policy.
 - Does **not** end the moment; task `blocked` is ledger state only, not a moment stop.

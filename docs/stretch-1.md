@@ -152,7 +152,7 @@ Also ship **create-skill** (same dogfood idea for playbooks).
 
 ## 10. Base catalog (names)
 
-**Tools:** `read_file`, `list_dir`, `grep`, `search_replace`, `run` (sandbox) · `update_task`, `update_goal` · `speak`, `schedule_wake`, wait/questions · `load_skill` · `verify_tool`, `promote_tool` · later `search_tools` / `use_tool`.
+**Tools:** `read_file`, `list_dir`, `grep`, `search_replace`, `run` (sandbox) · `create_goal`, `create_task`, `list_goals`, `get_goal`, `get_task`, `update_task`, `update_goal` · `speak`, `schedule_wake`, wait/questions · `load_skill` · `verify_tool`, `promote_tool` · later `search_tools` / `use_tool`.
 
 **Skills:** `talk`, `plan-work`, `do-work`, `review-work`, `rest`, `create-skill`, `create-tool`.
 

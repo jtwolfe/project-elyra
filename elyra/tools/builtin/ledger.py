@@ -109,7 +109,7 @@ def _enqueue_task_ready(
 
 
 def _compact_goal(goal: dict[str, Any]) -> dict[str, Any]:
-    """Orient-friendly goal summary: id/title/status + short task list."""
+    """Compact list_goals summary: id/title/status + short task list."""
     tasks_raw = goal.get("tasks") or []
     tasks: list[dict[str, Any]] = []
     if isinstance(tasks_raw, list):

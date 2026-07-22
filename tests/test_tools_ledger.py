@@ -211,6 +211,57 @@ def test_create_task_ready_enqueues_and_marks(paths, store: GoalsStore) -> None:
     assert changed == [True]
 
 
+def test_create_task_enqueue_wake_failure_after_ready_still_ok(
+    paths, store: GoalsStore
+) -> None:
+    """Enqueue raise after durable create-as-ready must not fail the tool."""
+
+    def boom(**_kwargs: Any) -> str:
+        raise RuntimeError("wake queue down")
+
+    g = store.create_goal("G")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Ready now", "status": "ready"},
+        _ctx(paths, store, enqueue_wake=boom),
+    )
+    assert result.ok is True
+    assert result.payload["task"]["status"] == "ready"
+    assert result.payload["became_ready"] is True
+    assert result.payload.get("warning", "").startswith("task_ready_enqueue_failed:")
+    assert store.get_task(result.payload["task"]["id"])["status"] == "ready"
+
+
+def test_create_task_dual_path_store_hook_and_tool_enqueue_both_fire(
+    tmp_path: Path,
+) -> None:
+    """Documented dual path on create-as-ready: both may fire; host must dedupe."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store_calls: list[tuple[str, str]] = []
+    tool_wakes: list[dict[str, Any]] = []
+
+    store = GoalsStore(
+        paths,
+        on_task_ready=lambda tid, gid: store_calls.append((tid, gid)),
+    )
+    g = store.create_goal("G")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Ready now", "status": "ready"},
+        _ctx(
+            paths,
+            store,
+            enqueue_wake=lambda **kw: tool_wakes.append(kw) or "w1",
+        ),
+    )
+    assert result.ok is True
+    tid = result.payload["task"]["id"]
+    assert store_calls == [(tid, g["id"])]
+    assert len(tool_wakes) == 1
+    assert tool_wakes[0]["kind"] == "task_ready"
+    assert tool_wakes[0]["task_id"] == tid
+    assert tool_wakes[0]["goal_id"] == g["id"]
+
+
 def test_create_task_goal_not_found(paths, store: GoalsStore) -> None:
     result = create_task(
         {"goal_id": "g_missing", "title": "Orphan"},

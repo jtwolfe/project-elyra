@@ -14,3 +14,4 @@ Patch fields on an existing goal in the goals/tasks ledger.
   `force=true` still closes but returns a warning in the tool result payload.
 - `force` only bypasses the soft-close warning key; it is not a promote override.
   Meaningful only with a field change (e.g. `status=closed`); `force` alone is rejected.
+- On success, marks ledger activity (`mark_task_changed`) for continue policy.
