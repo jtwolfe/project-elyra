@@ -73,8 +73,7 @@ def maybe_migrate_self_v2(self_path: Path) -> bool:
         return False
     if content_sha256(text) != SEED_V1_SHA256:
         return False
-    if not text.endswith("\n"):
-        text = text + "\n"
+    # Hash gate implies text == SEED_V1_TEXT (ends with \n); append Drive + marker.
     self_path.write_text(text + _DRIVE_SECTION_APPEND, encoding="utf-8")
     return True
 
