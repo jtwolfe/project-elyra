@@ -1030,6 +1030,28 @@ def test_streak_increments_on_moment_continue_and_resets_on_user(paths):
         _stop_join(worker, stop, t)
 
 
+def test_streak_not_incremented_when_continuous_disabled_mid_flight(paths):
+    """Issue 1: OFF mid-flight then moment_continue finalize must leave streak 0."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    worker._continuous.streak = 0  # noqa: SLF001
+
+    # Simulate toggle OFF while a moment_continue is in flight (after claim).
+    worker.set_continuous_enabled(False)
+    assert worker._continuous.streak == 0  # noqa: SLF001
+    assert worker._continuous.enabled is False  # noqa: SLF001
+
+    _finalize_direct(
+        worker,
+        wake_kind="moment_continue",
+        payload={"source_moment_id": "midflight", "streak": 0},
+        result=_progress_result(tools_ran=True),
+    )
+    assert worker._continuous.streak == 0  # noqa: SLF001
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+
+
 def test_set_continuous_off_cancels_pending_moment_continues(paths):
     """Toggle OFF cancels only moment_continue; leaves task_ready untouched."""
     worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())

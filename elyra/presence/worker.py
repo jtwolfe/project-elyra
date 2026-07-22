@@ -678,8 +678,9 @@ class PresenceWorker:
                 )
 
             # Streak: consecutive moment_continue moments completed (not
-            # task_ready). Increment after mark_done so chain length is honest.
-            if wake.kind == "moment_continue":
+            # task_ready). Only while continuous still ON — mid-flight toggle
+            # OFF resets streak and must not leave residual +1 in status.
+            if wake.kind == "moment_continue" and self._continuous.enabled:
                 self._continuous.streak = int(self._continuous.streak) + 1
 
             # Continuous outer re-entry (K4/K15/K16): never enqueue_task_ready.

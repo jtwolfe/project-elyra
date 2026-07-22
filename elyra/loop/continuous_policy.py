@@ -3,9 +3,10 @@
 Scope: gates for in-moment work-continue HOST nudge and outer moment_continue
 re-wake; HOST string builders; decision dataclasses; runtime state shape.
 In scope: ContinuousSettings knobs, flood thrash formula, progress definitions
-(tools_ran = non-speak only; spoke alone never qualifies).
+(tools_ran = non-speak only; spoke alone never qualifies); ContinuousRuntimeState
+load/save helpers used by PresenceWorker finalize and toggle.
 Out of scope: wake enqueue I/O, do-loop scheduling, time-idle continue_policy
-(see continue_policy.py — different concept), finalize wiring (PR6).
+(see continue_policy.py — different concept). Finalize I/O lives in presence.worker.
 
 Do not put continuous gates in continue_policy.py (name collision with 8-min idle).
 """
@@ -76,7 +77,8 @@ class ContinuousRuntimeState:
     """Worker-owned mutable continuous flag + outer-chain counters.
 
     Defaults for enabled come from ContinuousSettings / continuous.json.
-    Streak/cooldown updated by finalize wiring (PR6); this PR only loads stub.
+    PresenceWorker finalize updates streak/cooldown/last_* on outer continue;
+    ``set_continuous_enabled`` persists enabled and resets streak on OFF.
     """
 
     enabled: bool = False
@@ -319,7 +321,8 @@ def load_continuous_runtime(
     """Load ContinuousRuntimeState: defaults then data/runtime/continuous.json.
 
     Missing or corrupt JSON → defaults only (enabled from ContinuousSettings).
-    Does not invent wakes. Stub for PR4; toggle API (PR7) writes the file.
+    Does not invent wakes. Worker ``set_continuous_enabled`` / PR7 API write
+    the file via ``save_continuous_enabled``.
     """
     cfg = defaults if defaults is not None else default_settings().continuous
     state = ContinuousRuntimeState(enabled=bool(cfg.enabled))
