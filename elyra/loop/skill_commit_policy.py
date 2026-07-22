@@ -1,12 +1,14 @@
-"""Skill classification + playbook framing for post-load_skill recovery.
+"""Skill classification + playbook framing + post-load commit / no_speak policy.
 
-Scope (PR1): work/social/no-commit name sets, pure classifiers, and
-``format_playbook_active`` for model-facing ``load_skill`` wire content.
-Out of scope (later PRs): skill-commit HOST inject, no_speak de-conflict
-predicates, post-load tool_choice lever.
+Scope: work/social/no-commit name sets, pure classifiers, ``format_playbook_active``
+for model-facing ``load_skill`` wire content, skill-commit HOST builder, and pure
+predicates for skill-commit inject + no_speak de-conflict (PR2).
+Out of scope: post-load tool_choice lever (later PR).
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from elyra.skills import normalize_skill_name
 
@@ -27,6 +29,13 @@ NO_COMMIT_SKILLS = frozenset({"rest"})
 _WORK_KEYS = frozenset(normalize_skill_name(s) for s in WORK_SKILLS)
 _SOCIAL_KEYS = frozenset(normalize_skill_name(s) for s in SOCIAL_SKILLS)
 _NO_COMMIT_KEYS = frozenset(normalize_skill_name(s) for s in NO_COMMIT_SKILLS)
+
+# Template for skill-commit HOST (chain-only; never SpeakTransport). {name} filled by builder.
+SKILL_COMMIT_HOST = (
+    "HOST: skill {name} is loaded — execute its next checklist step with tools now "
+    "(update_task / create_task / install_tool_draft / verify_tool / promote_tool / "
+    "install_skill / speak as the playbook says). Do not re-plan in free-text."
+)
 
 
 def is_work_skill(name: str) -> bool:
@@ -98,13 +107,84 @@ def format_playbook_active(
     return "\n".join(lines)
 
 
+def skill_commit_host_message(name: str) -> str:
+    """HOST skill-commit line injected into the in-turn chain (obs / user)."""
+    return SKILL_COMMIT_HOST.format(name=name)
+
+
+@dataclass(frozen=True)
+class SkillCommitNudgeDecision:
+    """Result of should_skill_commit_nudge."""
+
+    inject: bool
+    reason: str  # injected | none_pending | already_sent | not_eligible | not_free_text | …
+
+
+def should_skill_commit_nudge(
+    *,
+    pending_skill_name: str | None,
+    skill_commit_sent: bool,
+    free_text_no_tools: bool = True,
+) -> SkillCommitNudgeDecision:
+    """Inject once when a commit-eligible skill is pending and free-text hop has no tools.
+
+    Intentionally does NOT gate on flood, continuous_enabled, or social_wake.
+    Flood is the live failure mode; continuous OFF must still recover mid-playbook.
+    rest must never appear as pending if arm path is correct; belt-and-suspenders
+    rejects non-eligible names here too.
+    """
+    if not free_text_no_tools:
+        return SkillCommitNudgeDecision(False, "not_free_text")
+    if skill_commit_sent:
+        return SkillCommitNudgeDecision(False, "already_sent")
+    if not pending_skill_name:
+        return SkillCommitNudgeDecision(False, "none_pending")
+    if not is_commit_eligible_skill(pending_skill_name):
+        return SkillCommitNudgeDecision(False, "not_eligible")
+    return SkillCommitNudgeDecision(True, "injected")
+
+
+def should_allow_no_speak(
+    *,
+    social_wake: bool,
+    spoke: bool,
+    no_speak_nudge_sent: bool,
+    pending_skill_name: str | None,
+    skill_commit_sent: bool,
+) -> bool:
+    """Whether the free-text path may inject NO_SPEAK_NUDGE this hop.
+
+    Embeds the legacy structural gates (social / !spoke / !sent) so the free-text
+    branch can replace the bare if with this single call.
+    """
+    if not social_wake or spoke or no_speak_nudge_sent:
+        return False
+    # Work (or local-unknown) skill pending and commit HOST not yet sent →
+    # skill_commit owns this hop. talk/rest pending: talk is social skill so
+    # is_work_skill_or_unknown is False → no_speak allowed after skill_commit
+    # order runs first when pending; if pending still set without commit
+    # (should not happen for talk if order correct), no_speak not suppressed.
+    if (
+        pending_skill_name
+        and is_work_skill_or_unknown(pending_skill_name)
+        and not skill_commit_sent
+    ):
+        return False
+    return True
+
+
 __all__ = [
     "NO_COMMIT_SKILLS",
+    "SKILL_COMMIT_HOST",
     "SOCIAL_SKILLS",
     "WORK_SKILLS",
+    "SkillCommitNudgeDecision",
     "format_playbook_active",
     "is_commit_eligible_skill",
     "is_social_skill",
     "is_work_skill",
     "is_work_skill_or_unknown",
+    "should_allow_no_speak",
+    "should_skill_commit_nudge",
+    "skill_commit_host_message",
 ]

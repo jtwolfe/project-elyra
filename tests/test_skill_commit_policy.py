@@ -1,9 +1,10 @@
-"""Pure tests for skill_commit_policy name sets + playbook framing (PR1)."""
+"""Pure tests for skill_commit_policy (name sets, framing, commit / no_speak)."""
 
 from __future__ import annotations
 
 from elyra.loop.skill_commit_policy import (
     NO_COMMIT_SKILLS,
+    SKILL_COMMIT_HOST,
     SOCIAL_SKILLS,
     WORK_SKILLS,
     format_playbook_active,
@@ -11,6 +12,9 @@ from elyra.loop.skill_commit_policy import (
     is_social_skill,
     is_work_skill,
     is_work_skill_or_unknown,
+    should_allow_no_speak,
+    should_skill_commit_nudge,
+    skill_commit_host_message,
 )
 
 
@@ -104,3 +108,183 @@ def test_format_playbook_active_minimal_name_body() -> None:
     assert "catalog:" not in text
     assert "tool_call implementing step 1" in text
     assert "Speak first." in text
+
+
+# ---------------------------------------------------------------------------
+# PR2: skill-commit HOST + pure predicates
+# ---------------------------------------------------------------------------
+
+
+def test_skill_commit_host_message_exact_string() -> None:
+    msg = skill_commit_host_message("plan-work")
+    assert msg == (
+        "HOST: skill plan-work is loaded — execute its next checklist step with tools now "
+        "(update_task / create_task / install_tool_draft / verify_tool / promote_tool / "
+        "install_skill / speak as the playbook says). Do not re-plan in free-text."
+    )
+    assert msg.startswith("HOST:")
+    assert msg == SKILL_COMMIT_HOST.format(name="plan-work")
+    assert "talk" not in msg or "speak as the playbook says" in msg
+    # talk name
+    talk = skill_commit_host_message("talk")
+    assert "skill talk is loaded" in talk
+    assert talk.startswith("HOST:")
+
+
+def test_should_skill_commit_nudge_table() -> None:
+    # Happy path
+    d = should_skill_commit_nudge(
+        pending_skill_name="plan-work",
+        skill_commit_sent=False,
+        free_text_no_tools=True,
+    )
+    assert d.inject is True
+    assert d.reason == "injected"
+
+    # talk eligible
+    d = should_skill_commit_nudge(
+        pending_skill_name="talk",
+        skill_commit_sent=False,
+    )
+    assert d.inject is True
+
+    # local unknown eligible
+    d = should_skill_commit_nudge(
+        pending_skill_name="my-local",
+        skill_commit_sent=False,
+    )
+    assert d.inject is True
+
+    # already sent
+    d = should_skill_commit_nudge(
+        pending_skill_name="plan-work",
+        skill_commit_sent=True,
+    )
+    assert d.inject is False
+    assert d.reason == "already_sent"
+
+    # none pending
+    d = should_skill_commit_nudge(
+        pending_skill_name=None,
+        skill_commit_sent=False,
+    )
+    assert d.inject is False
+    assert d.reason == "none_pending"
+
+    d = should_skill_commit_nudge(
+        pending_skill_name="",
+        skill_commit_sent=False,
+    )
+    assert d.inject is False
+    assert d.reason == "none_pending"
+
+    # rest belt-and-suspenders not_eligible
+    d = should_skill_commit_nudge(
+        pending_skill_name="rest",
+        skill_commit_sent=False,
+    )
+    assert d.inject is False
+    assert d.reason == "not_eligible"
+
+    # free_text_no_tools=False
+    d = should_skill_commit_nudge(
+        pending_skill_name="plan-work",
+        skill_commit_sent=False,
+        free_text_no_tools=False,
+    )
+    assert d.inject is False
+    assert d.reason == "not_free_text"
+
+    # Independent of flood / continuous — no parameters for those (always injects).
+
+
+def test_should_allow_no_speak_table() -> None:
+    # Legacy social silent path
+    assert should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name=None,
+        skill_commit_sent=False,
+    )
+
+    # Non-social
+    assert not should_allow_no_speak(
+        social_wake=False,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name=None,
+        skill_commit_sent=False,
+    )
+
+    # Already spoke
+    assert not should_allow_no_speak(
+        social_wake=True,
+        spoke=True,
+        no_speak_nudge_sent=False,
+        pending_skill_name=None,
+        skill_commit_sent=False,
+    )
+
+    # Already sent
+    assert not should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=True,
+        pending_skill_name=None,
+        skill_commit_sent=False,
+    )
+
+    # Work skill pending + commit not sent → suppress
+    assert not should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name="plan-work",
+        skill_commit_sent=False,
+    )
+
+    # Local unknown pending → suppress
+    assert not should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name="custom-playbook",
+        skill_commit_sent=False,
+    )
+
+    # After commit spent (pending cleared, skill_commit_sent True) → allow
+    assert should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name=None,
+        skill_commit_sent=True,
+    )
+
+    # talk pending is social → not suppressed by work gate (skill_commit order owns hop first)
+    assert should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name="talk",
+        skill_commit_sent=False,
+    )
+
+    # rest pending → not suppressed
+    assert should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name="rest",
+        skill_commit_sent=False,
+    )
+
+    # Work pending but skill_commit_sent already True (odd state) → allow
+    assert should_allow_no_speak(
+        social_wake=True,
+        spoke=False,
+        no_speak_nudge_sent=False,
+        pending_skill_name="plan-work",
+        skill_commit_sent=True,
+    )
