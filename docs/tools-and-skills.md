@@ -109,7 +109,7 @@ The `create-tool` skill body should be a strict checklist matching the above so 
 | Group | Tools |
 |-------|--------|
 | Sandbox | `read_file`, `list_dir`, `grep`, `search_replace`, `run` |
-| Ledger | `update_task`, `update_goal` |
+| Ledger | `create_goal`, `create_task`, `list_goals`, `get_goal`, `get_task`, `update_task`, `update_goal` |
 | Social | `speak`, wait/questions, `schedule_wake` |
 | Skills | `load_skill` (or host equivalent) |
 | Growth | `install_tool_draft`, `verify_tool`, `promote_tool`, `install_skill` |

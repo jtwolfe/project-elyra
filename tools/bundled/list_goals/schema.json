@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["open", "review", "closed", "cancelled"],
+      "description": "Optional filter by goal status"
+    }
+  },
+  "additionalProperties": false
+}

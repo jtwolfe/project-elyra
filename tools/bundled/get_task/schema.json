@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "Id of the task to fetch (e.g. t_…)"
+    }
+  },
+  "required": ["task_id"],
+  "additionalProperties": false
+}

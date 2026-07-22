@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Goal title (non-empty)"
+    },
+    "acceptance": {
+      "type": "string",
+      "description": "Acceptance criteria text"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "review", "cancelled"],
+      "description": "Initial goal status (default open; closed not allowed on create)"
+    }
+  },
+  "required": ["title"],
+  "additionalProperties": false
+}
