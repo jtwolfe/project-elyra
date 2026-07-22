@@ -50,7 +50,7 @@ class InMomentNudgeDecision:
     """Result of should_in_moment_work_nudge."""
 
     inject: bool
-    reason: str  # injected | disabled | budget | not_workish | social_nudge_first | need_spoke | flood | …
+    reason: str  # injected | disabled | budget | not_workish | social_nudge_first | need_spoke | flood | thrash_recovery | …
 
 
 @dataclass(frozen=True)
@@ -123,6 +123,7 @@ def should_in_moment_work_nudge(
     max_nudges: int,
     work_context: bool,
     last_hop_was_flood: bool,
+    thrash_host_sent: int = 0,
 ) -> InMomentNudgeDecision:
     """Decide whether to inject the work-continue HOST before accepting no_tools.
 
@@ -136,9 +137,15 @@ def should_in_moment_work_nudge(
 
     Progress inputs are folded into ``work_context`` by the caller via
     ``in_moment_work_context`` (tools_ran / ledger_mutated not re-checked here).
+
+    K15: when ``thrash_host_sent > 0``, suppress work-continue for the rest of
+    the moment (``thrash_recovery``) so free-text does not re-amplify tool spam.
     """
     if not continuous_enabled:
         return InMomentNudgeDecision(inject=False, reason="disabled")
+    # K15: thrash HOST already sent this moment → do not push "call tools".
+    if thrash_host_sent > 0:
+        return InMomentNudgeDecision(inject=False, reason="thrash_recovery")
     if last_hop_was_flood:
         return InMomentNudgeDecision(inject=False, reason="flood")
     # K8: social no-speak first, then work-continue only after spoke.

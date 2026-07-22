@@ -2542,3 +2542,161 @@ def test_real_model_tool_call_through_doloop(
     if result.spoke:
         glass = list_messages(paths=paths)
         assert any(m.get("role") == "assistant" for m in glass)
+
+
+# ---------------------------------------------------------------------------
+# Tool thrash (Phase B): post-batch HOST + K15 work_continue suppress
+# ---------------------------------------------------------------------------
+
+
+def test_identical_fail_tools_inject_thrash_host_once(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """Three identical failing read_file → one thrash HOST; fourth does not re-inject."""
+    mid = moments.open_moment(why_now="thrash read", moment_id="mthrash1")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/search_web/TOOL.md"}
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),
+            # After thrash HOST, free-text → stop (continuous OFF).
+            _text("ok I'll stop"),
+            # Would be hop if thrash re-injected; should not run.
+            _text("should not run"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.thrash_host_injects == 1
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    thrash_obs = [
+        b for b in beats if b.get("type") == "obs" and b.get("kind") == "tool_thrash"
+    ]
+    assert len(thrash_obs) == 1
+    content = thrash_obs[0].get("content") or ""
+    assert content.startswith("HOST:")
+    assert "tool thrash" in content
+    assert "read_file" in content
+    assert "call tools to continue" not in content
+    assert thrash_obs[0].get("streak") == 3
+    assert _is_host_inject({"role": "user", "content": content})
+    # Thrash HOST never on glass / SpeakTransport
+    glass = list_messages(paths=paths)
+    assert not any("tool thrash" in (m.get("content") or "") for m in glass)
+    # attempt# present on tool results (streak after each call)
+    tool_beats = [b for b in beats if b.get("type") == "tool" and b.get("name") == "read_file"]
+    assert len(tool_beats) == 3
+    bodies = [json.loads(b["content"]) for b in tool_beats if b.get("content")]
+    assert [b.get("attempt") for b in bodies] == [1, 2, 3]
+    assert all(b.get("ok") is False for b in bodies)
+
+
+def test_thrash_host_budget_one_per_moment(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Fourth identical fail after thrash HOST does not second-inject."""
+    mid = moments.open_moment(why_now="thrash budget", moment_id="mthrash2")
+    ctx.moment_id = mid
+    missing = {"path": "nope.md"}
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),  # injects thrash HOST
+            _tc("read_file", missing, call_id="c4"),  # streak 4 but budget spent
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_host_injects == 1
+    thrash_obs = [
+        b
+        for b in moments.list_beats(mid)
+        if b.get("type") == "obs" and b.get("kind") == "tool_thrash"
+    ]
+    assert len(thrash_obs) == 1
+
+
+def test_work_continue_suppressed_after_thrash_host(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """Continuous ON + thrash HOST → free-text does not get work_continue (K15)."""
+    mid = moments.open_moment(why_now="thrash k15", moment_id="mthrashk15")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/x/TOOL.md"}
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),  # thrash HOST
+            _text("premature free text after thrash"),
+            _text("should not get work_continue"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings_continuous(enabled=True),
+        moments=moments,
+        social_wake=False,
+        wake_kind="task_ready",
+        continuous_enabled=True,
+    )
+    assert result.thrash_host_injects == 1
+    assert result.work_continue_injects == 0
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    assert any(b.get("kind") == "tool_thrash" for b in beats)
+    assert not any(b.get("kind") == "work_continue" for b in beats)
+    glass = list_messages(paths=paths)
+    assert not any(WORK_CONTINUE_HOST in (m.get("content") or "") for m in glass)
+    assert not any("tool thrash" in (m.get("content") or "") for m in glass)
+
+
+def test_free_text_order_unchanged_without_thrash(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Without thrash, skill_commit → no_speak → work_continue order still holds.
+
+    Regression lock: thrash must not reorder free-text injects.
+    """
+    mid = moments.open_moment(why_now="order lock", moment_id="morderlock")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _text("no speak yet"),
+            _tc("speak", {"text": "hello"}, call_id="c2"),
+            _text("after speak free"),
+            _text("after work nudge free"),
+        ]
+    )
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        settings=_settings_continuous(enabled=True),
+        moments=moments,
+        social_wake=True,
+        wake_kind="user_message",
+        continuous_enabled=True,
+    )
+    assert result.thrash_host_injects == 0
+    assert result.work_continue_injects == 1
+    kinds = [b.get("kind") for b in moments.list_beats(mid) if b.get("type") == "obs"]
+    assert "no_speak_nudge" in kinds
+    assert "work_continue" in kinds
+    assert kinds.index("no_speak_nudge") < kinds.index("work_continue")
+    assert "tool_thrash" not in kinds

@@ -432,6 +432,23 @@ def test_in_moment_nudge_not_workish():
     assert d.reason == "not_workish"
 
 
+def test_in_moment_nudge_thrash_recovery():
+    """K15: thrash_host_sent > 0 suppresses work_continue (thrash_recovery)."""
+    d = should_in_moment_work_nudge(
+        continuous_enabled=True,
+        social_wake=False,
+        spoke=False,
+        no_speak_nudge_pending_or_needed=False,
+        work_nudge_sent=0,
+        max_nudges=1,
+        work_context=True,
+        last_hop_was_flood=False,
+        thrash_host_sent=1,
+    )
+    assert d.inject is False
+    assert d.reason == "thrash_recovery"
+
+
 def test_in_moment_work_context_social_ignores_open_goals_alone():
     assert (
         in_moment_work_context(

@@ -2,11 +2,11 @@
 
 Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak
 nudge, budgeted in-moment work-continue HOST (continuous policy), post-load
-skill-commit HOST (skill_commit_policy), optional post-load tool_choice pin
-(default OFF).
+skill-commit HOST (skill_commit_policy), post-batch tool thrash HOST
+(tool_thrash_policy), optional post-load tool_choice pin (default OFF).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
           completion-ingress channel hygiene (sanitize before beat/chain),
-          tools_ran / ledger_mutated / flood counters on DoLoopResult.
+          tools_ran / ledger_mutated / flood / thrash counters on DoLoopResult.
 Out of scope: registry discovery, sandbox FS, presence phase machine, glass
 writes, outer moment_continue enqueue (PR6).
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
 
@@ -46,6 +46,13 @@ from elyra.loop.skill_commit_policy import (
     should_allow_no_speak,
     should_skill_commit_nudge,
     skill_commit_host_message,
+)
+from elyra.loop.tool_thrash_policy import (
+    THRASH_TRIED_CAP,
+    should_inject_thrash_host,
+    thrash_detail,
+    thrash_host_message,
+    update_thrash_streak,
 )
 from elyra.loop.stop import (
     STOP_ERROR,
@@ -109,6 +116,7 @@ class DoLoopResult:
     continue_injects: int = 0  # time-idle HOST injects (continue_policy)
     work_continue_injects: int = 0  # continuous work-continue HOST injects
     skill_commit_injects: int = 0  # post-load_skill commit HOST injects
+    thrash_host_injects: int = 0  # post-batch tool thrash HOST injects
     # K15: ≥1 successful non-speak tool (ok and not counts_as_speak); speak alone False
     tools_ran: bool = False
     ledger_mutated: bool = False  # mark_task_changed fired this moment
@@ -140,6 +148,14 @@ class _LoopState:
     last_stop_hop_was_flood: bool = False
     arm_wait: WaitArm | None = None
     reouter_count: int = 0
+    # Tool thrash (Phase B) — moment-scoped; survive in-turn re-outer.
+    thrash_last_fp: str | None = None
+    thrash_streak: int = 0
+    thrash_last_ok: bool | None = None
+    thrash_last_error: str | None = None
+    thrash_last_tool: str | None = None
+    thrash_host_sent: int = 0
+    thrash_tried: list[str] = field(default_factory=list)
 
 
 def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
@@ -658,6 +674,7 @@ def run_do_loop(
             continue_injects=state.continue_injects,
             work_continue_injects=state.work_continue_injects,
             skill_commit_injects=state.skill_commit_injects,
+            thrash_host_injects=state.thrash_host_sent,
             tools_ran=state.tools_ran,
             ledger_mutated=state.ledger_mutated,
             model_beats=state.model_beats,
@@ -902,6 +919,7 @@ def _run_loop_body(
             max_nudges=work_nudge_max,
             work_context=work_ctx,
             last_hop_was_flood=hop_was_flood,
+            thrash_host_sent=state.thrash_host_sent,
         )
         if nudge.inject:
             host_line = work_continue_host_message()
@@ -954,6 +972,37 @@ def _handle_tool_batch(
 
     for tc in result.tool_calls:
         tr = _execute_one(tc, registry=registry, ctx=ctx)
+
+        # Thrash fingerprint streak (Phase B) — pure update then apply to state.
+        args: Mapping[str, Any] = (
+            tc.arguments
+            if tc.arguments_parse_ok and isinstance(tc.arguments, dict)
+            else {}
+        )
+        upd = update_thrash_streak(
+            prev_fp=state.thrash_last_fp,
+            prev_streak=state.thrash_streak,
+            tool_name=tc.name,
+            args=args,
+            ok=tr.ok,
+            error_reason=tr.error_reason,
+        )
+        state.thrash_last_fp = upd.fingerprint
+        state.thrash_streak = upd.streak
+        state.thrash_last_ok = upd.ok
+        state.thrash_last_error = upd.error_reason
+        state.thrash_last_tool = upd.tool_name
+        # Compact tried fingerprints (cap 8).
+        if upd.fingerprint not in state.thrash_tried:
+            state.thrash_tried.append(upd.fingerprint)
+            if len(state.thrash_tried) > THRASH_TRIED_CAP:
+                state.thrash_tried = state.thrash_tried[-THRASH_TRIED_CAP:]
+
+        # Enrich attempt# into payload via replace (ToolResult is frozen).
+        payload = dict(tr.payload) if isinstance(tr.payload, dict) else {}
+        payload["attempt"] = upd.streak
+        tr = replace(tr, payload=payload)
+
         content = tool_result_to_content(tr, tool_cap, tool_name=tc.name)
         state.chain_messages.append(
             {
@@ -1013,6 +1062,45 @@ def _handle_tool_batch(
 
     # Safe point: full batch complete without ends_moment.
     _drain_interjections(state.chain_messages, drain_interjections, moments, moment_id)
+
+    # Post-batch thrash HOST (tool path — NOT free-text order). Last-fp only (v1).
+    thrash_dec = should_inject_thrash_host(
+        streak=state.thrash_streak,
+        last_ok=state.thrash_last_ok,
+        thrash_host_sent=state.thrash_host_sent,
+        tool_name=state.thrash_last_tool,
+    )
+    if thrash_dec.inject and state.thrash_last_tool:
+        detail = thrash_detail(
+            last_ok=state.thrash_last_ok,
+            last_error=state.thrash_last_error,
+        )
+        host_line = thrash_host_message(
+            tool_name=state.thrash_last_tool,
+            streak=state.thrash_streak,
+            detail=detail,
+        )
+        state.chain_messages.append(_obs_user_message(host_line))
+        state.thrash_host_sent += 1
+        _LOG.info(
+            "thrash HOST inject moment_id=%s tool=%s streak=%s fp=%s",
+            moment_id,
+            state.thrash_last_tool,
+            state.thrash_streak,
+            state.thrash_last_fp,
+        )
+        _append_beat(
+            moments,
+            moment_id,
+            {
+                "type": "obs",
+                "kind": "tool_thrash",
+                "content": host_line,
+                "fingerprint": state.thrash_last_fp,
+                "streak": state.thrash_streak,
+                "thrash_kind": thrash_dec.kind,
+            },
+        )
     return None
 
 
@@ -1036,6 +1124,7 @@ def _finish(
             "ledger_mutated": state.ledger_mutated,
             "work_continue_injects": state.work_continue_injects,
             "skill_commit_injects": state.skill_commit_injects,
+            "thrash_host_injects": state.thrash_host_sent,
         },
     )
     return DoLoopResult(
@@ -1048,6 +1137,7 @@ def _finish(
         continue_injects=state.continue_injects,
         work_continue_injects=state.work_continue_injects,
         skill_commit_injects=state.skill_commit_injects,
+        thrash_host_injects=state.thrash_host_sent,
         tools_ran=state.tools_ran,
         ledger_mutated=state.ledger_mutated,
         model_beats=state.model_beats,
