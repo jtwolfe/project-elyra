@@ -171,6 +171,15 @@ def install_tool_draft(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             )
         planned.append((rel, value))
 
+    # Fail-closed empty write set BEFORE any draft-tree side effects (Phase A / K4).
+    # files={} would otherwise mkdir tools/drafts/<name>/ then return ok+written:[].
+    if not planned:
+        return ToolResult(
+            ok=False,
+            payload={"name": name},
+            error_reason="empty_files",
+        )
+
     draft_root = draft_package_dir(ctx.paths, name)
     try:
         draft_root.mkdir(parents=True, exist_ok=True)
