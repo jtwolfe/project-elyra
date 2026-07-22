@@ -51,7 +51,8 @@ description: Execute the next ready task. Use when working a task or /do-work.
 
 - One skill per directory  
 - Catalog shows **name + short description** only  
-- Full body on activate  
+- Full body on activate (`load_skill`)  
+- Wire success is framed as **PLAYBOOK ACTIVE** (not a raw JSON blob); playbooks open with **First tool call (mandatory)** (work + talk) or **First action** (rest: honest stop with no tools is OK). Follow that section with tools — do not free-text re-plan.  
 
 ---
 

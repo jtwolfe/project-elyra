@@ -50,6 +50,30 @@ def test_system_prompt_is_valid_nonempty_lean():
     assert len(text) < 4000
 
 
+def test_system_prompt_defines_growth_path():
+    """Always-on growth pointer: load_skill + create-tool pipeline + post-load commit."""
+    text = load_prompt("system")
+    lower = text.lower()
+    assert "load_skill" in lower
+    assert "create-tool" in lower
+    assert "install_tool_draft" in lower or "draft" in lower
+    assert "verify_tool" in lower or "verify" in lower
+    assert "promote" in lower
+    # Pointer to playbook first-action (not a duplicated full checklist).
+    assert "first tool call" in lower or "first action" in lower
+
+
+def test_orient_prompt_requires_load_skill():
+    """Orient footer must push catalog → load_skill, not goals-only growth."""
+    text = load_prompt("orient")
+    lower = text.lower()
+    assert "load_skill" in lower
+    assert "create-tool" in lower
+    assert "{{SKILL_CATALOG}}" in text
+    assert "{{SKILL_BIAS}}" in text
+    assert "first tool call" in lower or "first action" in lower
+
+
 @pytest.mark.parametrize(
     "bad_name",
     ["../secret", "../../etc/passwd", "/etc/passwd", "a/b", "seeds/identity/self"],

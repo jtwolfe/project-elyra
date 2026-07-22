@@ -3,7 +3,7 @@
   "properties": {
     "name": {
       "type": "string",
-      "description": "Skill package name (e.g. talk, do-work, create-tool)"
+      "description": "Skill package name from orient catalog (talk, plan-work, do-work, review-work, rest, create-tool, create-skill)"
     }
   },
   "required": ["name"],

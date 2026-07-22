@@ -7,6 +7,14 @@ description: Check done claims against acceptance; set review then closed. Prefe
 
 Verify that claimed progress is real before closing.
 
+## First tool call (mandatory)
+
+After this playbook loads, your **next** completion must include a `tool_calls` entry from the list below (pick the first that applies). Do not answer with free-text only.
+
+- `get_goal` / `list_goals` — load what is claimed done.
+- Then `read_file` / `list_dir` / `grep` for sandbox evidence against acceptance.
+- Then `update_goal` / `update_task` for review outcome; close only after green review.
+
 ## Hard rule
 
 **Do not close a goal without review.**  

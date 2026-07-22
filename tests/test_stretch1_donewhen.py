@@ -212,6 +212,19 @@ def test_create_tool_skill_mentions_verify_promote() -> None:
     body = (root / "create-tool" / "SKILL.md").read_text(encoding="utf-8")
     for needle in ("draft", "verify", "promote"):
         assert needle in body.lower(), f"create-tool skill missing {needle!r}"
+    assert "First tool call" in body
+    assert "install_tool_draft" in body
+
+
+def test_bundled_skills_first_action_framing() -> None:
+    """PR3: work+talk mandate tools; rest allows honest no-tool stop (K10/K16)."""
+    root = resolve_bundled_skills_root()
+    for name in ("talk", "plan-work", "do-work", "review-work", "create-tool", "create-skill"):
+        body = (root / name / "SKILL.md").read_text(encoding="utf-8")
+        assert "First tool call" in body, name
+    rest = (root / "rest" / "SKILL.md").read_text(encoding="utf-8")
+    assert "First action" in rest
+    assert "no tools" in rest.lower()
 
 
 # ---------------------------------------------------------------------------

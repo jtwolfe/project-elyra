@@ -7,6 +7,16 @@ description: Draft → verify → promote a tool package. Use when adding a new 
 
 Fail-closed lifecycle for new tools. Runtime enforces gates even if you ignore this checklist — follow it anyway.
 
+You are on this playbook because a **capability is missing** (no existing tool does the job). Do not only create goals/tasks and stop — execute the checklist with tools. Do not thrash empty sandbox exploration instead of drafting.
+
+## First tool call (mandatory)
+
+After this playbook loads, your **next** completion must include a `tool_calls` entry from the list below (pick the first that applies). Do not answer with free-text only.
+
+- **`install_tool_draft`** — after you have a valid free name and package files ready (TOOL.md, schema.json, runner.json, tests/). Prefer this path over sandbox thrash.
+- Then **`verify_tool`** on the draft name. Never skip verify.
+- Then **`promote_tool`** only after green verify. Smoke-check the promoted tool after promote.
+
 ## Hard rules
 
 1. **Never skip verify.** Drafts are not callable. Promote only after green verify.

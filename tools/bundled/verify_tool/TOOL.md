@@ -10,6 +10,9 @@ Stages `tools/drafts/<name>/` into `data/sandbox/.verify/<name>/`, runs
 allowlisted pytest (`shell=False`), and on pass writes `.verify.json` with
 a content hash of the draft tree. Promote requires this record and hash match.
 
+Use via the `load_skill("create-tool")` checklist order:
+`install_tool_draft` → `verify_tool` → `promote_tool`. Never skip verify.
+
 ## Trust boundary (S1)
 
 Tests run at **process-level** trust only (same residual as sandbox `run`):

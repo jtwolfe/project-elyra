@@ -7,6 +7,14 @@ description: Break a goal into tasks with acceptance criteria. Use when a goal i
 
 Turn an open goal into an actionable task list.
 
+## First tool call (mandatory)
+
+After this playbook loads, your **next** completion must include a `tool_calls` entry from the list below (pick the first that applies). Do not answer with free-text only.
+
+- `list_goals` or `get_goal` / `get_task` — load ledger state first when orient is thin.
+- Then `create_task` / `update_task` / `update_goal` / `create_goal` to persist the plan.
+- If a human is waiting on glass: `speak` a short plan summary (work wakes may stay silent).
+
 ## Steps
 
 1. Load the goal from the ledger (orient / tools). Confirm the outcome in one sentence.

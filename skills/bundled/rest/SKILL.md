@@ -7,6 +7,14 @@ description: Idle honestly when there is nothing useful to do. Use on empty or p
 
 Sometimes the right action is no action.
 
+## First action
+
+Honest idle is success: if why-now shows nothing useful, **stop with no tools**.
+Do not invent busywork or open empty goals.
+
+- If this wake is social by mistake: `load_skill("talk")` then `speak`.
+- Never treat free-text planning as work when rest is correct.
+
 ## Steps
 
 1. Confirm why-now: no user message requiring a reply, no ready task you should take, no urgent timer work.
