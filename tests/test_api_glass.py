@@ -476,5 +476,50 @@ def test_static_index_served(paths):
         assert "continuous-toggle" in html
         assert "Continuous work" in html
         assert "pill-autopilot" in html
+        # Continuous control lives in the rail (single source of truth).
+        assert "continuous-toggle-rail" in html
+        assert "rail-continuous" in html
+        assert "continuous-status-rail" in html
+        # Removed per-panel chat/status header toggles (avoid duplication).
+        assert "continuous-toggle-chat" not in html
+        assert "continuous-toggle-status" not in html
+        # Moments list is content-sized; detail owns leftover space.
+        assert "list-panel-auto" in html
+    finally:
+        h.close()
+
+
+def test_static_app_js_active_panel_poll(paths):
+    """Glass app.js polls the active catalog panel and tracks selection."""
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+            js = resp.read().decode("utf-8")
+        # Core identifiers
+        assert "activePanel" in js
+        assert "refreshActivePanel" in js
+        assert "selectedMomentId" in js
+        assert "momentSnapshotChanged" in js
+        # Wiring: nav assigns activePanel; tick pushes active-panel refresh.
+        assert "activePanel = name" in js
+        assert "tasks.push(refreshActivePanel" in js
+        # Continuous meta targets rail control (single source of truth).
+        assert "continuous-status-rail" in js
+        # Soft refresh commits snapshot only after success / retries on change.
+        assert "momentSnapshotChanged(selectedMomentSnapshot" in js
+        assert "tickInFlight" in js
+        # Soft detail path + 404 closes vanished moments.
+        assert "soft: true" in js or "{ soft: true }" in js
+        assert "err.status === 404" in js or "err.status == 404" in js
+
+        req_css = urllib.request.Request(h.base + "/style.css", method="GET")
+        with urllib.request.urlopen(req_css, timeout=5) as resp:
+            assert resp.status == 200
+            css = resp.read().decode("utf-8")
+        assert "list-panel-auto" in css
+        assert "position: sticky" in css
+        assert "height: 100vh" in css
     finally:
         h.close()

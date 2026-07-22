@@ -41,6 +41,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  /* Fixed-height chrome: rail does not stretch with main content. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  align-self: start;
+  overflow: auto;
 }
 
 .brand {
@@ -96,8 +102,13 @@ body {
   border-color: var(--border);
 }
 
-.rail-foot {
+.rail-continuous {
   margin-top: auto;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.rail-foot {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -284,10 +295,22 @@ body {
   min-height: 0;
 }
 
+/* Moments list: size to content; scroll only on overflow. */
+.list-panel-auto {
+  flex: 0 1 auto;
+}
+
 .detail-panel {
   border-top: 1px solid var(--border);
-  max-height: 45%;
+  /* When open, detail owns leftover viewport under the list. */
+  flex: 1 1 auto;
+  min-height: 0;
   background: rgba(20, 24, 32, 0.6);
+}
+
+.detail-panel[hidden] {
+  display: none;
+  flex: 0;
 }
 
 .card {
@@ -308,6 +331,11 @@ body {
 
 .card-btn:hover {
   border-color: var(--accent-dim);
+}
+
+.card-btn.card-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(110, 168, 255, 0.25);
 }
 
 .card-head {
@@ -477,13 +505,6 @@ body {
   color: #c5d0e0;
 }
 
-.panel-head-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-}
-
 .continuous-control {
   display: flex;
   flex-direction: column;
@@ -491,6 +512,17 @@ body {
   gap: 0.35rem;
   flex-shrink: 0;
   min-width: 9.5rem;
+}
+
+.rail-continuous.continuous-control {
+  align-items: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+
+.rail-continuous .continuous-meta {
+  text-align: left;
+  max-width: none;
 }
 
 .toggle-label {
@@ -716,17 +748,36 @@ body {
 @media (max-width: 720px) {
   .app {
     grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
   .rail {
+    position: sticky;
+    top: 0;
+    height: auto;
+    max-height: none;
+    z-index: 10;
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
     border-right: none;
     border-bottom: 1px solid var(--border);
+    /* Opaque under sticky so scrolling main content does not show through. */
+    background: var(--bg);
+  }
+  .main {
+    flex: 1;
+    min-height: 0;
+    height: auto;
   }
   .nav {
     flex-direction: row;
     flex-wrap: wrap;
+  }
+  .rail-continuous {
+    margin-top: 0;
+    width: auto;
   }
   .rail-foot {
     margin-top: 0;

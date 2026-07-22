@@ -24,6 +24,14 @@
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
+        <div class="rail-continuous continuous-control" title="Hybrid continuous work (autopilot)">
+          <label class="toggle-label" for="continuous-toggle-rail">
+            <input type="checkbox" id="continuous-toggle-rail" class="continuous-toggle" />
+            <span class="toggle-track" aria-hidden="true"></span>
+            <span class="toggle-text">Continuous work</span>
+          </label>
+          <div id="continuous-status-rail" class="continuous-meta muted">off</div>
+        </div>
         <div class="rail-foot">
           <div id="pill-llama" class="pill pill-off">llama</div>
           <div id="pill-worker" class="pill pill-off">worker</div>
@@ -36,22 +44,12 @@
         <div id="notice" class="notice" hidden role="status"></div>
 
         <section id="panel-chat" class="panel active">
-          <header class="panel-head panel-head-row">
-            <div>
-              <h1>Chat</h1>
-              <p class="muted">
-                Messages route via presence (<code>resolve_user_input</code>). Wait
-                choices post to <code>/api/wait/reply</code>.
-              </p>
-            </div>
-            <div class="continuous-control" title="Hybrid continuous work (autopilot)">
-              <label class="toggle-label" for="continuous-toggle-chat">
-                <input type="checkbox" id="continuous-toggle-chat" class="continuous-toggle" />
-                <span class="toggle-track" aria-hidden="true"></span>
-                <span class="toggle-text">Continuous work</span>
-              </label>
-              <div id="continuous-status-chat" class="continuous-meta muted">off</div>
-            </div>
+          <header class="panel-head">
+            <h1>Chat</h1>
+            <p class="muted">
+              Messages route via presence (<code>resolve_user_input</code>). Wait
+              choices post to <code>/api/wait/reply</code>.
+            </p>
           </header>
           <div id="wait-bar" class="wait-bar" hidden>
             <div class="wait-prompt" id="wait-prompt"></div>
@@ -84,7 +82,7 @@
               Recent do-loops and beats. Reasoning is collapsed by default.
             </p>
           </header>
-          <div id="moments-list" class="list-panel">loading…</div>
+          <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
           <div id="moment-detail" class="list-panel detail-panel" hidden></div>
         </section>
 
@@ -123,19 +121,9 @@
         </section>
 
         <section id="panel-status" class="panel">
-          <header class="panel-head panel-head-row">
-            <div>
-              <h1>Status</h1>
-              <p class="muted">Runtime snapshot from <code>/api/status</code>.</p>
-            </div>
-            <div class="continuous-control" title="Hybrid continuous work (autopilot)">
-              <label class="toggle-label" for="continuous-toggle-status">
-                <input type="checkbox" id="continuous-toggle-status" class="continuous-toggle" />
-                <span class="toggle-track" aria-hidden="true"></span>
-                <span class="toggle-text">Continuous work</span>
-              </label>
-              <div id="continuous-status-status" class="continuous-meta muted">off</div>
-            </div>
+          <header class="panel-head">
+            <h1>Status</h1>
+            <p class="muted">Runtime snapshot from <code>/api/status</code>.</p>
           </header>
           <div id="continuous-summary" class="continuous-summary" hidden>
             <div class="card continuous-card">

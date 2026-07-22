@@ -21,10 +21,7 @@ const skillsList = $("#skills-list");
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
 const continuousToggles = document.querySelectorAll(".continuous-toggle");
-const continuousMetaEls = [
-  $("#continuous-status-chat"),
-  $("#continuous-status-status"),
-].filter(Boolean);
+const continuousMetaEls = [$("#continuous-status-rail")].filter(Boolean);
 const continuousSummary = $("#continuous-summary");
 const continuousBadge = $("#continuous-badge");
 const continuousDetail = $("#continuous-detail");
@@ -46,6 +43,16 @@ let continuousToggleInFlight = false;
 let lastContinuousEnabled = false;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
+/** Active nav panel name (chat | goals | moments | tools | identity | status). */
+let activePanel = "chat";
+/** Currently open moment detail id (null when closed). */
+let selectedMomentId = null;
+/** Snapshot of open moment list fields used to decide detail re-fetch. */
+let selectedMomentSnapshot = null;
+/** Bumped on each load/close so stale in-flight responses are ignored. */
+let momentDetailLoadGen = 0;
+/** Single-flight guard so overlapping setInterval ticks do not race. */
+let tickInFlight = false;
 
 function setPill(el, label, mode) {
   el.textContent = label;
@@ -373,6 +380,33 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+function momentListSnapshot(m) {
+  if (!m) return null;
+  return {
+    id: m.id || null,
+    hop_count: m.hop_count ?? 0,
+    ended_at: m.ended_at || null,
+    stop_reason: m.stop_reason || null,
+    why_now: m.why_now || null,
+  };
+}
+
+function momentSnapshotChanged(prev, next) {
+  if (!prev || !next) return true;
+  return (
+    prev.id !== next.id ||
+    prev.hop_count !== next.hop_count ||
+    prev.ended_at !== next.ended_at ||
+    prev.stop_reason !== next.stop_reason ||
+    prev.why_now !== next.why_now
+  );
+}
+
+/** True when last successful snapshot is for this moment id (not a prior card). */
+function hasLastGoodFor(id) {
+  return Boolean(selectedMomentSnapshot && selectedMomentSnapshot.id === id);
+}
+
 function renderMoments(moments) {
   momentsList.innerHTML = "";
   if (!moments.length) {
@@ -383,6 +417,10 @@ function renderMoments(moments) {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "card card-btn";
+    card.dataset.momentId = m.id;
+    if (selectedMomentId && m.id === selectedMomentId) {
+      card.classList.add("card-selected");
+    }
     const open = !m.ended_at;
     card.innerHTML = `
       <div class="card-head">
@@ -469,37 +507,140 @@ function renderBeats(beats) {
   return wrap;
 }
 
-async function loadMomentDetail(id) {
+function closeMomentDetail() {
+  momentDetailLoadGen += 1;
+  selectedMomentId = null;
+  selectedMomentSnapshot = null;
+  momentDetail.hidden = true;
+  momentDetail.innerHTML = "";
+  // Clear selected highlight without full re-fetch.
+  momentsList
+    .querySelectorAll(".card-selected")
+    .forEach((el) => el.classList.remove("card-selected"));
+}
+
+function renderMomentDetailChrome(titleHtml, bodyNode) {
+  momentDetail.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  head.innerHTML = `${titleHtml}
+    <button type="button" class="link-btn" id="close-moment-detail">close</button>`;
+  momentDetail.appendChild(head);
+  if (bodyNode) momentDetail.appendChild(bodyNode);
+  const closeBtn = $("#close-moment-detail");
+  if (closeBtn) closeBtn.addEventListener("click", closeMomentDetail);
+}
+
+function captureMomentDetailUi() {
+  return {
+    scrollTop: momentDetail.scrollTop,
+    openFolds: Array.from(
+      momentDetail.querySelectorAll("details.reason-fold")
+    ).map((d) => d.open),
+  };
+}
+
+function restoreMomentDetailUi(saved) {
+  if (!saved) return;
+  const details = momentDetail.querySelectorAll("details.reason-fold");
+  details.forEach((d, i) => {
+    if (saved.openFolds[i]) d.open = true;
+  });
+  momentDetail.scrollTop = saved.scrollTop;
+}
+
+/**
+ * Load / soft-refresh moment detail.
+ * @param {string} id
+ * @param {{ soft?: boolean }} opts soft=true: no loading wipe; preserve scroll/folds
+ */
+async function loadMomentDetail(id, opts = {}) {
+  const soft = Boolean(opts && opts.soft);
+  const gen = ++momentDetailLoadGen;
+  selectedMomentId = id;
+  // Do not commit selectedMomentSnapshot until a successful GET.
   momentDetail.hidden = false;
-  momentDetail.innerHTML = "loading…";
+  const savedUi = soft ? captureMomentDetailUi() : null;
+  if (!soft) {
+    // Hard open: drop prior moment's last-good so soft keep/skip cannot apply
+    // another card's snapshot (or leave bare "loading…" with no close).
+    selectedMomentSnapshot = null;
+    const loading = document.createElement("p");
+    loading.className = "muted";
+    loading.textContent = "loading…";
+    renderMomentDetailChrome(
+      `<strong>${escapeHtml(id)}</strong>`,
+      loading
+    );
+  }
   try {
     const data = await fetchJson(`/api/moments/${encodeURIComponent(id)}`);
+    // Stale: closed, switched, or a newer load superseded this one.
+    if (selectedMomentId !== id || gen !== momentDetailLoadGen) return;
     const m = data.moment || {};
-    momentDetail.innerHTML = "";
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML = `<strong>${escapeHtml(m.why_now || m.id)}</strong>
-      <button type="button" class="link-btn" id="close-moment-detail">close</button>`;
-    momentDetail.appendChild(head);
+    const nextSnap = momentListSnapshot(m);
+    // Soft path: if same-id snapshot unchanged, skip DOM rebuild (keeps folds/scroll).
+    if (
+      soft &&
+      hasLastGoodFor(id) &&
+      !momentSnapshotChanged(selectedMomentSnapshot, nextSnap)
+    ) {
+      selectedMomentSnapshot = nextSnap;
+      return;
+    }
+    // Snapshot only after successful response so failed fetches keep retrying.
+    selectedMomentSnapshot = nextSnap;
+    const body = document.createDocumentFragment();
     const meta = document.createElement("div");
     meta.className = "meta";
     meta.textContent = `${m.id} · stop=${m.stop_reason || "—"} · hops=${
       m.hop_count ?? 0
     }`;
-    momentDetail.appendChild(meta);
-    momentDetail.appendChild(renderBeats(data.beats || []));
-    $("#close-moment-detail").addEventListener("click", () => {
-      momentDetail.hidden = true;
-      momentDetail.innerHTML = "";
+    body.appendChild(meta);
+    body.appendChild(renderBeats(data.beats || []));
+    renderMomentDetailChrome(
+      `<strong>${escapeHtml(m.why_now || m.id)}</strong>`,
+      body
+    );
+    if (soft) restoreMomentDetailUi(savedUi);
+    // Highlight selected card after list may have re-rendered.
+    momentsList.querySelectorAll(".card-btn").forEach((el) => {
+      el.classList.toggle("card-selected", el.dataset.momentId === id);
     });
   } catch (err) {
-    momentDetail.textContent = String(err.message || err);
+    if (selectedMomentId !== id || gen !== momentDetailLoadGen) return;
+    // Gone from store (reset / deleted) — dismiss rather than freeze ghost detail.
+    if (err && err.status === 404) {
+      closeMomentDetail();
+      return;
+    }
+    // Soft keep only when last-good is for this same id (not a prior card / loading wipe).
+    if (soft && hasLastGoodFor(id)) return;
+    // Hard open, soft after hard wipe, or soft for a new id: error chrome with close.
+    const msg = document.createElement("p");
+    msg.className = "muted";
+    msg.textContent = String(err.message || err);
+    renderMomentDetailChrome(`<strong>Moment detail</strong>`, msg);
   }
 }
 
 async function refreshMoments() {
   const data = await fetchJson("/api/moments?limit=40");
-  renderMoments(data.moments || []);
+  const moments = data.moments || [];
+  renderMoments(moments);
+  // Soft detail refresh while a moment is open.
+  if (!selectedMomentId) return;
+  const row = moments.find((m) => m.id === selectedMomentId);
+  if (!row) {
+    // Not in recent list (or wiped by reset): re-fetch by id; 404 closes.
+    await loadMomentDetail(selectedMomentId, { soft: true });
+    return;
+  }
+  const next = momentListSnapshot(row);
+  // Do not pre-commit snapshot before load succeeds.
+  if (momentSnapshotChanged(selectedMomentSnapshot, next)) {
+    await loadMomentDetail(selectedMomentId, { soft: true });
+  }
 }
 
 function renderCatalog(el, items, emptyLabel) {
@@ -683,15 +824,26 @@ function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);
 }
 
+function refreshActivePanel() {
+  const name = activePanel;
+  if (name === "goals") return refreshGoals();
+  if (name === "moments") return refreshMoments();
+  if (name === "tools") return refreshTools();
+  if (name === "identity") return refreshIdentity();
+  // chat / status: covered by refreshMessages / refreshStatus
+  return Promise.resolve();
+}
+
 document.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
-    const panel = document.getElementById(`panel-${btn.dataset.panel}`);
+    const name = btn.dataset.panel;
+    activePanel = name || "chat";
+    const panel = document.getElementById(`panel-${name}`);
     if (panel) panel.classList.add("active");
     // Refresh panel data when opened; surface failures (parity with chat).
-    const name = btn.dataset.panel;
     if (name === "goals") refreshGoals().catch((e) => panelLoadError("Goals", e));
     if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
     if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
@@ -700,10 +852,25 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
 });
 
 async function tick() {
+  // Single-flight: skip if previous tick still running (avoids list/detail races).
+  if (tickInFlight) return;
+  tickInFlight = true;
   try {
-    await Promise.all([refreshStatus(), refreshMessages()]);
+    const tasks = [refreshStatus(), refreshMessages()];
+    // Also poll the active catalog panel so creates appear without nav re-click.
+    if (
+      activePanel === "goals" ||
+      activePanel === "moments" ||
+      activePanel === "tools" ||
+      activePanel === "identity"
+    ) {
+      tasks.push(refreshActivePanel().catch(() => {}));
+    }
+    await Promise.all(tasks);
   } catch {
     /* offline */
+  } finally {
+    tickInFlight = false;
   }
 }
 
