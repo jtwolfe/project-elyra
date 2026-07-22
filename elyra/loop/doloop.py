@@ -37,6 +37,7 @@ from elyra.loop.continuous_policy import (
     should_in_moment_work_nudge,
     work_continue_host_message,
 )
+from elyra.loop.skill_commit_policy import format_playbook_active
 from elyra.loop.stop import (
     STOP_ERROR,
     resolve_host_precheck_stop,
@@ -196,8 +197,39 @@ def truncate_tool_content(content: str, max_chars: int) -> str:
     return content[:keep] + _TRUNC_MARKER
 
 
-def tool_result_to_content(tr: ToolResult, max_chars: int) -> str:
-    """Serialize + truncate a ToolResult for the wire tool message."""
+def tool_result_to_content(
+    tr: ToolResult,
+    max_chars: int,
+    *,
+    tool_name: str | None = None,
+) -> str:
+    """Serialize + truncate a ToolResult for the wire tool message.
+
+    Successful ``load_skill`` results are framed as plain-text playbooks
+    (``PLAYBOOK ACTIVE: …``) when ``tool_name == "load_skill"`` and the payload
+    has a body. Errors and all other tools stay JSON. Default ``tool_name=None``
+    preserves the JSON path for direct unit callers and non-load tools.
+    """
+    if (
+        tool_name == "load_skill"
+        and tr.ok
+        and isinstance(tr.payload, dict)
+        and isinstance(tr.payload.get("body"), str)
+        and tr.payload["body"]
+    ):
+        name = tr.payload.get("name")
+        if not isinstance(name, str) or not name:
+            name = "unknown"
+        source = tr.payload.get("source")
+        description = tr.payload.get("description")
+        framed = format_playbook_active(
+            name,
+            tr.payload["body"],
+            source=source if isinstance(source, str) else None,
+            description=description if isinstance(description, str) else None,
+        )
+        return truncate_tool_content(framed, max_chars)
+
     try:
         raw = json.dumps(serialize_tool_result(tr), ensure_ascii=False, default=str)
     except (TypeError, ValueError):
@@ -839,7 +871,7 @@ def _handle_tool_batch(
 
     for tc in result.tool_calls:
         tr = _execute_one(tc, registry=registry, ctx=ctx)
-        content = tool_result_to_content(tr, tool_cap)
+        content = tool_result_to_content(tr, tool_cap, tool_name=tc.name)
         state.chain_messages.append(
             {
                 "role": "tool",

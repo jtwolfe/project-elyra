@@ -235,6 +235,87 @@ def test_tool_result_to_content_includes_ok_and_error():
     assert body["x"] == 1
 
 
+def test_tool_result_to_content_load_skill_ok_frames_playbook():
+    """Successful load_skill wire content is PLAYBOOK ACTIVE plain text, not JSON."""
+    body_md = "---\nname: plan-work\n---\n\n# plan-work\n\nSteps go here.\n"
+    tr = ToolResult(
+        ok=True,
+        payload={
+            "name": "plan-work",
+            "description": "Break work into goals and tasks",
+            "source": "bundled",
+            "body": body_md,
+        },
+    )
+    raw = tool_result_to_content(tr, max_chars=8000, tool_name="load_skill")
+    assert raw.startswith("PLAYBOOK ACTIVE: plan-work")
+    assert "source: bundled" in raw
+    assert "## Playbook" in raw
+    assert body_md.rstrip() in raw
+    assert "tool_call implementing step 1" in raw
+    # Must not be the old JSON envelope.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(raw)
+
+
+def test_tool_result_to_content_load_skill_rest_honest_stop_follow_line():
+    """rest framing still includes body but follow-line allows honest no-tool stop (K16)."""
+    body_md = "# rest\n\nIdle honestly.\n"
+    tr = ToolResult(
+        ok=True,
+        payload={
+            "name": "rest",
+            "description": "Honest idle",
+            "source": "bundled",
+            "body": body_md,
+        },
+    )
+    raw = tool_result_to_content(tr, max_chars=8000, tool_name="load_skill")
+    assert raw.startswith("PLAYBOOK ACTIVE: rest")
+    assert "## Playbook" in raw
+    assert body_md.rstrip() in raw
+    assert "honest stop with no tools" in raw
+    assert "must be a tool_call" not in raw
+
+
+def test_tool_result_to_content_load_skill_error_stays_json():
+    """Failed load_skill stays JSON (ok / error_reason)."""
+    tr = ToolResult(
+        ok=False,
+        payload={"name": "nope"},
+        error_reason="unknown_skill",
+    )
+    raw = tool_result_to_content(tr, max_chars=8000, tool_name="load_skill")
+    body = json.loads(raw)
+    assert body["ok"] is False
+    assert body["error_reason"] == "unknown_skill"
+    assert body["name"] == "nope"
+
+
+def test_tool_result_to_content_tool_name_none_or_other_stays_json():
+    """Default tool_name=None and non-load_skill tools keep JSON path."""
+    tr = ToolResult(
+        ok=True,
+        payload={
+            "name": "plan-work",
+            "description": "x",
+            "source": "bundled",
+            "body": "# plan-work body",
+        },
+    )
+    # No tool_name → JSON (direct unit callers).
+    none_raw = tool_result_to_content(tr, max_chars=8000)
+    none_body = json.loads(none_raw)
+    assert none_body["ok"] is True
+    assert none_body["body"] == "# plan-work body"
+
+    # Other tool names → JSON even if payload looks like a skill.
+    other_raw = tool_result_to_content(tr, max_chars=8000, tool_name="list_goals")
+    other_body = json.loads(other_raw)
+    assert other_body["ok"] is True
+    assert other_body["name"] == "plan-work"
+
+
 # ---------------------------------------------------------------------------
 # Stage 5 L4 — social first-hop speak pin predicate (hop==0 pre-call)
 # ---------------------------------------------------------------------------
