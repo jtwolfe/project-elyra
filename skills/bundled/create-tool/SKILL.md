@@ -1,6 +1,6 @@
 ---
 name: create-tool
-description: Draft → verify → promote a tool package. Use when adding a new callable capability. Never skip verify.
+description: "Draft → verify → promote a tool package (exact load_skill name: create-tool). Use for missing callables. Never skip verify."
 ---
 
 # Create tool

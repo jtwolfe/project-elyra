@@ -329,6 +329,35 @@ def test_load_skill_appends_skills_used_once(
     assert ctx.skills_used.count("do-work") == 1
 
 
+def test_load_skill_unknown_includes_catalog_hint(
+    home: Path, catalog: SkillCatalog
+) -> None:
+    """unknown_skill payload lists available names (exact catalog, not fuzzy)."""
+    paths = resolve_paths(home)
+    ctx = ToolContext(paths=paths, extras={"skills": catalog})
+    result = load_skill({"name": "nope-skill"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "unknown_skill"
+    assert result.payload.get("name") == "nope-skill"
+    assert "available" in result.payload
+    assert "create-tool" in result.payload["available"]
+    assert "hint" in result.payload
+    assert "did_you_mean" not in result.payload
+
+
+def test_load_skill_unknown_underscore_suggests_hyphenated(
+    home: Path, catalog: SkillCatalog
+) -> None:
+    """create_tool miss → did_you_mean create-tool (explicit suggestion only)."""
+    paths = resolve_paths(home)
+    ctx = ToolContext(paths=paths, extras={"skills": catalog})
+    result = load_skill({"name": "create_tool"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "unknown_skill"
+    assert result.payload.get("did_you_mean") == "create-tool"
+    assert "create-tool" in result.payload.get("available", [])
+
+
 def test_load_skill_unknown(home: Path, catalog: SkillCatalog) -> None:
     paths = resolve_paths(home)
     ctx = ToolContext(paths=paths, extras={"skills": catalog})

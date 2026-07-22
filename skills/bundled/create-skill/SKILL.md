@@ -1,6 +1,6 @@
 ---
 name: create-skill
-description: Author a new playbook on disk via install_skill into skills/local/. Use when a reusable workflow should be captured.
+description: "Author a local playbook via install_skill (exact load_skill name: create-skill). Reusable how-to only — not a new callable tool."
 ---
 
 # Create skill

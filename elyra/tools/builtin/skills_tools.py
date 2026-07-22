@@ -75,9 +75,27 @@ def load_skill(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     meta = catalog.load(name)
     if meta is None:
+        # Exact miss: help the model with catalog names (not fuzzy free match).
+        # Common slip: underscore form of a hyphenated skill (create_tool vs create-tool).
+        available = [str(row.get("name") or "") for row in catalog.catalog()]
+        available = [n for n in available if n]
+        payload: dict[str, Any] = {
+            "name": name,
+            "hint": (
+                "Use the exact skill name from orient Skills available "
+                "(hyphenated catalog names). Skills are not tools."
+            ),
+            "available": available,
+        }
+        underscored = name.replace("-", "_")
+        hyphenated = name.replace("_", "-")
+        for candidate in (hyphenated, underscored):
+            if candidate != name and catalog.has(candidate):
+                payload["did_you_mean"] = candidate
+                break
         return ToolResult(
             ok=False,
-            payload={"name": name},
+            payload=payload,
             error_reason="unknown_skill",
         )
 

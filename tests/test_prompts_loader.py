@@ -63,8 +63,22 @@ def test_system_prompt_defines_growth_path():
     assert "first tool call" in lower or "first action" in lower
 
 
+def test_system_prompt_exact_skill_names_not_underscored_aliases():
+    """Skill names are hyphenated catalog ids; do not teach create_tool underscore form."""
+    text = load_prompt("system")
+    assert "create-tool" in text
+    assert "plan-work" in text
+    assert "do-work" in text
+    # Explicit anti-pattern (underscore skill names) called out as wrong.
+    assert "create_tool" in text  # in the "Wrong:" line
+    assert "Wrong:" in text or "wrong:" in text.lower()
+    assert "snake_case" in text or "snake-case" in text.lower() or "snake_case" in text
+    assert "speak" in text
+    assert "install_tool_draft" in text
+
+
 def test_orient_prompt_requires_load_skill():
-    """Orient footer must push catalog → load_skill, not goals-only growth."""
+    """Orient must push catalog → exact load_skill names + tools vs skills."""
     text = load_prompt("orient")
     lower = text.lower()
     assert "load_skill" in lower
@@ -72,6 +86,8 @@ def test_orient_prompt_requires_load_skill():
     assert "{{SKILL_CATALOG}}" in text
     assert "{{SKILL_BIAS}}" in text
     assert "first tool call" in lower or "first action" in lower
+    assert "exact" in lower
+    assert "snake_case" in text or "tool schema" in lower or "schemas" in lower
 
 
 @pytest.mark.parametrize(
