@@ -488,8 +488,10 @@ class PresenceWorker:
         user_id = _user_id_from_wake(wake) or "operator"
 
         def rebuild_outer() -> list[dict[str, Any]]:
-            # Re-read glass, goals, and skill catalog every rebuild so mid-moment
-            # ledger/skill edits appear (do not cache format strings at open).
+            # Re-read glass + goals from disk every rebuild (ledger edits mid-moment
+            # appear). Catalog is the held SkillCatalog snapshot — growth tools
+            # reload it via ctx.extras["skills"] (install_skill); do not cache
+            # formatted strings at moment open.
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             try:
@@ -763,7 +765,9 @@ class PresenceWorker:
             skills_used=[],
             enqueue_wake=self._tool_enqueue_wake,
             cancel_wait=self._tool_cancel_wait,
-            extras={"wake": wake},
+            # Same SkillCatalog instance as rebuild_outer so install_skill
+            # can reload() and the next outer meal sees new skills.
+            extras={"wake": wake, "skills": self._ensure_skills()},
         )
 
     def _tool_enqueue_wake(

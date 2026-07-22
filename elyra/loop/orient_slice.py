@@ -49,10 +49,15 @@ def format_skill_catalog(
     """Bullet lines ``- {name}: {description}`` from ``SkillCatalog.catalog()``.
 
     Catalog is already name + description only and sorted by name. YAGNI: no
-    bias-aware drop ranking. When ``max_tokens`` is set and the full list is
-    over budget, drop trailing (alphabetically last) skills until under cap.
+    bias-aware drop ranking. When ``max_tokens`` is a positive int and the full
+    list is over budget, drop trailing (alphabetically last) skills until under
+    cap. ``max_tokens is None`` means uncapped; ``max_tokens <= 0`` yields an
+    empty string (mis-set budget must not silently disable the cap).
     """
     if not catalog:
+        return ""
+    # Explicit non-positive budget → empty (do not treat 0 as unlimited).
+    if max_tokens is not None and max_tokens <= 0:
         return ""
     lines: list[str] = []
     for item in catalog:
@@ -69,7 +74,7 @@ def format_skill_catalog(
         else:
             lines.append(f"- {name}")
 
-    if max_tokens is None or max_tokens <= 0:
+    if max_tokens is None:
         return "\n".join(lines)
 
     # Simple trailing drop only — never bias-aware ranking (later if needed).
@@ -198,12 +203,10 @@ def format_goals_slice(
     protected = [g for g in candidates if str(g.get("id") or "") in protect_g]
     others = [g for g in candidates if str(g.get("id") or "") not in protect_g]
 
+    # Protected goals always included first (may exceed max_tokens by design so
+    # wake-referenced goal/task ids stay visible).
     selected: list[Mapping[str, Any]] = list(protected)
     text = _join_goal_blocks([_render_one(g) for g in selected])
-    if estimate_tokens(text) > max_tokens and selected:
-        # Even protected set may overflow: keep order, drop from end of
-        # non-primary protected if needed (rare). Still try to keep all.
-        pass
 
     for g in others:
         trial_blocks = [_render_one(x) for x in selected] + [_render_one(g)]
@@ -215,10 +218,6 @@ def format_goals_slice(
 
     if not selected:
         return _EMPTY_GOALS
-
-    # If only protected overflowed, still return them (ids must be visible).
-    if not text:
-        text = _join_goal_blocks([_render_one(g) for g in selected])
     return text
 
 

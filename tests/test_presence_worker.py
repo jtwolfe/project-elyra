@@ -722,11 +722,37 @@ def test_rebuild_outer_injects_goals_catalog_and_bias(paths):
         assert "Ship orient slices" in orient_body
         assert "Wire rebuild_outer" in orient_body
         assert BIAS_TALK in orient_body
-        # Catalog from bundled skills (at least talk / do-work).
-        assert "talk" in orient_body.lower() or "- talk:" in orient_body
+        # Catalog from bundled skills — exact bullet shape, not incidental text.
+        assert "- talk:" in orient_body
         assert "{{GOALS}}" not in orient_body
         assert "{{SKILL_CATALOG}}" not in orient_body
         assert "{{SKILL_BIAS}}" not in orient_body
+        # Held SkillCatalog is reused and injected into tool context extras.
+        assert worker._ensure_skills() is worker._ensure_skills()  # noqa: SLF001
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_tool_context_extras_skills_is_worker_catalog(paths):
+    """install_skill reloads the same SkillCatalog rebuild_outer formats."""
+    seen: list[Any] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        ctx = kwargs["ctx"]
+        seen.append(ctx.extras.get("skills"))
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("check skills extras")
+        assert _wait_until(lambda: len(seen) >= 1, timeout=2.0)
+        assert seen[0] is not None
+        assert seen[0] is worker._ensure_skills()  # noqa: SLF001
     finally:
         _stop_join(worker, stop, t)
 

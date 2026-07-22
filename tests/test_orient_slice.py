@@ -48,6 +48,15 @@ def test_format_skill_catalog_trailing_drop_when_over_budget():
     assert "skill-19" not in capped
 
 
+def test_format_skill_catalog_nonpositive_budget_is_empty():
+    """max_tokens <= 0 must not silently mean unlimited."""
+    catalog = [{"name": "talk", "description": "Social presence."}]
+    assert format_skill_catalog(catalog, max_tokens=0) == ""
+    assert format_skill_catalog(catalog, max_tokens=-1) == ""
+    # None remains uncapped.
+    assert "talk" in format_skill_catalog(catalog, max_tokens=None)
+
+
 def test_format_skill_bias_table():
     assert format_skill_bias("user_message") == BIAS_TALK
     assert format_skill_bias("wait_reply") == BIAS_TALK
