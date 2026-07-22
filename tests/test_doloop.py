@@ -2700,3 +2700,366 @@ def test_free_text_order_unchanged_without_thrash(
     assert "work_continue" in kinds
     assert kinds.index("no_speak_nudge") < kinds.index("work_continue")
     assert "tool_thrash" not in kinds
+    assert "thrash_lesson" not in kinds
+    assert "lesson_pin" not in kinds
+
+
+# ---------------------------------------------------------------------------
+# Phase C — thrash lessons (request, capture, pin, synthesize)
+# ---------------------------------------------------------------------------
+
+
+def test_thrash_lesson_request_and_free_text_capture(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """After thrash HOST: lesson request; free-text stores lesson + pin; no glass."""
+    mid = moments.open_moment(why_now="lesson capture", moment_id="mlesson1")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/search_web/TOOL.md"}
+    lesson_text = (
+        "FAILURE: wrong path for TOOL.md\n"
+        "TRIED: read_file three times\n"
+        "WHY: draft never written\n"
+        "NEXT: write package files then install_tool_draft"
+    )
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),  # thrash + lesson request
+            _text(lesson_text),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.thrash_host_injects == 1
+    assert result.stop_reason == "no_tools"  # honest stop after lesson OK
+    beats = moments.list_beats(mid)
+    kinds = [b.get("kind") for b in beats if b.get("type") == "obs"]
+    assert "tool_thrash" in kinds
+    assert "thrash_lesson" in kinds
+    assert "lesson_pin" in kinds
+    assert kinds.index("tool_thrash") < kinds.index("thrash_lesson")
+    assert kinds.index("thrash_lesson") < kinds.index("lesson_pin")
+    pin_obs = [b for b in beats if b.get("kind") == "lesson_pin"]
+    assert len(pin_obs) == 1
+    pin_content = pin_obs[0].get("content") or ""
+    assert pin_content.startswith("HOST:")
+    assert "moment lesson pin" in pin_content
+    assert pin_obs[0].get("synthesized") is False
+    # Lesson HOST never SpeakTransport / glass
+    glass = list_messages(paths=paths)
+    assert not any("thrash lesson" in (m.get("content") or "") for m in glass)
+    assert not any("moment lesson pin" in (m.get("content") or "") for m in glass)
+
+
+def test_flood_free_text_does_not_capture_lesson(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Channel-flood free-text after lesson request does not capture or pin."""
+    mid = moments.open_moment(why_now="lesson flood", moment_id="mlessonflood")
+    ctx.moment_id = mid
+    missing = {"path": "nope.md"}
+    flood = "\n".join(["<|channel>thought"] * 20)
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),
+            {
+                "content": flood,
+                "reasoning_content": flood,
+                "tool_calls": [],
+                "finish_reason": "stop",
+            },
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_host_injects == 1
+    assert result.last_stop_hop_was_flood is True
+    beats = moments.list_beats(mid)
+    assert any(b.get("kind") == "thrash_lesson" for b in beats)
+    assert not any(b.get("kind") == "lesson_pin" for b in beats)
+
+
+def test_lesson_capture_does_not_force_stop_before_skill_commit(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Lesson alone does not auto-stop: free-text order still runs (skill_commit)."""
+    mid = moments.open_moment(why_now="lesson no autostop", moment_id="mlessonsc")
+    ctx.moment_id = mid
+    missing = {"path": "missing.md"}
+    client = StubChatClient.scripted(
+        [
+            # Arm skill-commit via load_skill, then thrash path, then free-text.
+            _tc("load_skill", {"name": "create-tool"}, call_id="ls1"),
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),  # thrash + lesson request
+            # Free-text: captures lesson then skill_commit still injects → continue
+            _text("FAILURE: thrash on missing path. NEXT: draft real files."),
+            # After skill_commit HOST, free-text again → stop
+            _text("done for real"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_host_injects == 1
+    assert result.skill_commit_injects == 1
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    kinds = [b.get("kind") for b in beats if b.get("type") == "obs"]
+    assert "lesson_pin" in kinds
+    assert "skill_commit" in kinds
+    # Capture/pin before skill_commit inject (order: lesson then free-text lattice)
+    assert kinds.index("lesson_pin") < kinds.index("skill_commit")
+
+
+def test_host_synthesized_lesson_after_fail_streak(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """No free-text after request: K more identical fails → HOST-synthesized pin."""
+    mid = moments.open_moment(why_now="lesson synth", moment_id="mlessonsynth")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/x/TOOL.md"}
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", missing, call_id="c1"),
+            _tc("read_file", missing, call_id="c2"),
+            _tc("read_file", missing, call_id="c3"),  # thrash + lesson request
+            # 3 additional fails after request → synthesize
+            _tc("read_file", missing, call_id="c4"),
+            _tc("read_file", missing, call_id="c5"),
+            _tc("read_file", missing, call_id="c6"),
+            _text("stop now"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_host_injects == 1
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    pin_obs = [b for b in beats if b.get("kind") == "lesson_pin"]
+    assert len(pin_obs) == 1
+    assert pin_obs[0].get("synthesized") is True
+    content = pin_obs[0].get("content") or ""
+    assert "HOST-synthesized" in content
+    assert content.startswith("HOST:")
+    # Only one thrash HOST (budget)
+    thrash_obs = [b for b in beats if b.get("kind") == "tool_thrash"]
+    assert len(thrash_obs) == 1
+    glass = list_messages(paths=paths)
+    assert not any("HOST-synthesized" in (m.get("content") or "") for m in glass)
+
+
+def test_diversified_fails_after_lesson_request_do_not_synthesize(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Three *different* fail fingerprints after request must not HOST-synthesize.
+
+    Synth counter is identical-fingerprint only (design C2); diversified recovery
+    is not thrash continuation.
+    """
+    mid = moments.open_moment(why_now="lesson diversify", moment_id="mlessondiv")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", {"path": "a.md"}, call_id="c1"),
+            _tc("read_file", {"path": "a.md"}, call_id="c2"),
+            _tc("read_file", {"path": "a.md"}, call_id="c3"),  # thrash + lesson req
+            # Different paths → different fingerprints; no identical streak of 3
+            _tc("read_file", {"path": "b.md"}, call_id="c4"),
+            _tc("read_file", {"path": "c.md"}, call_id="c5"),
+            _tc("read_file", {"path": "d.md"}, call_id="c6"),
+            _text("changed approach"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_host_injects == 1
+    beats = moments.list_beats(mid)
+    assert any(b.get("kind") == "thrash_lesson" for b in beats)
+    # Free-text captures model lesson — but no HOST-synthesized pin before that
+    pin_obs = [b for b in beats if b.get("kind") == "lesson_pin"]
+    assert len(pin_obs) == 1
+    assert pin_obs[0].get("synthesized") is False
+    assert "HOST-synthesized" not in (pin_obs[0].get("content") or "")
+
+
+def test_lesson_pin_survives_in_turn_reouter(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """lesson_pin HOST inject survives compress/re-outer (kept + sticky ensure)."""
+    from elyra.loop.doloop import (
+        _LoopState,
+        _compress_chain_for_reouter,
+        _ensure_lesson_pin_in_chain,
+        enforce_in_turn_budget,
+    )
+    from elyra.loop.tool_thrash_policy import lesson_pin_host_message
+
+    pin = lesson_pin_host_message("wrong path; write draft files next")
+    # Build a chain with old batches + pin; compress drops old batches, keeps injects.
+    chain = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "old1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "old1", "content": "x" * 200},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "old2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "old2", "content": "y" * 200},
+        {"role": "user", "content": pin},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "new1",
+                    "type": "function",
+                    "function": {"name": "list_dir", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "new1", "content": "z" * 50},
+    ]
+    compressed = _compress_chain_for_reouter(list(chain))
+    pin_msgs = [
+        m for m in compressed if m.get("role") == "user" and m.get("content") == pin
+    ]
+    assert len(pin_msgs) == 1
+
+    # Sticky re-append when pin missing after compress (belt-and-suspenders).
+    state = _LoopState(outer_prefix=[{"role": "system", "content": "sys"}])
+    state.lesson_pin_message = pin
+    state.chain_messages = [m for m in compressed if m.get("content") != pin]
+    assert not any(m.get("content") == pin for m in state.chain_messages)
+    _ensure_lesson_pin_in_chain(state)
+    assert any(m.get("content") == pin for m in state.chain_messages)
+
+    # Budget pressure: compress keeps HOST inject spans — pin present without ensure.
+    outer = [{"role": "system", "content": "S" * 20}]
+    fat_chain = list(chain)
+    new_outer, new_chain, did = enforce_in_turn_budget(
+        outer,
+        fat_chain,
+        budget_tokens=5,
+        tool_result_max_chars=20,
+        rebuild_outer=lambda: [{"role": "system", "content": "rebuilt"}],
+    )
+    assert did is True
+    assert new_outer[0]["content"] == "rebuilt"
+    pin_after_budget = [
+        m for m in new_chain if m.get("role") == "user" and m.get("content") == pin
+    ]
+    assert len(pin_after_budget) == 1, (
+        "compress/re-outer must keep lesson pin HOST inject without sticky re-append"
+    )
+
+
+def test_lesson_pin_survives_run_do_loop_reouter(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """End-to-end: HOST-synth pin still present in model messages after re-outer.
+
+    Tool-path synth keeps the loop running so fat payloads can force re-outer
+    without free-text auto-stop after capture.
+    """
+    mid = moments.open_moment(why_now="lesson pin e2e", moment_id="mlessonpin")
+    ctx.moment_id = mid
+    missing = {"path": "tools/drafts/pin/TOOL.md"}
+    messages_seen: list[list[dict[str, Any]]] = []
+    script = [
+        _tc("read_file", missing, call_id="c1"),
+        _tc("read_file", missing, call_id="c2"),
+        _tc("read_file", missing, call_id="c3"),  # thrash + lesson request
+        _tc("read_file", missing, call_id="c4"),
+        _tc("read_file", missing, call_id="c5"),
+        _tc("read_file", missing, call_id="c6"),  # K fails → HOST-synth pin
+        # Fat tools force re-outer; pin must survive into later completions
+        _tc("list_dir", {"path": "."}, call_id="fat1"),
+        _tc("list_dir", {"path": "."}, call_id="fat2"),
+        _text("done after reouter"),
+    ]
+    idx = {"i": 0}
+
+    def recording_client(
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> ChatCompletionResult:
+        messages_seen.append([dict(m) for m in messages])
+        i = idx["i"]
+        idx["i"] += 1
+        resp = script[min(i, len(script) - 1)]
+        if isinstance(resp, ChatCompletionResult):
+            return resp
+        return StubChatClient.scripted([resp]).chat_completion(messages, **kwargs)
+
+    client = StubChatClient(responses=recording_client)
+    fat = _FatPayloadRegistry(registry, blob_chars=30_000)
+    rebuilds = {"n": 0}
+
+    def rebuild() -> list[dict[str, Any]]:
+        rebuilds["n"] += 1
+        return [
+            {"role": "system", "content": f"outer-{rebuilds['n']}"},
+            {"role": "user", "content": "work"},
+        ]
+
+    settings = _settings(
+        max_tool_hops=20,
+        in_turn_max_tokens=80,
+        sliding_input_tokens=80,
+        tool_result_max_chars=2000,
+    )
+    result = run_do_loop(
+        client=client,
+        registry=fat,  # type: ignore[arg-type]
+        ctx=ctx,
+        rebuild_outer=rebuild,
+        settings=settings,
+        moments=moments,
+        social_wake=False,
+    )
+    assert result.thrash_host_injects == 1
+    assert result.reouter_count >= 1, result
+    beats = moments.list_beats(mid)
+    pin_obs = [b for b in beats if b.get("kind") == "lesson_pin"]
+    assert len(pin_obs) == 1
+    assert pin_obs[0].get("synthesized") is True
+    pin_content = pin_obs[0].get("content") or ""
+    assert "moment lesson pin" in pin_content
+    assert "HOST-synthesized" in pin_content
+    # Pin is injected at end of hop 6 (index 5). Completions from hop 7+
+    # (messages_seen[6:]) must still include the pin after re-outer.
+    post_pin_msgs = messages_seen[6:]
+    assert post_pin_msgs, (
+        f"expected completions after synth pin; saw {len(messages_seen)} total"
+    )
+    saw_pin = any(
+        any(
+            m.get("role") == "user" and (m.get("content") or "") == pin_content
+            for m in msgs
+        )
+        for msgs in post_pin_msgs
+    )
+    assert saw_pin, "lesson pin HOST must appear in chain after re-outer"

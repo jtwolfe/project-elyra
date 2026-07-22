@@ -1,4 +1,4 @@
-"""Pure table tests for tool_thrash_policy (Phase B)."""
+"""Pure table tests for tool_thrash_policy (Phase B + C lessons)."""
 
 from __future__ import annotations
 
@@ -7,13 +7,21 @@ import json
 from elyra.loop.continuous_policy import should_in_moment_work_nudge
 from elyra.loop.tool_thrash_policy import (
     FAIL_STREAK_THRESHOLD,
+    LESSON_SYNTH_FAIL_STREAK,
+    MAX_LESSON_PINS,
     MAX_THRASH_HOSTS,
     OK_STREAK_THRESHOLD,
     THRASH_HOST,
+    THRASH_LESSON_REQUEST,
     canonical_args,
+    compact_lesson,
+    lesson_pin_host_message,
+    lesson_request_host_message,
     should_inject_thrash_host,
+    synthesize_lesson,
     thrash_detail,
     thrash_host_message,
+    thrash_lesson_request_message,
     tool_fingerprint,
     update_thrash_streak,
 )
@@ -272,3 +280,72 @@ def test_streak_table_three_fails_then_threshold() -> None:
         else:
             assert d.inject is True
             assert d.kind == "thrash_fail_streak"
+
+
+# ---------------------------------------------------------------------------
+# Phase C — lesson builders (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_thrash_lesson_request_message_normative() -> None:
+    msg = thrash_lesson_request_message()
+    assert msg == THRASH_LESSON_REQUEST
+    assert msg.startswith("HOST:")
+    assert "thrash lesson" in msg
+    assert "FAILURE:" in msg
+    assert "TRIED:" in msg
+    assert "WHY:" in msg
+    assert "NEXT:" in msg
+    # Design alias
+    assert lesson_request_host_message() == msg
+
+
+def test_lesson_pin_host_message() -> None:
+    pin = lesson_pin_host_message("read_file path was wrong")
+    assert pin.startswith("HOST:")
+    assert "moment lesson pin" in pin
+    assert "read_file path was wrong" in pin
+
+
+def test_compact_lesson_free_sentences() -> None:
+    one = compact_lesson("I used the wrong path.")
+    assert one == "I used the wrong path."
+    three = compact_lesson("One. Two. Three. Four. Five.")
+    assert "One." in three
+    assert "Four" not in three
+    assert compact_lesson("   ") == ""
+    assert compact_lesson("") == ""
+
+
+def test_compact_lesson_structured_fields() -> None:
+    raw = (
+        "FAILURE: missing TOOL.md\n"
+        "TRIED: read_file drafts/search_web\n"
+        "WHY: path wrong\n"
+        "NEXT: write files then install\n"
+        "noise line ignored eventually"
+    )
+    out = compact_lesson(raw)
+    assert "FAILURE:" in out
+    assert "NEXT:" in out
+
+
+def test_synthesize_lesson_labeled() -> None:
+    body = synthesize_lesson(
+        tried=["read_file|{}", "read_file|{\"path\":\"x\"}"],
+        last_error="not_found",
+        tool_name="read_file",
+    )
+    assert "HOST-synthesized" in body
+    assert "read_file" in body
+    assert "not_found" in body
+    # Must not fake first-person self-voice as the only label
+    assert not body.startswith("I learned")
+    pin = lesson_pin_host_message(body)
+    assert pin.startswith("HOST:")
+    assert "HOST-synthesized" in pin
+
+
+def test_lesson_constants() -> None:
+    assert MAX_LESSON_PINS == 2
+    assert LESSON_SYNTH_FAIL_STREAK == 3

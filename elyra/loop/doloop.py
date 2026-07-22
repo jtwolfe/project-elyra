@@ -3,7 +3,8 @@
 Scope: hop orchestration, in-turn budget, ends_moment batch abort, no-speak
 nudge, budgeted in-moment work-continue HOST (continuous policy), post-load
 skill-commit HOST (skill_commit_policy), post-batch tool thrash HOST
-(tool_thrash_policy), optional post-load tool_choice pin (default OFF).
+(tool_thrash_policy), thrash lesson request/capture/HOST-synthesized pin
+(Phase C), optional post-load tool_choice pin (default OFF).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
           completion-ingress channel hygiene (sanitize before beat/chain),
           tools_ran / ledger_mutated / flood / thrash counters on DoLoopResult.
@@ -48,10 +49,16 @@ from elyra.loop.skill_commit_policy import (
     skill_commit_host_message,
 )
 from elyra.loop.tool_thrash_policy import (
+    LESSON_SYNTH_FAIL_STREAK,
+    MAX_LESSON_PINS,
     THRASH_TRIED_CAP,
+    compact_lesson,
+    lesson_pin_host_message,
     should_inject_thrash_host,
+    synthesize_lesson,
     thrash_detail,
     thrash_host_message,
+    thrash_lesson_request_message,
     update_thrash_streak,
 )
 from elyra.loop.stop import (
@@ -156,6 +163,14 @@ class _LoopState:
     thrash_last_tool: str | None = None
     thrash_host_sent: int = 0
     thrash_tried: list[str] = field(default_factory=list)
+    # Thrash lessons (Phase C) — moment-scoped; reset on new _LoopState only.
+    lessons: list[str] = field(default_factory=list)
+    lesson_request_sent: bool = False
+    lesson_captured: bool = False
+    lesson_pin_message: str | None = None
+    # Identical-fail streak after lesson request (same fingerprint; synthesize after K).
+    lesson_fails_since_request: int = 0
+    lesson_synth_fp: str | None = None  # fp being counted for HOST-synthesize
 
 
 def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
@@ -757,6 +772,9 @@ def _run_loop_body(
         )
         if did_re:
             state.reouter_count += 1
+        # Belt-and-suspenders: lesson pin is HOST inject (compress keeps injects);
+        # re-materialize if missing after re-outer/compress.
+        _ensure_lesson_pin_in_chain(state)
 
         messages = list(state.outer_prefix) + list(state.chain_messages)
         # Stage 5 L4: pin speak only on social first completion (hop==0 pre-call).
@@ -837,6 +855,16 @@ def _run_loop_body(
         state.last_stop_hop_was_flood = hop_was_flood
 
         # Orphan content → model beat only (already recorded); never glass.
+        # Phase C lesson capture BEFORE frozen free-text inject order.
+        # Does not force stop or tools; fall through to skill_commit → …
+        _maybe_capture_free_text_lesson(
+            state=state,
+            content=result.content or "",
+            hop_was_flood=hop_was_flood,
+            moments=moments,
+            moment_id=moment_id,
+        )
+
         # Free-text inject order (K8 extended): skill_commit → no_speak →
         # work_continue → stop. Skill-commit fires even on flood free-text and
         # is independent of continuous_enabled.
@@ -998,6 +1026,22 @@ def _handle_tool_batch(
             if len(state.thrash_tried) > THRASH_TRIED_CAP:
                 state.thrash_tried = state.thrash_tried[-THRASH_TRIED_CAP:]
 
+        # Phase C: identical-fail streak after lesson request (HOST-synthesize).
+        # Only count continuing same fingerprint; diversified fails / ok reset.
+        if state.lesson_request_sent and not state.lesson_captured:
+            if not upd.ok and (
+                state.lesson_synth_fp is not None
+                and upd.fingerprint == state.lesson_synth_fp
+            ):
+                state.lesson_fails_since_request += 1
+            elif not upd.ok:
+                # New fail fingerprint — start a fresh identical streak.
+                state.lesson_synth_fp = upd.fingerprint
+                state.lesson_fails_since_request = 1
+            else:
+                state.lesson_fails_since_request = 0
+                state.lesson_synth_fp = None
+
         # Enrich attempt# into payload via replace (ToolResult is frozen).
         payload = dict(tr.payload) if isinstance(tr.payload, dict) else {}
         payload["attempt"] = upd.streak
@@ -1101,7 +1145,124 @@ def _handle_tool_batch(
                 "thrash_kind": thrash_dec.kind,
             },
         )
+
+    # Phase C: arm thrash lesson request once after thrash HOST is in play
+    # (including later batches when thrash budget already spent).
+    if state.thrash_host_sent > 0 and not state.lesson_request_sent:
+        lesson_req = thrash_lesson_request_message()
+        state.chain_messages.append(_obs_user_message(lesson_req))
+        state.lesson_request_sent = True
+        state.lesson_fails_since_request = 0
+        # Count further identical fails of the thrashing fingerprint only.
+        state.lesson_synth_fp = state.thrash_last_fp
+        _LOG.info("thrash lesson request moment_id=%s", moment_id)
+        _append_beat(
+            moments,
+            moment_id,
+            {
+                "type": "obs",
+                "kind": "thrash_lesson",
+                "content": lesson_req,
+            },
+        )
+
+    # Phase C: HOST-synthesized lesson after K additional *identical* fails.
+    if (
+        state.lesson_request_sent
+        and not state.lesson_captured
+        and state.lesson_fails_since_request >= LESSON_SYNTH_FAIL_STREAK
+    ):
+        _store_and_pin_lesson(
+            state=state,
+            lesson=synthesize_lesson(
+                tried=state.thrash_tried,
+                last_error=state.thrash_last_error,
+                tool_name=state.thrash_last_tool or "tool",
+            ),
+            moments=moments,
+            moment_id=moment_id,
+            synthesized=True,
+        )
+
     return None
+
+
+def _ensure_lesson_pin_in_chain(state: _LoopState) -> None:
+    """Re-append lesson pin HOST if missing after in-turn re-outer/compress."""
+    pin = state.lesson_pin_message
+    if not pin:
+        return
+    for msg in state.chain_messages:
+        if msg.get("role") == "user" and msg.get("content") == pin:
+            return
+    state.chain_messages.append(_obs_user_message(pin))
+
+
+def _store_and_pin_lesson(
+    *,
+    state: _LoopState,
+    lesson: str,
+    moments: Any | None,
+    moment_id: str,
+    synthesized: bool = False,
+) -> None:
+    """Store compact lesson, set pin HOST, mark captured. No auto-stop."""
+    body = (lesson or "").strip()
+    if not body:
+        return
+    state.lessons = (state.lessons + [body])[-MAX_LESSON_PINS:]
+    state.lesson_captured = True
+    pin = lesson_pin_host_message(body)
+    state.lesson_pin_message = pin
+    # Materialize as HOST so compress keeps inject span (OQ3).
+    if not any(
+        m.get("role") == "user" and m.get("content") == pin for m in state.chain_messages
+    ):
+        state.chain_messages.append(_obs_user_message(pin))
+    _LOG.info(
+        "lesson pin moment_id=%s synthesized=%s lessons=%s",
+        moment_id,
+        synthesized,
+        len(state.lessons),
+    )
+    _append_beat(
+        moments,
+        moment_id,
+        {
+            "type": "obs",
+            "kind": "lesson_pin",
+            "content": pin,
+            "synthesized": synthesized,
+        },
+    )
+
+
+def _maybe_capture_free_text_lesson(
+    *,
+    state: _LoopState,
+    content: str,
+    hop_was_flood: bool,
+    moments: Any | None,
+    moment_id: str,
+) -> None:
+    """Capture non-flood free-text as lesson after request; do not force stop."""
+    if not state.lesson_request_sent or state.lesson_captured:
+        return
+    if hop_was_flood:
+        return
+    text = (content or "").strip()
+    if not text:
+        return
+    lesson = compact_lesson(text)
+    if not lesson:
+        return
+    _store_and_pin_lesson(
+        state=state,
+        lesson=lesson,
+        moments=moments,
+        moment_id=moment_id,
+        synthesized=False,
+    )
 
 
 def _finish(
