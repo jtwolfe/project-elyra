@@ -1,9 +1,10 @@
 """Tool thrash policy (pure decisions).
 
-Scope: fingerprints, streak updates, thrash HOST decision, HOST builder.
-Peer to skill_commit_policy / continuous_policy. No I/O. No glass.
+Scope: fingerprints, streak updates, thrash HOST decision, HOST builders,
+lesson request/pin/compact/synthesize (Phase C ceremony). Peer to
+skill_commit_policy / continuous_policy. No I/O. No glass.
 
-Phase B only: no lesson ceremony, no skip-identical re-exec.
+Out of scope here: skip-identical re-exec (PR3b).
 """
 
 from __future__ import annotations
@@ -12,13 +13,18 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 # Defaults (thin lattice; constants over flag forest).
 FAIL_STREAK_THRESHOLD = 3
 OK_STREAK_THRESHOLD = 5
 MAX_THRASH_HOSTS = 1
 THRASH_TRIED_CAP = 8
+MAX_LESSON_PINS = 2  # last L=1–2 moment-scoped lessons
+# Additional identical fail updates after lesson request before HOST-synthesize.
+LESSON_SYNTH_FAIL_STREAK = 3
+# Compact lesson max chars (1–3 sentences target).
+_LESSON_MAX_CHARS = 480
 
 # Large string values hashed above this length (fingerprint only).
 _LARGE_STR_THRESHOLD = 64
@@ -31,8 +37,25 @@ THRASH_HOST = (
     "or honest no-tool stop — rest is not a tool name."
 )
 
-_WS_RE = re.compile(r"\s+")
+# Phase C: thrash lesson request (free-text form; not free-text inject order).
+THRASH_LESSON_REQUEST = (
+    "HOST: thrash lesson — reply in free-text only (1–3 sentences) OR structured:\n"
+    "FAILURE: …\n"
+    "TRIED: …\n"
+    "WHY: …\n"
+    "NEXT: …\n"
+    "Then change tool/args on a following hop (or honest no-tool stop). "
+    "Do not repeat the thrashing call."
+)
 
+LESSON_PIN_HOST = "HOST: moment lesson pin — {lesson}"
+
+_WS_RE = re.compile(r"\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_STRUCTURED_LESSON_RE = re.compile(
+    r"^\s*(FAILURE|TRIED|WHY|NEXT)\s*:",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 @dataclass(frozen=True)
 class ThrashUpdate:
@@ -219,18 +242,102 @@ def thrash_detail(*, last_ok: bool | None, last_error: str | None) -> str:
     return "unknown"
 
 
+# ---------------------------------------------------------------------------
+# Phase C — thin first-person lessons (moment-scoped; not self.md)
+# ---------------------------------------------------------------------------
+
+
+def thrash_lesson_request_message() -> str:
+    """HOST thrash lesson request (chain-only; obs kind thrash_lesson)."""
+    return THRASH_LESSON_REQUEST
+
+
+def lesson_request_host_message() -> str:
+    """Alias for thrash_lesson_request_message (design API name)."""
+    return thrash_lesson_request_message()
+
+
+def lesson_pin_host_message(lesson: str) -> str:
+    """Sticky moment lesson pin as HOST inject (survives in-turn re-outer)."""
+    text = (lesson or "").strip() or "(empty)"
+    return LESSON_PIN_HOST.format(lesson=text)
+
+
+def compact_lesson(content: str) -> str:
+    """Keep 1–3 sentences or structured FAILURE/TRIED/WHY/NEXT lines.
+
+    No strict parser — light trim only. Empty input → empty string.
+    """
+    text = (content or "").strip()
+    if not text:
+        return ""
+    # Collapse runaway whitespace while preserving newlines for structured form.
+    if _STRUCTURED_LESSON_RE.search(text):
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        # Keep labeled lines preferentially; drop pure noise after a few.
+        kept: list[str] = []
+        for ln in lines:
+            if _STRUCTURED_LESSON_RE.match(ln) or len(kept) < 4:
+                kept.append(ln)
+            if len(kept) >= 8:
+                break
+        text = "\n".join(kept)
+    else:
+        # Free sentences: first 1–3.
+        parts = _SENTENCE_SPLIT_RE.split(text)
+        parts = [p.strip() for p in parts if p.strip()]
+        if len(parts) > 3:
+            text = " ".join(parts[:3])
+        else:
+            text = " ".join(parts) if parts else text
+        text = _WS_RE.sub(" ", text).strip()
+    if len(text) > _LESSON_MAX_CHARS:
+        text = text[: _LESSON_MAX_CHARS - 1].rstrip() + "…"
+    return text
+
+
+def synthesize_lesson(
+    *,
+    tried: Sequence[str],
+    last_error: str | None,
+    tool_name: str,
+) -> str:
+    """HOST-synthesized lesson body (must stay labeled; never fake self-voice).
+
+    Returned string is the lesson body (without pin HOST prefix); caller wraps
+    with lesson_pin_host_message for chain inject.
+    """
+    name = (tool_name or "").strip() or "tool"
+    err = last_error if last_error else "ok_spam"
+    tried_tail = list(tried)[-4:] if tried else []
+    return (
+        f"HOST-synthesized lesson: failed repeating {name} "
+        f"({err}); tried={tried_tail}; "
+        f"next=change args or stop — not a first-person claim."
+    )
+
+
 __all__ = [
     "FAIL_STREAK_THRESHOLD",
+    "LESSON_PIN_HOST",
+    "LESSON_SYNTH_FAIL_STREAK",
+    "MAX_LESSON_PINS",
     "MAX_THRASH_HOSTS",
     "OK_STREAK_THRESHOLD",
     "THRASH_HOST",
+    "THRASH_LESSON_REQUEST",
     "THRASH_TRIED_CAP",
     "ThrashHostDecision",
     "ThrashUpdate",
     "canonical_args",
+    "compact_lesson",
+    "lesson_pin_host_message",
+    "lesson_request_host_message",
     "should_inject_thrash_host",
+    "synthesize_lesson",
     "thrash_detail",
     "thrash_host_message",
+    "thrash_lesson_request_message",
     "tool_fingerprint",
     "update_thrash_streak",
 ]
