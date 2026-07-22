@@ -22,6 +22,11 @@ from elyra.identity import IdentityStore
 from elyra.llm.client import ChatClient
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.doloop import DoLoopResult, run_do_loop
+from elyra.loop.orient_slice import (
+    format_goals_slice,
+    format_skill_bias,
+    format_skill_catalog,
+)
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.moment.types import STOP_REASONS
@@ -43,6 +48,7 @@ from elyra.presence.user_input import (
 )
 from elyra.sandbox import Sandbox
 from elyra.settings import Settings, load_settings
+from elyra.skills import SkillCatalog
 from elyra.speak import SpeakTransport
 from elyra.tools import ToolContext, ToolRegistry
 from elyra.tools.policy import resolve_bundled_tools_root
@@ -108,6 +114,7 @@ class PresenceWorker:
         sandbox: Sandbox | None = None,
         speak: SpeakTransport | None = None,
         goals: GoalsStore | None = None,
+        skills: SkillCatalog | None = None,
         run_do_loop_fn: RunDoLoopFn | None = None,
     ) -> None:
         self.paths = paths
@@ -124,6 +131,7 @@ class PresenceWorker:
         self._sandbox = sandbox
         self._speak = speak
         self._goals = goals
+        self._skills = skills
         self._run_do_loop: RunDoLoopFn = run_do_loop_fn or run_do_loop
 
         self._identity = IdentityStore(paths)
@@ -480,12 +488,23 @@ class PresenceWorker:
         user_id = _user_id_from_wake(wake) or "operator"
 
         def rebuild_outer() -> list[dict[str, Any]]:
+            # Re-read glass, goals, and skill catalog every rebuild so mid-moment
+            # ledger/skill edits appear (do not cache format strings at open).
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             try:
                 user_digest = self._users.profile(user_id)
             except ValueError:
                 user_digest = ""
+            loop = self.settings.loop
+            catalog = self._ensure_skills().catalog()
+            goals_list = self._ensure_goals().list_goals()
+            protect_goal_ids: set[str] = set()
+            protect_task_ids: set[str] = set()
+            if payload.get("goal_id"):
+                protect_goal_ids.add(str(payload["goal_id"]))
+            if payload.get("task_id"):
+                protect_task_ids.add(str(payload["task_id"]))
             return assemble_outer_meal(
                 glass_history=glass,
                 settings=self.settings,
@@ -493,6 +512,17 @@ class PresenceWorker:
                 self_digest=self_digest,
                 user_digest=user_digest,
                 why_now=why,
+                goals=format_goals_slice(
+                    goals_list,
+                    max_tokens=loop.orient_goals_max_tokens,
+                    protect_goal_ids=protect_goal_ids or None,
+                    protect_task_ids=protect_task_ids or None,
+                ),
+                skill_catalog=format_skill_catalog(
+                    catalog,
+                    max_tokens=loop.orient_skill_catalog_max_tokens,
+                ),
+                skill_bias=format_skill_bias(wake.kind, payload),
                 wake_content=wake_content_s,
                 wake_message_id=wake_message_id_s,
             )
@@ -701,6 +731,11 @@ class PresenceWorker:
                 on_task_ready=self._on_task_ready,
             )
         return self._goals
+
+    def _ensure_skills(self) -> SkillCatalog:
+        if self._skills is None:
+            self._skills = SkillCatalog(self.paths)
+        return self._skills
 
     def _on_task_ready(self, task_id: str, goal_id: str) -> None:
         try:

@@ -686,3 +686,108 @@ def test_priority_user_before_timer(paths):
         assert order[1] == "timer"
     finally:
         _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_injects_goals_catalog_and_bias(paths):
+    """rebuild_outer passes skill catalog, bias, and goals into assemble_outer_meal."""
+    from elyra.goals import GoalsStore
+    from elyra.loop.orient_slice import BIAS_TALK
+
+    store = GoalsStore(paths)
+    goal = store.create_goal("Ship orient slices", acceptance="meal has goals")
+    store.create_task(goal["id"], "Wire rebuild_outer", status="ready")
+
+    meals: list[list[dict[str, Any]]] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meal = rebuild()
+        meals.append(meal)
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    # Inject goals store so create above is visible (same paths; re-read ok).
+    worker._goals = store  # noqa: SLF001
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("hello orient")
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert _wait_until(lambda: not worker.busy, timeout=2.0)
+        orient_body = meals[0][-1]["content"]
+        assert "Ship orient slices" in orient_body
+        assert "Wire rebuild_outer" in orient_body
+        assert BIAS_TALK in orient_body
+        # Catalog from bundled skills (at least talk / do-work).
+        assert "talk" in orient_body.lower() or "- talk:" in orient_body
+        assert "{{GOALS}}" not in orient_body
+        assert "{{SKILL_CATALOG}}" not in orient_body
+        assert "{{SKILL_BIAS}}" not in orient_body
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_rereads_goals_each_call(paths):
+    """Every rebuild_outer re-reads goals (fresh slice, not cached at open)."""
+    from elyra.goals import GoalsStore
+
+    store = GoalsStore(paths)
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        first = rebuild()[-1]["content"]
+        # Mutate ledger mid-moment, then rebuild again.
+        store.create_goal("Mid-moment goal")
+        second = rebuild()[-1]["content"]
+        meals.extend([first, second])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    worker._goals = store  # noqa: SLF001
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message("check reread")
+        assert _wait_until(lambda: len(meals) >= 2, timeout=2.0)
+        assert "Mid-moment goal" not in meals[0]
+        assert "Mid-moment goal" in meals[1]
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_task_ready_bias(paths):
+    """task_ready wake gets do-work bias in orient."""
+    from elyra.loop.orient_slice import BIAS_DO_WORK
+
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meals.append(rebuild()[-1]["content"])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        worker.enqueue_wake(
+            "task_ready",
+            {"task_id": "t_xyz", "goal_id": "g_xyz"},
+        )
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert BIAS_DO_WORK in meals[0]
+    finally:
+        _stop_join(worker, stop, t)

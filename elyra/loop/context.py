@@ -15,7 +15,7 @@ from elyra.config import ElyraPaths
 from elyra.prompts.loader import load_prompt
 from elyra.settings import LoopSettings, Settings, default_settings
 
-# Placeholders left empty when not provided (goals/skills land in later PRs).
+# Placeholders left empty when caller omits goals / skill_catalog / skill_bias.
 _EMPTY_PLACEHOLDER = ""
 
 # Single-pass orient fill — substituted values are never re-scanned.

@@ -27,6 +27,9 @@ class LoopSettings:
     in_turn_max_tokens: int = 24000
     tool_result_max_chars: int = 8000
     generation_max_tokens: int = 8192
+    # Orient slice budgets (skill catalog + goals/tasks in outer meal).
+    orient_skill_catalog_max_tokens: int = 400
+    orient_goals_max_tokens: int = 600
 
 
 @dataclass(frozen=True)
