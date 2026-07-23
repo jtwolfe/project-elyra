@@ -1,11 +1,13 @@
 ---
 name: create-skill
-description: Author high-quality local playbooks. Use only when durable, non-obvious procedural knowledge is missing and worth encoding.
+description: Author high-quality local playbooks. Use when durable, non-obvious procedural knowledge is missing and has already been judged worth encoding.
 ---
 
 # Create skill
 
-Create a new local skill only when it will meaningfully improve future performance. Most ideas should not become skills.
+This skill is the execution path for adding a new local skill. It assumes the decision that a new skill is warranted has already been made.
+
+Most ideas should **not** become skills.
 
 ## Decision framework (use this first)
 
@@ -72,6 +74,10 @@ description: One precise line that says what it does and when it should trigger.
 - If the missing capability is executable rather than instructional, use `create-tool` (or later Grok Build) instead.
 - Do not create a skill just to feel productive. Silence is better than a low-value skill.
 
-## After creation
+## Ledger and review
 
-If the new skill is part of a larger improvement effort, update the relevant goal/task and consider whether `review-work` is needed before treating the work as done.
+Skill creation is a meaningful capability change. Keep it visible:
+
+- Work should normally sit under an explicit goal or task.
+- After creation, update the relevant ledger entries.
+- Prefer `review-work` before treating the new skill as fully done.

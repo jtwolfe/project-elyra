@@ -5,7 +5,7 @@ description: Draft, verify, and promote a new tool package. Use when a reusable 
 
 # Create tool
 
-This skill is the **execution path** for adding a new tool. It assumes the decision that a new tool is warranted has already been made (by orient, a higher-level judgment, or an explicit goal).
+This skill is the execution path for adding a new tool. It assumes the decision that a new tool is warranted has already been made.
 
 Most capability gaps should **not** result in a new tool.
 
@@ -75,7 +75,3 @@ Tool creation is a meaningful capability change. Keep it visible:
 - Work should normally sit under an explicit goal or task.
 - After promotion, update the relevant ledger entries.
 - Prefer `review-work` before treating the new capability as fully done.
-
-## Relationship to Metacognition
-
-Higher-order judgment about *whether* capability growth is appropriate belongs to Metacognition (Decide). This skill is the focused execution path once that judgment has selected “create a tool.”
