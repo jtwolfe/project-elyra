@@ -9,18 +9,26 @@ This folder holds the design documentation for migrating Project Elyra from loca
 3. **Subscription protection.** Elyra must never consume the full SuperGrok weekly quota under normal operation. A hierarchical usage meter with hard stops is a Phase 0 requirement.
 4. **Person / Instrument separation.** Elyra remains the durable person (identity, goals, moments). Grok Build is the high-capability coding instrument that Elyra can call later. Phase 0 only prepares the model path and budgets; the `grok_build` tool itself is Phase 1+.
 5. **Documentation before code.** Designs live here before implementation begins on the `grok-improvement` branch.
+6. **Glue, not ceremony.** Metacognition (MC) is the light path that keeps goals, tasks, skills, tools (and later memory) coherent under continuous work. It is not a second mind. Name it early; give it form only after the Grok path is stable.
 
 ## Folder contents
 
 | Document | Purpose |
 |----------|---------|
 | [phase-0.md](phase-0.md) | Complete Phase 0 concept design (provider, usage meter, prompt adjustments, success criteria) |
+| [metacognition.md](metacognition.md) | MC geometry, dual with Memory, employment plan (name now → shallow shape after Grok stable → optional package later) |
 
-Later phases (to be added when ready):
+## Phase overview
 
-- Phase 1 — `grok_build` tool + self-improvement goal scaffolding
-- Phase 2 — Self-modification continuity protocol and worktree workflow
-- Phase 3 — Atomized memory substrate (drawing on the memory-atom / hypergraph model)
+| Phase | Focus |
+|-------|--------|
+| **Phase 0** | xAI / Grok provider path, hierarchical usage meter (50% weekly / day / 1-hour hard stops), light prompt fitness. **No MC implementation.** |
+| **After Phase 0 stable** | Optional Stage B MC shape: ledger-aware soft bias + short Decide cadence in orient. Still no new subsystem. |
+| **Phase 1** | `grok_build` tool + self-improvement goal scaffolding. MC package is **not** required; shallow shape may land here if not already done. |
+| **Phase 2** | Self-modification continuity (worktree, verify, promote, controlled restart / resume). |
+| **Phase 3** | Atomized memory substrate (memory-atom / hypergraph model) as equal peer to MC. |
+
+Later (unscoped): remote Glass (Vercel + auth), TTS/STT voice.
 
 ## Branch
 
@@ -28,4 +36,5 @@ All work for this plan happens on the `grok-improvement` branch (created from `m
 
 ## Status
 
-- **Phase 0**: Documented (this folder). Implementation not yet started.
+- **Phase 0**: Documented. Implementation not yet started.
+- **Metacognition**: Concept documented. Naming allowed now; form only after Grok path is stable.

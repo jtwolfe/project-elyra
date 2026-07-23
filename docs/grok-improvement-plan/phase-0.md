@@ -21,6 +21,7 @@ Success means we can start the supervisor against a Grok model, run normal socia
 Explicitly **out of scope** for Phase 0:
 
 - Atomized / hypergraph memory (Stretch 2+)
+- Metacognition (MC) implementation or package form (see [metacognition.md](metacognition.md); naming only is fine)
 - The `grok_build` tool itself
 - Self-modification continuity protocol or worktree workflows
 - Continuous-work policy changes
@@ -38,7 +39,7 @@ Phase 0 is deliberately thin. It only unlocks the Grok path and protects the sub
 1. Document first (this folder).
 2. Implement the usage meter and provider abstraction as small, testable units.
 3. Verify with live calls under a tight budget before relaxing anything.
-4. Only then consider Phase 1 (`grok_build` tool).
+4. Only then consider post–Phase 0 work (light MC shape, then Phase 1 `grok_build` tool).
 
 Past projects failed by building sophisticated memory first on models that could not reliably use it. We will not repeat that pattern.
 
@@ -161,6 +162,7 @@ Exact model IDs are left to config so they can track xAI's current naming.
 
 - Awareness that a usage budget exists and that resting when the budget is exhausted is correct behaviour
 - Clear statement that Elyra is running under a Grok / xAI path when that is true (optional, for identity honesty)
+- Optional: light naming of the Decide / metacognition role if it helps Grok without adding constraints (see [metacognition.md](metacognition.md) Stage A)
 
 ### 6.3 Scope limit
 
@@ -205,15 +207,16 @@ Phase 0 is complete when all of the following hold:
 | Token burn before meter is solid | Implement meter first; start with a tighter temporary fraction if needed |
 | Provider differences break tool calling | Keep request surface minimal; test tools early |
 | Prompt softening re-introduces old Gemma failure modes on the local path | Keep local path on the original prompts or gate prompt set by provider |
-| Scope creep into memory, voice, or `grok_build` | Enforce the non-goals list above |
+| Scope creep into memory, MC form, voice, or `grok_build` | Enforce the non-goals list above |
 
 ## 10. Related later work (preview only)
 
 After Phase 0 is verified:
 
+- **Metacognition Stage B** — shallow shape only: ledger-aware soft bias + short Decide cadence in orient. See [metacognition.md](metacognition.md). No package required.
 - **Phase 1** — `grok_build` tool (headless CLI, reuses existing Grok Build session) + self-improvement goal scaffolding.
 - **Phase 2** — Self-modification continuity (worktree, verify, promote, controlled restart / resume).
-- **Phase 3** — Atomized memory substrate guided by the memory-atom / hypergraph model.
+- **Phase 3** — Atomized memory substrate guided by the memory-atom / hypergraph model (equal peer to MC).
 - **Later** — Remote Glass (FE on Vercel + auth + tunnel/VPS), TTS/STT voice (Grok Build already uses `wss://api.x.ai/v1/stt` with refreshable OAuth/session bearer).
 
-Do not start Phase 1 until Phase 0 success criteria are met.
+Do not start Phase 1 (or MC Stage B form beyond optional naming) until Phase 0 success criteria are met.
