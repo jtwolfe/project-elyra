@@ -22,7 +22,7 @@ This folder holds the design documentation for migrating Project Elyra from loca
 
 | Phase | Focus |
 |-------|--------|
-| **Phase 0** | xAI / Grok provider path (**default ON**), hierarchical usage meter (50% weekly / day / 1-hour hard stops), light prompt fitness (done), continuous/auto **default OFF**, Web UI status visibility. **No MC implementation.** |
+| **Phase 0** | xAI / Grok provider path (**default ON**), credentials **primarily Grok Build `auth.json`** (optional UI API key selectable later), default model **Grok 4.5 Fast** (selectable), hierarchical usage meter (50% weekly / day / 1-hour hard stops), light prompt fitness (done), continuous/auto **default OFF**, Web UI status + model/credential controls. **No MC implementation.** |
 | **After Phase 0 stable** | Optional Stage B MC shape: ledger-aware soft bias + short Decide cadence in orient. Still no new subsystem. |
 | **Phase 1** | `grok_build` tool + self-improvement goal scaffolding. MC package is **not** required; shallow shape may land here if not already done. |
 | **Phase 2** | Self-modification continuity (worktree, verify, promote, controlled restart / resume). |
@@ -36,13 +36,22 @@ Later (unscoped): remote Glass (Vercel + auth), TTS/STT voice.
 elyra start
 ```
 
-→ provider **xai** (default), continuous **OFF**, usage meter ON, Web UI shows provider / model / usage remaining / hard-stop / continuous so the operator can see what is going on. Local path remains available via override.
+→ provider **xai** (default), model **Grok 4.5 Fast** (selectable), credential source **Grok Build session** (optional API key paste + select later), continuous **OFF**, usage meter ON, Web UI shows provider / model / credential source / usage remaining / hard-stop / continuous. Local path remains available via override.
 
 ## Branch
 
-All work for this plan happens on the `grok-improvement` branch (created from `main`).
+**Integration branch:** `grok-improvement` (created from `main`).
+
+| Rule | Detail |
+|------|--------|
+| Work branches | All Phase 0 (and later plan) PR branches **sit on top of** `grok-improvement` |
+| PR base | Open PRs against **`grok-improvement`**, not `main` |
+| Push + merge | Push every work branch; **merge all of them down onto `grok-improvement`** when the work lands |
+| Promote to main | Separate operator step after Phase 0 success — not automatic with individual PRs |
+
+Execution detail (including PR stack and end-state checklist): [phase-0-execution.md](phase-0-execution.md).
 
 ## Status
 
-- **Phase 0**: Design + detailed implementation plan in [phase-0.md](phase-0.md). Prompt fitness already applied. Code implementation not yet started.
+- **Phase 0**: Concept in [phase-0.md](phase-0.md); **execution design** in [phase-0-execution.md](phase-0-execution.md) (ready for implementation). Prompt fitness already applied. Code implementation not yet started.
 - **Metacognition**: Concept documented. Naming allowed now; form only after Grok path is stable.

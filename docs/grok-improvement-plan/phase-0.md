@@ -1,7 +1,8 @@
 # Phase 0 — Concept Design + Implementation Plan
 
 **Status:** Design complete · Implementation plan detailed (code not started)  
-**Branch:** `grok-improvement`  
+**Branch:** `grok-improvement` (integration branch — all Phase 0 work branches stack on it and merge back here; not `main` until later promotion)  
+**Execution plan:** [phase-0-execution.md](phase-0-execution.md)  
 **Purpose:** Make Project Elyra runnable on xAI Grok models under SuperGrok Heavy with controlled token usage, without changing Stretch 1 runtime semantics.
 
 **Operator target after this work ships:**
@@ -10,7 +11,7 @@
 elyra start
 ```
 
-boots with **provider = xai** (default), **continuous / auto-operation = OFF** (default), usage meter ON, and the Web UI clearly showing provider, model, usage budgets, hard-stop state, and continuous state so the operator can see what is going on.
+boots with **provider = xai** (default), **model = Grok 4.5 Fast** (selectable), credentials resolved primarily from **Grok Build `~/.grok/auth.json`**, **continuous / auto-operation = OFF** (default), usage meter ON, and the Web UI clearly showing provider, active model, credential source, usage budgets, hard-stop state, and continuous state so the operator can see what is going on.
 
 ---
 
@@ -18,11 +19,11 @@ boots with **provider = xai** (default), **continuous / auto-operation = OFF** (
 
 Phase 0 has three concrete goals:
 
-1. **Provider path** — Elyra can talk to an xAI Grok endpoint (in addition to the existing local llama.cpp path). On this branch the **product default is xai**.
+1. **Provider path** — Elyra can talk to an xAI Grok endpoint (in addition to the existing local llama.cpp path). On this branch the **product default is xai**, authenticated primarily via **Grok Build `~/.grok/auth.json`**, default model **Grok 4.5 Fast**, with operator **model selection** and an optional **UI-stored API key** that can be selected as the active credential later.
 2. **Usage protection** — A hierarchical usage meter prevents normal operation from consuming more than 50% of the real SuperGrok Heavy weekly quota.
 3. **Prompt fitness** — System and orient prompts are adjusted so they do not over-constrain Grok the way they currently constrain Gemma. *(Already done on this branch.)*
 
-Success means we can run `elyra start`, open the Web UI, run normal social + tool moments against Grok, see live status (provider / budgets / continuous), and have the system automatically rest when budgets are exhausted — with continuous work remaining opt-in (OFF by default).
+Success means we can run `elyra start`, open the Web UI, run normal social + tool moments against Grok 4.5 Fast using the Grok Build session, see live status (provider / model / credential source / budgets / continuous), switch models or credential source when desired, and have the system automatically rest when budgets are exhausted — with continuous work remaining opt-in (OFF by default).
 
 ## 2. Non-goals (Phase 0)
 
@@ -39,7 +40,7 @@ Explicitly **out of scope** for Phase 0:
 - Multi-model routing inside a single moment
 - Remote Glass / Vercel deployment
 - TTS / STT voice integration
-- Full OAuth / token-refresh browser flow inside Elyra
+- Full OAuth / token-refresh **browser** flow inside Elyra (reading existing Grok Build `auth.json` **is** in scope; operator re-logins outside Elyra if the session dies)
 - Emergency override after a hard stop (default: **no**)
 
 Phase 0 is deliberately thin. It only unlocks the Grok path, protects the subscription, and makes the operator glass honest about runtime state.
@@ -133,17 +134,43 @@ Requirements:
 
 ### 5.3 Credential handling (Phase 0)
 
-Preferred order:
+**Primary access path is Grok Build session auth.** The operator's SuperGrok / Grok Build login is the normal way models are reached; a classic API key is optional and secondary.
 
-1. Explicit `XAI_API_KEY` (env or config key) — simplest, fully supported public path.
-2. Optional: read a usable token from `~/.grok/auth.json` if present (Grok Build session). Reuse / extract logic from `scripts/prototype_xai_grok_auth_smoke.py`. No full OAuth or refresh loop required in Phase 0.
+#### Credential sources
 
-If neither credential is resolvable at start with provider=xai, fail clearly (log + status) rather than silently falling back to local. Operator can still force local with config/CLI.
+| Source id | What | When used |
+|-----------|------|-----------|
+| `grok_build` **(default)** | Bearer from `~/.grok/auth.json` (Grok Build OIDC session; field `key` / `access_token`) | Product default when present and selected |
+| `api_key` | Operator-supplied xAI API key stored by Elyra (see §9.3) | When the operator **selects** this source after pasting a key in the Web UI (or sets it via env/config for headless use) |
+| `env` | `XAI_API_KEY` in the process environment | Convenience for scripts / CI; same material as `api_key`, not a separate product mode |
 
-### 5.4 Model selection guidance
+#### Resolution rules
 
-- Presence / do-loop → a fast, high-throughput Grok variant (cost and latency matter). Suggested default model id left in config (e.g. a current `grok-4.x` id); exact string is config, not hard-coded forever.
-- Later coding instrument (Phase 1+) → stronger / Heavy path via Grok Build.
+1. **Active source** is a runtime-selectable preference (default `grok_build`), persisted under `data/runtime/` (e.g. with model preference). Surface it in status as `credential_source`.
+2. Resolve the bearer for the active source only:
+   - `grok_build` → read `~/.grok/auth.json` using the same shape as `scripts/prototype_xai_grok_auth_smoke.py`. No full OAuth / browser login loop inside Elyra in Phase 0 (operator runs `grok login` / Grok Build login separately). Optional best-effort expiry awareness in status (`credential_expires_at` / `credential_ok`); refresh may remain out of process for Phase 0.
+   - `api_key` → load from Elyra-managed secret store (UI-saved key) or, if none stored, fall back to `XAI_API_KEY` env / config for headless.
+3. If the **active** source cannot resolve a token with provider=xai, **fail clearly** (log + status: `credential_ok=false`, reason) — do **not** silently fall back to another source or to local. Operator can switch source in the UI or force local with config/CLI.
+4. **Never** put raw tokens or API keys in `/api/status`, logs at info level, or the Web UI DOM beyond a one-time paste field that does not re-display the secret.
+
+#### Why this order
+
+This matches how the operator actually has access: SuperGrok Heavy / Grok Build session first. API key is preserved for later or alternate billing paths without becoming the default assumption.
+
+### 5.4 Model selection
+
+| Knob | Default | Notes |
+|------|---------|-------|
+| **Product default** | **Grok 4.5 Fast** | Presence / do-loop: fast, high-throughput; cost and latency matter |
+| **Wire model id** | Config-owned string (e.g. current xAI id for 4.5 Fast) | Verify against `GET /v1/models` with the active credential; do not freeze a stale id in code forever |
+| **Selectable** | Yes | Operator can change model via Web UI and/or `elyra.toml` / CLI; selection persists across restarts |
+
+Requirements:
+
+- Default model for provider=xai is **Grok 4.5 Fast** (exact API id in config; label in UI can be human-friendly).
+- **Model list** for the picker: prefer live `GET /v1/models` when credential_ok; fall back to a small curated allowlist (including the default) if listing fails.
+- Changing model applies to **subsequent** completions / moments — **not** mid-moment multi-model routing (still a Phase 0 non-goal).
+- Later coding instrument (Phase 1+) may default to a stronger / Heavy path via Grok Build; Phase 0 presence stays on Fast unless the operator picks otherwise.
 
 ---
 
@@ -185,6 +212,8 @@ After Phase 0 implementation, the following is the **default posture**:
 | Knob | Default | Notes |
 |------|---------|-------|
 | `provider` | **`xai`** | Override to `local` via `elyra.toml` or CLI |
+| `model` | **Grok 4.5 Fast** | Selectable; wire id in config / runtime preference |
+| `credential_source` | **`grok_build`** | `~/.grok/auth.json` first; `api_key` selectable later |
 | Continuous / auto | **OFF** | Already true; keep; surface in UI |
 | Usage meter | **ON** | `weekly_allowed_fraction = 0.50` |
 | llama-server | **Not started** when provider=xai | Started only for local |
@@ -195,8 +224,8 @@ After Phase 0 implementation, the following is the **default posture**:
 elyra start
 ```
 
-- Resolves credentials (env `XAI_API_KEY`, then optional `~/.grok/auth.json`).
-- Builds RuntimeConfig with `provider=xai` (unless overridden).
+- Resolves credentials for the active source (default: Grok Build `~/.grok/auth.json`).
+- Builds RuntimeConfig with `provider=xai` and default model Grok 4.5 Fast (unless overridden).
 - Skips llama-server start.
 - Starts API + Web UI + presence worker with the xAI chat client gated by the usage meter.
 - Prints clear startup lines, e.g.:
@@ -204,7 +233,7 @@ elyra start
 ```text
 Elyra home:  …
 Web UI:      http://127.0.0.1:8787/
-Provider:    xai  (model=…)
+Provider:    xai  (model=grok-…-fast · source=grok_build)
 Continuous:  off
 Usage:       week remaining …% · day … · hour …
 ```
@@ -212,6 +241,8 @@ Usage:       week remaining …% · day … · hour …
 Optional CLI flags (suggested, minimal):
 
 - `--provider local|xai` (override default)
+- `--model <id>` (override default Grok 4.5 Fast)
+- `--credential-source grok_build|api_key` (override active source)
 - Existing `--no-llama` / `--stub-llm` remain useful for local/stub paths
 - Existing `--api-host` / `--api-port` / `--context-tokens` unchanged
 
@@ -220,9 +251,11 @@ Optional CLI flags (suggested, minimal):
 ```toml
 [provider]
 name = "xai"                    # default on this branch
-model = "grok-4.5"              # config-owned; track xAI naming
+model = "…"                     # wire id for Grok 4.5 Fast; verify via /v1/models
 base_url = "https://api.x.ai/v1"
-# credential: prefer env XAI_API_KEY; optional auth.json fallback
+credential_source = "grok_build"  # grok_build | api_key
+# grok_build: ~/.grok/auth.json (primary)
+# api_key: UI-stored key and/or XAI_API_KEY env for headless
 
 [usage]
 enabled = true
@@ -232,6 +265,8 @@ hour_block_minutes = 60
 [continuous]
 enabled = false                 # product default; also runtime-toggled
 ```
+
+Runtime preferences (model, credential_source, presence of stored api_key — never the secret itself in plain status) may also live under `data/runtime/` so Web UI changes survive restarts without rewriting `elyra.toml`.
 
 Settings loading already supports sectioned `elyra.toml`. Add frozen dataclasses / sections without breaking existing loop/wait/tools/goals keys.
 
@@ -249,7 +284,12 @@ Extend `RuntimeState.snapshot()` and the merge in `ElyraApiHandler` so status in
 {
   "provider": "xai",
   "model": "…",
+  "model_label": "Grok 4.5 Fast",
+  "models_available": ["…", "…"],
+  "credential_source": "grok_build",
   "credential_ok": true,
+  "credential_detail": null,
+  "api_key_configured": false,
   "llama_ready": false,
   "llama_error": null,
   "usage": {
@@ -267,7 +307,8 @@ Extend `RuntimeState.snapshot()` and the merge in `ElyraApiHandler` so status in
 }
 ```
 
-- Never put secrets (API keys / tokens) in status.
+- **Never** put secrets (API keys / session tokens) in status. `api_key_configured` is a boolean only.
+- `credential_source` is the **active** source (`grok_build` | `api_key`).
 - `hard_stop` / `hard_stop_reason` must be non-null when the meter is refusing calls.
 - Continuous block already exists via the worker; keep and ensure the UI reads it.
 
@@ -278,12 +319,13 @@ File targets: `elyra/runtime/web/app.js`, `index.html`, light CSS if needed.
 **Rail pills (minimum):**
 
 - Replace or dual the current llama-only pill with a **provider** pill, e.g. `xai ready` / `xai stop` / `local ready` / `credential missing`.
+- Optional short model hint on rail or Status only (avoid clutter).
 - Keep worker + phase pills.
 - Keep continuous / autopilot pill behaviour (hidden when continuous OFF).
 
 **Status panel:**
 
-- Card (or clear block) for **Provider**: name, model, credential_ok.
+- Card for **Provider / model**: name, active model (with selector — see §9.3), credential_source, credential_ok.
 - Card for **Usage budget**: week / day / hour remaining + hard-stop reason when active.
 - Existing continuous summary card stays; ensure it is visible and accurate at default OFF.
 - Keep the raw JSON dump for power users.
@@ -291,9 +333,29 @@ File targets: `elyra/runtime/web/app.js`, `index.html`, light CSS if needed.
 **Behaviour on hard stop:**
 
 - Status shows the reason.
-- New model-using moments are refused; glass remains usable for inspection and for turning continuous off / waiting for budget renewal.
+- New model-using moments are refused; glass remains usable for inspection, credential/model controls, turning continuous off, or waiting for budget renewal.
 
 No new admin pages. No multi-user glass. Stay inside the existing SPA.
+
+### 9.3 Operator controls: model + credentials (Phase 0)
+
+Still inside the Status panel (or a small adjacent card on the same panel) — not a second app.
+
+| Control | Behaviour |
+|---------|-----------|
+| **Model select** | Dropdown (or equivalent) bound to `models_available` + current `model`. `PATCH` (or POST) updates runtime preference; applies to **next** completion/moment. Default selection = Grok 4.5 Fast. |
+| **Credential source** | Toggle / select: **Grok Build session** (`grok_build`) vs **API key** (`api_key`). Default = Grok Build. Switching only succeeds if that source can resolve; otherwise show clear error and leave previous source active. |
+| **API key paste** | Password-style input + Save. Persists to Elyra secret store under the data home (file mode restricted; never committed). Sets `api_key_configured=true`. Does **not** auto-switch source unless the operator also selects API key. Clear/remove control allowed. |
+| **Session hint** | For `grok_build`: show non-secret meta if known (e.g. email from auth.json, expiry / ok). Link-style note: log in via Grok Build / `grok login` if missing. |
+
+Suggested endpoints (names flexible):
+
+- `PATCH /api/provider` — body `{ "model"?: string, "credential_source"?: "grok_build"|"api_key" }`
+- `PUT /api/provider/api-key` — body `{ "api_key": "…" }` (write-only; never echoed)
+- `DELETE /api/provider/api-key` — clear stored key
+- `GET /api/status` — already carries picker state (no secrets)
+
+Local-only glass assumption remains: no multi-user auth on the API in Phase 0.
 
 ---
 
@@ -303,9 +365,9 @@ Prefer configuration + thin adapters. Tests ship with each unit. Scope comments 
 
 ### Step 1 — Config surface
 
-- Add provider + usage sections to settings / runtime config (defaults: provider=`xai`, usage enabled, continuous remains OFF).
+- Add provider + usage sections to settings / runtime config (defaults: provider=`xai`, model=Grok 4.5 Fast wire id, `credential_source=grok_build`, usage enabled, continuous remains OFF).
 - Files: `elyra/settings.py`, `elyra/runtime/config.py`, possibly generalize `elyra/llm/config.py`.
-- CLI: `elyra/cli.py` — default provider xai; print provider/continuous/usage lines; optional `--provider`.
+- CLI: `elyra/cli.py` — default provider xai; print provider/model/source/continuous/usage lines; optional `--provider`, `--model`, `--credential-source`.
 
 ### Step 2 — Usage meter (first substantive code)
 
@@ -314,14 +376,19 @@ Prefer configuration + thin adapters. Tests ship with each unit. Scope comments 
 - Unit tests: rollover, persistence, hard-stop decisions, restart survival.
 - No emergency override in Phase 0.
 
-### Step 3 — Provider client path
+### Step 3 — Credentials + provider client path
 
 - Keep `ChatClient` protocol.
 - Generalize `HttpChatClient` (or thin sibling): Authorization Bearer, `model` field, omit Gemma-only fields for xai.
-- Credential helper: env first, optional `~/.grok/auth.json` reader (extract from existing smoke script).
+- Credential resolver module (e.g. `elyra/llm/auth.py`):
+  - **Primary:** `~/.grok/auth.json` reader (lift from `scripts/prototype_xai_grok_auth_smoke.py`).
+  - **Secondary:** UI/env API key store under data home (write-only API; file perms restricted).
+  - Active source selection + fail-closed resolve (no silent fallback).
+- Runtime preference store for model + credential_source (and api_key presence).
 - Parse response `usage` into a field the meter can record (`ChatCompletionResult` may need a small extension).
-- Files: `elyra/llm/client.py`, `elyra/llm/config.py`, optional `elyra/llm/auth.py`.
-- Tests: request payload shape by provider; no secrets in logs.
+- Optional: list models via `GET /v1/models` for the picker.
+- Files: `elyra/llm/client.py`, `elyra/llm/config.py`, `elyra/llm/auth.py` (or similar).
+- Tests: request payload shape by provider; resolve order; no secrets in logs/status.
 
 ### Step 4 — Supervisor + gate wiring
 
@@ -332,10 +399,12 @@ Prefer configuration + thin adapters. Tests ship with each unit. Scope comments 
 
 ### Step 5 — Status API + Web UI
 
-- Extend `RuntimeState.snapshot` and `/api/status` merge with provider, model, credential_ok, usage block, hard_stop.
+- Extend `RuntimeState.snapshot` and `/api/status` merge with provider, model, models_available, credential_source, credential_ok, api_key_configured, usage block, hard_stop.
+- Add model select + credential source select + API key paste/clear (§9.3) in Status panel.
+- Wire `PATCH /api/provider` and put/delete API key routes; never echo secrets.
 - Update rail pills + Status panel cards in `elyra/runtime/web/{app.js,index.html}` (and CSS if needed).
-- Ensure continuous OFF is obvious on first load.
-- Manual check: open Web UI after `elyra start` and confirm all fields visible without digging into JSON only.
+- Ensure continuous OFF is obvious on first load; default model label shows Grok 4.5 Fast; default source shows Grok Build.
+- Manual check: open Web UI after `elyra start` and confirm all fields + controls work without digging into JSON only.
 
 ### Step 6 — Tests + live smoke
 
@@ -359,14 +428,16 @@ Prefer configuration + thin adapters. Tests ship with each unit. Scope comments 
 
 Phase 0 is complete when **all** of the following hold:
 
-1. **`elyra start`** (no flags) runs with **provider=xai** by default, does **not** start llama-server, and requires resolvable credentials (clear failure if missing).
+1. **`elyra start`** (no flags) runs with **provider=xai** and **model=Grok 4.5 Fast** by default, does **not** start llama-server, and resolves credentials primarily from **Grok Build `~/.grok/auth.json`** (clear failure if the active source is missing).
 2. **Continuous / auto-operation is OFF by default** and remains operator-controlled via the existing UI toggle; no path turns it on as a side-effect.
-3. A normal social moment and a normal tool-using moment complete successfully against a Grok model.
+3. A normal social moment and a normal tool-using moment complete successfully against Grok 4.5 Fast (or the operator-selected model).
 4. The usage meter tracks consumption and enforces 1-hour, daily, and weekly (50%-of-real) hard stops; hard-stop reason is logged and visible in status.
-5. **Web UI adequately shows what is going on:** provider, model, credential_ok, usage remaining (week/day/hour), hard-stop state, continuous state (rail + Status panel).
-6. System and orient prompts remain fitness-passed for Grok (already true).
-7. Local Gemma path still works via explicit override (no regression).
-8. Covered by hermetic tests where possible and the live smoke checklist above.
+5. **Web UI adequately shows what is going on:** provider, model, credential_source, credential_ok, api_key_configured (boolean), usage remaining (week/day/hour), hard-stop state, continuous state (rail + Status panel).
+6. **Operator can select models** in the UI (and via config/CLI); selection persists and applies to subsequent work.
+7. **Operator can paste an API key in the UI**, store it, and **select** API key vs Grok Build as the active credential source later — without secrets appearing in status or logs.
+8. System and orient prompts remain fitness-passed for Grok (already true).
+9. Local Gemma path still works via explicit override (no regression).
+10. Covered by hermetic tests where possible and the live smoke checklist above.
 
 ## 12. Risks and mitigations
 
@@ -375,8 +446,10 @@ Phase 0 is complete when **all** of the following hold:
 | Token burn before meter is solid | Meter first; optional tighter temporary fraction |
 | Provider differences break tool calling | Minimal request surface; test tools early on live xAI |
 | Prompt softening re-introduces Gemma issues on local | Shared fitness-passed prompts; keep local path unless regression appears |
-| Default xai without credentials confuses operator | Fail clearly at start; document `XAI_API_KEY` / auth.json; local override remains |
-| Status noise or secret leakage | No secrets in status; small fixed field set |
+| Default xai without Grok Build session confuses operator | Fail clearly; status points at `grok login` / Grok Build; API key path and local override remain |
+| Session token expires mid-run | Surface credential_ok false; no silent infinite retry; Phase 0 may require re-login outside Elyra |
+| Status noise or secret leakage | No secrets in status; API key write-only endpoints; small fixed field set |
+| Wrong / stale model id for "4.5 Fast" | Config-owned id; verify with `/v1/models`; UI list from live catalog when possible |
 | Scope creep into MC / memory / grok_build / continuous policy | Enforce non-goals; continuous default stays OFF |
 
 ## 13. Related later work (preview only)
@@ -397,9 +470,9 @@ Do not start Phase 1 (or MC Stage B form beyond optional naming) until Phase 0 s
 
 **Exact next actions (in order):**
 
-1. Add provider + usage config sections with **defaults: provider=xai, usage on, continuous off**; CLI prints the posture.
+1. Add provider + usage config sections with **defaults: provider=xai, model=Grok 4.5 Fast, credential_source=grok_build, usage on, continuous off**; CLI prints the posture.
 2. Implement **UsageMeter** + persistence + unit tests (meter first).
-3. Thin **xAI client path** (auth, model, field omission) + credential helper.
+3. Thin **xAI client path** + **credential resolver** (auth.json primary, optional stored/env API key, no silent fallback) + model id field omission rules.
 4. **Supervisor** skip-llama for xai + usage gate on every chat completion.
-5. Extend **RuntimeState / `/api/status`** and **Web UI** (provider pill, usage card, hard-stop visibility, continuous remains clear at OFF).
-6. Live smoke under constrained budget; confirm local override; flip status in this doc when §11 holds.
+5. Extend **RuntimeState / `/api/status`** and **Web UI**: provider pill, model select, credential source select, API key paste/clear, usage card, hard-stop visibility; continuous remains clear at OFF.
+6. Live smoke under constrained budget with Grok Build session; confirm model switch + API key path + local override; flip status in this doc when §11 holds.
