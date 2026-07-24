@@ -246,21 +246,26 @@ def write_stored_api_key(data_dir: Path, api_key: str) -> Path:
 
 
 def delete_stored_api_key(data_dir: Path) -> bool:
-    """Delete stored API key file. Returns True if a file was removed."""
+    """Delete stored API key file. Returns True if the final key file was removed.
+
+    Always attempts to remove a leftover ``xai_api_key.tmp`` (missing_ok) so a
+    crash between tmp write and ``os.replace`` cannot leave secret material on
+    disk after operator DELETE.
+    """
     path = api_key_path(data_dir)
-    if not path.is_file():
-        # Also clean stray tmp if present
-        tmp = secrets_dir(data_dir) / API_KEY_TMP_FILENAME
+    tmp = secrets_dir(data_dir) / API_KEY_TMP_FILENAME
+    removed = False
+    if path.is_file():
         try:
-            tmp.unlink(missing_ok=True)
+            path.unlink()
+            removed = True
         except OSError:
-            pass
-        return False
+            removed = False
     try:
-        path.unlink()
-        return True
+        tmp.unlink(missing_ok=True)
     except OSError:
-        return False
+        pass
+    return removed
 
 
 def api_key_is_configured(

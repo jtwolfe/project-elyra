@@ -324,6 +324,19 @@ def test_delete_stored_api_key(tmp_path: Path):
     assert delete_stored_api_key(data) is False
 
 
+def test_delete_stored_api_key_cleans_orphan_tmp(tmp_path: Path):
+    """DELETE removes final key and any leftover xai_api_key.tmp (crash residue)."""
+    data = tmp_path / "data"
+    write_stored_api_key(data, "sk-final")
+    tmp = secrets_dir(data) / "xai_api_key.tmp"
+    tmp.write_text("sk-partial-orphan\n", encoding="utf-8")
+    assert tmp.is_file()
+    assert delete_stored_api_key(data) is True
+    assert read_stored_api_key(data) is None
+    assert not api_key_path(data).exists()
+    assert not tmp.exists()
+
+
 def test_api_key_is_configured_file_or_env(tmp_path: Path):
     data = tmp_path / "data"
     data.mkdir()
