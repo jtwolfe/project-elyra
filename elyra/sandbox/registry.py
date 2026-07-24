@@ -2,27 +2,29 @@
 
 Scope: set/get/clear for SandboxLifecycleManager used by later PRs.
 In scope: thread-safe process singleton (analogous to runtime state).
-Out of scope: ensure state machine, supervisor wiring (PR2/PR3).
-
-Placeholder: manager type is ``object`` until lifecycle lands in PR2.
+Out of scope: ensure state machine, supervisor wiring (PR3).
 """
 
 from __future__ import annotations
 
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from elyra.sandbox.lifecycle import SandboxLifecycleManager
 
 _lock = threading.Lock()
-_lifecycle: object | None = None
+_lifecycle: SandboxLifecycleManager | None = None
 
 
-def set_sandbox_lifecycle(manager: object | None) -> None:
+def set_sandbox_lifecycle(manager: SandboxLifecycleManager | None) -> None:
     """Register (or clear with None) the process-wide lifecycle manager."""
     global _lifecycle
     with _lock:
         _lifecycle = manager
 
 
-def get_sandbox_lifecycle() -> object | None:
+def get_sandbox_lifecycle() -> SandboxLifecycleManager | None:
     """Return the registered lifecycle manager, or None if unset."""
     with _lock:
         return _lifecycle

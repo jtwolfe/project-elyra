@@ -3,9 +3,10 @@
 Scope:
 - Path jail: join + resolve under a fixed root; deny escapes and symlink escapes.
 - MSB constants: guest mount map, primary name, network policy, host-tree ensure.
+- ``isolation_enabled()`` / ``ELYRA_SANDBOX`` product isolation flag.
 
 In scope: relative/absolute user paths, symlink target re-check, empty reject,
-guest constants + host tree ensure for lifecycle (PR2).
+guest constants + host tree ensure for lifecycle, isolation flag.
 Out of scope: FS I/O beyond ensure, process execution, hard-link inode isolation,
 O_NOFOLLOW open races (callers may re-resolve before open).
 
@@ -138,6 +139,32 @@ def resolve_msb_network_policy_id() -> str:
     if raw in _MSB_NETWORK_POLICIES:
         return raw
     return _MSB_NETWORK_DEFAULT
+
+
+# Opt-in isolation flag (single env: ELYRA_SANDBOX only — DESIGN).
+ENV_ELYRA_SANDBOX = "ELYRA_SANDBOX"
+
+
+def isolation_enabled() -> bool:
+    """Return whether warm microsandbox isolation is enabled.
+
+    Default is **on** when ``ELYRA_SANDBOX`` is unset (operator product default).
+    Explicit off: ``0`` / ``false`` / ``no`` / ``off``.
+    Explicit on: ``1`` / ``true`` / ``yes`` / ``on`` (or any other non-empty
+    value that is not a recognized false token).
+
+    Tests set ``ELYRA_SANDBOX=0`` for hermetic host-stub runs (PR4+).
+    """
+    raw = os.environ.get(ENV_ELYRA_SANDBOX)
+    if raw is None:
+        return True
+    value = raw.strip().lower()
+    if value in {"", "0", "false", "no", "off"}:
+        return False
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    # Unknown non-empty values: treat as enabled (fail-closed isolation path).
+    return True
 
 
 def host_root_for(
