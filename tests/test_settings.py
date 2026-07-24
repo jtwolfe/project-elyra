@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 from elyra.settings import (
     LoopSettings,
     Settings,
@@ -29,6 +30,24 @@ def test_default_settings_match_design():
     assert s.wait.default_timeout_seconds == 120
     assert s.tools.verify_timeout_seconds == 120
     assert s.goals.close_gate == "soft"
+    # Continuous remains product-default OFF
+    assert s.continuous.enabled is False
+    # Provider / usage Phase 0 defaults (settings surface only)
+    assert s.provider.name == "xai"
+    assert s.provider.model == "grok-4.5"
+    assert s.provider.model == DEFAULT_XAI_MODEL
+    assert s.provider.model_label == "Grok 4.5 Fast"
+    assert s.provider.model_label == DEFAULT_XAI_MODEL_LABEL
+    assert s.provider.base_url == "https://api.x.ai/v1"
+    assert s.provider.credential_source == "grok_build"
+    assert s.provider.grok_auth_path is None
+    assert s.provider.request_timeout_s == 120.0
+    assert s.usage.enabled is True
+    assert s.usage.weekly_allowed_tokens == 5_000_000
+    assert s.usage.weekly_allowed_fraction == 0.50
+    assert s.usage.hour_block_minutes == 60
+    assert s.usage.day_allowed_tokens is None
+    assert s.usage.hour_allowed_tokens is None
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert s.context_tokens is None
@@ -122,6 +141,99 @@ def test_settings_as_dict_round_structure():
     d = settings_as_dict(default_settings())
     assert d["loop"]["max_tool_hops"] == 200
     assert d["goals"]["close_gate"] == "soft"
+    assert d["provider"]["name"] == "xai"
+    assert d["provider"]["model"] == "grok-4.5"
+    assert d["usage"]["enabled"] is True
+    assert d["usage"]["weekly_allowed_tokens"] == 5_000_000
+    assert d["continuous"]["enabled"] is False
+
+
+def test_load_settings_provider_and_usage_toml(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        """
+[provider]
+name = "local"
+model = "custom-model"
+model_label = "Custom"
+base_url = "http://127.0.0.1:8080/v1"
+credential_source = "api_key"
+request_timeout_s = 60.0
+
+[usage]
+enabled = false
+weekly_allowed_tokens = 1000
+weekly_allowed_fraction = 0.25
+hour_block_minutes = 30
+day_allowed_tokens = 100
+hour_allowed_tokens = 10
+
+[continuous]
+enabled = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.provider.name == "local"
+    assert s.provider.model == "custom-model"
+    assert s.provider.model_label == "Custom"
+    assert s.provider.base_url == "http://127.0.0.1:8080/v1"
+    assert s.provider.credential_source == "api_key"
+    assert s.provider.request_timeout_s == 60.0
+    # unset optional path stays default
+    assert s.provider.grok_auth_path is None
+    assert s.usage.enabled is False
+    assert s.usage.weekly_allowed_tokens == 1000
+    assert s.usage.weekly_allowed_fraction == 0.25
+    assert s.usage.hour_block_minutes == 30
+    assert s.usage.day_allowed_tokens == 100
+    assert s.usage.hour_allowed_tokens == 10
+    assert s.continuous.enabled is False
+
+
+def test_cli_overrides_provider_and_usage_win_over_toml(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        """
+[provider]
+name = "local"
+model = "from-toml"
+
+[usage]
+weekly_allowed_tokens = 999
+enabled = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    base = load_settings(tmp_path)
+    merged = merge_cli_overrides(
+        base,
+        {
+            "provider": {"name": "xai", "model": "grok-4.5"},
+            "usage": {"enabled": True, "weekly_allowed_tokens": 5_000_000},
+        },
+    )
+    assert merged.provider.name == "xai"
+    assert merged.provider.model == "grok-4.5"
+    # toml-only field not overridden stays
+    assert base.provider.name == "local"
+    assert merged.usage.enabled is True
+    assert merged.usage.weekly_allowed_tokens == 5_000_000
+
+
+def test_merge_cli_provider_none_values_ignored():
+    base = default_settings()
+    merged = merge_cli_overrides(
+        base,
+        {
+            "provider": {"name": None, "model": "only-this"},
+            "usage": {"enabled": None, "weekly_allowed_tokens": 42},
+        },
+    )
+    assert merged.provider.name == "xai"  # default preserved
+    assert merged.provider.model == "only-this"
+    assert merged.usage.enabled is True  # default preserved
+    assert merged.usage.weekly_allowed_tokens == 42
 
 
 def test_bad_int_type_raises(tmp_path):
@@ -148,6 +260,57 @@ def test_invalid_close_gate_raises(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="close_gate"):
+        load_settings(tmp_path)
+
+
+def test_invalid_provider_name_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[provider]\nname = "openai"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="provider.name"):
+        load_settings(tmp_path)
+
+
+def test_invalid_credential_source_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[provider]\ncredential_source = "env"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="provider.credential_source"):
+        load_settings(tmp_path)
+
+
+def test_invalid_weekly_allowed_fraction_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nweekly_allowed_fraction = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="weekly_allowed_fraction"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nweekly_allowed_fraction = 1.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="weekly_allowed_fraction"):
+        load_settings(tmp_path)
+
+
+def test_invalid_weekly_allowed_tokens_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nweekly_allowed_tokens = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="weekly_allowed_tokens"):
+        load_settings(tmp_path)
+
+
+def test_invalid_hour_block_minutes_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nhour_block_minutes = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="hour_block_minutes"):
         load_settings(tmp_path)
 
 
