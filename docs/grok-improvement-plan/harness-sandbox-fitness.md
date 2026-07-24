@@ -453,7 +453,7 @@ Keep existing gates: planted `tools/local` detection, content_hash, draft runner
 1. **Base image:** MSB `"python"` image → `python3` + pip. Stock image has **no** pytest.
 2. **Curated list:** `sandboxes/sandbox0/lib/requirements-curated.txt` (pin major versions), **must include**:
    - **`pytest`** (pinned major, e.g. `pytest>=8,<9`) — required for isolation-on `verify_tool` (KD17 + KD22)
-   - Tool-author libs: `requests`, `httpx`, `beautifulsoup4`, `lxml`, `pyyaml`, `python-dateutil`, `regex`, `jinja2`
+   - Tool-author libs (wheel-friendly; no `lxml`/compile-heavy): `requests`, `httpx`, `beautifulsoup4`, `pyyaml`, `python-dateutil`, `regex`, `jinja2`
    - **Avoid** heavy ML stacks in v1 (disk + pull time)
 3. Optional split (same install moment): `requirements-verify.txt` that only adds pytest — if split, bootstrap installs **both** curated + verify files before setting pyenv marker. Prefer **single file** including pytest unless size becomes an issue.
 4. **Install moment (separate from mount readiness):** after mount readiness succeeds, if marker `tmp/.elyra_pyenv_ready` missing or requirements hash changed:

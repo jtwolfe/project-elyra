@@ -105,6 +105,30 @@ def test_requirements_curated_includes_pytest() -> None:
     assert "pytest" in text
 
 
+def test_requirements_curated_avoids_compile_heavy_lxml() -> None:
+    """Guest often lacks gcc/libxml2; curated list must not require lxml builds."""
+    from elyra.config import project_root
+
+    req = project_root() / "sandboxes" / "sandbox0" / "lib" / "requirements-curated.txt"
+    text = req.read_text(encoding="utf-8")
+    # Allow comments mentioning lxml as a negative example; ban a real pin.
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        assert not stripped.lower().startswith("lxml"), (
+            f"curated requirements must not pin lxml (wheel/build risk): {stripped!r}"
+        )
+
+
+def test_guest_pip_argv_prefers_binary() -> None:
+    from elyra.sandbox.pyenv import guest_pip_install_argv
+
+    argv = guest_pip_install_argv()
+    assert "--prefer-binary" in argv
+    assert "-r" in argv
+
+
 def test_seed_copies_requirements_into_host_tree(paths) -> None:
     root = ensure_host_tree(PRIMARY_NAME, paths)
     req = requirements_file(root)

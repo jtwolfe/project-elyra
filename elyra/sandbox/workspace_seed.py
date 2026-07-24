@@ -101,6 +101,15 @@ def ensure_host_tree(
     return ensure_primary_sandbox_tree(paths, seed_source=seed_source)
 
 
+# Always refresh curated requirements so guest pip tracks repo pin changes
+# (e.g. dropping compile-heavy packages) without wiping operator lib extras.
+_ALWAYS_REFRESH_SEED_FILES = frozenset(
+    {
+        "lib/requirements-curated.txt",
+    }
+)
+
+
 def _copy_seed_entries(source: Path, dest: Path, *, overwrite: bool) -> None:
     for entry in SEED_ENTRIES:
         src = source / entry
@@ -121,10 +130,12 @@ def _copy_seed_entries(source: Path, dest: Path, *, overwrite: bool) -> None:
                     if child.name == "__pycache__" or child.suffix == ".pyc":
                         continue
                     out = target / child.name
-                    if out.exists() and not overwrite:
+                    rel = f"{entry}/{child.name}".replace("\\", "/")
+                    force = rel in _ALWAYS_REFRESH_SEED_FILES
+                    if out.exists() and not overwrite and not force:
                         continue
                     if child.is_dir():
-                        if out.exists() and overwrite:
+                        if out.exists() and (overwrite or force):
                             shutil.rmtree(out)
                         if not out.exists():
                             shutil.copytree(

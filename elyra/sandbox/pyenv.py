@@ -134,12 +134,18 @@ def needs_pyenv_install(host_root: Path) -> bool:
 
 
 def guest_pip_install_argv() -> list[str]:
-    """Argv (after python3) for curated install inside the guest."""
+    """Argv (after python3) for curated install inside the guest.
+
+    ``--prefer-binary`` avoids falling back to sdist builds when a wheel
+    exists (guests often lack gcc/headers). Curated list itself must stay
+    wheel-friendly (see requirements-curated.txt).
+    """
     return [
         "-m",
         "pip",
         "install",
         "--user",
+        "--prefer-binary",
         "-r",
         GUEST_REQUIREMENTS_PATH,
     ]
