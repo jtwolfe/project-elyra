@@ -1,0 +1,1 @@
+Elyra sandbox fixture — safe to list and read.
