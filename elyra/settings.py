@@ -15,6 +15,8 @@ from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
 
 import tomllib
 
+from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
+
 _CLOSE_GATES = frozenset({"soft", "hard"})
 _PROVIDER_NAMES = frozenset({"xai", "local"})
 _CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
@@ -87,8 +89,8 @@ class ProviderSettings:
     """
 
     name: str = "xai"  # xai | local
-    model: str = "grok-4.5"
-    model_label: str = "Grok 4.5 Fast"
+    model: str = DEFAULT_XAI_MODEL
+    model_label: str = DEFAULT_XAI_MODEL_LABEL
     base_url: str = "https://api.x.ai/v1"
     credential_source: str = "grok_build"  # grok_build | api_key
     grok_auth_path: str | None = None  # None → ~/.grok/auth.json
@@ -232,6 +234,8 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                 f"{path}: expected one of {sorted(_CREDENTIAL_SOURCES)}, "
                 f"got {coerced!r}"
             )
+        if path == "provider.request_timeout_s" and coerced <= 0:
+            raise ValueError(f"{path}: expected positive float, got {coerced!r}")
         if path == "usage.weekly_allowed_fraction":
             if not (0.0 < coerced <= 1.0):
                 raise ValueError(
@@ -241,6 +245,10 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected positive int, got {coerced!r}")
         if path == "usage.hour_block_minutes" and coerced < 1:
             raise ValueError(f"{path}: expected int >= 1, got {coerced!r}")
+        # Optional tighter ceilings (when set) must be positive like weekly.
+        if path in ("usage.day_allowed_tokens", "usage.hour_allowed_tokens"):
+            if coerced <= 0:
+                raise ValueError(f"{path}: expected positive int, got {coerced!r}")
         filtered[k] = coerced
     return replace(section, **filtered) if filtered else section
 

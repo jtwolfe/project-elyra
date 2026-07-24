@@ -1,8 +1,14 @@
 from pathlib import Path
 
 import pytest
+import tomllib
 
-from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
+from elyra.llm.models import (
+    CURATED_XAI_MODELS,
+    DEFAULT_XAI_MODEL,
+    DEFAULT_XAI_MODEL_LABEL,
+    label_for_model,
+)
 from elyra.settings import (
     LoopSettings,
     Settings,
@@ -197,6 +203,7 @@ def test_cli_overrides_provider_and_usage_win_over_toml(tmp_path):
 [provider]
 name = "local"
 model = "from-toml"
+model_label = "From Toml"
 
 [usage]
 weekly_allowed_tokens = 999
@@ -216,7 +223,7 @@ enabled = false
     assert merged.provider.name == "xai"
     assert merged.provider.model == "grok-4.5"
     # toml-only field not overridden stays
-    assert base.provider.name == "local"
+    assert merged.provider.model_label == "From Toml"
     assert merged.usage.enabled is True
     assert merged.usage.weekly_allowed_tokens == 5_000_000
 
@@ -312,6 +319,70 @@ def test_invalid_hour_block_minutes_raises(tmp_path):
     )
     with pytest.raises(ValueError, match="hour_block_minutes"):
         load_settings(tmp_path)
+
+
+def test_invalid_day_and_hour_allowed_tokens_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nday_allowed_tokens = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="day_allowed_tokens"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nhour_allowed_tokens = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="hour_allowed_tokens"):
+        load_settings(tmp_path)
+
+
+def test_invalid_request_timeout_s_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[provider]\nrequest_timeout_s = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="request_timeout_s"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[provider]\nrequest_timeout_s = -1.0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="request_timeout_s"):
+        load_settings(tmp_path)
+
+
+def test_cli_invalid_provider_and_usage_raise():
+    base = default_settings()
+    with pytest.raises(ValueError, match="provider.name"):
+        merge_cli_overrides(base, {"provider": {"name": "openai"}})
+    with pytest.raises(ValueError, match="provider.credential_source"):
+        merge_cli_overrides(base, {"provider": {"credential_source": "env"}})
+    with pytest.raises(ValueError, match="weekly_allowed_fraction"):
+        merge_cli_overrides(base, {"usage": {"weekly_allowed_fraction": 0}})
+    with pytest.raises(ValueError, match="weekly_allowed_tokens"):
+        merge_cli_overrides(base, {"usage": {"weekly_allowed_tokens": -3}})
+    with pytest.raises(ValueError, match="day_allowed_tokens"):
+        merge_cli_overrides(base, {"usage": {"day_allowed_tokens": 0}})
+    with pytest.raises(ValueError, match="hour_allowed_tokens"):
+        merge_cli_overrides(base, {"usage": {"hour_allowed_tokens": -5}})
+    with pytest.raises(ValueError, match="request_timeout_s"):
+        merge_cli_overrides(base, {"provider": {"request_timeout_s": 0.0}})
+
+
+def test_malformed_toml_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[provider\nname = broken\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(tomllib.TOMLDecodeError):
+        load_settings(tmp_path)
+
+
+def test_label_for_model_and_curated_defaults():
+    assert DEFAULT_XAI_MODEL in CURATED_XAI_MODELS
+    assert label_for_model(DEFAULT_XAI_MODEL) == DEFAULT_XAI_MODEL_LABEL
+    assert label_for_model("grok-4.3") == "Grok 4.3"
+    assert label_for_model("unknown-model-xyz") == "unknown-model-xyz"
 
 
 def test_string_int_coerces_in_cli_override():
