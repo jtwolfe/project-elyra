@@ -1,10 +1,10 @@
 # Elyra primary sandbox (`sandbox0`)
 
-Host tree at `{ELYRA_HOME}/sandboxes/sandbox0/`. When isolation is enabled, this
-is mounted into the warm microsandbox guest under fixed root **`/workspace`**.
-
-Product FS tools remain on legacy `data/sandbox/` until the PR3 cutover; this
-tree is the MSB host root prepared by `ensure_host_tree` / `host_primary_root`.
+Host tree at `{ELYRA_HOME}/sandboxes/sandbox0/`. Product FS tools
+(`list_dir`, `read_file`, `grep`, `search_replace`) path-jail here.
+When isolation is enabled (product default), this tree is mounted into the
+warm microsandbox guest under fixed root **`/workspace`**. Prepared by
+`ensure_host_tree` / `host_primary_root`.
 
 ## Layout
 

@@ -21,6 +21,18 @@ Before writing anything, answer these questions:
 
 If the answer to 1–3 is not clearly yes, or if 4–5 suggest another path, **do not create a skill**.
 
+## First tool call (mandatory)
+
+After this playbook loads, your **next** completion must include a `tool_calls` entry. Do not answer with free-text only.
+
+Pick the first that applies:
+
+1. Confirm no existing catalog skill covers this (orient / prior `load_skill` attempts)
+2. `install_skill` with a complete local package
+3. Immediately `load_skill` on the new name and verify body + catalog entry
+
+If the gap is executable rather than instructional, switch to `load_skill` name `create-tool` instead.
+
 ## Quality bar
 
 A good skill is:

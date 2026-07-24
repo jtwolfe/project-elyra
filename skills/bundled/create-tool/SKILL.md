@@ -23,6 +23,18 @@ Prefer these alternatives when they fit:
 - Use Grok Build for complex or multi-step implementation work
 - Encode procedural guidance as a skill instead of a tool
 
+## First tool call (mandatory)
+
+After this playbook loads, your **next** completion must include a `tool_calls` entry. Do not answer with free-text only.
+
+Pick the first that applies:
+
+1. Ledger note if needed (`create_goal` / `create_task` / `update_task`) so growth work is visible
+2. `install_tool_draft` with a non-empty `files` map (or fix an existing draft)
+3. Then `verify_tool` → on green, `promote_tool` → safe smoke call of the promoted tool
+
+If isolation is unusable (`sandbox_unavailable` / not `pyenv_ready`), block the task / `speak` / `rest` — do not thrash sandbox FS or host-path fish with `run`.
+
 ## Quality bar
 
 A good tool is:
@@ -45,6 +57,29 @@ install_tool_draft  →  verify_tool  →  promote_tool
 - Promotion is allowed only after a green `verify_tool`.
 - The runtime enforces these gates. Do not bypass them.
 
+### Paths (do not confuse)
+
+| Path | What it is |
+|------|------------|
+| Host `tools/drafts/<name>/` | Draft packages — **only** via `install_tool_draft` |
+| Host `tools/local/<name>/` | Promoted packages (callable after promote) |
+| Sandbox `tools/` (host `sandboxes/sandbox0/tools/`, guest `/workspace/tools/`) | **Staged runtime copies** for execution / verify — **not** drafts |
+| Sandbox `tools/.verify/<name>/` | Verify stage (guest pytest when isolation on) |
+
+Sandbox FS tools (`list_dir`, `read_file`, …) **cannot** list host `tools/drafts/`. Seeing packages under sandbox `tools/` does not mean drafts are there.
+
+### Runners (model-created)
+
+- `sandbox_python`: `runner.json` with `module` + optional `function` (default `run`); guest calls `fn(args)` with the model args dict.
+- `sandbox_shell`: `runner.json` with `argv`; model args are **not** on argv — the runtime writes guest `tmp/elyra_tool_args_*.json` and sets env **`ELYRA_TOOL_ARGS`** to that path. Shell impls must read that file.
+- Invalid shape → `invalid_runner:*` on verify/promote. Do not use `builtin` for model drafts.
+
+### Isolation
+
+- Product default: isolation **on**. `verify_tool` needs guest **mount_ready** + **pyenv_ready** (curated env includes pytest). Failures: `sandbox_unavailable:*`, `guest_pytest_unavailable` — not “retry the same thrash.”
+- If the sandbox is unusable, **block the task / speak / rest** honestly. Do not thrash `read_file` or fish host paths with `run`.
+- Promoted smoke-check also needs isolation ready when isolation is on (guest exec). Host stub only when `ELYRA_SANDBOX=0` (tests/CI).
+
 ## Process
 
 1. Confirm the name is free and the capability is still missing.
@@ -56,13 +91,13 @@ install_tool_draft  →  verify_tool  →  promote_tool
    - optional `impl/`
 3. Call `verify_tool`. On failure, remain in drafts, fix, and re-verify.
 4. Only after green verify, call `promote_tool`.
-5. Smoke-check the promoted tool with a safe call.
+5. Smoke-check the promoted tool with a safe call (requires isolation ready when on).
 6. If usage is non-obvious, consider a companion skill via `create-skill`.
 
 ## Hard rules
 
 - Never skip verify.
-- Write only under `tools/drafts/<name>/` via `install_tool_draft` (sandbox FS tools cannot see host `tools/`; do not thrash empty `list_dir` / host path fishing via `run` as a substitute).
+- Write only under `tools/drafts/<name>/` via `install_tool_draft` (sandbox FS tools cannot see host drafts; sandbox `tools/` ≠ drafts; do not thrash empty `list_dir` / host path fishing via `run` as a substitute).
 - Never overwrite bundled tools or existing promoted local tools.
 - Never call a draft tool.
 - Prefer small, clear tools over large multi-purpose ones.

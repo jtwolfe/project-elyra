@@ -62,28 +62,34 @@ description: Execute the next ready task. Use when working a task or /do-work.
 **schema.json** — JSON Schema for arguments.  
 **runner.json** — how to execute (allowlisted kinds only).
 
-Stretch 1 runners (finite):
+Stretch 1 runners (finite; **implemented**):
 
-| runner | Meaning |
-|--------|---------|
-| `builtin` | Host code (humans) |
-| `sandbox_shell` | Argv in sandbox |
-| `sandbox_python` | `impl/` in sandbox |
+| runner | Meaning | Isolation **on** (product default) | Isolation **off** (`ELYRA_SANDBOX=0`) |
+|--------|---------|------------------------------------|--------------------------------------|
+| `builtin` | Host code (humans) | Host | Host |
+| `sandbox_shell` | Argv in sandbox; model args via env **`ELYRA_TOOL_ARGS`** → guest `tmp/elyra_tool_args_*.json` | Guest exec only; fail closed if sandbox unusable | Host stub under `sandboxes/sandbox0/` |
+| `sandbox_python` | `impl/` module `function(args)` in sandbox | Guest exec only; fail closed if sandbox unusable | Host stub under `sandboxes/sandbox0/` |
 
-No host `eval` of model code. New runner kinds = rare code change.
+No host `eval` of model code. New runner kinds = rare code change.  
+Invalid `runner.json` shapes surface as `invalid_runner:*` on verify/promote.  
+Full isolation design: [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).
 
 ### Lifecycle
 
 ```text
-create-tool → tools/drafts/ (not callable)
-           → verify_tool (sandbox tests)
-           → promote_tool → tools/local/ (callable)
+create-tool → tools/drafts/ (not callable; host-only; not visible via sandbox FS)
+           → verify_tool (stage to sandboxes/sandbox0/tools/.verify/<name>/;
+                          guest pytest when isolation on + pyenv_ready;
+                          host pytest when ELYRA_SANDBOX=0)
+           → promote_tool → tools/local/ (callable; staged into sandbox tools/ at run time)
 ```
 
 | State | Callable? |
 |-------|-----------|
 | `drafts/` | No |
 | `local/` / `bundled/` promoted | Yes (if in toolset) |
+
+**Sandbox tree honesty:** product FS root is `{ELYRA_HOME}/sandboxes/sandbox0/` (guest `/workspace` when isolation is on). Sandbox `tools/` holds **staged runtime copies** (plus `.stage` / `.verify`) — not host `tools/drafts/`. Growth tools own drafts/promote on the host.
 
 ---
 
@@ -117,7 +123,19 @@ The `create-tool` skill body should be a strict checklist matching the above so 
 | Optional later | `search_tools`, `use_tool` |
 
 `speak` failure → tool result with reason.  
-`run` = **sandbox only**, not host shell.
+`run` = guest exec when isolation on (fail closed `sandbox_unavailable:*` if unusable); host `Sandbox.run` only when `ELYRA_SANDBOX=0`. Not a host login shell.
+
+### Operator sandbox install (isolation on)
+
+Product default is isolation **on** when `ELYRA_SANDBOX` is unset. Without the optional extra, guest tools fail closed while chat continues — install early so create-tool does not look “broken”:
+
+```bash
+pip install -e '.[sandbox]'          # microsandbox SDK
+./scripts/setup-microsandbox.sh      # doctor / optional --install-extra / --smoke
+# hermetic tests / host-stub: export ELYRA_SANDBOX=0
+```
+
+Glass `/api/status` sandbox block: `mount_ready`, `pyenv_ready`, `ready` / `warming` / `client_unusable`.
 
 ---
 
