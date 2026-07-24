@@ -1,8 +1,10 @@
 """Load runner.json and dispatch tool execution by kind.
 
-Scope: runner metadata, builtin entry import, sandbox_* stubs.
-In scope: allowlisted kinds, ``module:attr`` builtin resolve, dispatch.
-Out of scope: sandbox_shell/python full impl (PR7+), promote gates.
+Scope: runner metadata, builtin entry import, sandbox_python / sandbox_shell
+dispatch (guest when isolation on; host stub when ELYRA_SANDBOX=0).
+In scope: allowlisted kinds, ``module:attr`` builtin resolve, shape validation,
+``package_dir`` through dispatch, return map via guest_exec.
+Out of scope: verify guest pytest (PR5), promote gates, builtin run guest (PR5).
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ _LOG = logging.getLogger(__name__)
 
 BuiltinHandler = Callable[[dict[str, Any], ToolContext], ToolResult]
 
+_SANDBOX_KINDS = frozenset({"sandbox_shell", "sandbox_python"})
+
 
 @dataclass(frozen=True)
 class RunnerSpec:
@@ -28,10 +32,61 @@ class RunnerSpec:
 
     kind: str
     entry: str | None = None  # module:attr for builtin
-    # sandbox_shell / sandbox_python fields reserved for later PRs
-    argv: list[str] | None = None
-    module: str | None = None
+    argv: list[str] | None = None  # sandbox_shell
+    module: str | None = None  # sandbox_python path under package_dir
+    function: str | None = None  # sandbox_python; default "run" at dispatch if None
     raw: dict[str, Any] | None = None
+
+
+def validate_runner_fields(kind: str, data: dict[str, Any]) -> str | None:
+    """Return ``invalid_runner:*`` reason if sandbox runner shape is illegal.
+
+    Used by ``load_runner_json`` (raises) and ``validate_draft_package``.
+    """
+    kind_n = (kind or "").strip().lower()
+    if kind_n == "sandbox_python":
+        module = data.get("module")
+        if module is None or (isinstance(module, str) and not module.strip()):
+            return "invalid_runner:module_missing"
+        if not isinstance(module, str):
+            return "invalid_runner:module_type"
+        from elyra.tools.guest_exec import is_safe_module_rel
+
+        if not is_safe_module_rel(module):
+            # Absolute / .. / empty after strip
+            path = Path(str(module).strip())
+            if path.is_absolute():
+                return "invalid_runner:module_absolute"
+            if ".." in path.parts:
+                return "invalid_runner:module_dotdot"
+            return "invalid_runner:module"
+        func = data.get("function")
+        if func is not None:
+            if not isinstance(func, str):
+                return "invalid_runner:function_type"
+            func_s = func.strip()
+            if func_s:
+                from elyra.tools.guest_exec import is_public_function_name
+
+                if not is_public_function_name(func_s):
+                    return "invalid_runner:function"
+        return None
+
+    if kind_n == "sandbox_shell":
+        argv = data.get("argv")
+        if argv is None:
+            return "invalid_runner:argv_missing"
+        if not isinstance(argv, list):
+            return "invalid_runner:argv_type"
+        if not argv:
+            return "invalid_runner:argv_empty"
+        if not all(isinstance(a, str) for a in argv):
+            return "invalid_runner:argv_not_strings"
+        if not str(argv[0]).strip():
+            return "invalid_runner:argv0_empty"
+        return None
+
+    return None
 
 
 def load_runner_json(package_dir: Path) -> RunnerSpec:
@@ -57,13 +112,31 @@ def load_runner_json(package_dir: Path) -> RunnerSpec:
     module = data.get("module")
     if module is not None:
         module = str(module).strip() or None
+    function_raw = data.get("function")
+    function: str | None = None
+    if function_raw is not None:
+        function = str(function_raw).strip() or None
+
     if kind == "builtin" and not entry:
         raise ValueError(f"builtin runner requires entry (module:attr): {path}")
+
+    if kind in _SANDBOX_KINDS:
+        shape_err = validate_runner_fields(kind, data)
+        if shape_err:
+            raise ValueError(f"{shape_err}: {path}")
+        if kind == "sandbox_python":
+            # Default function name is applied at load so RunnerSpec is complete.
+            if not function:
+                function = "run"
+        if kind == "sandbox_shell" and argv is not None:
+            argv = [str(a) for a in argv]
+
     return RunnerSpec(
         kind=kind,
         entry=entry,
         argv=list(argv) if isinstance(argv, list) else None,
         module=module,
+        function=function,
         raw=data,
     )
 
@@ -94,10 +167,12 @@ def dispatch(
     ctx: ToolContext,
     *,
     handler: BuiltinHandler | None = None,
+    package_dir: Path | None = None,
 ) -> ToolResult:
     """Execute a tool via its runner kind.
 
     ``handler`` is the pre-resolved builtin callable (registry caches it).
+    ``package_dir`` is required for sandbox_python / sandbox_shell.
     """
     if runner.kind == "builtin":
         if handler is None:
@@ -133,13 +208,22 @@ def dispatch(
             )
         return result
 
-    if runner.kind in {"sandbox_shell", "sandbox_python"}:
-        # Full runners land with PR7 / create-tool; fail closed with clear reason.
-        return ToolResult(
-            ok=False,
-            payload={},
-            error_reason=f"runner_not_implemented:{runner.kind}",
-        )
+    if runner.kind in _SANDBOX_KINDS:
+        if package_dir is None:
+            return ToolResult(
+                ok=False,
+                payload={},
+                error_reason="package_dir_missing",
+            )
+        # Lazy import keeps runner loadable without sandbox stack at import time.
+        from elyra.sandbox.paths import isolation_enabled
+        from elyra.tools.guest_exec import guest_dispatch, host_stub_dispatch
+
+        if not isolation_enabled():
+            return host_stub_dispatch(
+                runner, args, ctx, package_dir=Path(package_dir)
+            )
+        return guest_dispatch(runner, args, ctx, package_dir=Path(package_dir))
 
     return ToolResult(
         ok=False,

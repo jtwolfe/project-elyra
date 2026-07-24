@@ -2,7 +2,7 @@
 
 Scope: scan roots, local-over-bundled priority, execute → ToolResult.
 In scope: BUNDLED_TOOLS_ROOT assert, drafts never scanned, openai_tools().
-Out of scope: verify/promote, create-tool, full FS tool set (PR7).
+Out of scope: verify guest pytest (PR5), promote gates.
 """
 
 from __future__ import annotations
@@ -157,7 +157,13 @@ class ToolRegistry:
         if pkg is None:
             return ToolResult(ok=False, payload={}, error_reason="unknown_tool")
 
-        result = dispatch(pkg.runner, args, ctx, handler=pkg.handler)
+        result = dispatch(
+            pkg.runner,
+            args,
+            ctx,
+            handler=pkg.handler,
+            package_dir=pkg.package_dir,
+        )
         return self._enforce_control_policy(pkg, result)
 
     def _enforce_control_policy(

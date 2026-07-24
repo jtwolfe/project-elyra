@@ -155,6 +155,12 @@ def validate_draft_package(package_dir: Path) -> str | None:
         return "builtin_kind_forbidden"
     if kind not in DRAFT_ALLOWED_RUNNER_KINDS:
         return f"invalid_runner_kind:{kind or 'missing'}"
+    # Shape hygiene for sandbox_python / sandbox_shell (PR4 / KD19–21).
+    from elyra.tools.runner import validate_runner_fields
+
+    shape_err = validate_runner_fields(kind, runner)
+    if shape_err:
+        return shape_err
     return None
 
 

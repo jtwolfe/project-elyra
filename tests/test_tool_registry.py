@@ -353,7 +353,7 @@ def test_control_flags_stripped_for_non_control(
         user_id="operator",
     )
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={"forced": True},
@@ -384,7 +384,7 @@ def test_control_flags_stripped_without_ends_moment(
     paths = resolve_paths(home)
     reg = ToolRegistry(paths, bundled_root=bundled_root)
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={},
@@ -419,7 +419,7 @@ def test_control_kind_keeps_ends_moment(
 
     wait = WaitArm("w2", 60, "choose", ["y", "n"], "operator")
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={"waiting": True},
@@ -450,7 +450,7 @@ def test_speak_kind_keeps_counts_as_speak(
     _write_package(local, "speak_stub", kind="speak")
     reg = ToolRegistry(paths, bundled_root=bundled_root)
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={},
