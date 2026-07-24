@@ -152,6 +152,11 @@ def clear_sandbox(paths: ElyraPaths) -> dict[str, Any]:
                 n_rw += _clear_dir_contents(d)
             else:
                 d.mkdir(parents=True, exist_ok=True)
+        # Drop host-only pyenv marker so next warm reinstalls curated env.
+        from elyra.sandbox.pyenv import clear_pyenv_marker
+
+        if clear_pyenv_marker(primary_r):
+            n_rw += 1
     # Re-scaffold seed + chmod so FS tools see a usable tree after reset.
     ensure_primary_sandbox_tree(paths)
     return {

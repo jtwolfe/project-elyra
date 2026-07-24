@@ -367,6 +367,7 @@ class ElyraSupervisor:
             state=self.state,
             worker=self._worker,
             provider=pr,
+            supervisor=self,
         )
 
         # Best-effort remote models when credentials already ok (no network on fail).

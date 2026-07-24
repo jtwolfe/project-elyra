@@ -31,7 +31,8 @@ warm microsandbox guest under fixed root **`/workspace`**. Prepared by
 ## Curated Python env (H3b)
 
 `lib/requirements-curated.txt` is installed into the guest after mount readiness
-(async warm). Marker: `tmp/.elyra_pyenv_ready`. Includes **pytest** (required for
+(async warm). Marker: host-only `.elyra_pyenv_ready` at the sandbox0 root
+(not under guest-mounted `tmp/`). Includes **pytest** (required for
 isolation-on `verify_tool`) plus light tool-author libraries (`requests`,
 `httpx`, `beautifulsoup4`, `pyyaml`, `python-dateutil`, `regex`,
 `jinja2`). Not “any PyPI package.” Overlay wipe requires re-bootstrap (minutes).

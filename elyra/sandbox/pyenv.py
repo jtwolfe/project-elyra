@@ -5,7 +5,8 @@ mount readiness (H3b / KD11 / KD22). Mount readiness is independent of pyenv.
 
 Install moment (product warm path, not inside the 60s mount wall budget):
   guest: python3 -m pip install --user -r /workspace/lib/requirements-curated.txt
-  host:  write tmp/.elyra_pyenv_ready with requirements hash on success
+  host:  write {host_root}/.elyra_pyenv_ready with requirements hash on success
+         (not under guest-mounted tmp/ — overlay can drop host writes there)
 
 Offline / network=none / pip failure → leave marker absent; verify fails
 ``guest_pytest_unavailable``. Hermetic tests write the marker directly or skip
@@ -26,7 +27,7 @@ from elyra.sandbox.paths import (
     ensure_host_tree,
     guest_env,
 )
-from elyra.sandbox.status import PYENV_READY_MARKER
+from elyra.sandbox.status import PYENV_READY_MARKER, PYENV_READY_MARKER_LEGACY
 
 _LOG = logging.getLogger(__name__)
 
@@ -56,23 +57,29 @@ def requirements_hash(host_root: Path) -> str | None:
 
 
 def marker_path(host_root: Path) -> Path:
-    """Host path to ``tmp/.elyra_pyenv_ready``."""
+    """Host path to product ``.elyra_pyenv_ready`` (outside guest mounts)."""
     return Path(host_root) / PYENV_READY_MARKER
+
+
+def _marker_paths(host_root: Path) -> list[Path]:
+    """Product marker first, then legacy ``tmp/`` marker."""
+    root = Path(host_root)
+    return [root / PYENV_READY_MARKER, root / PYENV_READY_MARKER_LEGACY]
 
 
 def read_marker_hash(host_root: Path) -> str | None:
     """Return hash stored in marker (first non-empty line), or None."""
-    path = marker_path(host_root)
-    if not path.is_file():
-        return None
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            return line
+    for path in _marker_paths(host_root):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line
     return None
 
 
@@ -83,8 +90,7 @@ def pyenv_ready(host_root: Path) -> bool:
     pre-baked env). If requirements exist, hash must match so re-bootstrap runs
     after curated list changes.
     """
-    path = marker_path(host_root)
-    if not path.is_file():
+    if not any(p.is_file() for p in _marker_paths(host_root)):
         return False
     expected = requirements_hash(host_root)
     if expected is None:
@@ -104,28 +110,43 @@ def pyenv_ready(host_root: Path) -> bool:
 
 
 def write_pyenv_marker(host_root: Path, *, req_hash: str | None = None) -> Path:
-    """Write the pyenv ready marker under host ``tmp/``. Returns marker path."""
+    """Write the pyenv ready marker on the **host-only** product root.
+
+    Marker path is ``{host_root}/.elyra_pyenv_ready`` (not under guest-mounted
+    ``tmp/``). Shared RW mounts can lose host writes under virtio/overlay.
+    """
     host_root = Path(host_root)
-    tmp = host_root / "tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
+    host_root.mkdir(parents=True, exist_ok=True)
     digest = req_hash if req_hash is not None else requirements_hash(host_root)
     body = (digest or "ready") + "\n"
     path = marker_path(host_root)
     path.write_text(body, encoding="utf-8")
+    # Drop legacy tmp marker so status does not disagree with product path.
+    legacy = host_root / "tmp" / ".elyra_pyenv_ready"
+    if legacy.is_file():
+        try:
+            legacy.unlink()
+        except OSError:
+            pass
+    if not path.is_file():
+        _LOG.error("pyenv marker write vanished immediately: %s", path)
     return path
 
 
 def clear_pyenv_marker(host_root: Path) -> bool:
-    """Remove marker if present. Returns True when deleted."""
-    path = marker_path(host_root)
-    if not path.is_file():
-        return False
-    try:
-        path.unlink()
-        return True
-    except OSError as exc:
-        _LOG.warning("failed to clear pyenv marker %s: %s", path, exc)
-        return False
+    """Remove marker if present (product + legacy paths). Returns True if any deleted."""
+    host_root = Path(host_root)
+    deleted = False
+    for rel in (PYENV_READY_MARKER, Path("tmp") / ".elyra_pyenv_ready"):
+        path = host_root / rel
+        if not path.is_file():
+            continue
+        try:
+            path.unlink()
+            deleted = True
+        except OSError as exc:
+            _LOG.warning("failed to clear pyenv marker %s: %s", path, exc)
+    return deleted
 
 
 def needs_pyenv_install(host_root: Path) -> bool:
@@ -218,8 +239,18 @@ def try_install_curated_pyenv(
         )
         return False
 
-    write_pyenv_marker(host_root, req_hash=digest)
-    _LOG.info("sandbox0 pyenv ready (curated install ok, hash=%s)", (digest or "")[:12])
+    path = write_pyenv_marker(host_root, req_hash=digest)
+    if not pyenv_ready(host_root):
+        _LOG.error(
+            "pyenv install reported ok but marker not readable at %s",
+            path,
+        )
+        return False
+    _LOG.info(
+        "sandbox0 pyenv ready (curated install ok, hash=%s, marker=%s)",
+        (digest or "")[:12],
+        path.name,
+    )
     return True
 
 

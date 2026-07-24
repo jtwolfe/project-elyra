@@ -133,7 +133,7 @@ def test_status_block_pyenv_marker(
     set_sandbox_lifecycle(life)
     life.ensure(PRIMARY_NAME)
     root = host_root_for(PRIMARY_NAME, paths)
-    marker = root / "tmp" / ".elyra_pyenv_ready"
+    marker = root / ".elyra_pyenv_ready"
     marker.write_text("ok\n", encoding="utf-8")
     block = sandbox_status_block(paths)
     assert block["pyenv_ready"] is True

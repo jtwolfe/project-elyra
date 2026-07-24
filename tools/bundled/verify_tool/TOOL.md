@@ -25,7 +25,8 @@ Use via the `load_skill("create-tool")` checklist order:
 
 Curated guest packages (incl. **pytest**) live in
 `sandboxes/sandbox0/lib/requirements-curated.txt`. Status field `pyenv_ready`
-tracks the install marker under `tmp/.elyra_pyenv_ready`.
+tracks the install marker at `sandboxes/sandbox0/.elyra_pyenv_ready`
+(host-only; not under guest-mounted `tmp/`).
 
 ## Fail-closed mitigations
 

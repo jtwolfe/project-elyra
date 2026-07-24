@@ -323,7 +323,17 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def _sandbox_status_block(self) -> dict[str, Any]:
-        """Sandbox readiness for glass/API — no secrets, no host absolute paths."""
+        """Sandbox readiness for glass/API — no secrets, no host absolute paths.
+
+        Prefer supervisor.sandbox_status() when available so async-warm state
+        matches the install thread.
+        """
+        sup = getattr(self, "supervisor", None)
+        if sup is not None and hasattr(sup, "sandbox_status"):
+            try:
+                return sup.sandbox_status()
+            except Exception:  # noqa: BLE001 — fall through to direct status
+                pass
         from elyra.sandbox.status import sandbox_status_block
 
         return sandbox_status_block(self.paths)
@@ -750,6 +760,7 @@ def start_api_server(
     state: RuntimeState,
     worker: PresenceWorker,
     provider: Any = None,
+    supervisor: Any = None,
     goals: GoalsStore | None = None,
     moments: MomentStore | None = None,
     identity: IdentityStore | None = None,
@@ -762,6 +773,7 @@ def start_api_server(
     Catalog stores default from ``paths``. Pass ``tools=None`` / ``skills=None``
     to skip disk scan (tests without bundled roots). Omit (ellipsis) to auto-build.
     ``provider`` is the shared ProviderRuntime used by status + provider routes.
+    ``supervisor`` optional: used for live sandbox status (async warm).
     """
     if tools is ...:
         tools = _try_tool_registry(paths)
@@ -778,6 +790,7 @@ def start_api_server(
             "worker": worker,
             "config": config,
             "provider": provider,
+            "supervisor": supervisor,
             "goals": goals or GoalsStore(paths),
             "moments": moments or MomentStore(paths),
             "identity": identity or IdentityStore(paths),

@@ -20,7 +20,11 @@ from elyra.sandbox.paths import (
 from elyra.sandbox.registry import get_sandbox_lifecycle
 
 # Host marker written after curated (+ pytest) guest install (H3b / KD22).
-PYENV_READY_MARKER = Path("tmp") / ".elyra_pyenv_ready"
+# MUST live *outside* guest RW mounts (tmp/tools) — virtio/overlay can drop
+# host writes under mounted RW dirs; product root file is host-only.
+PYENV_READY_MARKER = Path(".elyra_pyenv_ready")
+# Legacy path (pre-fix); still accepted for one release so restarts stay warm.
+PYENV_READY_MARKER_LEGACY = Path("tmp") / ".elyra_pyenv_ready"
 
 # Coarse glass-pill states (KD27).
 PILL_READY = "ready"
@@ -58,7 +62,10 @@ _REASON_ALLOWLIST = frozenset(
 
 def pyenv_ready_marker_present(host_root: Path) -> bool:
     """True when curated guest install marker exists under host tree."""
-    return (host_root / PYENV_READY_MARKER).is_file()
+    root = Path(host_root)
+    return (root / PYENV_READY_MARKER).is_file() or (
+        root / PYENV_READY_MARKER_LEGACY
+    ).is_file()
 
 
 def _sanitize_reason(raw: str | None) -> str | None:

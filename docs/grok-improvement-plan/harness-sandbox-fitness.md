@@ -456,7 +456,7 @@ Keep existing gates: planted `tools/local` detection, content_hash, draft runner
    - Tool-author libs (wheel-friendly; no `lxml`/compile-heavy): `requests`, `httpx`, `beautifulsoup4`, `pyyaml`, `python-dateutil`, `regex`, `jinja2`
    - **Avoid** heavy ML stacks in v1 (disk + pull time)
 3. Optional split (same install moment): `requirements-verify.txt` that only adds pytest — if split, bootstrap installs **both** curated + verify files before setting pyenv marker. Prefer **single file** including pytest unless size becomes an issue.
-4. **Install moment (separate from mount readiness):** after mount readiness succeeds, if marker `tmp/.elyra_pyenv_ready` missing or requirements hash changed:
+4. **Install moment (separate from mount readiness):** after mount readiness succeeds, if host-only marker `sandboxes/sandbox0/.elyra_pyenv_ready` missing or requirements hash changed:
    - Guest: `python3 -m pip install --user -r /workspace/lib/requirements-curated.txt` (needs `public_only` or pre-cached wheels).
    - On success: write marker with requirements hash → **`pyenv_ready=true`**.
    - On failure: leave `pyenv_ready=false`; mount may still be ready; verify fails with `guest_pytest_unavailable`.
@@ -639,7 +639,7 @@ Full create-tool smoke (verify guest pytest → promote → call) requires **bot
 | Flag | Meaning | How to observe |
 |------|---------|----------------|
 | **`mount_ready`** | Host tree + guest mount probes OK; guest can exec stdlib `python3` | `GET /api/status` → `sandbox.mount_ready === true`; glass pill not stuck **unusable** |
-| **`pyenv_ready`** | Curated env (+ pytest) marker present under host `tmp/.elyra_pyenv_ready` | `sandbox.pyenv_ready === true` |
+| **`pyenv_ready`** | Curated env (+ pytest) marker present at host `sandboxes/sandbox0/.elyra_pyenv_ready` (not under guest RW mounts) | `sandbox.pyenv_ready === true` |
 | **`ready`** (product shorthand) | `mount_ready && (pyenv_ready \|\| isolation off)` | After H3b: isolation-on product ready means **both** flags |
 
 **Wait rules:**
