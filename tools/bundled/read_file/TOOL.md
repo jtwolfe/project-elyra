@@ -6,5 +6,9 @@ kind: read
 
 # read_file
 
-Read a UTF-8 text file under the persistent sandbox root. Path is jailed;
+Read a UTF-8 text file under the **persistent sandbox root**. Path is jailed;
 escapes return a tool error (never host paths outside the sandbox).
+
+Use for workspace artifacts the agent created or staged. Bundled tool packages
+and host source are not reachable here — use catalog tools / `load_skill` /
+growth tools instead of inventing host paths.

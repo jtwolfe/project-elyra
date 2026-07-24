@@ -62,11 +62,11 @@ install_tool_draft  →  verify_tool  →  promote_tool
 ## Hard rules
 
 - Never skip verify.
-- Write only under `tools/drafts/<name>/` via `install_tool_draft`.
+- Write only under `tools/drafts/<name>/` via `install_tool_draft` (sandbox FS tools cannot see host `tools/`; do not thrash empty `list_dir` / host path fishing via `run` as a substitute).
 - Never overwrite bundled tools or existing promoted local tools.
 - Never call a draft tool.
 - Prefer small, clear tools over large multi-purpose ones.
-- Prefer Grok Build over creating a new tool when the need is primarily complex implementation rather than a reusable primitive.
+- Prefer Grok Build over creating a new tool when the need is primarily complex implementation rather than a reusable primitive — **only when that instrument exists**; until then, block the ledger honestly or ask the operator rather than rewriting the host runtime.
 
 ## Ledger and review
 
