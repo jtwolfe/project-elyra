@@ -2,7 +2,8 @@
 
 Scope: REST JSON + SPA fallthrough for operator glass.
 In scope: status, messages, wait reply, continuous toggle, full reset,
-  lean glass catalogs (goals, moments, tools, skills, identity/users).
+  lean glass catalogs (goals, moments, tools, skills, identity/users),
+  provider/model/credential mutators, live usage + hard-stop override.
 Out of scope: promote/verify admin, multi-user glass, write identity.
 """
 
@@ -20,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
+from elyra.llm.auth import VALID_SOURCES
 from elyra.llm.queue import LlamaServerGate
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
@@ -127,6 +129,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "api": f"http://{self.config.api_host}:{self.config.api_port}/",
                 }
             )
+            # Live provider + usage (meter.snapshot every GET — no secrets).
+            if self.provider is not None:
+                snap.update(self.provider.status_provider_fields())
+                snap["usage"] = self.provider.usage_status_block()
             self._json(200, snap)
             return
 
@@ -283,7 +289,222 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._patch_continuous(body)
             return
 
+        if path == "/api/provider":
+            self._patch_provider(body)
+            return
+
+        if path == "/api/usage":
+            self._patch_usage(body)
+            return
+
         self._json(404, {"error": "not found"})
+
+    def do_PUT(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+        body = self._read_json()
+
+        if path == "/api/provider/api-key":
+            self._put_api_key(body)
+            return
+
+        self._json(404, {"error": "not found"})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/api/provider/api-key":
+            self._delete_api_key()
+            return
+
+        self._json(404, {"error": "not found"})
+
+    def _provider_unavailable(self) -> bool:
+        """True when provider runtime is not bound (legacy / incomplete start)."""
+        return self.provider is None
+
+    def _reject_if_resetting(self) -> bool:
+        """Send 503 resetting when full reset is in progress; return True if rejected."""
+        # PresenceWorker.is_resetting is a @property (bool), not a method.
+        if bool(getattr(self.worker, "is_resetting", False)):
+            self._json(503, {"ok": False, "error": "resetting"})
+            return True
+        return False
+
+    def _provider_response_fields(self) -> dict[str, Any]:
+        """Non-secret provider + credential fields for mutator responses."""
+        assert self.provider is not None
+        fields = self.provider.status_provider_fields()
+        return {
+            "ok": True,
+            "model": fields.get("model"),
+            "model_label": fields.get("model_label"),
+            "credential_source": fields.get("credential_source"),
+            "credential_ok": fields.get("credential_ok"),
+            "credential_detail": fields.get("credential_detail"),
+            "credential_expires_at": fields.get("credential_expires_at"),
+            "credential_email": fields.get("credential_email"),
+            "api_key_configured": fields.get("api_key_configured"),
+            "provider": fields.get("provider"),
+            "models_available": fields.get("models_available"),
+        }
+
+    def _patch_provider(self, body: dict[str, Any]) -> None:
+        """PATCH /api/provider — ``{ model?, credential_source? }`` (at least one).
+
+        Successful model/credential changes persist prefs and rebuild stack when
+        needed (see ProviderRuntime.apply_*). Never echoes secrets.
+        """
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+
+        has_model = "model" in body
+        has_source = "credential_source" in body
+        if not has_model and not has_source:
+            self._json(
+                400,
+                {"ok": False, "error": "model or credential_source required"},
+            )
+            return
+
+        provider = self.provider
+        assert provider is not None
+
+        if has_model:
+            model = body.get("model")
+            if not isinstance(model, str) or not model.strip():
+                self._json(400, {"ok": False, "error": "unknown_model"})
+                return
+            mid = model.strip()
+            available = list(provider.status_provider_fields().get("models_available") or [])
+            # Empty list (pre-refresh / local cold): allow any non-empty wire id.
+            if available and mid not in available:
+                self._json(400, {"ok": False, "error": "unknown_model"})
+                return
+            try:
+                provider.apply_model(mid)
+            except ValueError:
+                self._json(400, {"ok": False, "error": "unknown_model"})
+                return
+
+        if has_source:
+            source = body.get("credential_source")
+            if not isinstance(source, str) or source.strip() not in VALID_SOURCES:
+                self._json(400, {"ok": False, "error": "invalid_credential_source"})
+                return
+            resolution = provider.apply_credential_source(source.strip())
+            if not getattr(resolution, "ok", False):
+                # Previous source + stack left intact by apply_credential_source.
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "credential_unavailable",
+                        "credential_detail": getattr(resolution, "detail", None),
+                        "credential_source": provider.status_provider_fields().get(
+                            "credential_source"
+                        ),
+                    },
+                )
+                return
+
+        self._json(200, self._provider_response_fields())
+
+    def _put_api_key(self, body: dict[str, Any]) -> None:
+        """PUT /api/provider/api-key — write-only; never echo the key.
+
+        Does not auto-switch credential_source. Rebuilds when active source is
+        already ``api_key`` so cold-start Failing clients become live.
+        """
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+
+        api_key = body.get("api_key")
+        if not isinstance(api_key, str) or not api_key.strip():
+            self._json(400, {"ok": False, "error": "api_key required"})
+            return
+
+        provider = self.provider
+        assert provider is not None
+        try:
+            provider.put_api_key(api_key.strip())
+        except ValueError as exc:
+            # empty_api_key from auth store
+            self._json(400, {"ok": False, "error": str(exc) or "api_key required"})
+            return
+
+        fields = provider.status_provider_fields()
+        self._json(
+            200,
+            {
+                "ok": True,
+                "api_key_configured": bool(fields.get("api_key_configured")),
+                "credential_ok": bool(fields.get("credential_ok")),
+                "credential_source": fields.get("credential_source"),
+                "credential_detail": fields.get("credential_detail"),
+            },
+        )
+
+    def _delete_api_key(self) -> None:
+        """DELETE /api/provider/api-key — remove stored key; no silent source switch."""
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+
+        provider = self.provider
+        assert provider is not None
+        provider.delete_api_key()
+        fields = provider.status_provider_fields()
+        self._json(
+            200,
+            {
+                "ok": True,
+                "api_key_configured": bool(fields.get("api_key_configured")),
+                "credential_ok": bool(fields.get("credential_ok")),
+                "credential_source": fields.get("credential_source"),
+                "credential_detail": fields.get("credential_detail"),
+            },
+        )
+
+    def _patch_usage(self, body: dict[str, Any]) -> None:
+        """PATCH /api/usage — ``{ "hard_stop_override": bool }`` only.
+
+        Does not reset counters or change credentials. Override default is OFF.
+        """
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+
+        if "hard_stop_override" not in body:
+            self._json(400, {"ok": False, "error": "hard_stop_override required"})
+            return
+        value = body["hard_stop_override"]
+        if not isinstance(value, bool):
+            self._json(
+                400,
+                {"ok": False, "error": "hard_stop_override must be a boolean"},
+            )
+            return
+
+        provider = self.provider
+        assert provider is not None
+        if provider.meter is None:
+            self._json(503, {"ok": False, "error": "meter unavailable"})
+            return
+
+        usage = provider.set_hard_stop_override(value)
+        self._json(200, {"ok": True, "usage": usage})
 
     def _patch_continuous(self, body: dict[str, Any]) -> None:
         """PATCH /api/continuous — ``{ "enabled": bool }`` (K17).
@@ -532,7 +753,7 @@ def start_api_server(
 
     Catalog stores default from ``paths``. Pass ``tools=None`` / ``skills=None``
     to skip disk scan (tests without bundled roots). Omit (ellipsis) to auto-build.
-    ``provider`` is the shared ProviderRuntime (optional until PR6 routes land).
+    ``provider`` is the shared ProviderRuntime used by status + provider routes.
     """
     if tools is ...:
         tools = _try_tool_registry(paths)
