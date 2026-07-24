@@ -1,4 +1,9 @@
-"""Process-level runtime status for the Web UI."""
+"""Process-level runtime status for the Web UI.
+
+Holds stable provider/credential labels for debugging. Live usage fractions
+come from ``UsageMeter.snapshot()`` / ``ProviderRuntime.usage_status_block()``
+— never a durable cache on this object. Secrets never land here.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
+
 
 @dataclass
 class RuntimeState:
@@ -14,6 +21,17 @@ class RuntimeState:
     llama_pid: int | None = None
     llama_ready: bool = False
     llama_error: str | None = None
+    # Provider / credential labels (no secrets, no live usage cache)
+    provider_name: str = "xai"
+    model: str = DEFAULT_XAI_MODEL
+    model_label: str = DEFAULT_XAI_MODEL_LABEL
+    base_url: str = "https://api.x.ai/v1"
+    credential_source: str = "grok_build"
+    credential_ok: bool = False
+    credential_detail: str | None = None
+    credential_expires_at: str | None = None
+    credential_email: str | None = None
+    api_key_configured: bool = False
 
     def set_llama(
         self,
@@ -26,12 +44,47 @@ class RuntimeState:
         self.llama_ready = ready
         self.llama_error = error
 
+    def set_provider(
+        self,
+        *,
+        provider_name: str,
+        model: str,
+        model_label: str,
+        base_url: str,
+        credential_source: str,
+        credential_ok: bool,
+        credential_detail: str | None = None,
+        credential_expires_at: str | None = None,
+        credential_email: str | None = None,
+        api_key_configured: bool = False,
+    ) -> None:
+        self.provider_name = provider_name
+        self.model = model
+        self.model_label = model_label
+        self.base_url = base_url
+        self.credential_source = credential_source
+        self.credential_ok = credential_ok
+        self.credential_detail = credential_detail
+        self.credential_expires_at = credential_expires_at
+        self.credential_email = credential_email
+        self.api_key_configured = api_key_configured
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "uptime_s": round(time.time() - self.started_at, 1),
             "llama_pid": self.llama_pid,
             "llama_ready": self.llama_ready,
             "llama_error": self.llama_error,
+            "provider": self.provider_name,
+            "model": self.model,
+            "model_label": self.model_label,
+            "base_url": self.base_url,
+            "credential_source": self.credential_source,
+            "credential_ok": self.credential_ok,
+            "credential_detail": self.credential_detail,
+            "credential_expires_at": self.credential_expires_at,
+            "credential_email": self.credential_email,
+            "api_key_configured": self.api_key_configured,
         }
 
 

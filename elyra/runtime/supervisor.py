@@ -1,6 +1,10 @@
-"""Start Elyra: llama-server, API + Web UI, presence worker.
+"""Start Elyra: optional llama-server, API + Web UI, presence worker.
 
-Scope: single-command process supervision.
+Provider-aware client stack (Phase 0):
+- provider=xai → skip llama; UsageGatedChatClient(HttpChatClient.for_xai) or
+  FailingChatClient when !credential_ok (meter still loaded).
+- provider=local → optional llama + gated local HTTP client.
+- --stub-llm → StubChatClient only (not implied by --no-llama).
 """
 
 from __future__ import annotations
@@ -13,17 +17,30 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from elyra.config import ElyraPaths, resolve_paths
-from elyra.llm.client import GatedChatClient, HttpChatClient, StubChatClient
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.auth import resolve_bearer
+from elyra.llm.client import (
+    ChatClient,
+    FailingChatClient,
+    GatedChatClient,
+    HttpChatClient,
+    StubChatClient,
+    UsageGatedChatClient,
+)
+from elyra.llm.config import LlamaServerConfig, XaiClientConfig
 from elyra.llm.constants import CONTEXT_WINDOW_TOKENS
+from elyra.llm.models import CURATED_XAI_MODELS, models_for_picker
+from elyra.llm.provider_prefs import provider_prefs_path
 from elyra.llm.queue import LlamaServerGate
 from elyra.llm.server import build_server_command, validate_model_paths
+from elyra.llm.usage import UsageMeter
 from elyra.presence.worker import PresenceWorker
 from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
+from elyra.runtime.provider_runtime import ProviderRuntime
 from elyra.runtime.state import RuntimeState, set_runtime_state
 
 _LOG = logging.getLogger(__name__)
@@ -48,34 +65,162 @@ class ElyraSupervisor:
         self._worker: PresenceWorker | None = None
         self._gate = LlamaServerGate()
         self._stop = threading.Event()
+        self.provider_runtime: ProviderRuntime | None = None
 
     def start(self) -> None:
         set_runtime_state(self.state)
         self.paths.ensure_data_dirs()
 
-        if self.config.start_llama_server and not self._use_stub:
-            self._start_llama_server()
-        elif self._use_stub:
-            self.state.set_llama(pid=None, ready=False, error="stub_llm")
-        else:
-            self.state.set_llama(pid=None, ready=False, error="llama disabled")
+        cfg = self.config
+        provider_name = cfg.provider_name
+        data_dir = self.paths.data_dir
 
-        client: HttpChatClient | StubChatClient | GatedChatClient
-        if self._use_stub or not self.state.llama_ready:
-            if not self._use_stub and not self.state.llama_ready:
-                _LOG.warning("llama not ready — using stub chat client")
-            client = StubChatClient()
-        else:
-            client = GatedChatClient(
-                HttpChatClient(self.config.llama),
-                self._gate,
+        # Always load meter (even when !credential_ok) so repair keeps windows.
+        meter = UsageMeter.load(data_dir, cfg.usage)
+
+        grok_auth_path: Path | None = None
+        if cfg.grok_auth_path:
+            grok_auth_path = Path(cfg.grok_auth_path).expanduser()
+
+        xai_config = XaiClientConfig(
+            base_url=cfg.base_url,
+            read_timeout=cfg.request_timeout_s,
+        )
+
+        http_client: HttpChatClient | None = None
+        chat_client: ChatClient
+        credential_ok = False
+        credential_detail: str | None = None
+        credential_expires_at: str | None = None
+        credential_email: str | None = None
+        api_key_configured = False
+        models_available: list[str] = []
+
+        if self._use_stub:
+            # Stub path: never force llama; --stub-llm is the only stub trigger.
+            if cfg.start_llama_server:
+                self._start_llama_server()
+            else:
+                self.state.set_llama(pid=None, ready=False, error="stub_llm")
+            chat_client = StubChatClient()
+            credential_ok = True
+            credential_detail = None
+            if provider_name == "local":
+                models_available = ["local"]
+            else:
+                models_available = models_for_picker(
+                    None, fallback=CURATED_XAI_MODELS, current=cfg.model
+                )
+        elif provider_name == "xai":
+            # Product default: no llama-server for xai.
+            self.state.set_llama(pid=None, ready=False, error="provider_xai")
+            resolution = resolve_bearer(
+                source=cfg.credential_source,
+                data_dir=data_dir,
+                grok_auth_path=grok_auth_path,
             )
+            api_key_configured = resolution.api_key_configured
+            credential_expires_at = resolution.expires_at
+            credential_email = resolution.email
+            if resolution.ok and resolution.token:
+                http_client = HttpChatClient.for_xai(
+                    xai_config,
+                    model=cfg.model,
+                    bearer_token=resolution.token,
+                )
+                if cfg.usage.enabled:
+                    chat_client = UsageGatedChatClient(http_client, meter)
+                else:
+                    chat_client = http_client
+                credential_ok = True
+                credential_detail = None
+                models_available = models_for_picker(
+                    None, fallback=CURATED_XAI_MODELS, current=cfg.model
+                )
+            else:
+                detail = resolution.detail or "credential_unavailable"
+                _LOG.warning(
+                    "xai credentials not ok (source=%s detail=%s) — FailingChatClient",
+                    cfg.credential_source,
+                    detail,
+                )
+                chat_client = FailingChatClient(detail)
+                credential_ok = False
+                credential_detail = detail
+                models_available = models_for_picker(
+                    None, fallback=CURATED_XAI_MODELS, current=cfg.model
+                )
+        else:
+            # provider=local
+            if cfg.start_llama_server:
+                self._start_llama_server()
+            else:
+                self.state.set_llama(pid=None, ready=False, error="llama disabled")
+
+            if self.state.llama_ready:
+                http_client = HttpChatClient.for_local(cfg.llama)
+                gated: ChatClient = GatedChatClient(http_client, self._gate)
+                if cfg.usage.enabled:
+                    chat_client = UsageGatedChatClient(gated, meter)
+                else:
+                    chat_client = gated
+                credential_ok = True
+            else:
+                if not self.state.llama_ready:
+                    _LOG.warning("llama not ready — using stub chat client")
+                chat_client = StubChatClient()
+                credential_ok = True
+                credential_detail = self.state.llama_error
+            models_available = ["local"]
+
+        self.state.set_provider(
+            provider_name=provider_name,
+            model=cfg.model,
+            model_label=cfg.model_label,
+            base_url=cfg.base_url,
+            credential_source=cfg.credential_source,
+            credential_ok=credential_ok,
+            credential_detail=credential_detail,
+            credential_expires_at=credential_expires_at,
+            credential_email=credential_email,
+            api_key_configured=api_key_configured,
+        )
+
+        pr = ProviderRuntime(
+            meter=meter,
+            http_client=http_client,
+            chat_client=chat_client,
+            worker=None,
+            usage_settings=cfg.usage,
+            xai_config=xai_config if provider_name == "xai" else None,
+            llama_config=cfg.llama if provider_name == "local" else None,
+            gate=self._gate,
+            prefs_path=provider_prefs_path(data_dir),
+            data_dir=data_dir,
+            provider_name=provider_name,
+            model=cfg.model,
+            model_label=cfg.model_label,
+            credential_source=cfg.credential_source,
+            credential_ok=credential_ok,
+            credential_detail=credential_detail,
+            credential_expires_at=credential_expires_at,
+            credential_email=credential_email,
+            api_key_configured=api_key_configured,
+            models_available=models_available,
+            base_url=cfg.base_url,
+            grok_auth_path=grok_auth_path,
+            request_timeout_s=cfg.request_timeout_s,
+            state=self.state,
+        )
+        self.provider_runtime = pr
 
         self._worker = PresenceWorker(
             paths=self.paths,
-            client=client,
+            client=chat_client,
             stop_event=self._stop,
         )
+        pr.worker = self._worker
+
         self._worker_thread = threading.Thread(
             target=self._worker.run,
             name="elyra-presence",
@@ -89,10 +234,22 @@ class ElyraSupervisor:
             gate=self._gate,
             state=self.state,
             worker=self._worker,
+            provider=pr,
         )
+
+        # Best-effort remote models when credentials already ok (no network on fail).
+        if credential_ok and provider_name == "xai" and not self._use_stub:
+            try:
+                pr.refresh_models()
+            except Exception:  # noqa: BLE001
+                _LOG.debug("initial refresh_models failed", exc_info=True)
 
     def run_forever(self) -> None:
         self.start()
+        self.serve_until_stopped()
+
+    def serve_until_stopped(self) -> None:
+        """Block until SIGINT/SIGTERM after ``start()`` has been called."""
 
         def _handle(signum: int, _frame: object) -> None:
             print(f"\nshutting down (signal {signum})…", file=sys.stderr)

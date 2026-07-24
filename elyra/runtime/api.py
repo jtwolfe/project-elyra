@@ -73,6 +73,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     state: RuntimeState
     worker: PresenceWorker
     config: RuntimeConfig
+    # Bound by start_api_server; None in legacy tests (PR6 wires routes).
+    provider: Any = None
     # Lean catalog stores (file-backed; constructed once at server start).
     goals: GoalsStore
     moments: MomentStore
@@ -518,6 +520,7 @@ def start_api_server(
     gate: LlamaServerGate,
     state: RuntimeState,
     worker: PresenceWorker,
+    provider: Any = None,
     goals: GoalsStore | None = None,
     moments: MomentStore | None = None,
     identity: IdentityStore | None = None,
@@ -529,6 +532,7 @@ def start_api_server(
 
     Catalog stores default from ``paths``. Pass ``tools=None`` / ``skills=None``
     to skip disk scan (tests without bundled roots). Omit (ellipsis) to auto-build.
+    ``provider`` is the shared ProviderRuntime (optional until PR6 routes land).
     """
     if tools is ...:
         tools = _try_tool_registry(paths)
@@ -544,6 +548,7 @@ def start_api_server(
             "state": state,
             "worker": worker,
             "config": config,
+            "provider": provider,
             "goals": goals or GoalsStore(paths),
             "moments": moments or MomentStore(paths),
             "identity": identity or IdentityStore(paths),
