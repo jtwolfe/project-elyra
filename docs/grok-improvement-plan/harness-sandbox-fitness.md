@@ -5,7 +5,7 @@
 | **Title** | Harness / Sandbox Fitness — warm microsandbox + runner truth for Grok |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-24 |
-| **Status** | Ready for implementation (consensus) |
+| **Status** | **Implementation complete** (H2–H5 code + H6 checklist); live create-tool smoke is **operator-owned** — not claimed green in-repo until executed |
 | **Codename** | H1–H6 |
 | **Branch** | `grok-improvement` (PRs base + merge here; not `main` until later) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` (Stretch 1) |
@@ -612,33 +612,83 @@ Minimal bias line for blocked-task honesty may appear here; **full MC Stage B** 
 
 ### H6 — Operator live smoke (tool creation) — **operator-owned**
 
-**Not a CI gate. Not required for PR merge.** After **all** H2–H5 implementation PRs merge to `grok-improvement`, the operator runs this in a real Elyra session (Grok + MSB).
+**Audience:** operator with a real SuperGrok / Grok Build session, working microsandbox (KVM or platform virt), and `pip install -e '.[sandbox]'`.
 
-#### Readiness criteria (before starting checklist)
+**In-repo claim:** H-series **implementation is complete** (H2–H5 code + this checklist). This checklist is **ready for operator** execution. Do **not** record “H6 live smoke passed” / “H-series green live” in docs unless the steps below were actually run against a real MSB + Grok session.
 
-- [ ] Branch tip of `grok-improvement` with H2–H5 merged
-- [ ] `pip install -e '.[sandbox]'` and `import microsandbox` OK
-- [ ] `./scripts/setup-microsandbox.sh --doctor-only` green enough (KVM RW)
-- [ ] `elyra start` → chat comes up without multi-minute hang (async warm); eventually `/api/status` shows `mount_ready` + `pyenv_ready` (or document degraded reason)
-- [ ] Provider xai credential_ok; continuous OFF; usage meter not hard-stopped
-- [ ] Optional: wipe note — if MSB overlay was cleaned, expect **async** first ensure + pip (incl. pytest) to take longer; watch status until `pyenv_ready`
+| Gate | Policy |
+|------|--------|
+| **CI / implementer merge** | **Not a gate.** Hermetic tests (`ELYRA_SANDBOX=0`, Fake client) prove code. No live create-tool job in default CI (KD14). |
+| **PR merge to `grok-improvement`** | Code PRs (H2–H5) + this docs PR (H6) merge without a live MSB run. |
+| **Promote `grok-improvement` → `main`** | Operator sign-off after this smoke is green (same policy as Phase 0 live smoke). |
+| **Continuous** | Remains default **OFF** throughout H-series and this smoke. Do not enable continuous for the checklist. |
+
+#### Hermetic vs operator (who owns what)
+
+| Layer | Owner | What it proves | What it does **not** prove |
+|-------|-------|----------------|----------------------------|
+| **Hermetic / CI** | Implementers | Lifecycle SM, bridge, dispatch, host-stub runners, create-tool fail-closed gates, thrash isolation wording, status JSON shape | Real KVM/MSB, guest pyenv pip, end-to-end create-tool dogfood under Grok |
+| **Operator live smoke (this section)** | Operator | Warm MSB, `mount_ready` + `pyenv_ready`, guest verify/promote/call, glass pill honesty, shutdown reconnect | CI green (already separate); Phase 1 / MC Stage B |
+
+Hermetic substitutes stay the default for implementers and CI (table below). Live smoke is **optional for day-to-day development** and **required before claiming product isolation works end-to-end**.
+
+#### Hard readiness gate — do not start create-tool until both flags are true
+
+Full create-tool smoke (verify guest pytest → promote → call) requires **both**:
+
+| Flag | Meaning | How to observe |
+|------|---------|----------------|
+| **`mount_ready`** | Host tree + guest mount probes OK; guest can exec stdlib `python3` | `GET /api/status` → `sandbox.mount_ready === true`; glass pill not stuck **unusable** |
+| **`pyenv_ready`** | Curated env (+ pytest) marker present under host `tmp/.elyra_pyenv_ready` | `sandbox.pyenv_ready === true` |
+| **`ready`** (product shorthand) | `mount_ready && (pyenv_ready \|\| isolation off)` | After H3b: isolation-on product ready means **both** flags |
+
+**Wait rules:**
+
+1. `elyra start` must come up **without** a multi-minute hang (async warm — KD23). Chat may work while status is `warming` / `pyenv_not_ready`.
+2. **Do not** run steps 5–9 (draft → verify → promote → call) until `mount_ready` **and** `pyenv_ready` are both true (or document an intentional degraded path — e.g. isolation off is **not** the product create-tool path).
+3. If `mount_ready` and not `pyenv_ready`: expect `verify_tool` → `guest_pytest_unavailable` (fail closed). That is **not** a smoke pass; wait or re-bootstrap curated env.
+4. If `client_unusable` / pill **unusable**: install extra + doctor first; do not thrash create-tool.
+5. Overlay wipe: first ensure + pip (incl. pytest) can take minutes; poll status until `pyenv_ready` before create-tool.
+
+#### Preflight (environment)
+
+- [ ] Branch tip of `grok-improvement` with **H2–H5 merged** (and this H6 docs PR)
+- [ ] `pip install -e '.[sandbox]'` and `python -c 'import microsandbox'` OK
+- [ ] `./scripts/setup-microsandbox.sh --doctor-only` green enough (KVM / virt RW as applicable)
+- [ ] `elyra start` → chat up immediately; **poll** `/api/status` until `mount_ready` + `pyenv_ready` (or stop and document degraded reason — do not claim smoke green)
+- [ ] Provider **xai**, `credential_ok`; **continuous OFF**; usage meter not hard-stopped (override OFF unless testing meter separately)
+- [ ] Note `sandbox.network_policy` (default `public_only`) and glass sandbox pill (**ready** / **warming** / **unusable**)
 
 #### Operator checklist (create-tool path)
 
-1. **Status:** Glass/API shows `ready` / `mount_ready` / `pyenv_ready`; note network_policy.
-2. **FS truth:** `list_dir` on `.` shows `lib`, `general`, `fixtures`, `tmp`, `tools` (or seed layout) — not host home. Note staged copies under `tools/` are not drafts.
-3. **Guest python:** Via `run` or a tiny promoted tool: `python3 -c 'print(1)'` in guest succeeds (`mount_ready`).
-4. **Curated import:** Guest `python3 -c 'import requests; print(requests.__name__)'` and `python3 -c 'import pytest'` (`pyenv_ready`).
-5. **Draft:** Activate create-tool; `install_tool_draft` for a tiny tool e.g. `echo_upper` (`sandbox_python`, tests included).
-6. **FS negative:** Confirm `list_dir` does **not** show draft under host `tools/drafts` (honesty).
-7. **Verify:** `verify_tool` green (guest pytest); inspect `.verify.json` content_hash + `executor_backend`.
-8. **Promote:** `promote_tool` → appears in catalog / callable.
-9. **Call:** Invoke promoted tool once; observe guest path / ok payload.
-10. **Negative isolation:** Stop MSB or set broken client (optional advanced): call guest tool → structured `sandbox_unavailable`, chat continues.
-11. **Thrash non-regression:** Do not host-fish with `run` for `/home/.../tools/drafts`.
-12. **Shutdown:** SIGINT — guest stop-only; restart reconnects or re-ensures.
+**Pass only when every required row is green.** Optional rows may be skipped with a note.
 
-#### Hermetic substitutes (implementers / CI)
+| # | Check | Pass criteria |
+|---|--------|----------------|
+| 0 | **Readiness gate** | `sandbox.mount_ready === true` **and** `sandbox.pyenv_ready === true` (hence product `ready` under isolation on). Pill **ready**. Continuous **off**. |
+| 1 | **Status surface** | Glass pill + `/api/status` sandbox block agree; no secrets/host absolute paths in JSON; note `network_policy`, `isolation_enabled=true`. |
+| 2 | **FS truth** | Via tools: `list_dir` on `.` shows seed layout (`lib`, `general`, `fixtures`, `tmp`, `tools`) — **not** host home. Staged copies under sandbox `tools/` are **not** drafts. |
+| 3 | **Guest python (`mount_ready`)** | Via builtin `run` (isolation on = guest): `python3 -c 'print(1)'` succeeds in guest. |
+| 4 | **Curated import (`pyenv_ready`)** | Guest: `python3 -c 'import requests; print(requests.__name__)'` and `python3 -c 'import pytest'` both succeed. |
+| 5 | **Draft** | Activate skill `create-tool`; `install_tool_draft` for a tiny tool (e.g. `echo_upper`, `sandbox_python`, tests included). Non-empty package; install `ok`. |
+| 6 | **FS negative (honesty)** | Sandbox FS tools do **not** list host `tools/drafts/…`; drafts remain growth-tool-owned. |
+| 7 | **Verify** | `verify_tool` green via **guest** pytest; draft `.verify.json` has `content_hash` + `executor_backend` (expect `microsandbox` when isolation on). |
+| 8 | **Promote** | `promote_tool` → tool appears in catalog and is callable (not draft-only). |
+| 9 | **Call** | Invoke promoted tool once; `ok` payload / guest path observed (not `runner_not_implemented`, not host-fish). |
+| 10 | **Negative isolation** *(optional advanced)* | Stop MSB or force unusable client: guest tool → structured `sandbox_unavailable` (or family); chat continues; model should block/speak/rest (H5 thrash HOST), not thrash retry. |
+| 11 | **Thrash non-regression** | Session does **not** host-fish with `run` for absolute host paths under `/home/…/tools/drafts`. |
+| 12 | **Shutdown** | SIGINT → stop-only (guest not removed); restart reconnects or re-ensures without wiping host seed tree. |
+| 13 | **Continuous still OFF** | Status/UI continuous remains off after the session; no accidental continuous-on from this smoke. |
+
+#### After smoke (operator sign-off)
+
+| Outcome | Action |
+|---------|--------|
+| All required rows green | Operator may record live smoke passed (separate note / commit); then optionally promote `grok-improvement` → `main`. |
+| Degraded / failed | File reason (`client_unusable`, `pyenv_not_ready`, verify fail, thrash, etc.). Do **not** flip in-repo status to “live green.” Fix stack or environment; re-run from readiness gate. |
+| Hermetic-only CI green | **Insufficient** alone to claim live create-tool dogfood. |
+
+#### Hermetic substitutes (implementers / CI) — **not** a substitute for H6 live
 
 | Test area | Approach |
 |-----------|----------|
@@ -646,9 +696,11 @@ Minimal bias line for blocked-task honesty may appear here; **full MC Stage B** 
 | Bridge | Timeout / reentrancy / shutdown unit tests |
 | Dispatch | Fake lifecycle + staged package → assert argv/cwd/env |
 | Isolation off | `ELYRA_SANDBOX=0` host stub path |
-| Verify gates | Existing `test_create_tool_gates.py` + new backend branch mocks |
-| Path jail | Existing `test_sandbox.py` retargeted to new root |
-| Optional | `@pytest.mark.microsandbox` real smoke — **not** required in default CI |
+| Verify gates | `tests/test_create_tool_gates.py` + guest/host backend branch mocks |
+| Status / pill | `tests/test_sandbox_status.py` (`mount_ready` / `pyenv_ready` / pill mapping) |
+| Path jail | `tests/test_sandbox.py` / FS tools on `sandboxes/sandbox0` |
+| Thrash isolation | `tests/test_tool_thrash_policy.py` isolation HOST wording (H5) |
+| Optional real MSB | `@pytest.mark.microsandbox` — **not** required in default CI; **not** a replacement for full operator create-tool smoke |
 
 ---
 
@@ -802,7 +854,7 @@ Alerting: none automated in H-series; operator watches status + logs.
 3. **Feature flag:** `ELYRA_SANDBOX` (default on for product; off in tests).
 4. **Degraded mode:** chat works; guest tools fail closed with reason.
 5. **Rollback:** set `ELYRA_SANDBOX=0` or revert PR stack on branch; stop-only leaves host tree intact.
-6. **H6** — operator smoke after code complete; promote branch → main only after operator sign-off (same policy as Phase 0 live smoke).
+6. **H6** — operator smoke checklist finalized (this file); **run after** H2–H5 code is on tip; promote branch → main only after operator sign-off (same policy as Phase 0 live smoke). **No CI live gate.**
 
 ---
 
@@ -911,7 +963,7 @@ All PRs: branch from and merge into **`grok-improvement`**.
 | **PR5** | **H3b: Guest run + verify guest pytest + curated pyenv (incl. pytest)** | `run` guest when on (KD24); verify stage `tools/.verify`; `requirements-curated.txt` **includes pytest**; pyenv marker; status `pyenv_ready`; TOOL.md run/verify | Fake isolation-on verify path; `guest_pytest_unavailable` when pyenv missing; host pytest when off |
 | **PR6** | **H4: Residual skills / system / docs honesty** | system.md, tools-and-skills, stretch-1 §7, create-tool residual (staged tools/ vs drafts, ELYRA_TOOL_ARGS), operator MSB install note | Docs match runtime; no skill re-litigation |
 | **PR7** | **H5: Goals/tasks thrash sanity (only if needed)** | Isolation error thrash wording; blocked-task honesty; **no** orient sandbox inject by default (KD26) | Targeted tests; continuous still OFF |
-| **PR8** | **H6: Operator live smoke checklist (docs only)** | Checklist already in this file §H6; polish readiness (`mount_ready`+`pyenv_ready`); any remaining plan-index polish | Checklist complete; **no** CI live gate |
+| **PR8** | **H6: Operator live smoke checklist (docs only)** | Polish §H6: hard readiness (`mount_ready`+`pyenv_ready` before create-tool), hermetic-vs-operator table, Phase-0-style pass criteria, continuous OFF, plan-index status | Checklist complete; **implementation complete** claim for code stack; live smoke **not** claimed green until operator-run; **no** CI live gate |
 
 **Suggested PR titles (copy-paste):**
 
@@ -934,3 +986,4 @@ All PRs: branch from and merge into **`grok-improvement`**.
 - Initial draft: H1 design-complete MSB + multi-prong H2–H6 plan for Stretch 1 post Phase 0, porting elyra2 sandbox stack with package-tool dispatch mapping, operator-owned H6, explicit Key Decisions and ordered PR plan.
 - Review pass: guest pytest in curated env (KD22); host-stub contracts (KD19); `fn(args)` + return map + `RunnerSpec.function` (KD21); shell `ELYRA_TOOL_ARGS` only (KD20); FS cutover = PR3 hard cutover (KD25); async warm + mount/pyenv status (KD23); run guest-only when on (KD24); atomic stage + single-writer; validation in PR4; inspect deferred; package_dir call sites; plan README pointer at H1 landing.
 - Operator OQ close: **KD26** orient status-only (no orient sandbox line); **KD27** light glass pill in PR3 (ready/warming/unusable). Status → **Ready for implementation**.
+- **H6 / PR8 (docs):** Operator live create-tool smoke checklist polished — hard readiness gate (`mount_ready` **and** `pyenv_ready` before draft/verify/promote), hermetic-vs-operator ownership table, Phase-0-style pass-criteria table, continuous OFF, sign-off rules. Status → **Implementation complete**; live smoke remains operator-owned and not claimed green in-repo until executed. **No CI live gate** (KD14).

@@ -17,7 +17,7 @@ This folder holds the design documentation for migrating Project Elyra from loca
 |----------|---------|
 | [phase-0.md](phase-0.md) | Phase 0 concept + **detailed implementation plan** (provider, usage meter, defaults, Web UI status contract, success criteria) |
 | [phase-0-execution.md](phase-0-execution.md) | Phase 0 execution design + operator live smoke checklist |
-| [harness-sandbox-fitness.md](harness-sandbox-fitness.md) | **H1–H6** post–Phase 0 harness / warm microsandbox fitness (design + PR plan); next implementation track on `grok-improvement` |
+| [harness-sandbox-fitness.md](harness-sandbox-fitness.md) | **H1–H6** post–Phase 0 harness / warm microsandbox fitness (design + PR plan + **operator create-tool live smoke checklist** §H6) |
 | [metacognition.md](metacognition.md) | MC geometry, dual with Memory, employment plan (name now → shallow shape after Grok stable → optional package later) |
 
 ## Phase overview
@@ -56,5 +56,5 @@ Execution detail (including PR stack and end-state checklist): [phase-0-executio
 ## Status
 
 - **Phase 0**: **Implementation complete** on `grok-improvement` (provider path, credentials, usage meter + hard-stop override, supervisor/CLI defaults, status API, Web UI). Concept + success criteria in [phase-0.md](phase-0.md); execution design + **live smoke checklist** in [phase-0-execution.md](phase-0-execution.md). Prompt fitness applied. **Live smoke against xAI is operator-run** — checklist ready; not claimed green in-repo until executed. Promote `grok-improvement` → `main` only after smoke is green (separate step).
-- **H1–H6 Harness / Sandbox Fitness**: Design complete — [harness-sandbox-fitness.md](harness-sandbox-fitness.md). **H2–H4** implementation on `grok-improvement` (warm MSB `sandbox0`, real `sandbox_*` runners, residual docs/prompts honesty). H5 thrash/goals residual if needed; **H6** operator-owned create-tool live smoke. Operators: `pip install -e '.[sandbox]'` + `./scripts/setup-microsandbox.sh`. Does not open Phase 1 / MC Stage C.
-- **Metacognition**: Concept documented. Naming allowed now; form only after Grok path is stable (post live smoke). Prefer H-series green before MC Stage B.
+- **H1–H6 Harness / Sandbox Fitness**: **Implementation complete** on `grok-improvement` (H2–H5 code: warm MSB `sandbox0`, real `sandbox_*` runners, residual honesty, isolation thrash HOST; H6 docs checklist). Design + **operator create-tool live smoke checklist** in [harness-sandbox-fitness.md](harness-sandbox-fitness.md) §H6. **Hard readiness:** wait for `mount_ready` **and** `pyenv_ready` before create-tool smoke. Hermetic/CI (`ELYRA_SANDBOX=0`, Fake client) ≠ live green. **Live create-tool smoke is operator-run** — checklist ready; not claimed green in-repo until executed. Continuous remains default **OFF**. Operators: `pip install -e '.[sandbox]'` + `./scripts/setup-microsandbox.sh`. Does not open Phase 1 / MC Stage C. Prefer H-series live sign-off before MC Stage B.
+- **Metacognition**: Concept documented. Naming allowed now; form only after Grok path is stable (post Phase 0 + H live smoke). Prefer H-series green before MC Stage B.
