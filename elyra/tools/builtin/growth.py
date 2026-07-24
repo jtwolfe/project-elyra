@@ -140,9 +140,40 @@ def install_tool_draft(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     files = args.get("files")
     if files is None:
-        return ToolResult(ok=False, payload={}, error_reason="missing_files")
+        return ToolResult(
+            ok=False,
+            payload={
+                "args_keys": sorted(str(k) for k in args.keys()),
+                "hint": (
+                    "files is required: a JSON object map of "
+                    "relative_path -> UTF-8 string content"
+                ),
+            },
+            error_reason="missing_files",
+        )
     if not isinstance(files, dict):
-        return ToolResult(ok=False, payload={}, error_reason="invalid_files")
+        # Opaque invalid_files forced multi-hop binary search in live dogfood.
+        # Echo type + args shape so the model can fix the call without archaeology.
+        sample: Any = None
+        if isinstance(files, list):
+            sample = f"list_len={len(files)}"
+        elif isinstance(files, str):
+            sample = f"str_len={len(files)}"
+        return ToolResult(
+            ok=False,
+            payload={
+                "received_type": type(files).__name__,
+                "received_sample": sample,
+                "args_keys": sorted(str(k) for k in args.keys()),
+                "hint": (
+                    "files must be a JSON object (map), not a list or string. "
+                    "Example: {\"TOOL.md\": \"...\", \"schema.json\": \"{...}\", "
+                    "\"runner.json\": \"{...}\", \"impl/main.py\": \"...\", "
+                    "\"tests/test_main.py\": \"...\"}"
+                ),
+            },
+            error_reason="invalid_files",
+        )
 
     # Validate all keys before writing anything (atomic fail-closed).
     planned: list[tuple[str, str]] = []
@@ -166,7 +197,11 @@ def install_tool_draft(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         if not isinstance(value, str):
             return ToolResult(
                 ok=False,
-                payload={"path": rel},
+                payload={
+                    "path": rel,
+                    "received_type": type(value).__name__,
+                    "hint": "each files value must be a UTF-8 string (file contents)",
+                },
                 error_reason="invalid_file_content",
             )
         planned.append((rel, value))
@@ -176,7 +211,10 @@ def install_tool_draft(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if not planned:
         return ToolResult(
             ok=False,
-            payload={"name": name},
+            payload={
+                "name": name,
+                "hint": "files must be a non-empty map of path -> content strings",
+            },
             error_reason="empty_files",
         )
 

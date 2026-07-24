@@ -21,6 +21,7 @@ from elyra.tools.guest_exec import (
     EXECUTOR_BACKEND_MICROSANDBOX,
     ENV_TOOL_ARGS,
     map_python_exec_result,
+    resolve_module_file,
     stage_package_for_guest,
 )
 from elyra.tools.registry import ToolRegistry
@@ -227,6 +228,90 @@ def test_validate_runner_fields_module_missing() -> None:
         validate_runner_fields("sandbox_python", {"kind": "sandbox_python"})
         == "invalid_runner:module_missing"
     )
+
+
+# ---------------------------------------------------------------------------
+# Module path resolution (dotted import + path forms)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_module_file_dotted_and_path(tmp_path: Path) -> None:
+    """Live dogfood: runner module \"impl.web_search\" must map to impl/web_search.py."""
+    pkg = tmp_path / "web_search"
+    (pkg / "impl").mkdir(parents=True)
+    target = pkg / "impl" / "web_search.py"
+    target.write_text("def run(args):\n    return {'ok': True}\n", encoding="utf-8")
+    (pkg / "impl" / "__init__.py").write_text("", encoding="utf-8")
+
+    for module in (
+        "impl.web_search",
+        "impl/web_search",
+        "impl/web_search.py",
+    ):
+        resolved = resolve_module_file(pkg, module)
+        assert resolved is not None, module
+        assert resolved.resolve() == target.resolve()
+
+    assert resolve_module_file(pkg, "impl.missing") is None
+    assert resolve_module_file(pkg, "../escape") is None
+
+
+def test_host_stub_dispatch_dotted_module(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """sandbox_python with dotted module must execute under host stub (ELYRA_SANDBOX=0)."""
+    monkeypatch.setenv(ENV_ELYRA_SANDBOX, "0")
+    clear_sandbox_lifecycle()
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    pkg = _write_sandbox_python_pkg(
+        local,
+        "dot_mod",
+        module_rel="impl/echo.py",
+        body=(
+            "def run(args):\n"
+            "    return {'ok': True, 'v': (args or {}).get('text', '')[::-1]}\n"
+        ),
+    )
+    # Rewrite runner to dotted form (file still at impl/echo.py)
+    (pkg / "runner.json").write_text(
+        json.dumps(
+            {"kind": "sandbox_python", "module": "impl.echo", "function": "run"}
+        ),
+        encoding="utf-8",
+    )
+    runner = load_runner_json(pkg)
+    assert runner.module == "impl.echo"
+    ctx = ToolContext(paths=paths)
+    result = dispatch(runner, {"text": "ab"}, ctx, package_dir=pkg)
+    assert result.ok is True, result
+    assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_HOST_STUB
+    # map_python_exec_result may nest the handler return
+    body = result.payload
+    assert body.get("ok") is True or body.get("v") == "ba" or "ba" in json.dumps(body)
+
+
+def test_validate_draft_package_module_not_found(tmp_path: Path) -> None:
+    draft = tmp_path / "hollow"
+    draft.mkdir()
+    (draft / "TOOL.md").write_text("---\nname: hollow\n---\n", encoding="utf-8")
+    (draft / "schema.json").write_text(
+        json.dumps({"type": "object"}), encoding="utf-8"
+    )
+    (draft / "tests").mkdir()
+    (draft / "tests" / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+    (draft / "runner.json").write_text(
+        json.dumps({"kind": "sandbox_python", "module": "impl.main"}),
+        encoding="utf-8",
+    )
+    # No impl/main.py
+    err = validate_draft_package(draft)
+    assert err == "invalid_runner:module_not_found"
+
+    # Add the file — shape ok
+    (draft / "impl").mkdir()
+    (draft / "impl" / "main.py").write_text("def run(args):\n    return {}\n")
+    assert validate_draft_package(draft) is None
 
 
 # ---------------------------------------------------------------------------

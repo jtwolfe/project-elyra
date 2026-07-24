@@ -70,7 +70,7 @@ Sandbox FS tools (`list_dir`, `read_file`, …) **cannot** list host `tools/draf
 
 ### Runners (model-created)
 
-- `sandbox_python`: `runner.json` with `module` + optional `function` (default `run`); guest calls `fn(args)` with the model args dict.
+- `sandbox_python`: `runner.json` with `module` + optional `function` (default `run`); guest calls `fn(args)` with the model args dict. `module` may be a dotted import (`impl.web_search`) or a package-relative path (`impl/web_search.py`); the file must exist under the package or verify/promote fail with `invalid_runner:module_not_found`.
 - `sandbox_shell`: `runner.json` with `argv`; model args are **not** on argv — the runtime writes guest `tmp/elyra_tool_args_*.json` and sets env **`ELYRA_TOOL_ARGS`** to that path. Shell impls must read that file.
 - Invalid shape → `invalid_runner:*` on verify/promote. Do not use `builtin` for model drafts.
 

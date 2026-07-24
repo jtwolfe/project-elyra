@@ -180,6 +180,17 @@ def validate_draft_package(package_dir: Path) -> str | None:
     shape_err = validate_runner_fields(kind, runner)
     if shape_err:
         return shape_err
+
+    # Fail closed when sandbox_python module cannot resolve to a real file.
+    # Prevents hollow promote (callable:true) then module_not_found at call time
+    # — live dogfood failure mode with nested packages like impl.web_search.
+    if kind == "sandbox_python":
+        from elyra.tools.guest_exec import resolve_module_file
+
+        module = runner.get("module")
+        if isinstance(module, str) and module.strip():
+            if resolve_module_file(package_dir, module.strip()) is None:
+                return "invalid_runner:module_not_found"
     return None
 
 

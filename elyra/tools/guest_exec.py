@@ -98,16 +98,24 @@ def clamp_tool_timeout(timeout: object | None) -> float:
 
 
 def is_safe_module_rel(module: str) -> bool:
-    """True when ``module`` is a package-relative path (no abs / ``..``)."""
-    raw = (module or "").strip()
+    """True when ``module`` is a package-relative path or dotted import (no abs / ``..``).
+
+    Accepts both path form (``impl/main.py``, ``impl/main``) and Python dotted
+    import form (``impl.main``). Rejects absolute paths and parent traversal.
+    """
+    raw = (module or "").strip().replace("\\", "/")
     if not raw:
+        return False
+    # Absolute POSIX or Windows drive — Path catches most; also reject leading /
+    if raw.startswith("/") or (len(raw) >= 2 and raw[1] == ":"):
         return False
     path = Path(raw)
     if path.is_absolute():
         return False
-    if ".." in path.parts or any(p in {"", "."} for p in path.parts if p == ".."):
-        return False
     if any(part == ".." for part in path.parts):
+        return False
+    # Empty segments (e.g. "a//b" or leading/trailing slash leftovers)
+    if any(part == "" for part in path.parts):
         return False
     return True
 
@@ -124,27 +132,56 @@ def is_public_function_name(name: str) -> bool:
     return True
 
 
+def _module_rel_candidates(module: str) -> list[str]:
+    """Candidate relative paths for a runner ``module`` field.
+
+    Order prefers the literal path (and ``.py`` suffix), then dotted-import
+    conversion (``impl.web_search`` → ``impl/web_search.py``). That matches
+    create-tool / fixture language and live dogfood packages.
+    """
+    raw = (module or "").strip().replace("\\", "/")
+    if not raw:
+        return []
+    out: list[str] = []
+
+    def add(rel: str) -> None:
+        rel = rel.strip().replace("\\", "/")
+        if rel and rel not in out:
+            out.append(rel)
+
+    add(raw)
+    if not raw.endswith(".py"):
+        add(f"{raw}.py")
+
+    # Dotted Python module → posix path under package (only when not already a path).
+    if "/" not in raw and not raw.endswith(".py"):
+        parts = raw.split(".")
+        if len(parts) >= 1 and all(p.isidentifier() for p in parts):
+            as_path = "/".join(parts)
+            add(as_path)
+            add(f"{as_path}.py")
+    return out
+
+
 def resolve_module_file(package_dir: Path, module: str) -> Path | None:
-    """Resolve ``module`` under ``package_dir``; None if missing or escapes."""
+    """Resolve ``module`` under ``package_dir``; None if missing or escapes.
+
+    ``module`` may be a relative path (``impl/main.py``) or a dotted import
+    path (``impl.main`` → ``impl/main.py``). First existing regular file wins.
+    """
     if not is_safe_module_rel(module):
         return None
     root = package_dir.resolve()
-    candidate = (package_dir / module).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    if candidate.is_file():
-        return candidate
-    # Allow omitting ``.py`` when the file exists with that suffix.
-    if not module.endswith(".py"):
-        with_py = (package_dir / f"{module}.py").resolve()
+    for rel in _module_rel_candidates(module):
+        if not is_safe_module_rel(rel):
+            continue
+        candidate = (package_dir / rel).resolve()
         try:
-            with_py.relative_to(root)
+            candidate.relative_to(root)
         except ValueError:
-            return None
-        if with_py.is_file():
-            return with_py
+            continue
+        if candidate.is_file():
+            return candidate
     return None
 
 
@@ -438,7 +475,11 @@ def _host_stub_python(
     if mod_path is None:
         return ToolResult(
             ok=False,
-            payload={"executor_backend": EXECUTOR_BACKEND_HOST_STUB},
+            payload={
+                "executor_backend": EXECUTOR_BACKEND_HOST_STUB,
+                "module": module,
+                "tried": _module_rel_candidates(module),
+            },
             error_reason="module_not_found",
         )
     try:
@@ -645,7 +686,11 @@ def _guest_python(
     if mod_file is None:
         return ToolResult(
             ok=False,
-            payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
+            payload={
+                "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                "module": module,
+                "tried": _module_rel_candidates(module),
+            },
             error_reason="module_not_found",
         )
     rel = mod_file.relative_to(package_dir.resolve()).as_posix()

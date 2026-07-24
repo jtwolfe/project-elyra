@@ -8,3 +8,12 @@ build/
 data/
 model
 *.gguf
+
+# Runtime growth tools (promote/draft) — never source of truth in git
+tools/local/
+tools/drafts/
+
+# Sandbox runtime residue; seed tree (README, lib, fixtures, .gitkeep) stays tracked
+sandboxes/sandbox0/.elyra_pyenv_ready
+sandboxes/sandbox0/tools/*
+!sandboxes/sandbox0/tools/.gitkeep

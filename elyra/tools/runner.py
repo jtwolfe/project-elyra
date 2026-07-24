@@ -33,7 +33,7 @@ class RunnerSpec:
     kind: str
     entry: str | None = None  # module:attr for builtin
     argv: list[str] | None = None  # sandbox_shell
-    module: str | None = None  # sandbox_python path under package_dir
+    module: str | None = None  # sandbox_python: path or dotted import under package_dir
     function: str | None = None  # sandbox_python; default "run" at dispatch if None
     raw: dict[str, Any] | None = None
 

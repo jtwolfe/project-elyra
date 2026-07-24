@@ -81,9 +81,19 @@ def _minimal_draft_files(
                 "additionalProperties": False,
             }
         ),
+        # Dotted module form (impl.main → impl/main.py) must resolve at verify/promote.
         "runner.json": json.dumps({"kind": runner_kind, "module": "impl.main"}),
+        "impl/main.py": (
+            "def run(args):\n"
+            "    return {'ok': True, 'echo': (args or {}).get('x')}\n"
+        ),
+        "impl/__init__.py": "",
         "tests/test_sample.py": test_body,
     }
+    if runner_kind == "sandbox_shell":
+        files["runner.json"] = json.dumps(
+            {"kind": "sandbox_shell", "argv": ["python3", "-B", "impl/main.py"]}
+        )
     if extra:
         files.update(extra)
     return files
@@ -199,8 +209,55 @@ def test_empty_files_fails_before_mkdir(ctx: ToolContext, paths) -> None:
     assert result.ok is False
     assert result.error_reason == "empty_files"
     assert result.payload.get("name") == name
+    assert "hint" in result.payload
     # No draft-tree side effects — hollow mkdir must not run
     assert not draft.exists()
+
+
+def test_invalid_files_echoes_type_and_hint(ctx: ToolContext, paths) -> None:
+    """Non-dict files must not be opaque — live dogfood thrash fix."""
+    # List of path/content objects is a common model mistake
+    result = install_tool_draft(
+        {
+            "name": "bad_shape",
+            "files": [
+                {"path": "TOOL.md", "content": "x"},
+            ],
+        },
+        ctx,
+    )
+    assert result.ok is False
+    assert result.error_reason == "invalid_files"
+    assert result.payload.get("received_type") == "list"
+    assert result.payload.get("received_sample") == "list_len=1"
+    assert "args_keys" in result.payload
+    assert "name" in result.payload["args_keys"]
+    assert "files" in result.payload["args_keys"]
+    assert "object" in (result.payload.get("hint") or "").lower()
+    assert not (drafts_dir(paths) / "bad_shape").exists()
+
+    result_str = install_tool_draft(
+        {"name": "bad_str", "files": '{"TOOL.md": "x"}'},
+        ctx,
+    )
+    assert result_str.ok is False
+    assert result_str.error_reason == "invalid_files"
+    assert result_str.payload.get("received_type") == "str"
+    assert result_str.payload.get("received_sample") == f"str_len={len('{\"TOOL.md\": \"x\"}')}"
+
+
+def test_invalid_file_content_echoes_type(ctx: ToolContext) -> None:
+    result = install_tool_draft(
+        {
+            "name": "bad_content",
+            "files": {"TOOL.md": {"nested": True}},
+        },
+        ctx,
+    )
+    assert result.ok is False
+    assert result.error_reason == "invalid_file_content"
+    assert result.payload.get("path") == "TOOL.md"
+    assert result.payload.get("received_type") == "dict"
 
 
 def test_drafts_never_callable_before_promote(
@@ -357,6 +414,21 @@ def test_promote_without_verify_fails(ctx: ToolContext) -> None:
     result = promote_tool({"name": name}, ctx)
     assert result.ok is False
     assert result.error_reason == "verify_required"
+
+
+def test_verify_fails_when_module_file_missing(ctx: ToolContext, paths) -> None:
+    """Hollow package: runner points at impl.main but no file — fail before green."""
+    name = "no_impl"
+    files = _minimal_draft_files()
+    # Drop the implementation that runner.module requires
+    del files["impl/main.py"]
+    del files["impl/__init__.py"]
+    assert _install_draft(ctx, name, files=files).ok
+    result = verify_tool({"name": name}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "invalid_runner:module_not_found"
+    draft = drafts_dir(paths) / name
+    assert not (draft / VERIFY_RECORD_NAME).exists()
 
 
 def test_builtin_kind_rejected_at_verify_and_promote(ctx: ToolContext) -> None:
