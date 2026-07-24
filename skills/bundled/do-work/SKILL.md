@@ -37,7 +37,7 @@ Pick the first that applies:
 1. **One primary task per moment** when possible; avoid thrashing across many tasks.
 2. Never claim done without **evidence** in the sandbox or honest ledger notes.
 3. Sandbox tools are jailed under the sandbox root — they do **not** see host `tools/bundled` or repo paths. Prefer ledger + allowed tools; drafts only via `install_tool_draft` (through create-tool).
-4. On blocker: set task **`blocked`** (or clear notes) with a specific reason; optional `speak` if a human must unblock. Do not spin forever.
+4. On blocker: set task **`blocked`** (or clear notes) with a specific reason; optional `speak` if a human must unblock. Do not spin forever. Sandbox isolation failures (`sandbox_unavailable:*`, `guest_pytest_unavailable`) are blockers — block / speak / rest; do not thrash guest tools.
 5. Do **not** close the parent goal from here. Prefer `load_skill` name `review-work` before goal close.
 6. Use **exact** tool names (snake_case) and skill names (hyphenated) only.
 
