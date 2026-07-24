@@ -3202,3 +3202,89 @@ def test_skip_identical_never_ends_moment(
     assert len(stop_beats) == 1
     assert stop_beats[0].get("stop_reason") == "no_tools"
     assert stop_beats[0].get("thrash_skips") == 2
+
+
+# ---------------------------------------------------------------------------
+# Usage hard-stop → STOP_POLICY (Phase 0 PR 5b)
+# ---------------------------------------------------------------------------
+
+
+def test_usage_hard_stop_yields_policy_not_error(ctx, registry, moments):
+    """UsageHardStopError from the gated client maps to stop_reason=policy.
+
+    Dedicated except before broad Exception so continuous does not treat this
+    as STOP_ERROR, and policy ∉ moment_continue allowlist.
+    """
+    from elyra.llm.usage import TokenUsage, UsageHardStopError, UsageMeter
+    from elyra.llm.client import UsageGatedChatClient
+    from elyra.settings import UsageSettings
+
+    mid = moments.open_moment(why_now="hard-stop test", moment_id="m-hardstop")
+    ctx.moment_id = mid
+
+    # Meter already at ceiling → gate raises before any model call.
+    usage = UsageSettings(
+        enabled=True,
+        weekly_allowed_tokens=10,
+        day_allowed_tokens=10,
+        hour_allowed_tokens=10,
+    )
+    # Persist under tmp via paths from ctx
+    meter = UsageMeter.load(ctx.paths.data_dir, usage)
+    meter.record(TokenUsage(total_tokens=10))
+    assert meter.can_call() is False
+
+    inner_calls = {"n": 0}
+
+    def _should_not_run(*_a: Any, **_k: Any) -> ChatCompletionResult:
+        inner_calls["n"] += 1
+        return ChatCompletionResult(content="nope", reasoning_content="", raw_json="{}")
+
+    client = UsageGatedChatClient(StubChatClient(responses=_should_not_run), meter)
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+
+    assert result.stop_reason == "policy"
+    assert result.stop_reason != "error"
+    assert result.error is not None
+    assert "usage_hard_stop" in result.error
+    assert inner_calls["n"] == 0
+
+    beats = moments.list_beats(mid)
+    stop_beats = [b for b in beats if b.get("type") == "stop"]
+    assert len(stop_beats) == 1
+    assert stop_beats[0].get("stop_reason") == "policy"
+    assert "usage_hard_stop" in (stop_beats[0].get("error") or "")
+
+
+def test_usage_hard_stop_direct_raise_is_policy(ctx, registry, moments):
+    """Bare UsageHardStopError (no gate wrapper) still maps to policy not error."""
+    from elyra.llm.usage import UsageHardStopError
+
+    mid = moments.open_moment(why_now="direct hard-stop", moment_id="m-direct-hs")
+    ctx.moment_id = mid
+
+    class _HardStopClient:
+        def chat_completion(self, *args: Any, **kwargs: Any) -> ChatCompletionResult:
+            raise UsageHardStopError("week budget exhausted", level="week")
+
+    result = _run(_HardStopClient(), ctx, registry, moments=moments)  # type: ignore[arg-type]
+    assert result.stop_reason == "policy"
+    assert result.error == "usage_hard_stop:week:week budget exhausted"
+    stop_beats = [b for b in moments.list_beats(mid) if b.get("type") == "stop"]
+    assert stop_beats[0]["stop_reason"] == "policy"
+
+
+def test_generic_exception_still_yields_error(ctx, registry, moments):
+    """Non-usage exceptions still surface as stop_reason=error (regression)."""
+
+    mid = moments.open_moment(why_now="generic boom", moment_id="m-boom")
+    ctx.moment_id = mid
+
+    class _BoomClient:
+        def chat_completion(self, *args: Any, **kwargs: Any) -> ChatCompletionResult:
+            raise RuntimeError("network down")
+
+    result = _run(_BoomClient(), ctx, registry, moments=moments)  # type: ignore[arg-type]
+    assert result.stop_reason == "error"
+    assert result.error is not None
+    assert "RuntimeError" in result.error

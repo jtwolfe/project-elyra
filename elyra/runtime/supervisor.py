@@ -218,6 +218,7 @@ class ElyraSupervisor:
             paths=self.paths,
             client=chat_client,
             stop_event=self._stop,
+            model_available=pr.can_open_model_moment,
         )
         pr.worker = self._worker
 

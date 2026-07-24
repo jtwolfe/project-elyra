@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Callable, Sequence
@@ -148,8 +149,10 @@ class PresenceWorker:
         goals: GoalsStore | None = None,
         skills: SkillCatalog | None = None,
         run_do_loop_fn: RunDoLoopFn | None = None,
+        model_available: Callable[[], bool] | None = None,
     ) -> None:
         self.paths = paths
+        # Rebindable: ProviderRuntime.rebuild_chat_stack sets worker.client.
         self.client = client
         self._stop = stop_event
         self._poll = poll_seconds
@@ -165,6 +168,13 @@ class PresenceWorker:
         self._goals = goals
         self._skills = skills
         self._run_do_loop: RunDoLoopFn = run_do_loop_fn or run_do_loop
+        # Pre-claim gate: safe to open a model-using moment (creds + budget).
+        # Default True preserves prior behaviour for unit tests without a meter.
+        self._model_available: Callable[[], bool] = (
+            model_available if model_available is not None else (lambda: True)
+        )
+        # Rate-limit "skip claim" log to once/minute (usage vs credential).
+        self._model_unavailable_log_at: float = 0.0
 
         self._identity = IdentityStore(paths)
         self._users = UsersStore(paths)
@@ -639,11 +649,39 @@ class PresenceWorker:
 
         If claim succeeds but ``open_moment`` fails, the wake is cancelled so it
         is not left stuck in ``claimed``. Skips claim while full reset runs.
+
+        Pre-claim gate: when ``model_available()`` is false (usage hard-stop with
+        override OFF, or ``!credential_ok`` / FailingChatClient), do **not**
+        claim — wakes stay pending (never cancelled). Timers still fire via
+        ``_fire_due_unlocked`` so due work lands on the queue.
         """
         with self._lock:
             if self._continuous.resetting:
                 return None
             self._fire_due_unlocked()
+            # Pre-claim model gate (usage hard-stop / missing credentials).
+            try:
+                available = bool(self._model_available())
+            except Exception:  # noqa: BLE001 — never block worker on gate errors
+                available = False
+                now = time.monotonic()
+                if now - self._model_unavailable_log_at >= 60.0:
+                    self._model_unavailable_log_at = now
+                    _LOG.exception(
+                        "model_available hook failed; treating as unavailable"
+                    )
+            if not available:
+                pending = self._queue.pending()
+                if pending:
+                    now = time.monotonic()
+                    if now - self._model_unavailable_log_at >= 60.0:
+                        self._model_unavailable_log_at = now
+                        _LOG.warning(
+                            "model_available=false; skipping claim "
+                            "(%d pending wake(s) left untouched)",
+                            len(pending),
+                        )
+                return None
             moment_id = str(uuid.uuid4())
             wake = self._queue.claim(moment_id)
             if wake is None:
