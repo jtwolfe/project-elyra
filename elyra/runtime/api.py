@@ -10,6 +10,7 @@ Out of scope: promote/verify admin, multi-user glass, write identity.
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import re
 import threading
@@ -17,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
+_LOG = logging.getLogger(__name__)
 
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
@@ -225,6 +228,11 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if self.tools is None:
                 self._json(200, {"tools": [], "error": "tools catalog unavailable"})
                 return
+            # Rescan disk so promote/delete/external edits match the glass catalog.
+            try:
+                self.tools.reload()
+            except Exception as exc:  # noqa: BLE001 — catalog still serves last known
+                _LOG.warning("tools.reload on GET /api/tools failed: %s", exc)
             catalog = []
             for name in self.tools.names():
                 pkg = self.tools.get(name)
@@ -245,6 +253,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if self.skills is None:
                 self._json(200, {"skills": [], "error": "skills catalog unavailable"})
                 return
+            try:
+                self.skills.reload()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("skills.reload on GET /api/skills failed: %s", exc)
             items = self.skills.catalog()
             # Enrich with source when available.
             enriched = []

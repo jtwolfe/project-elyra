@@ -324,6 +324,48 @@ def test_get_tools_and_skills_catalog(paths):
         h.close()
 
 
+def test_get_tools_rescans_after_local_delete(paths):
+    """GET /api/tools reloads so operator-deleted local packages leave the catalog."""
+    import json
+    import shutil
+
+    local = paths.tools_dir / "local" / "ghost_tool"
+    local.mkdir(parents=True)
+    (local / "TOOL.md").write_text(
+        "---\nname: ghost_tool\ndescription: temp\nkind: read\n---\n",
+        encoding="utf-8",
+    )
+    (local / "schema.json").write_text(
+        json.dumps({"type": "object", "properties": {}}), encoding="utf-8"
+    )
+    (local / "runner.json").write_text(
+        json.dumps({"kind": "sandbox_python", "module": "main"}), encoding="utf-8"
+    )
+    (local / "main.py").write_text("def run(args):\n    return {'ok': True}\n")
+
+    h = _ApiHarness(paths)
+    try:
+        if h.server is None:
+            return
+        # Harness may have failed to resolve tools if bundled root missing.
+        code, body = h.get("/api/tools")
+        assert code == 200
+        if body.get("error") == "tools catalog unavailable":
+            return
+        names = {t["name"] for t in body["tools"]}
+        assert "ghost_tool" in names
+
+        # External delete (operator rm) without process restart
+        shutil.rmtree(local)
+
+        code, body = h.get("/api/tools")
+        assert code == 200
+        names = {t["name"] for t in body["tools"]}
+        assert "ghost_tool" not in names
+    finally:
+        h.close()
+
+
 def test_existing_status_and_messages_still_work(paths):
     h = _ApiHarness(paths)
     try:
@@ -556,16 +598,30 @@ def test_static_app_js_active_panel_poll(paths):
         assert "providerApiKeyInput.value = \"\"" in js or "providerApiKeyInput.value = ''" in js
         assert "usageOverrideInFlight" in js
         assert "providerPatchInFlight" in js
+        # Chat polish + multimodal-ready composer
+        assert "renderMarkdown" in js
+        assert "pendingAttachments" in js
+        assert "chatStickToBottom" in js
+        assert "updateChatActivity" in js
+        assert "renderActivityTrail" in js
+        assert "recent_activity" in js
 
         req_css = urllib.request.Request(h.base + "/style.css", method="GET")
         with urllib.request.urlopen(req_css, timeout=5) as resp:
             assert resp.status == 200
             css = resp.read().decode("utf-8")
         assert "list-panel-auto" in css
-        assert "position: sticky" in css
-        assert "height: 100vh" in css
+        # Viewport-locked shell: app/rail/main do not page-scroll together.
+        assert "overflow: hidden" in css
+        assert "overscroll-behavior: contain" in css
         assert "hard-stop-banner" in css
         assert "usage-bar-fill" in css
         assert "status-cards" in css
+        # Chat polish surface
+        assert "msg-body" in css
+        assert "jump-latest" in css
+        assert "attach-tray" in css
+        assert "activity-trail" in css
+        assert "activity-chip" in css
     finally:
         h.close()

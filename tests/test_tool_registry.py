@@ -528,6 +528,24 @@ def test_reload_picks_up_new_local(home: Path, bundled_root: Path) -> None:
     assert reg.has("echo_tool")
 
 
+def test_execute_missing_local_package_reloads(home: Path, bundled_root: Path) -> None:
+    """Operator-deleted local tools should not stay callable as ghosts."""
+    import shutil
+
+    paths = resolve_paths(home)
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    _write_package(local, "ghost_echo", description="doomed")
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+    assert reg.has("ghost_echo")
+    shutil.rmtree(local / "ghost_echo")
+    ctx = ToolContext(paths=paths)
+    result = reg.execute("ghost_echo", {}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "unknown_tool"
+    assert not reg.has("ghost_echo")
+
+
 def test_incomplete_package_skipped(home: Path, bundled_root: Path) -> None:
     paths = resolve_paths(home)
     local = paths.tools_dir / "local"
