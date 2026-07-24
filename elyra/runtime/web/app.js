@@ -20,7 +20,9 @@ const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
-const continuousToggles = document.querySelectorAll(".continuous-toggle");
+const continuousToggles = document.querySelectorAll(
+  ".continuous-toggle:not(#usage-override-toggle)"
+);
 const continuousMetaEls = [$("#continuous-status-rail")].filter(Boolean);
 const continuousSummary = $("#continuous-summary");
 const continuousBadge = $("#continuous-badge");
@@ -29,6 +31,26 @@ const resetOpenBtn = $("#reset-open-btn");
 const resetModal = $("#reset-modal");
 const resetConfirmInput = $("#reset-confirm-input");
 const resetConfirmBtn = $("#reset-confirm-btn");
+const hardStopBanner = $("#hard-stop-banner");
+const providerBadge = $("#provider-badge");
+const providerNameEl = $("#provider-name");
+const providerModelSelect = $("#provider-model-select");
+const providerCredentialSelect = $("#provider-credential-select");
+const providerCredentialOk = $("#provider-credential-ok");
+const providerApiKeyInput = $("#provider-api-key-input");
+const providerApiKeySave = $("#provider-api-key-save");
+const providerApiKeyClear = $("#provider-api-key-clear");
+const providerApiKeyMeta = $("#provider-api-key-meta");
+const usageBadge = $("#usage-badge");
+const usageWeekPct = $("#usage-week-pct");
+const usageDayPct = $("#usage-day-pct");
+const usageHourPct = $("#usage-hour-pct");
+const usageWeekBar = $("#usage-week-bar");
+const usageDayBar = $("#usage-day-bar");
+const usageHourBar = $("#usage-hour-bar");
+const usageDetail = $("#usage-detail");
+const usageOverrideToggle = $("#usage-override-toggle");
+const usageOverrideMeta = $("#usage-override-meta");
 
 const USER_ID = "operator";
 const REASON_BUFFER_FULL = "interjection_buffer_full";
@@ -43,6 +65,21 @@ let continuousToggleInFlight = false;
 let lastContinuousEnabled = false;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
+/** True while PATCH /api/provider is in flight. */
+let providerPatchInFlight = false;
+/** True while PUT/DELETE api-key is in flight. */
+let apiKeyInFlight = false;
+/** True while PATCH /api/usage (hard-stop override) is in flight. */
+let usageOverrideInFlight = false;
+/** Last known hard_stop_override / override_active from status. */
+let lastOverrideActive = false;
+/** Last known usage.hard_stop value (for transition notices). */
+let lastHardStop = null;
+/** False until first successful status paint (skip transition notices on boot). */
+let statusPrimed = false;
+/** Last known model / credential_source (for select change detection). */
+let lastProviderModel = null;
+let lastCredentialSource = null;
 /** Active nav panel name (chat | goals | moments | tools | identity | status). */
 let activePanel = "chat";
 /** Currently open moment detail id (null when closed). */
@@ -206,6 +243,415 @@ function formatContinuousMeta(c) {
   return parts.join(" · ");
 }
 
+function formatPctRemaining(frac) {
+  if (frac == null || Number.isNaN(Number(frac))) return "—";
+  const pct = Math.max(0, Math.min(100, Math.round(Number(frac) * 100)));
+  return `${pct}%`;
+}
+
+function setUsageBar(barEl, frac) {
+  if (!barEl) return;
+  const f = Math.max(0, Math.min(1, Number(frac) || 0));
+  barEl.style.width = `${Math.round(f * 100)}%`;
+  barEl.classList.remove("usage-bar-warn", "usage-bar-crit");
+  if (f <= 0.05) barEl.classList.add("usage-bar-crit");
+  else if (f <= 0.2) barEl.classList.add("usage-bar-warn");
+}
+
+/**
+ * Provider-aware rail pill (keeps id pill-llama for less churn).
+ * xai ready/busy/auth/limit/ovrd; local llama; stub.
+ */
+function renderProviderPill(s) {
+  if (!pillLlama) return;
+  const provider = (s && s.provider) || null;
+  const usage = (s && s.usage) || {};
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  const credentialOk = s && s.credential_ok !== false;
+  const workerBusy = Boolean(s && s.worker_busy);
+  const phase = (s && s.phase) || "";
+  const busy = workerBusy || phase === "in_moment";
+
+  // Legacy / no provider field: fall back to llama-centric display.
+  if (!provider) {
+    if (s && s.llama_ready) {
+      setPill(
+        pillLlama,
+        s.llama_busy ? "llama busy" : "llama ready",
+        s.llama_busy ? "pill-busy" : "pill-on"
+      );
+    } else if (s && s.llama_error === "stub_llm") {
+      setPill(pillLlama, "stub llm", "pill-off");
+    } else {
+      setPill(
+        pillLlama,
+        s && s.llama_error ? "llama error" : "llama off",
+        "pill-off"
+      );
+    }
+    return;
+  }
+
+  if (provider === "local") {
+    if (s.llama_ready) {
+      setPill(
+        pillLlama,
+        s.llama_busy || busy ? "llama busy" : "llama ready",
+        s.llama_busy || busy ? "pill-busy" : "pill-on"
+      );
+    } else if (s.llama_error === "stub_llm") {
+      setPill(pillLlama, "stub llm", "pill-off");
+    } else {
+      setPill(
+        pillLlama,
+        s.llama_error ? "llama error" : "llama off",
+        "pill-off"
+      );
+    }
+    return;
+  }
+
+  // xai (and any non-local remote)
+  if (s.llama_error === "stub_llm" && !s.credential_ok && !s.model) {
+    setPill(pillLlama, "stub llm", "pill-off");
+    return;
+  }
+  if (!credentialOk) {
+    setPill(pillLlama, `${provider} auth`, "pill-off");
+    return;
+  }
+  if (hardStop && !overrideActive) {
+    setPill(pillLlama, `${provider} limit`, "pill-off");
+    return;
+  }
+  if (hardStop && overrideActive) {
+    setPill(pillLlama, `${provider} ovrd`, "pill-busy");
+    return;
+  }
+  setPill(
+    pillLlama,
+    busy ? `${provider} busy` : `${provider} ready`,
+    busy ? "pill-busy" : "pill-on"
+  );
+}
+
+function renderHardStopBanner(s) {
+  if (!hardStopBanner) return;
+  const usage = (s && s.usage) || {};
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  const credentialOk = !(s && s.provider === "xai" && s.credential_ok === false);
+
+  if (!credentialOk) {
+    hardStopBanner.hidden = false;
+    hardStopBanner.className = "hard-stop-banner hard-stop-auth";
+    const detail = (s && s.credential_detail) || "credential missing";
+    hardStopBanner.textContent = `Auth paused — ${detail}. Model moments will not open until credentials resolve.`;
+    return;
+  }
+
+  if (hardStop && !overrideActive) {
+    hardStopBanner.hidden = false;
+    hardStopBanner.className = "hard-stop-banner hard-stop-limit";
+    const reason = usage.hard_stop_reason || hardStop;
+    hardStopBanner.textContent = `Usage hard stop (${hardStop}) — queue paused for budget. ${reason}`;
+    return;
+  }
+
+  if (hardStop && overrideActive) {
+    hardStopBanner.hidden = false;
+    hardStopBanner.className = "hard-stop-banner hard-stop-override";
+    hardStopBanner.textContent = `Over budget (${hardStop}) — hard-stop override ON. Model calls continue; usage still recorded.`;
+    return;
+  }
+
+  hardStopBanner.hidden = true;
+  hardStopBanner.textContent = "";
+  hardStopBanner.className = "hard-stop-banner";
+}
+
+function fillModelSelect(models, current) {
+  if (!providerModelSelect) return;
+  const list = Array.isArray(models) ? models.slice() : [];
+  if (current && !list.includes(current)) list.unshift(current);
+  const prev = providerModelSelect.value;
+  // Skip rebuild if options + selection unchanged (preserve focus).
+  const existing = Array.from(providerModelSelect.options).map((o) => o.value);
+  const same =
+    existing.length === list.length &&
+    existing.every((v, i) => v === list[i]) &&
+    providerModelSelect.value === (current || "");
+  if (same) return;
+  providerModelSelect.innerHTML = "";
+  if (!list.length) {
+    const opt = document.createElement("option");
+    opt.value = current || "";
+    opt.textContent = current || "—";
+    providerModelSelect.appendChild(opt);
+  } else {
+    for (const mid of list) {
+      const opt = document.createElement("option");
+      opt.value = mid;
+      opt.textContent = mid;
+      providerModelSelect.appendChild(opt);
+    }
+  }
+  const pick = current || prev || (list[0] || "");
+  if (pick) providerModelSelect.value = pick;
+}
+
+function renderProviderCard(s) {
+  const provider = (s && s.provider) || null;
+  if (providerNameEl) {
+    providerNameEl.textContent = provider
+      ? `${provider}${s.model_label ? ` · ${s.model_label}` : s.model ? ` · ${s.model}` : ""}`
+      : "— (legacy)";
+  }
+  if (providerBadge) {
+    if (!provider) {
+      providerBadge.textContent = "legacy";
+      providerBadge.classList.remove("badge-open", "badge-bad");
+    } else if (s.credential_ok) {
+      providerBadge.textContent = "ok";
+      providerBadge.classList.add("badge-open");
+      providerBadge.classList.remove("badge-bad");
+    } else {
+      providerBadge.textContent = "auth";
+      providerBadge.classList.remove("badge-open");
+      providerBadge.classList.add("badge-bad");
+    }
+  }
+  if (!providerPatchInFlight) {
+    fillModelSelect(s && s.models_available, s && s.model);
+    lastProviderModel = (s && s.model) || null;
+    if (providerCredentialSelect && s && s.credential_source) {
+      providerCredentialSelect.value = s.credential_source;
+      lastCredentialSource = s.credential_source;
+    }
+  }
+  if (providerCredentialOk) {
+    if (!provider) {
+      providerCredentialOk.textContent = "—";
+    } else {
+      const ok = Boolean(s.credential_ok);
+      const detail = s.credential_detail || "";
+      const email = s.credential_email || "";
+      const parts = [ok ? "yes" : "no"];
+      if (detail) parts.push(detail);
+      if (email) parts.push(email);
+      if (s.credential_expires_at) parts.push(`exp ${s.credential_expires_at}`);
+      providerCredentialOk.textContent = parts.join(" · ");
+      providerCredentialOk.classList.toggle("status-ok", ok);
+      providerCredentialOk.classList.toggle("status-bad", !ok);
+    }
+  }
+  if (providerApiKeyMeta) {
+    const configured = Boolean(s && s.api_key_configured);
+    providerApiKeyMeta.textContent = configured
+      ? "API key configured (secret not shown)"
+      : "not configured";
+  }
+}
+
+function renderUsageCard(s) {
+  const usage = (s && s.usage) || null;
+  const enabled = Boolean(usage && usage.enabled);
+  const overrideActive = Boolean(usage && usage.override_active);
+  const hardStop = (usage && usage.hard_stop) || null;
+
+  if (usageBadge) {
+    if (!usage) {
+      usageBadge.textContent = "n/a";
+      usageBadge.classList.remove("badge-open", "badge-bad");
+    } else if (!enabled) {
+      usageBadge.textContent = "off";
+      usageBadge.classList.remove("badge-open", "badge-bad");
+    } else if (hardStop && !overrideActive) {
+      usageBadge.textContent = `stop · ${hardStop}`;
+      usageBadge.classList.remove("badge-open");
+      usageBadge.classList.add("badge-bad");
+    } else if (hardStop && overrideActive) {
+      usageBadge.textContent = "override";
+      usageBadge.classList.add("badge-open");
+      usageBadge.classList.remove("badge-bad");
+    } else {
+      usageBadge.textContent = "ok";
+      usageBadge.classList.add("badge-open");
+      usageBadge.classList.remove("badge-bad");
+    }
+  }
+
+  const week = usage ? usage.week_remaining_fraction : null;
+  const day = usage ? usage.day_remaining_fraction : null;
+  const hour = usage ? usage.hour_remaining_fraction : null;
+  if (usageWeekPct) usageWeekPct.textContent = formatPctRemaining(week);
+  if (usageDayPct) usageDayPct.textContent = formatPctRemaining(day);
+  if (usageHourPct) usageHourPct.textContent = formatPctRemaining(hour);
+  setUsageBar(usageWeekBar, week);
+  setUsageBar(usageDayBar, day);
+  setUsageBar(usageHourBar, hour);
+
+  if (usageDetail) {
+    if (!usage) {
+      usageDetail.textContent = "Usage meter not bound.";
+    } else if (!enabled) {
+      usageDetail.textContent = "Usage meter disabled.";
+    } else {
+      const parts = [];
+      if (usage.week_used_tokens != null) {
+        parts.push(
+          `week ${usage.week_used_tokens}/${usage.week_limit_tokens ?? "—"}`
+        );
+      }
+      if (usage.day_used_tokens != null) {
+        parts.push(
+          `day ${usage.day_used_tokens}/${usage.day_limit_tokens ?? "—"}`
+        );
+      }
+      if (usage.hour_used_tokens != null) {
+        parts.push(
+          `hour ${usage.hour_used_tokens}/${usage.hour_limit_tokens ?? "—"}`
+        );
+      }
+      if (usage.last_record_at) parts.push(`last ${usage.last_record_at}`);
+      usageDetail.textContent = parts.length ? parts.join(" · ") : "no usage yet";
+    }
+  }
+
+  if (usageOverrideToggle && !usageOverrideInFlight) {
+    usageOverrideToggle.checked = overrideActive;
+    usageOverrideToggle.disabled = !enabled;
+  }
+  lastOverrideActive = overrideActive;
+  if (usageOverrideMeta) {
+    usageOverrideMeta.textContent = overrideActive
+      ? "override ON"
+      : "default off";
+  }
+}
+
+async function patchProvider(body) {
+  if (providerPatchInFlight) return;
+  providerPatchInFlight = true;
+  if (providerModelSelect) providerModelSelect.disabled = true;
+  if (providerCredentialSelect) providerCredentialSelect.disabled = true;
+  try {
+    await fetchJson("/api/provider", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshStatus();
+  } catch (err) {
+    if (providerModelSelect && lastProviderModel != null) {
+      providerModelSelect.value = lastProviderModel;
+    }
+    if (providerCredentialSelect && lastCredentialSource != null) {
+      providerCredentialSelect.value = lastCredentialSource;
+    }
+    showNotice(String(err.message || err));
+  } finally {
+    providerPatchInFlight = false;
+    if (providerModelSelect) providerModelSelect.disabled = false;
+    if (providerCredentialSelect) providerCredentialSelect.disabled = false;
+  }
+}
+
+async function saveApiKey() {
+  if (apiKeyInFlight || !providerApiKeyInput) return;
+  const api_key = providerApiKeyInput.value.trim();
+  if (!api_key) {
+    showNotice("API key required.");
+    return;
+  }
+  apiKeyInFlight = true;
+  if (providerApiKeySave) providerApiKeySave.disabled = true;
+  if (providerApiKeyClear) providerApiKeyClear.disabled = true;
+  try {
+    await fetchJson("/api/provider/api-key", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key }),
+    });
+    // Never re-display secret.
+    providerApiKeyInput.value = "";
+    showNotice("API key saved.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    apiKeyInFlight = false;
+    if (providerApiKeySave) providerApiKeySave.disabled = false;
+    if (providerApiKeyClear) providerApiKeyClear.disabled = false;
+  }
+}
+
+async function clearApiKey() {
+  if (apiKeyInFlight) return;
+  apiKeyInFlight = true;
+  if (providerApiKeySave) providerApiKeySave.disabled = true;
+  if (providerApiKeyClear) providerApiKeyClear.disabled = true;
+  try {
+    await fetchJson("/api/provider/api-key", { method: "DELETE" });
+    if (providerApiKeyInput) providerApiKeyInput.value = "";
+    showNotice("API key cleared.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    apiKeyInFlight = false;
+    if (providerApiKeySave) providerApiKeySave.disabled = false;
+    if (providerApiKeyClear) providerApiKeyClear.disabled = false;
+  }
+}
+
+async function setHardStopOverride(active) {
+  if (usageOverrideInFlight) return;
+  usageOverrideInFlight = true;
+  if (usageOverrideToggle) {
+    usageOverrideToggle.disabled = true;
+    usageOverrideToggle.checked = active;
+  }
+  try {
+    await fetchJson("/api/usage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hard_stop_override: Boolean(active) }),
+    });
+    if (active) {
+      showNotice("Hard-stop override ON — model calls continue past budget.");
+    }
+    await refreshStatus();
+  } catch (err) {
+    if (usageOverrideToggle) usageOverrideToggle.checked = lastOverrideActive;
+    showNotice(String(err.message || err));
+  } finally {
+    usageOverrideInFlight = false;
+    if (usageOverrideToggle) usageOverrideToggle.disabled = false;
+  }
+}
+
+function maybeNoticeHardStopTransition(s) {
+  const usage = (s && s.usage) || {};
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  // First paint: seed without notice.
+  if (!statusPrimed) {
+    lastHardStop = hardStop;
+    lastOverrideActive = overrideActive;
+    statusPrimed = true;
+    return;
+  }
+  if (hardStop && hardStop !== lastHardStop && !overrideActive) {
+    showNotice(
+      `Usage hard stop (${hardStop}) — queue paused until budget resets or override is enabled.`,
+      { sticky: true }
+    );
+  }
+  lastHardStop = hardStop;
+}
+
 function renderContinuous(s) {
   const c = (s && s.continuous) || {};
   const enabled = Boolean(c.enabled);
@@ -297,20 +743,24 @@ async function refreshStatus() {
   const s = await fetchJson("/api/status");
   statusJson.textContent = JSON.stringify(s, null, 2);
 
-  if (s.llama_ready) {
-    setPill(
-      pillLlama,
-      s.llama_busy ? "llama busy" : "llama ready",
-      s.llama_busy ? "pill-busy" : "pill-on"
-    );
-  } else if (s.llama_error === "stub_llm") {
-    setPill(pillLlama, "stub llm", "pill-off");
-  } else {
-    setPill(pillLlama, s.llama_error ? "llama error" : "llama off", "pill-off");
-  }
+  renderProviderPill(s);
+  renderHardStopBanner(s);
+  renderProviderCard(s);
+  renderUsageCard(s);
+  maybeNoticeHardStopTransition(s);
+
+  // When hard-stopped without override, surface queue pause on worker pill.
+  const usage = s.usage || {};
+  const queuePaused =
+    Boolean(usage.hard_stop) && !usage.override_active;
+  const authPaused = s.provider === "xai" && s.credential_ok === false;
 
   if (s.worker_busy) {
     setPill(pillWorker, "worker busy", "pill-busy");
+  } else if (queuePaused) {
+    setPill(pillWorker, "queue paused", "pill-off");
+  } else if (authPaused) {
+    setPill(pillWorker, "auth paused", "pill-off");
   } else if (s.worker_pending > 0) {
     setPill(pillWorker, `queue ${s.worker_pending}`, "pill-busy");
   } else {
@@ -698,6 +1148,44 @@ continuousToggles.forEach((el) => {
     setContinuousEnabled(el.checked);
   });
 });
+
+if (providerModelSelect) {
+  providerModelSelect.addEventListener("change", () => {
+    const model = providerModelSelect.value;
+    if (!model || model === lastProviderModel) return;
+    patchProvider({ model });
+  });
+}
+if (providerCredentialSelect) {
+  providerCredentialSelect.addEventListener("change", () => {
+    const credential_source = providerCredentialSelect.value;
+    if (!credential_source || credential_source === lastCredentialSource) return;
+    patchProvider({ credential_source });
+  });
+}
+if (providerApiKeySave) {
+  providerApiKeySave.addEventListener("click", () => {
+    saveApiKey();
+  });
+}
+if (providerApiKeyClear) {
+  providerApiKeyClear.addEventListener("click", () => {
+    clearApiKey();
+  });
+}
+if (providerApiKeyInput) {
+  providerApiKeyInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveApiKey();
+    }
+  });
+}
+if (usageOverrideToggle) {
+  usageOverrideToggle.addEventListener("change", () => {
+    setHardStopOverride(usageOverrideToggle.checked);
+  });
+}
 
 function openResetModal() {
   if (!resetModal) return;
