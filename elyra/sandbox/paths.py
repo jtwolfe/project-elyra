@@ -14,8 +14,8 @@ Known limitations (path jail, not a mount namespace):
 - Hard links created inside the root to outside inodes (same UID) resolve
   *under* root and are not detected as escapes. Symlinks are checked.
 
-Product FS root remains ``data/sandbox/`` until PR3; ``host_primary_root`` /
-``ensure_host_tree`` prepare ``sandboxes/sandbox0`` only.
+Product FS root is ``sandboxes/sandbox0`` (H2c cutover). Legacy
+``data/sandbox/`` is cleared on reset but no longer used for FS tools.
 """
 
 from __future__ import annotations

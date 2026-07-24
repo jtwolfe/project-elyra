@@ -133,6 +133,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if self.provider is not None:
                 snap.update(self.provider.status_provider_fields())
                 snap["usage"] = self.provider.usage_status_block()
+            # Sandbox readiness (H2c): no secrets, no host absolute paths.
+            snap["sandbox"] = self._sandbox_status_block()
             self._json(200, snap)
             return
 
@@ -319,6 +321,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         self._json(404, {"error": "not found"})
+
+    def _sandbox_status_block(self) -> dict[str, Any]:
+        """Sandbox readiness for glass/API — no secrets, no host absolute paths."""
+        from elyra.sandbox.status import sandbox_status_block
+
+        return sandbox_status_block(self.paths)
 
     def _provider_unavailable(self) -> bool:
         """True when provider runtime is not bound (legacy / incomplete start)."""

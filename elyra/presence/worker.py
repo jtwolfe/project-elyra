@@ -1114,8 +1114,11 @@ class PresenceWorker:
         return self._registry
 
     def _ensure_sandbox(self) -> Sandbox:
+        """Product FS jail rooted at sandboxes/sandbox0 (H2c cutover)."""
         if self._sandbox is None:
             self._sandbox = Sandbox(self.paths)
+            # Ensure seed + RW dirs exist before first FS tool call.
+            self._sandbox.ensure_root()
         return self._sandbox
 
     def _ensure_speak(self) -> SpeakTransport:

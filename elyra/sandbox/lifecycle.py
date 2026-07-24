@@ -1,8 +1,9 @@
 """SandboxLifecycleManager — warm sandbox ensure state machine.
 
 Scope: ensure(name) for missing/running/stopped/crashed/draining; shutdown stop-only.
-In scope: instance lock, one-shot recreate, readiness, connected cache, bridge.
-Out of scope: tool invoke, supervisor wiring (PR3).
+In scope: instance lock, one-shot recreate, readiness, connected cache, bridge,
+last ensure reason for status surface.
+Out of scope: tool invoke (PR4+); async warm thread lives on the supervisor.
 
 Fingerprints are **in-memory only** (v1): after process restart the mismatch
 branch is not taken until a successful Ready in this process stores a fp again.
@@ -93,6 +94,10 @@ class SandboxLifecycleManager:
         self._ready: dict[str, bool] = {}
         # In-memory only (v1); not persisted across process restarts.
         self._fingerprints: dict[str, str] = {}
+        # Last ensure reason per name (status surface; no secrets/paths).
+        self._last_reason: dict[str, str | None] = {}
+        # True after at least one ensure() call for name (async warm progress).
+        self._ensure_attempted: dict[str, bool] = {}
         self._skip_guest_readiness = skip_guest_readiness
 
         if client is not None:
@@ -136,6 +141,18 @@ class SandboxLifecycleManager:
     def get_connected(self, name: str = PRIMARY_NAME) -> ConnectedSandbox | None:
         return self._connected.get(name)
 
+    def last_ensure_reason(self, name: str = PRIMARY_NAME) -> str | None:
+        """Return last ensure reason for ``name`` (None when ready / never run)."""
+        if self.client_unusable:
+            return "client_unusable"
+        return self._last_reason.get(name)
+
+    def ensure_attempted(self, name: str = PRIMARY_NAME) -> bool:
+        """True after at least one ``ensure`` call for ``name`` this process."""
+        if self.client_unusable:
+            return True
+        return bool(self._ensure_attempted.get(name))
+
     def ensure(
         self,
         name: str = PRIMARY_NAME,
@@ -148,6 +165,8 @@ class SandboxLifecycleManager:
         (not a per-step allowance).
         """
         if self.client_unusable or self._client is None:
+            self._last_reason[name] = "client_unusable"
+            self._ensure_attempted[name] = True
             return EnsureResult(
                 status="degraded",
                 name=name,
@@ -158,6 +177,8 @@ class SandboxLifecycleManager:
         lock = self._instance_lock(name)
         acquired = lock.acquire(timeout=INSTANCE_LOCK_WAIT_SECONDS)
         if not acquired:
+            self._last_reason[name] = "lock_timeout"
+            self._ensure_attempted[name] = True
             return EnsureResult(
                 status="degraded",
                 name=name,
@@ -165,9 +186,14 @@ class SandboxLifecycleManager:
             )
         try:
             try:
-                return self._ensure_locked(name, deadline=deadline)
+                result = self._ensure_locked(name, deadline=deadline)
             except _WallTimeout:
-                return self._degraded(name, "ensure_wall_timeout")
+                result = self._degraded(name, "ensure_wall_timeout")
+            self._last_reason[name] = (
+                None if result.ready else (result.reason or "degraded")
+            )
+            self._ensure_attempted[name] = True
+            return result
         finally:
             lock.release()
 
@@ -620,6 +646,8 @@ class SandboxLifecycleManager:
             finally:
                 self._clear_cache(name)
                 self._fingerprints.pop(name, None)
+                self._last_reason.pop(name, None)
+                self._ensure_attempted.pop(name, None)
         finally:
             if acquired:
                 lock.release()

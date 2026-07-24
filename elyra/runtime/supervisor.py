@@ -5,6 +5,9 @@ Provider-aware client stack (Phase 0):
   FailingChatClient when !credential_ok (meter still loaded).
 - provider=local → optional llama + gated local HTTP client.
 - --stub-llm → StubChatClient only (not implied by --no-llama).
+
+Sandbox (H2c): host tree ensure (sync) + SandboxLifecycleManager register +
+**async warm** ensure so chat starts without multi-minute MSB hang.
 """
 
 from __future__ import annotations
@@ -42,8 +45,20 @@ from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
 from elyra.runtime.provider_runtime import ProviderRuntime
 from elyra.runtime.state import RuntimeState, set_runtime_state
+from elyra.sandbox.lifecycle import SandboxLifecycleManager
+from elyra.sandbox.paths import PRIMARY_NAME, ensure_host_tree, isolation_enabled
+from elyra.sandbox.registry import clear_sandbox_lifecycle, set_sandbox_lifecycle
+from elyra.sandbox.status import sandbox_status_block
 
 _LOG = logging.getLogger(__name__)
+
+# Log install hint at most once per process when isolation on + client unusable.
+_INSTALL_HINT_LOGGED = False
+_INSTALL_HINT = (
+    "sandbox isolation on but microsandbox client unusable — "
+    "guest tools will fail closed. Install: pip install -e '.[sandbox]' "
+    "then ./scripts/setup-microsandbox.sh --doctor-only"
+)
 
 
 class ElyraSupervisor:
@@ -53,6 +68,7 @@ class ElyraSupervisor:
         paths: ElyraPaths | None = None,
         config: RuntimeConfig | None = None,
         use_stub_llm: bool = False,
+        sandbox_lifecycle: SandboxLifecycleManager | None = None,
     ) -> None:
         self.paths = paths or resolve_paths()
         self.config = config or RuntimeConfig()
@@ -66,10 +82,103 @@ class ElyraSupervisor:
         self._gate = LlamaServerGate()
         self._stop = threading.Event()
         self.provider_runtime: ProviderRuntime | None = None
+        # Sandbox lifecycle (H2c) — injectable for hermetic tests.
+        self._sandbox: SandboxLifecycleManager | None = sandbox_lifecycle
+        self._sandbox_warm_thread: threading.Thread | None = None
+        self._sandbox_warm_lock = threading.Lock()
+        self._sandbox_warm_reason: str | None = "warming"
+        self._sandbox_warm_done: bool = False
+        self._sandbox_stop = threading.Event()
+
+    def sandbox_status(self) -> dict[str, Any]:
+        """Operator status block (also used by GET /api/status)."""
+        with self._sandbox_warm_lock:
+            warm_reason = self._sandbox_warm_reason
+            warm_done = self._sandbox_warm_done
+        return sandbox_status_block(
+            self.paths,
+            warm_reason=warm_reason,
+            warm_done=warm_done,
+        )
+
+    def _set_warm_state(
+        self,
+        *,
+        reason: str | None,
+        done: bool,
+    ) -> None:
+        with self._sandbox_warm_lock:
+            self._sandbox_warm_reason = reason
+            self._sandbox_warm_done = done
+
+    def _start_sandbox_lifecycle(self) -> None:
+        """Ensure host tree, register lifecycle, kick async warm ensure (KD23).
+
+        Never blocks product start on multi-minute image pull / pip. Chat and
+        API come up immediately; guest tools fail closed until mount_ready.
+        """
+        global _INSTALL_HINT_LOGGED
+
+        # 1. Host FS (fast) — product FS tools need sandboxes/sandbox0 seed.
+        try:
+            ensure_host_tree(PRIMARY_NAME, self.paths)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("ensure_host_tree failed: %s", exc)
+
+        # 2. Construct + register immediately (even when degraded / unusable).
+        if self._sandbox is None:
+            self._sandbox = SandboxLifecycleManager(paths=self.paths)
+        set_sandbox_lifecycle(self._sandbox)
+
+        iso = isolation_enabled()
+        if not iso:
+            self._set_warm_state(reason="isolation_disabled", done=True)
+            _LOG.info("sandbox isolation disabled (ELYRA_SANDBOX=0); skip warm ensure")
+            return
+
+        if self._sandbox.client_unusable:
+            self._set_warm_state(reason="client_unusable", done=True)
+            if not _INSTALL_HINT_LOGGED:
+                _LOG.warning("%s", _INSTALL_HINT)
+                _INSTALL_HINT_LOGGED = True
+            return
+
+        # 3. Async warm — do not block elyra start.
+        self._set_warm_state(reason="warming", done=False)
+        life = self._sandbox
+        stop = self._sandbox_stop
+
+        def _warm() -> None:
+            if stop.is_set():
+                return
+            try:
+                result = life.ensure(PRIMARY_NAME)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("sandbox async warm ensure raised: %s", exc)
+                self._set_warm_state(reason="ensure_raised", done=True)
+                return
+            if stop.is_set():
+                return
+            if result.ready:
+                _LOG.info("sandbox0 mount ready (async warm)")
+                self._set_warm_state(reason=None, done=True)
+            else:
+                reason = result.reason or "degraded"
+                _LOG.warning("sandbox0 async warm degraded: %s", reason)
+                self._set_warm_state(reason=reason, done=True)
+
+        self._sandbox_warm_thread = threading.Thread(
+            target=_warm,
+            name="elyra-sandbox-warm",
+            daemon=True,
+        )
+        self._sandbox_warm_thread.start()
 
     def start(self) -> None:
         set_runtime_state(self.state)
         self.paths.ensure_data_dirs()
+        # Sandbox host tree + lifecycle before worker (FS tools see seed layout).
+        self._start_sandbox_lifecycle()
 
         cfg = self.config
         provider_name = cfg.provider_name
@@ -325,10 +434,30 @@ class ElyraSupervisor:
         return False
 
     def shutdown(self) -> None:
+        """Ordered teardown: stop signal → worker join → sandbox stop → registry.
+
+        Worker must join **before** sandbox stop (avoid mid-exec races).
+        Sandbox shutdown is stop-only (no remove). Warm thread best-effort join.
+        """
         self._stop.set()
+        self._sandbox_stop.set()
         self._gate.shutdown()
+        # 1. Presence worker join before sandbox stop.
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=5)
+        # 2. Warm thread best-effort join (daemon; cancel via stop event).
+        if self._sandbox_warm_thread is not None:
+            self._sandbox_warm_thread.join(timeout=5)
+            self._sandbox_warm_thread = None
+        # 3. Sandbox stop-only + bridge; clear durable in-memory ensure state.
+        if self._sandbox is not None:
+            try:
+                self._sandbox.shutdown()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("sandbox shutdown failed: %s", exc)
+            self._sandbox = None
+        clear_sandbox_lifecycle()
+        # 4. llama + API
         if self._llama_proc is not None:
             self._llama_proc.terminate()
             try:

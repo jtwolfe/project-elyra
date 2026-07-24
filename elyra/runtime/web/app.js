@@ -6,6 +6,7 @@ const input = $("#chat-input");
 const sendBtn = $("#send-btn");
 const statusJson = $("#status-json");
 const pillLlama = $("#pill-llama");
+const pillSandbox = $("#pill-sandbox");
 const pillWorker = $("#pill-worker");
 const pillPhase = $("#pill-phase");
 const pillAutopilot = $("#pill-autopilot");
@@ -739,11 +740,36 @@ async function setContinuousEnabled(enabled) {
   }
 }
 
+/**
+ * Sandbox pill (KD27): ready / warming / unusable next to provider pill.
+ * No secrets, no host paths — only coarse states from status.sandbox.
+ */
+function renderSandboxPill(s) {
+  if (!pillSandbox) return;
+  const box = (s && s.sandbox) || null;
+  if (!box) {
+    setPill(pillSandbox, "sandbox", "pill-off");
+    return;
+  }
+  const pill = box.pill || null;
+  if (pill === "ready" || box.ready) {
+    setPill(pillSandbox, "sandbox ready", "pill-on");
+  } else if (pill === "warming" || box.reason === "warming") {
+    setPill(pillSandbox, "sandbox warming", "pill-busy");
+  } else if (pill === "off" || box.isolation_enabled === false) {
+    setPill(pillSandbox, "sandbox off", "pill-off");
+  } else {
+    // unusable / client_unusable / degraded after warm
+    setPill(pillSandbox, "sandbox unusable", "pill-off");
+  }
+}
+
 async function refreshStatus() {
   const s = await fetchJson("/api/status");
   statusJson.textContent = JSON.stringify(s, null, 2);
 
   renderProviderPill(s);
+  renderSandboxPill(s);
   renderHardStopBanner(s);
   renderProviderCard(s);
   renderUsageCard(s);

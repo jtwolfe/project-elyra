@@ -122,12 +122,44 @@ def clear_wakes_disk(paths: ElyraPaths) -> dict[str, Any]:
 
 
 def clear_sandbox(paths: ElyraPaths) -> dict[str, Any]:
-    """Clear ``data/sandbox/**`` contents; keep the directory."""
-    sandbox = _assert_under(
+    """Clear legacy ``data/sandbox/**`` and new-tree RW dirs.
+
+    Product FS root is ``sandboxes/sandbox0`` (H2c). Reset clears:
+    - legacy ``data/sandbox/**`` (full wipe of contents)
+    - ``sandboxes/sandbox0/{tmp,tools}`` (RW only; RO seed lib/general/fixtures
+      kept; never wipe seed without re-seed)
+
+    Does **not** stop/remove the MSB instance (stop-only on process shutdown).
+    """
+    legacy = _assert_under(
         paths.data_dir / "sandbox", paths.data_dir, label="sandbox"
     )
-    n = _clear_dir_contents(sandbox)
-    return {"step": "sandbox", "removed": n}
+    n_legacy = _clear_dir_contents(legacy)
+
+    from elyra.sandbox.workspace_seed import (
+        ensure_primary_sandbox_tree,
+        host_primary_root,
+    )
+
+    primary = host_primary_root(paths)
+    n_rw = 0
+    # Guard: primary must stay under home.
+    if primary.exists() or primary.parent.exists():
+        primary_r = _assert_under(primary, paths.home, label="sandbox0")
+        for sub in ("tmp", "tools"):
+            d = primary_r / sub
+            if d.is_dir():
+                n_rw += _clear_dir_contents(d)
+            else:
+                d.mkdir(parents=True, exist_ok=True)
+    # Re-scaffold seed + chmod so FS tools see a usable tree after reset.
+    ensure_primary_sandbox_tree(paths)
+    return {
+        "step": "sandbox",
+        "removed": n_legacy + n_rw,
+        "legacy_removed": n_legacy,
+        "rw_removed": n_rw,
+    }
 
 
 def clear_tool_drafts(paths: ElyraPaths) -> dict[str, Any]:

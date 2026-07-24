@@ -1,8 +1,8 @@
 """Process-wide sandbox lifecycle registry.
 
-Scope: set/get/clear for SandboxLifecycleManager used by later PRs.
+Scope: set/get/clear for SandboxLifecycleManager (supervisor + runners).
 In scope: thread-safe process singleton (analogous to runtime state).
-Out of scope: ensure state machine, supervisor wiring (PR3).
+Out of scope: ensure state machine (lifecycle.py).
 """
 
 from __future__ import annotations

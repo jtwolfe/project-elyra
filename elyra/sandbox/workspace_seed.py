@@ -2,11 +2,9 @@
 
 Scope: primary sandbox0 root resolution, ensure host tree, repo seed copy.
 In scope: ``{ELYRA_HOME}/sandboxes/sandbox0`` layout + seed from repo.
-Out of scope: microsandbox lifecycle (PR2), FS product root cutover (PR3),
-Lance bootstrap / pre-migration dual-read (not used in Stretch 1).
+Out of scope: microsandbox guest ensure SM, Lance bootstrap.
 
-Product ``Sandbox`` root remains ``data/sandbox/`` until PR3; this module only
-prepares the *future* MSB host tree.
+Product ``Sandbox`` FS root is this host tree (H2c cutover).
 """
 
 from __future__ import annotations

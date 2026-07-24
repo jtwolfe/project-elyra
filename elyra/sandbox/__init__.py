@@ -1,13 +1,14 @@
-"""Sandbox package: path jail (product FS) + warm-MSB surfaces (H2a/H2b).
+"""Sandbox package: path jail (product FS) + warm-MSB surfaces (H2a–H2c).
 
 Public API:
-- Path jail resolve + product ``Sandbox`` under ``data/sandbox/`` (unchanged until PR3).
+- Path jail resolve + product ``Sandbox`` under ``sandboxes/sandbox0/`` (H2c).
 - H2a: protocols, errors, async bridge, fake client, health, registry, host seed.
 - H2b: lifecycle manager, optional MSB client, ``isolation_enabled``.
+- H2c: supervisor wiring helpers, status block (no secrets), FS cutover.
 
 Trust boundary: FS methods are path-jailed; ``run`` is process-level only
-(cwd + scrubbed env + shell=False) — not a container. Supervisor wiring lands
-in PR3; product FS root cutover also lands in PR3.
+(cwd + scrubbed env + shell=False) — not a container. Guest exec via lifecycle
+lands in later PRs.
 """
 
 from __future__ import annotations
@@ -55,7 +56,9 @@ from elyra.sandbox.sandbox import (
     OUTPUT_CAP_BYTES,
     RunResult,
     Sandbox,
+    normalize_user_path,
 )
+from elyra.sandbox.status import sandbox_status_block
 from elyra.sandbox.workspace_seed import host_primary_root
 
 __all__ = [
@@ -92,7 +95,9 @@ __all__ = [
     "host_primary_root",
     "isolation_enabled",
     "microsandbox_available",
+    "normalize_user_path",
     "resolve",
+    "sandbox_status_block",
     "set_sandbox_lifecycle",
     "try_create_real_client",
 ]

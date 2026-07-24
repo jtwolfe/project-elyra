@@ -162,13 +162,14 @@ def test_mount_fingerprint_stable(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert c != a
 
 
-def test_product_sandbox_root_unchanged(tmp_path: Path) -> None:
-    """H2a must not retarget product Sandbox away from data/sandbox/."""
+def test_product_sandbox_root_is_sandbox0(tmp_path: Path) -> None:
+    """H2c cutover: product Sandbox roots at sandboxes/sandbox0."""
     from elyra.sandbox import Sandbox
 
     layout = _layout(tmp_path)
     layout.ensure_data_dirs()
     sb = Sandbox(layout)
-    assert sb.root == (tmp_path / "data" / "sandbox").resolve()
-    # Host primary is a different tree.
-    assert host_primary_root(layout) != sb.root
+    sb.ensure_root()
+    assert sb.root == host_primary_root(layout).resolve()
+    assert (sb.root / "tmp").is_dir()
+    assert (sb.root / "tools").is_dir()
