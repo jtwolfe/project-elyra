@@ -1,6 +1,7 @@
 """LLM server connection settings.
 
-Scope: injectable dataclass for llama-server chat endpoint.
+Scope: injectable dataclass for llama-server chat endpoint and xAI OpenAI-
+compatible base URL join rules.
 Product sampling defaults (KD13): temperature + Gemma card truncation +
 default_reasoning_budget_tokens live here; HttpChatClient falls back when
 chat_completion kwargs are None.
@@ -45,6 +46,45 @@ class LlamaServerConfig:
     @property
     def health_url(self) -> str:
         return f"http://{self.host}:{self.port}/health"
+
+    @property
+    def request_timeout(self) -> float:
+        return max(self.connect_timeout, self.read_timeout)
+
+
+@dataclass(frozen=True)
+class XaiClientConfig:
+    """xAI OpenAI-compatible API config.
+
+    ``base_url`` includes ``/v1`` (matches smoke ``API_BASE``). Paths are
+    relative to that root — do **not** repeat ``/v1`` (avoids ``/v1/v1/...``).
+    """
+
+    base_url: str = "https://api.x.ai/v1"
+    # Paths relative to base_url — NOT /v1/chat/completions.
+    chat_path: str = "/chat/completions"
+    models_path: str = "/models"
+    connect_timeout: float = 10.0
+    read_timeout: float = 120.0
+    temperature: float = 0.7
+    top_p: float | None = None
+    # Always omit top_k on the wire for xai even if set.
+    top_k: int | None = None
+    use_reasoning: bool = False
+
+    @staticmethod
+    def _join(base: str, path: str) -> str:
+        return base.rstrip("/") + (path if path.startswith("/") else f"/{path}")
+
+    @property
+    def chat_url(self) -> str:
+        # → https://api.x.ai/v1/chat/completions
+        return self._join(self.base_url, self.chat_path)
+
+    @property
+    def models_url(self) -> str:
+        # → https://api.x.ai/v1/models
+        return self._join(self.base_url, self.models_path)
 
     @property
     def request_timeout(self) -> float:
