@@ -5,7 +5,7 @@
 | **Document** | Phase 0 detailed execution plan (Grok path) |
 | **Author** | (implementation) |
 | **Date** | 2026-07-24 |
-| **Status** | Ready for implementation (consensus) |
+| **Status** | Implementation complete (PR stack 1–7) · Live smoke checklist ready for operator (not claimed green in-repo until operator-run against xAI) |
 | **Integration branch** | **`grok-improvement`** (not `main`) |
 | **Work branches** | All PR/feature branches **fork from and stack on** current `grok-improvement` |
 | **Land target** | Every PR is **pushed and merged back into `grok-improvement`**; do **not** merge Phase 0 PRs to `main` until the operator promotes the whole branch later |
@@ -1442,17 +1442,22 @@ Confirm copy does **not** claim runtime dir is wiped.
 
 ### Live smoke checklist
 
-1. Smoke script OK (`prototype_xai_grok_auth_smoke.py`).
-2. `elyra start` → xai, grok-4.5 / Grok 4.5 Fast, grok_build, continuous off, usage live, no llama.
-3. Social + tool moments succeed.
-4. Model switch → next call uses new model.
-5. **Live repair (no restart):** start without valid creds (or rename auth.json) → status `credential_ok=false`, glass messages do **not** open error moments (queue paused). Paste API key + select `api_key` → `credential_ok=true`, next message runs on real stack. Switch back to `grok_build` when session valid.
-6. Tiny temporary budget (or force record) → hard stop in UI; claims skipped; continuous off; **override OFF by default**.
-7. Turn **hard-stop override ON** → model calls resume; status `override_active=true`; counters still climb; turn OFF → stop re-enforced if still over budget.
-8. `--provider local` boots llama path.
-9. `--no-llama` with default xai does **not** force stub (still real client if creds ok); note on stderr.
-10. No secrets in status JSON.
-11. Confirm ship defaults: `weekly_allowed_tokens=5_000_000`, model `grok-4.5` / Grok 4.5 Fast. (Optional process: re-tune tokens after dogfood weeks — not a ship blocker.)
+**Audience:** operator with a real SuperGrok / Grok Build session and (optionally) an xAI API key.  
+**In-repo claim:** Phase 0 **implementation is complete**; this checklist is **ready for operator** execution. Do **not** record “live smoke passed” in docs unless the steps below were actually run against xAI.
+
+| # | Check | Pass criteria |
+|---|--------|----------------|
+| 1 | Auth pathfinding | `scripts/prototype_xai_grok_auth_smoke.py` succeeds against live xAI |
+| 2 | **Ship defaults** | `elyra start` (no flags): provider **xai**, model **`grok-4.5`** / **Grok 4.5 Fast**, credential_source **`grok_build`**, continuous **off**, usage meter live in status, **llama-server not started**, **`weekly_allowed_tokens=5_000_000`** |
+| 3 | Social + tools | Social moment succeeds; tool-using moment succeeds on Grok |
+| 4 | Model switch | UI/CLI model change applies to the **next** completion only |
+| 5 | Credential live repair | Start without valid creds (or rename `auth.json`) → `credential_ok=false`, messages do **not** open error moments (queue paused). Paste API key + select **`api_key`** → `credential_ok=true`, next message on real stack. Switch back to **`grok_build`** when session valid. No process restart required. |
+| 6 | Hard stop | Tiny temporary budget (or force record) → hard stop in UI; claims skipped; continuous remains off; **override OFF by default** |
+| 7 | **Override path** | Turn hard-stop override **ON** → model calls resume; status `override_active=true`; counters still climb. Turn **OFF** → stop re-enforced if still over budget |
+| 8 | **Local override** | `--provider local` boots llama path (existing Gemma behaviour) |
+| 9 | **`--no-llama` non-footgun** | With default xai, `--no-llama` does **not** force stub (still real client if creds ok); one-line stderr note that the flag is ignored for xai |
+| 10 | Secret hygiene | No bearer / API key material in `/api/status` JSON or routine logs |
+| 11 | Defaults re-check | Confirm wire id `grok-4.5`, label Grok 4.5 Fast, `weekly_allowed_tokens=5_000_000` (dogfood re-tune later is process-only, not a ship blocker) |
 
 ---
 
@@ -1590,13 +1595,13 @@ DEBUG: billable tokens per completion optional.
 
 ## Rollout Plan
 
-1. Branch every PR off **`grok-improvement`**; open PRs with base **`grok-improvement`** (see Branch & merge policy).
-2. Land PRs **in order onto `grok-improvement`**; enforce merge gate (no default xai without usage gate). Keep the stack restacked if the integration tip moves.
-3. Ship with `weekly_allowed_tokens=5_000_000`; optional dogfood re-tune later (process note).
-4. Live smoke green on `grok-improvement` tip, including `--no-llama` non-footgun check and override ON/OFF path.
+1. ~~Branch every PR off **`grok-improvement`**; open PRs with base **`grok-improvement`**.~~ (done for PR stack)
+2. ~~Land PRs **in order onto `grok-improvement`**; enforce merge gate (no default xai without usage gate).~~ (implementation PRs 1–7 complete)
+3. ~~Ship with `weekly_allowed_tokens=5_000_000`; optional dogfood re-tune later (process note).~~ (default landed)
+4. **Operator:** run live smoke on `grok-improvement` tip (checklist above) — includes `--no-llama` non-footgun, override ON/OFF, local override, defaults 5M / `grok-4.5` / `grok_build`. **Not claimed green in-repo until operator-run.**
 5. Ensure **all** Phase 0 work branches are **pushed and merged down** onto `grok-improvement` (no orphaned PR branches left only remote-unmerged).
-6. Flip phase-0.md status; README row on `grok-improvement`.
-7. **Optional later:** promote `grok-improvement` → `main` as a separate step (not automatic with PR8).
+6. ~~Flip phase-0.md status; README row on `grok-improvement`.~~ (this docs PR)
+7. **Optional later:** promote `grok-improvement` → `main` as a separate step after live smoke is green (not automatic with this docs PR).
 8. Rollback: `--provider local` or revert on `grok-improvement`; delete `provider.json` to reset prefs; keep `usage.json` (or clear override by PATCH false).
 
 ---
@@ -1716,8 +1721,8 @@ Ordered, independently reviewable slices. **Meter → auth/client → supervisor
 
 - **Title:** `docs(grok): Phase 0 smoke checklist + mark complete`
 - **Files:** `docs/grok-improvement-plan/phase-0.md`, `docs/grok-improvement-plan/README.md`, this execution doc status
-- **Dependencies:** PR 5a–7 green + smoke
-- **Description:** Record success criteria (defaults 5M tokens, grok-4.5, override path).
+- **Dependencies:** PR 5a–7 implementation landed (live smoke remains operator-run)
+- **Description:** Mark Phase 0 **implementation complete**; finalize live smoke checklist (defaults 5M tokens, `grok-4.5`, `grok_build` auth, override path, `--no-llama` non-footgun, local override). **Do not claim live smoke passed** unless actually run against xAI — prefer “implementation complete; live smoke checklist ready for operator.”
 
 ### PR dependency graph
 

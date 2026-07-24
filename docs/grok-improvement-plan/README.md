@@ -53,5 +53,5 @@ Execution detail (including PR stack and end-state checklist): [phase-0-executio
 
 ## Status
 
-- **Phase 0**: Concept in [phase-0.md](phase-0.md); **execution design** in [phase-0-execution.md](phase-0-execution.md) (ready for implementation). Prompt fitness already applied. Code implementation not yet started.
-- **Metacognition**: Concept documented. Naming allowed now; form only after Grok path is stable.
+- **Phase 0**: **Implementation complete** on `grok-improvement` (provider path, credentials, usage meter + hard-stop override, supervisor/CLI defaults, status API, Web UI). Concept + success criteria in [phase-0.md](phase-0.md); execution design + **live smoke checklist** in [phase-0-execution.md](phase-0-execution.md). Prompt fitness applied. **Live smoke against xAI is operator-run** — checklist ready; not claimed green in-repo until executed. Promote `grok-improvement` → `main` only after smoke is green (separate step).
+- **Metacognition**: Concept documented. Naming allowed now; form only after Grok path is stable (post live smoke).

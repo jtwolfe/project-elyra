@@ -1,6 +1,6 @@
 # Phase 0 — Concept Design + Implementation Plan
 
-**Status:** Design complete · Implementation plan detailed (code not started)  
+**Status:** Implementation complete on `grok-improvement` · Live smoke checklist ready for operator (not claimed green in-repo until operator-run against xAI)  
 **Branch:** `grok-improvement` (integration branch — all Phase 0 work branches stack on it and merge back here; not `main` until later promotion)  
 **Execution plan:** [phase-0-execution.md](phase-0-execution.md)  
 **Purpose:** Make Project Elyra runnable on xAI Grok models under SuperGrok Heavy with controlled token usage, without changing Stretch 1 runtime semantics.
@@ -408,36 +408,45 @@ Prefer configuration + thin adapters. Tests ship with each unit. Scope comments 
 
 ### Step 6 — Tests + live smoke
 
-- Hermetic: meter, client payload, supervisor skip-llama, status shape.
+- Hermetic: meter, client payload, supervisor skip-llama, status shape (landed with PR stack).
 - Regression: local path still works (`--provider local` or config).
-- Live smoke checklist:
-  1. `elyra start` with credentials → Web UI up, provider=xai, continuous off, usage numbers present.
-  2. Social moment succeeds; tool-using moment succeeds.
-  3. Tight temporary budget → hard stop surfaces in UI; further model calls refused; rest behaviour.
-  4. Local override still boots llama path.
-  5. Existing auth smoke script remains valid pathfinding aid.
+- **Live smoke checklist (operator-run against xAI; not claimed passed in-repo):**
+
+  Normative full list: [phase-0-execution.md § Live smoke checklist](phase-0-execution.md#live-smoke-checklist). Summary of must-check items:
+
+  1. Auth pathfinding: `scripts/prototype_xai_grok_auth_smoke.py` OK against live xAI.
+  2. **Defaults:** `elyra start` (no flags) → provider **xai**, wire model **`grok-4.5`** / label **Grok 4.5 Fast**, credential source **`grok_build`** (`~/.grok/auth.json`), continuous **off**, usage meter live, **no llama-server**, ship ceiling **`weekly_allowed_tokens=5_000_000`**.
+  3. Social moment succeeds; tool-using moment succeeds.
+  4. Model switch → next call uses new model.
+  5. Credential live repair (no restart): bad/missing auth → `credential_ok=false`; paste API key + select `api_key` → repair; switch back to `grok_build` when session valid.
+  6. **Hard-stop + override path:** tiny temporary budget → hard stop in UI, claims skipped, **override OFF by default**; turn **hard-stop override ON** → calls resume, `override_active=true`, counters still climb; turn OFF → stop re-enforced if still over budget.
+  7. **Local override:** `--provider local` boots llama path.
+  8. **`--no-llama` non-footgun:** with default xai, `--no-llama` does **not** force stub (real client if creds ok); stderr note that flag is ignored for xai.
+  9. No secrets in status JSON.
 
 ### Step 7 — Docs status
 
-- Flip this document's status to implementation complete once §11 criteria hold.
-- Light note in [README.md](README.md) Phase 0 row.
+- **Done (this PR):** status flipped to implementation complete; live smoke left as operator checklist (do not claim live green without a real xAI run).
+- [README.md](README.md) Phase 0 row updated accordingly.
 
 ---
 
 ## 11. Success criteria
 
-Phase 0 is complete when **all** of the following hold:
+**Implementation status:** Phase 0 **code and hermetic tests are complete** on the `grok-improvement` integration branch (PR stack 1–7). **Live smoke against xAI is operator-run** — use the checklist in §10 Step 6 / [phase-0-execution.md](phase-0-execution.md); do not treat “implementation complete” as “live smoke green” until that checklist is executed.
 
-1. **`elyra start`** (no flags) runs with **provider=xai** and **model=Grok 4.5 Fast** by default, does **not** start llama-server, and resolves credentials primarily from **Grok Build `~/.grok/auth.json`** (clear failure if the active source is missing).
+Phase 0 product criteria (for operator verification and promotion readiness):
+
+1. **`elyra start`** (no flags) runs with **provider=xai** and **model=Grok 4.5 Fast** (`grok-4.5`) by default, does **not** start llama-server, and resolves credentials primarily from **Grok Build `~/.grok/auth.json`** / `credential_source=grok_build` (clear failure if the active source is missing). Ship usage ceiling **`weekly_allowed_tokens=5_000_000`**.
 2. **Continuous / auto-operation is OFF by default** and remains operator-controlled via the existing UI toggle; no path turns it on as a side-effect.
 3. A normal social moment and a normal tool-using moment complete successfully against Grok 4.5 Fast (or the operator-selected model).
-4. The usage meter tracks consumption and enforces 1-hour, daily, and weekly (50%-of-real) hard stops; hard-stop reason is logged and visible in status.
-5. **Web UI adequately shows what is going on:** provider, model, credential_source, credential_ok, api_key_configured (boolean), usage remaining (week/day/hour), hard-stop state, continuous state (rail + Status panel).
+4. The usage meter tracks consumption and enforces 1-hour, daily, and weekly hard stops (allowed-week ceiling 5M tokens; product intent ≈50% of real); hard-stop reason is logged and visible in status. **Hard-stop override** (default OFF) is available so dogfood can unbrick past budget; glass shows `override_active`.
+5. **Web UI adequately shows what is going on:** provider, model, credential_source, credential_ok, api_key_configured (boolean), usage remaining (week/day/hour), hard-stop state, override state, continuous state (rail + Status panel).
 6. **Operator can select models** in the UI (and via config/CLI); selection persists and applies to subsequent work.
 7. **Operator can paste an API key in the UI**, store it, and **select** API key vs Grok Build as the active credential source later — without secrets appearing in status or logs.
 8. System and orient prompts remain fitness-passed for Grok (already true).
-9. Local Gemma path still works via explicit override (no regression).
-10. Covered by hermetic tests where possible and the live smoke checklist above.
+9. Local Gemma path still works via explicit override (`--provider local`; no regression). **`--no-llama` does not force stub** on default xai (non-footgun).
+10. Covered by hermetic tests where possible; live smoke checklist above remains the operator gate for promotion to `main`.
 
 ## 12. Risks and mitigations
 
@@ -468,11 +477,10 @@ Do not start Phase 1 (or MC Stage B form beyond optional naming) until Phase 0 s
 
 ## 14. Ready for Grok Build
 
-**Exact next actions (in order):**
+**Implementation (PRs 1–7):** done on `grok-improvement` — settings, UsageMeter, auth/prefs, xAI client factories + UsageGatedChatClient, supervisor/CLI default xai, presence pre-claim + do-loop `STOP_POLICY`, status/provider/usage APIs, Web UI cards/pill/override.
 
-1. Add provider + usage config sections with **defaults: provider=xai, model=Grok 4.5 Fast, credential_source=grok_build, usage on, continuous off**; CLI prints the posture.
-2. Implement **UsageMeter** + persistence + unit tests (meter first).
-3. Thin **xAI client path** + **credential resolver** (auth.json primary, optional stored/env API key, no silent fallback) + model id field omission rules.
-4. **Supervisor** skip-llama for xai + usage gate on every chat completion.
-5. Extend **RuntimeState / `/api/status`** and **Web UI**: provider pill, model select, credential source select, API key paste/clear, usage card, hard-stop visibility; continuous remains clear at OFF.
-6. Live smoke under constrained budget with Grok Build session; confirm model switch + API key path + local override; flip status in this doc when §11 holds.
+**Remaining operator steps:**
+
+1. Run the **live smoke checklist** (§10 Step 6 / [phase-0-execution.md](phase-0-execution.md)) under a Grok Build session: defaults (5M tokens, `grok-4.5`, `grok_build`), social + tools, model switch, API key repair path, hard-stop + **override ON/OFF**, `--no-llama` non-footgun, **local override**.
+2. After live smoke is green, merge remaining Phase 0 docs/work onto `grok-improvement` tip and (optionally, separately) promote `grok-improvement` → `main`.
+3. Only then consider post–Phase 0 work (light MC shape, then Phase 1 `grok_build` tool).
