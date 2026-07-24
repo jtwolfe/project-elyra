@@ -19,8 +19,7 @@ from elyra.sandbox.paths import (
 )
 from elyra.sandbox.registry import get_sandbox_lifecycle
 
-# Host marker written after curated (+ pytest) guest install (H3b / PR5).
-# Until that PR, status reports pyenv_ready=false unless marker is present.
+# Host marker written after curated (+ pytest) guest install (H3b / KD22).
 PYENV_READY_MARKER = Path("tmp") / ".elyra_pyenv_ready"
 
 # Coarse glass-pill states (KD27).
@@ -127,8 +126,9 @@ def sandbox_status_block(
         elif client_unusable:
             ensure_done = True
 
-    # Until H3b: product ready == mount_ready (pyenv is informational only).
-    ready = mount_ready
+    # H3b: product ready == mount_ready && (pyenv_ready || isolation off).
+    # Isolation-off is host-stub only — ready stays false (pill=off).
+    ready = bool(mount_ready and (pyenv_ready or not iso))
 
     last_reason: str | None = None
     if life is not None:
@@ -141,9 +141,11 @@ def sandbox_status_block(
         reason = "isolation_disabled"
     elif client_unusable:
         reason = "client_unusable"
-    elif mount_ready:
-        # Mount ready; pyenv may still be false until PR5 — keep reason clean.
+    elif mount_ready and pyenv_ready:
         reason = None
+    elif mount_ready and not pyenv_ready:
+        # Mount OK; curated env still installing or failed — not fully ready.
+        reason = "pyenv_not_ready"
     elif warm_reason is not None and not ensure_done:
         reason = _sanitize_reason(warm_reason) or "warming"
     elif not ensure_done and lifecycle_registered and iso:
@@ -153,12 +155,13 @@ def sandbox_status_block(
             _sanitize_reason(warm_reason) if warm_reason else "degraded"
         )
 
-    # Coarse pill mapping (KD27).
+    # Coarse pill mapping (KD27). pyenv_not_ready after mount still "warming"
+    # until curated install finishes (or stays unusable if mount never came up).
     if not iso:
         pill = PILL_OFF
     elif ready:
         pill = PILL_READY
-    elif reason == "warming":
+    elif reason in {"warming", "pyenv_not_ready"}:
         pill = PILL_WARMING
     else:
         pill = PILL_UNUSABLE

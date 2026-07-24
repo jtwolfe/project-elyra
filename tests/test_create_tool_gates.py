@@ -230,9 +230,10 @@ def test_verify_stages_under_sandbox_verify(
     assert stage.is_dir()
     assert (stage / "tests").is_dir()
     assert (stage / "TOOL.md").is_file()
-    # Stage is under data/sandbox/.verify/
-    sandbox_root = (paths.data_dir / "sandbox").resolve()
-    assert stage.resolve().is_relative_to(sandbox_root)
+    # Stage is under sandboxes/sandbox0/tools/.verify/ (guest-visible RW)
+    host_root = (paths.home / "sandboxes" / "sandbox0").resolve()
+    assert stage.resolve().is_relative_to(host_root)
+    assert "tools" in stage.parts
     assert ".verify" in stage.parts
     # Verify record written on draft, not planted by client
     draft = drafts_dir(paths) / name

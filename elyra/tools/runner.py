@@ -4,7 +4,7 @@ Scope: runner metadata, builtin entry import, sandbox_python / sandbox_shell
 dispatch (guest when isolation on; host stub when ELYRA_SANDBOX=0).
 In scope: allowlisted kinds, ``module:attr`` builtin resolve, shape validation,
 ``package_dir`` through dispatch, return map via guest_exec.
-Out of scope: verify guest pytest (PR5), promote gates, builtin run guest (PR5).
+Out of scope: promote gates.
 """
 
 from __future__ import annotations

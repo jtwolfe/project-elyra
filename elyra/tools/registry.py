@@ -2,7 +2,7 @@
 
 Scope: scan roots, local-over-bundled priority, execute → ToolResult.
 In scope: BUNDLED_TOOLS_ROOT assert, drafts never scanned, openai_tools().
-Out of scope: verify guest pytest (PR5), promote gates.
+Out of scope: promote gates.
 """
 
 from __future__ import annotations

@@ -159,13 +159,35 @@ class ElyraSupervisor:
                 return
             if stop.is_set():
                 return
-            if result.ready:
-                _LOG.info("sandbox0 mount ready (async warm)")
-                self._set_warm_state(reason=None, done=True)
-            else:
+            if not result.ready:
                 reason = result.reason or "degraded"
                 _LOG.warning("sandbox0 async warm degraded: %s", reason)
                 self._set_warm_state(reason=reason, done=True)
+                return
+            # Mount ready — curated pyenv install is *outside* the 60s mount wall
+            # (KD23 / H3b). May take minutes; status pyenv_ready stays false until
+            # marker written. Guest tools that need third-party pkgs / verify
+            # fail closed until then.
+            _LOG.info("sandbox0 mount ready (async warm); starting pyenv install")
+            self._set_warm_state(reason="pyenv_not_ready", done=True)
+            try:
+                from elyra.sandbox.pyenv import try_install_curated_pyenv
+
+                pyenv_ok = try_install_curated_pyenv(life, paths=self.paths)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("sandbox0 pyenv install raised: %s", exc)
+                pyenv_ok = False
+            if stop.is_set():
+                return
+            if pyenv_ok:
+                _LOG.info("sandbox0 pyenv ready (async warm)")
+                self._set_warm_state(reason=None, done=True)
+            else:
+                _LOG.warning(
+                    "sandbox0 pyenv not ready after warm — verify_tool will fail "
+                    "guest_pytest_unavailable until operator re-bootstrap"
+                )
+                self._set_warm_state(reason="pyenv_not_ready", done=True)
 
         self._sandbox_warm_thread = threading.Thread(
             target=_warm,

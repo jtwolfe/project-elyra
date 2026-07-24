@@ -28,4 +28,12 @@ tree is the MSB host root prepared by `ensure_host_tree` / `host_primary_root`.
   need `__pycache__`.
 - Never mount host `data/`, secrets, model weights, or the repo wholesale.
 
+## Curated Python env (H3b)
+
+`lib/requirements-curated.txt` is installed into the guest after mount readiness
+(async warm). Marker: `tmp/.elyra_pyenv_ready`. Includes **pytest** (required for
+isolation-on `verify_tool`) plus light tool-author libraries (`requests`,
+`httpx`, `beautifulsoup4`, `lxml`, `pyyaml`, `python-dateutil`, `regex`,
+`jinja2`). Not “any PyPI package.” Overlay wipe requires re-bootstrap (minutes).
+
 See `docs/grok-improvement-plan/harness-sandbox-fitness.md`.

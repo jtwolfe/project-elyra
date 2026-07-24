@@ -222,7 +222,7 @@ def install_tool_draft(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def verify_tool(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    """Stage draft under sandbox/.verify and run package tests; write hash record."""
+    """Stage draft under tools/.verify and run package tests; write hash record."""
     name = args.get("name")
     if name is None or (isinstance(name, str) and not name.strip()):
         return ToolResult(ok=False, payload={}, error_reason="missing_name")
@@ -245,16 +245,16 @@ def verify_tool(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             error_reason=str(result.get("error_reason") or "verify_failed"),
         )
 
-    return ToolResult(
-        ok=True,
-        payload={
-            "name": result.get("tool_name", name),
-            "passed": True,
-            "content_hash": result.get("content_hash"),
-            "log": result.get("log", ""),
-            "stage_dir": result.get("stage_dir"),
-        },
-    )
+    payload: dict[str, Any] = {
+        "name": result.get("tool_name", name),
+        "passed": True,
+        "content_hash": result.get("content_hash"),
+        "log": result.get("log", ""),
+        "stage_dir": result.get("stage_dir"),
+    }
+    if result.get("executor_backend") is not None:
+        payload["executor_backend"] = result["executor_backend"]
+    return ToolResult(ok=True, payload=payload)
 
 
 def promote_tool(args: dict[str, Any], ctx: ToolContext) -> ToolResult:

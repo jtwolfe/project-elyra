@@ -112,12 +112,12 @@ def test_status_block_warming_then_ready(
     result = life.ensure(PRIMARY_NAME)
     assert result.ready is True
     block2 = sandbox_status_block(paths)
-    assert block2["ready"] is True
+    # H3b: product ready requires pyenv_ready as well as mount_ready.
     assert block2["mount_ready"] is True
-    assert block2["pill"] == PILL_READY
-    assert block2["reason"] is None
-    # pyenv_ready false until PR5 marker
     assert block2["pyenv_ready"] is False
+    assert block2["ready"] is False
+    assert block2["reason"] == "pyenv_not_ready"
+    assert block2["pill"] == PILL_WARMING
 
 
 def test_status_block_pyenv_marker(
@@ -137,7 +137,10 @@ def test_status_block_pyenv_marker(
     marker.write_text("ok\n", encoding="utf-8")
     block = sandbox_status_block(paths)
     assert block["pyenv_ready"] is True
-    assert block["ready"] is True  # until H3b ready==mount_ready
+    assert block["mount_ready"] is True
+    assert block["ready"] is True  # H3b: mount + pyenv
+    assert block["reason"] is None
+    assert block["pill"] == PILL_READY
 
 
 def test_product_sandbox_sees_seed_layout(home: Path) -> None:

@@ -1,25 +1,24 @@
 """Verify draft tool packages (sandbox-staged pytest, hash-bound record).
 
-Scope: stage drafts under data/sandbox/.verify/, run allowlisted pytest,
-write .verify.json only on pass with content_hash of draft tree.
-Out of scope: promote, install_tool_draft writes, registry scan,
-container/namespace isolation for the verify child (S1 process-level only).
+Scope: stage drafts under ``sandboxes/sandbox0/tools/.verify/<name>/``, run
+allowlisted pytest (guest when isolation on + pyenv_ready; host when off),
+write ``.verify.json`` only on pass with content_hash of draft tree.
 
-Trust boundary (S1)
--------------------
-Verify runs package tests as a host subprocess with process-level isolation
-only: ``shell=False``, scrubbed env matching ``Sandbox.run`` (no host PATH
-merge, no secret inherit), ``cwd`` = staged package under
-``data/sandbox/.verify/<name>/``. The child is **not** a chroot/container;
-it can open absolute host paths and use the network (same residual as
-sandbox ``run``).
+Trust boundary
+--------------
+- Isolation **on**: guest ``python3 -m pytest`` via warm lifecycle; requires
+  ``pyenv_ready`` (curated env includes pytest). Fail closed
+  ``guest_pytest_unavailable`` when pyenv missing (KD22). Fail
+  ``sandbox_unavailable`` when lifecycle/mount unusable. No host pytest
+  fallback when isolation is on.
+- Isolation **off** (``ELYRA_SANDBOX=0``): host ``sys.executable -m pytest``
+  with process-level isolation only (scrubbed env, shell=False) for CI.
 
-Fail-closed mitigations in S1:
-  - Host PATH is never merged into the child env.
+Fail-closed mitigations:
+  - Host PATH is never merged into the host-stub child env.
   - After pytest, any **new** packages under ``tools/local/`` planted during
     the run are removed and the verify fails (blocks the known
     “pass tests by writing tools/local” promote-bypass).
-  - Full FS/network isolation is out of scope until stronger sandbox hardening.
 """
 
 from __future__ import annotations
@@ -36,6 +35,17 @@ from pathlib import Path
 from typing import Any
 
 from elyra.config import ElyraPaths
+from elyra.sandbox.paths import (
+    GUEST_WORKSPACE_ROOT,
+    PRIMARY_NAME,
+    ensure_host_tree,
+    guest_env,
+    isolation_enabled,
+)
+from elyra.tools.guest_exec import (
+    EXECUTOR_BACKEND_HOST_STUB,
+    EXECUTOR_BACKEND_MICROSANDBOX,
+)
 from elyra.tools.policy import DRAFT_ALLOWED_RUNNER_KINDS, is_valid_tool_name
 from elyra.tools.registry import drafts_dir
 from elyra.tools.schema import load_schema_json
@@ -51,6 +61,9 @@ _LOG_TAIL_CHARS = 8000
 # Match elyra.sandbox.sandbox._MINIMAL_PATH — never merge host PATH.
 _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
 
+# Guest pytest argv after python3.
+_GUEST_PYTEST_ARGV = ["-m", "pytest", "tests/", "-q", "--tb=short", "-p", "no:cacheprovider"]
+
 
 def draft_package_dir(paths: ElyraPaths, name: str) -> Path:
     """Resolved path to ``tools/drafts/<name>/`` (does not require existence)."""
@@ -58,8 +71,14 @@ def draft_package_dir(paths: ElyraPaths, name: str) -> Path:
 
 
 def verify_stage_dir(paths: ElyraPaths, name: str) -> Path:
-    """Staging root: ``data/sandbox/.verify/<name>/``."""
-    return (paths.data_dir / "sandbox" / ".verify" / name).resolve()
+    """Staging root: ``sandboxes/sandbox0/tools/.verify/<name>/`` (guest-visible RW)."""
+    host_root = ensure_host_tree(PRIMARY_NAME, paths)
+    return (host_root / "tools" / ".verify" / name).resolve()
+
+
+def guest_verify_stage_path(name: str) -> str:
+    """Guest absolute path for the staged verify package."""
+    return f"{GUEST_WORKSPACE_ROOT}/tools/.verify/{name}"
 
 
 def content_hash(package_dir: Path) -> str:
@@ -221,19 +240,69 @@ def remove_planted_local_packages(
 
 
 def stage_draft_for_verify(paths: ElyraPaths, name: str, draft_dir: Path) -> Path:
-    """Wipe and recreate ``data/sandbox/.verify/<name>/`` from draft (no .verify.json)."""
+    """Wipe and recreate ``tools/.verify/<name>/`` from draft (no .verify.json).
+
+    Stages under the primary host tree so the package is guest-visible when
+    isolation is on. Atomic-ish: write under ``.verify/.stage.<name>.*`` then
+    replace into place.
+    """
     stage = verify_stage_dir(paths, name)
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.parent.mkdir(parents=True, exist_ok=True)
-    # copytree then strip verify sidecar if present
-    shutil.copytree(draft_dir, stage, ignore=shutil.ignore_patterns(VERIFY_RECORD_NAME))
-    # Defense: remove any nested .verify.json that ignore_patterns missed
-    for leftover in stage.rglob(VERIFY_RECORD_NAME):
+    parent = stage.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    token = f"{os.getpid()}.{os.urandom(4).hex()}"
+    work = parent / f".stage.{name}.{token}"
+    if work.exists() or work.is_symlink():
+        if work.is_dir() and not work.is_symlink():
+            shutil.rmtree(work)
+        else:
+            work.unlink(missing_ok=True)
+    try:
+        shutil.copytree(
+            draft_dir,
+            work,
+            ignore=shutil.ignore_patterns(VERIFY_RECORD_NAME, "__pycache__"),
+        )
+        for leftover in work.rglob(VERIFY_RECORD_NAME):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+        # Swap into place
+        backup: Path | None = None
+        if stage.exists() or stage.is_symlink():
+            backup = parent / f".old.{name}.{token}"
+            if backup.exists() or backup.is_symlink():
+                if backup.is_dir() and not backup.is_symlink():
+                    shutil.rmtree(backup)
+                else:
+                    backup.unlink(missing_ok=True)
+            os.rename(stage, backup)
         try:
-            leftover.unlink()
+            os.rename(work, stage)
         except OSError:
-            pass
+            if backup is not None and backup.exists():
+                try:
+                    os.rename(backup, stage)
+                except OSError:
+                    pass
+            raise
+        if backup is not None and backup.exists():
+            try:
+                if backup.is_dir() and not backup.is_symlink():
+                    shutil.rmtree(backup)
+                else:
+                    backup.unlink(missing_ok=True)
+            except OSError:
+                pass
+    finally:
+        if work.exists() or work.is_symlink():
+            try:
+                if work.is_dir() and not work.is_symlink():
+                    shutil.rmtree(work)
+                else:
+                    work.unlink(missing_ok=True)
+            except OSError:
+                pass
     return stage
 
 
@@ -242,12 +311,10 @@ def run_staged_pytest(
     *,
     timeout_seconds: float,
 ) -> tuple[int, str, bool]:
-    """Run allowlisted pytest on staged package. Returns (rc, combined_log, timed_out).
+    """Host pytest on staged package (isolation off only).
 
+    Returns (rc, combined_log, timed_out).
     argv is fixed: ``[sys.executable, -m, pytest, tests/, -q, --tb=short]``.
-    ``shell=False``; cwd = staged root; env scrubbed like sandbox (no host PATH).
-    Never runs against repo tests/. Process-level isolation only (see module
-    trust boundary).
     """
     argv = [
         sys.executable,
@@ -281,6 +348,80 @@ def run_staged_pytest(
     return (int(completed.returncode), log, False)
 
 
+def run_guest_pytest(
+    paths: ElyraPaths,
+    name: str,
+    *,
+    timeout_seconds: float,
+) -> tuple[int, str, bool] | dict[str, Any]:
+    """Guest pytest on staged package. Returns (rc, log, timed_out) or error dict.
+
+    Error dict keys: ``ok=False``, ``error_reason``.
+    """
+    from elyra.sandbox.pyenv import pyenv_ready
+    from elyra.sandbox.registry import get_sandbox_lifecycle
+    from elyra.tools.guest_exec import (
+        GuestIsolationError,
+        GuestTimeoutError,
+        guest_exec_raw,
+    )
+
+    life = get_sandbox_lifecycle()
+    if life is None:
+        return {
+            "ok": False,
+            "error_reason": "sandbox_unavailable:lifecycle_unregistered",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+        }
+    if getattr(life, "client_unusable", False):
+        return {
+            "ok": False,
+            "error_reason": "sandbox_unavailable:client_unusable",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+        }
+
+    host_root = ensure_host_tree(PRIMARY_NAME, paths)
+    if not pyenv_ready(host_root):
+        return {
+            "ok": False,
+            "error_reason": "guest_pytest_unavailable",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "pyenv_ready": False,
+        }
+
+    guest_cwd = guest_verify_stage_path(name)
+    try:
+        result = guest_exec_raw(
+            "python3",
+            list(_GUEST_PYTEST_ARGV),
+            cwd=guest_cwd,
+            timeout=float(timeout_seconds),
+            env=guest_env(),
+        )
+    except GuestTimeoutError:
+        return (
+            -1,
+            _combine_log("", "[verify timed out in guest]", timed_out=True),
+            True,
+        )
+    except GuestIsolationError as exc:
+        return {
+            "ok": False,
+            "error_reason": f"sandbox_unavailable:{exc.message}",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "anomaly": exc.anomaly,
+        }
+
+    out = str(result.stdout_text or "")
+    err = str(result.stderr_text or "")
+    log = _combine_log(out, err, timed_out=False)
+    return (int(result.exit_code), log, False)
+
+
 def _combine_log(stdout: str, stderr: str, *, timed_out: bool) -> str:
     parts: list[str] = []
     if timed_out:
@@ -302,15 +443,18 @@ def write_verify_record(
     content_hash_value: str,
     passed: bool,
     log: str,
+    executor_backend: str | None = None,
 ) -> Path:
     """Write ``.verify.json`` under the draft package."""
-    record = {
+    record: dict[str, Any] = {
         "tool_name": tool_name,
         "verified_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "content_hash": content_hash_value,
         "passed": passed,
         "log": log,
     }
+    if executor_backend is not None:
+        record["executor_backend"] = executor_backend
     path = Path(package_dir) / VERIFY_RECORD_NAME
     path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return path
@@ -324,7 +468,8 @@ def verify_draft_tool(
 ) -> dict[str, Any]:
     """Full verify algorithm. Returns a result dict for the tool handler.
 
-    Keys: ok, error_reason (optional), content_hash, passed, log, stage_dir.
+    Keys: ok, error_reason (optional), content_hash, passed, log, stage_dir,
+    executor_backend.
     On pass, writes ``.verify.json`` with passed=true. On fail, does not write
     a passed record (no passed:true file left behind).
     """
@@ -360,7 +505,19 @@ def verify_draft_tool(
     # Snapshot tools/local before pytest so planted packages fail closed.
     local_before = local_tool_package_names(paths)
 
-    rc, log, timed_out = run_staged_pytest(stage, timeout_seconds=timeout)
+    iso = isolation_enabled()
+    if iso:
+        guest_result = run_guest_pytest(paths, name, timeout_seconds=timeout)
+        if isinstance(guest_result, dict):
+            guest_result.setdefault("stage_dir", str(stage))
+            guest_result.setdefault("content_hash", content_hash(draft_dir))
+            return guest_result
+        rc, log, timed_out = guest_result
+        backend = EXECUTOR_BACKEND_MICROSANDBOX
+    else:
+        rc, log, timed_out = run_staged_pytest(stage, timeout_seconds=timeout)
+        backend = EXECUTOR_BACKEND_HOST_STUB
+
     tree_hash = content_hash(draft_dir)
 
     local_after = local_tool_package_names(paths)
@@ -383,6 +540,7 @@ def verify_draft_tool(
             "stage_dir": str(stage),
             "planted": sorted(planted),
             "planted_removed": removed,
+            "executor_backend": backend,
         }
 
     passed = rc == 0 and not timed_out
@@ -396,6 +554,7 @@ def verify_draft_tool(
             "log": log,
             "returncode": rc,
             "stage_dir": str(stage),
+            "executor_backend": backend,
         }
 
     write_verify_record(
@@ -404,6 +563,7 @@ def verify_draft_tool(
         content_hash_value=tree_hash,
         passed=True,
         log=log,
+        executor_backend=backend,
     )
     return {
         "ok": True,
@@ -413,6 +573,7 @@ def verify_draft_tool(
         "returncode": rc,
         "stage_dir": str(stage),
         "tool_name": name,
+        "executor_backend": backend,
     }
 
 
@@ -422,9 +583,12 @@ __all__ = [
     "content_hash",
     "delete_verify_record",
     "draft_package_dir",
+    "guest_verify_stage_path",
     "load_verify_record",
     "local_tool_package_names",
     "remove_planted_local_packages",
+    "run_guest_pytest",
+    "run_staged_pytest",
     "scrubbed_verify_env",
     "stage_draft_for_verify",
     "validate_draft_package",

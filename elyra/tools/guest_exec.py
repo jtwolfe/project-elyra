@@ -936,6 +936,100 @@ def _exec_once(
 
 
 # ---------------------------------------------------------------------------
+# Builtin run guest helper (KD24)
+# ---------------------------------------------------------------------------
+
+
+def guest_exec_raw(
+    cmd: str,
+    argv: list[str],
+    *,
+    cwd: str = GUEST_WORKSPACE_ROOT,
+    timeout: float,
+    env: Mapping[str, str] | None = None,
+) -> ExecResult:
+    """Low-level guest exec with one reconnect. Raises isolation/timeout errors.
+
+    Callers that need structured ToolResults should catch and map. Used by
+    verify guest pytest and advanced helpers.
+    """
+    life = get_sandbox_lifecycle()
+    if life is None:
+        raise _IsolationFailure(
+            "lifecycle_unregistered", anomaly="lifecycle_unregistered"
+        )
+    if getattr(life, "client_unusable", False):
+        raise _IsolationFailure("client_unusable", anomaly="client_unusable")
+    merged = {**guest_env(), "PYTHONDONTWRITEBYTECODE": "1"}
+    if env:
+        merged.update(dict(env))
+    return _exec_with_one_reconnect(
+        life,
+        cmd=cmd,
+        argv=list(argv),
+        cwd=cwd,
+        env=merged,
+        timeout=float(timeout),
+    )
+
+
+def guest_run_argv(
+    argv: list[str],
+    *,
+    timeout: float,
+    cwd: str = GUEST_WORKSPACE_ROOT,
+) -> ToolResult:
+    """Execute argv in the warm guest (builtin ``run`` when isolation on).
+
+    Non-zero exit and timeout are **payload data** with ``ok=True`` (parity with
+    host ``Sandbox.run``). Isolation failures return ``ok=False``.
+    """
+    if not argv or not str(argv[0]).strip():
+        return ToolResult(ok=False, payload={}, error_reason="empty_command")
+    cmd, cmd_args = str(argv[0]), [str(a) for a in argv[1:]]
+    try:
+        result = guest_exec_raw(cmd, cmd_args, cwd=cwd, timeout=float(timeout))
+    except _GuestTimeout:
+        return ToolResult(
+            ok=True,
+            payload={
+                "returncode": -1,
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": "",
+                "timed_out": True,
+                "stdout_truncated": False,
+                "stderr_truncated": False,
+                "argv": list(argv),
+                "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            },
+        )
+    except _IsolationFailure as exc:
+        return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
+
+    exit_code = int(result.exit_code)
+    return ToolResult(
+        ok=True,
+        payload={
+            "returncode": exit_code,
+            "exit_code": exit_code,
+            "stdout": _tail(str(result.stdout_text or "")),
+            "stderr": _tail(str(result.stderr_text or "")),
+            "timed_out": False,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "argv": list(argv),
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+        },
+    )
+
+
+# Public aliases for verify / advanced callers that map timeouts themselves.
+GuestTimeoutError = _GuestTimeout
+GuestIsolationError = _IsolationFailure
+
+
+# ---------------------------------------------------------------------------
 # FS helpers (symlink-hardened stage)
 # ---------------------------------------------------------------------------
 
@@ -1103,8 +1197,12 @@ __all__ = [
     "EXECUTOR_BACKEND_MICROSANDBOX",
     "MAX_TOOL_TIMEOUT_SECONDS",
     "clamp_tool_timeout",
+    "GuestIsolationError",
+    "GuestTimeoutError",
     "guest_dispatch",
+    "guest_exec_raw",
     "guest_module_path",
+    "guest_run_argv",
     "guest_tools_package_path",
     "host_stub_dispatch",
     "is_public_function_name",
