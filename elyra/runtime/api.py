@@ -1,4 +1,3 @@
-from elyra.media.limits import allow_stt, allow_tts
 """HTTP API and static Web UI.
 
 Scope: REST JSON + SPA fallthrough for operator glass.
@@ -1457,7 +1456,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         - xAI provider only; local / missing creds fail closed.
         """
         if not allow_tts():
-            self._json(429, {"ok": False, "error": "rate limited", "reason": "rate_limited"})
+            self._json(
+                429,
+                {"ok": False, "error": "rate limited", "reason": "rate_limited"},
+            )
             return
         message_id = self._parse_message_tts_id(path)
         if message_id is None:
@@ -1663,7 +1665,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         recording as attachment (origin user_recording / stt_source).
         """
         if not allow_stt():
-            self._json(429, {\"ok\": False, \"error\": \"rate limited\", \"reason\": \"rate_limited\"})
+            self._json(
+                429,
+                {"ok": False, "error": "rate limited", "reason": "rate_limited"},
+            )
             return
         if not stt_enabled():
             self._json(
