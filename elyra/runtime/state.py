@@ -18,9 +18,9 @@ from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 @dataclass
 class RuntimeState:
     started_at: float = field(default_factory=time.time)
-    llama_pid: int | None = None
-    llama_ready: bool = False
-    llama_error: str | None = None
+    # Provider-neutral chat/inference posture (KD14) — not local-process-specific.
+    chat_ready: bool = False
+    chat_error: str | None = None
     # Provider / credential labels (no secrets, no live usage cache)
     provider_name: str = "xai"
     model: str = DEFAULT_XAI_MODEL
@@ -33,16 +33,15 @@ class RuntimeState:
     credential_email: str | None = None
     api_key_configured: bool = False
 
-    def set_llama(
+    def set_chat_posture(
         self,
         *,
-        pid: int | None,
         ready: bool,
         error: str | None = None,
     ) -> None:
-        self.llama_pid = pid
-        self.llama_ready = ready
-        self.llama_error = error
+        """Update chat stack readiness (stub / failing / live HTTP)."""
+        self.chat_ready = ready
+        self.chat_error = error
 
     def set_provider(
         self,
@@ -72,9 +71,8 @@ class RuntimeState:
     def snapshot(self) -> dict[str, Any]:
         return {
             "uptime_s": round(time.time() - self.started_at, 1),
-            "llama_pid": self.llama_pid,
-            "llama_ready": self.llama_ready,
-            "llama_error": self.llama_error,
+            "chat_ready": self.chat_ready,
+            "chat_error": self.chat_error,
             "provider": self.provider_name,
             "model": self.model,
             "model_label": self.model_label,

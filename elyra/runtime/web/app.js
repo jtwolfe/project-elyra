@@ -18,7 +18,7 @@ const toolsCountEl = $("#tools-count");
 const skillsCountEl = $("#skills-count");
 const catalogRefreshBtn = $("#catalog-refresh-btn");
 const statusJson = $("#status-json");
-const pillLlama = $("#pill-llama");
+const pillProvider = $("#pill-provider");
 const pillSandbox = $("#pill-sandbox");
 const pillWorker = $("#pill-worker");
 const pillPhase = $("#pill-phase");
@@ -617,84 +617,51 @@ function setUsageBar(barEl, frac) {
 }
 
 /**
- * Provider-aware rail pill (keeps id pill-llama for less churn).
- * xai ready/busy/auth/limit/ovrd; local llama; stub.
+ * Provider-aware rail pill (#pill-provider). Matrix (design §6.3 / KD14):
+ * xai auth / limit / ovrd / busy (chat_busy only) / ready; stub llm; local off.
+ * Never "local ready".
  */
 function renderProviderPill(s) {
-  if (!pillLlama) return;
-  const provider = (s && s.provider) || null;
+  if (!pillProvider) return;
+  const provider = (s && s.provider) || "xai";
   const usage = (s && s.usage) || {};
   const hardStop = usage.hard_stop || null;
   const overrideActive = Boolean(usage.override_active);
   const credentialOk = s && s.credential_ok !== false;
-  const workerBusy = Boolean(s && s.worker_busy);
-  const phase = (s && s.phase) || "";
-  const busy = workerBusy || phase === "in_moment";
+  const chatError = (s && s.chat_error) || null;
+  const chatBusy = Boolean(s && s.chat_busy);
 
-  // Legacy / no provider field: fall back to llama-centric display.
-  if (!provider) {
-    if (s && s.llama_ready) {
-      setPill(
-        pillLlama,
-        s.llama_busy ? "llama busy" : "llama ready",
-        s.llama_busy ? "pill-busy" : "pill-on"
-      );
-    } else if (s && s.llama_error === "stub_llm") {
-      setPill(pillLlama, "stub llm", "pill-off");
-    } else {
-      setPill(
-        pillLlama,
-        s && s.llama_error ? "llama error" : "llama off",
-        "pill-off"
-      );
-    }
+  // Stub wins for any provider.
+  if (chatError === "stub_llm") {
+    setPill(pillProvider, "stub llm", "pill-off");
     return;
   }
 
+  // Local: never show ready this pass.
   if (provider === "local") {
-    if (s.llama_ready) {
-      setPill(
-        pillLlama,
-        s.llama_busy || busy ? "llama busy" : "llama ready",
-        s.llama_busy || busy ? "pill-busy" : "pill-on"
-      );
-    } else if (s.llama_error === "stub_llm") {
-      setPill(pillLlama, "stub llm", "pill-off");
-    } else if (s.llama_error === "local_not_implemented") {
-      // PR2 interim (pre-PR3 chat_* rename): fail-closed local is not an error.
-      setPill(pillLlama, "local off", "pill-off");
-    } else {
-      setPill(
-        pillLlama,
-        s.llama_error ? "llama error" : "llama off",
-        "pill-off"
-      );
-    }
+    setPill(pillProvider, "local off", "pill-off");
     return;
   }
 
   // xai (and any non-local remote)
-  if (s.llama_error === "stub_llm" && !s.credential_ok && !s.model) {
-    setPill(pillLlama, "stub llm", "pill-off");
-    return;
-  }
   if (!credentialOk) {
-    setPill(pillLlama, `${provider} auth`, "pill-off");
+    setPill(pillProvider, `${provider} auth`, "pill-off");
     return;
   }
   if (hardStop && !overrideActive) {
-    setPill(pillLlama, `${provider} limit`, "pill-off");
+    setPill(pillProvider, `${provider} limit`, "pill-off");
     return;
   }
   if (hardStop && overrideActive) {
-    setPill(pillLlama, `${provider} ovrd`, "pill-busy");
+    setPill(pillProvider, `${provider} ovrd`, "pill-busy");
     return;
   }
-  setPill(
-    pillLlama,
-    busy ? `${provider} busy` : `${provider} ready`,
-    busy ? "pill-busy" : "pill-on"
-  );
+  // Busy only when chat_busy is true (gate); not worker/phase.
+  if (chatBusy) {
+    setPill(pillProvider, `${provider} busy`, "pill-busy");
+    return;
+  }
+  setPill(pillProvider, `${provider} ready`, "pill-on");
 }
 
 function renderHardStopBanner(s) {

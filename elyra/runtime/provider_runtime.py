@@ -221,6 +221,9 @@ class ProviderRuntime:
                 self.chat_client = failing
                 self._bind_worker_unlocked()
                 self._sync_state_unlocked()
+            if self.state is not None:
+                # Cred failures stay on credential_*; chat stack not ready (KD14).
+                self.state.set_chat_posture(ready=False, error=None)
             return
 
         # Ensure meter so repair keeps window state (even after cold-start fail).
@@ -256,6 +259,8 @@ class ProviderRuntime:
                 self.chat_client = failing
                 self._bind_worker_unlocked()
                 self._sync_state_unlocked()
+            if self.state is not None:
+                self.state.set_chat_posture(ready=False, error=None)
             return
 
         with self._lock:
@@ -269,6 +274,8 @@ class ProviderRuntime:
             self.xai_config = cfg
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
+        if self.state is not None:
+            self.state.set_chat_posture(ready=True, error=None)
 
         # Best-effort models refresh (network); never undo a successful rebuild.
         try:
@@ -291,7 +298,7 @@ class ProviderRuntime:
             provider = self.provider_name
             self.http_client = None
             self.chat_client = StubChatClient()
-            # Match cold-start stub: credential_ok True; posture via llama_error.
+            # Match cold-start stub: credential_ok True; posture via chat_error.
             self.credential_ok = True
             self.credential_detail = None
             if provider == "local":
@@ -299,7 +306,7 @@ class ProviderRuntime:
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
         if self.state is not None:
-            self.state.set_llama(pid=None, ready=False, error="stub_llm")
+            self.state.set_chat_posture(ready=False, error="stub_llm")
 
     def _rebuild_local(
         self,
@@ -325,10 +332,7 @@ class ProviderRuntime:
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
         if self.state is not None:
-            # Keep historical status field names until PR3.
-            self.state.set_llama(
-                pid=None, ready=False, error="local_not_implemented"
-            )
+            self.state.set_chat_posture(ready=False, error="local_not_implemented")
 
     def _bind_worker_unlocked(self) -> None:
         worker = self.worker

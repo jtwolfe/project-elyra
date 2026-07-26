@@ -215,8 +215,8 @@ def test_supervisor_xai_missing_creds_uses_failing_and_loads_meter(tmp_path: Pat
         assert isinstance(sup._worker.client, FailingChatClient)
         assert sup.state.credential_ok is False
         assert sup.state.credential_detail == DETAIL_MISSING_AUTH_JSON
-        assert sup.state.llama_ready is False
-        assert sup.state.llama_error == "provider_xai"
+        assert sup.state.chat_ready is False
+        assert sup.state.chat_error is None
         pr = sup.provider_runtime
         assert pr is not None
         assert pr.meter is not None  # meter loaded even when !credential_ok
@@ -247,6 +247,8 @@ def test_supervisor_xai_ok_uses_usage_gated_stack(tmp_path: Path):
         assert pr.can_open_model_moment() is True
         assert sup.state.credential_ok is True
         assert sup.state.credential_email == "op@example.com"
+        assert sup.state.chat_ready is True
+        assert sup.state.chat_error is None
     finally:
         sup.shutdown()
 
@@ -306,8 +308,8 @@ def test_supervisor_local_uses_failing_not_stub(tmp_path: Path):
         assert sup.provider_runtime is not None
         assert sup.provider_runtime.provider_name == "local"
         assert sup.provider_runtime.can_open_model_moment() is False
-        assert sup.state.llama_ready is False
-        assert sup.state.llama_error == "local_not_implemented"
+        assert sup.state.chat_ready is False
+        assert sup.state.chat_error == "local_not_implemented"
         # rebuild must never dial for_local / open HTTP
         with patch(
             "elyra.runtime.provider_runtime.HttpChatClient.for_local"
@@ -343,7 +345,8 @@ def test_supervisor_local_stub_llm_uses_stub(tmp_path: Path):
         sup.start()
         assert isinstance(sup._worker.client, StubChatClient)
         assert not isinstance(sup._worker.client, FailingChatClient)
-        assert sup.state.llama_error == "stub_llm"
+        assert sup.state.chat_error == "stub_llm"
+        assert sup.state.chat_ready is False
         assert sup.provider_runtime is not None
         assert sup.provider_runtime.stub_llm is True
     finally:
@@ -393,8 +396,8 @@ def test_stub_llm_survives_apply_model_and_rebuild_local(tmp_path: Path):
         assert not isinstance(pr.chat_client, FailingChatClient)
         assert sup._worker.client is pr.chat_client
         assert isinstance(sup._worker.client, StubChatClient)
-        assert sup.state.llama_error == "stub_llm"
-        assert sup.state.llama_ready is False
+        assert sup.state.chat_error == "stub_llm"
+        assert sup.state.chat_ready is False
         assert pr.can_open_model_moment() is can_open_before
         assert pr.stub_llm is True
         assert pr.http_client is None
@@ -452,7 +455,8 @@ def test_stub_llm_survives_apply_model_and_rebuild_xai(tmp_path: Path):
         assert not isinstance(pr.chat_client, HttpChatClient)
         assert not isinstance(pr.chat_client, FailingChatClient)
         assert isinstance(sup._worker.client, StubChatClient)
-        assert sup.state.llama_error == "stub_llm"
+        assert sup.state.chat_error == "stub_llm"
+        assert sup.state.chat_ready is False
         assert pr.http_client is None
     finally:
         sup.shutdown()

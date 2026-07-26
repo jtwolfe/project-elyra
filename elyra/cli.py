@@ -83,14 +83,12 @@ def _print_startup_posture(sup: ElyraSupervisor) -> None:
     meter = pr.meter if pr is not None else None
     usage_line = format_usage_posture(meter, enabled=config.usage.enabled)
     print(f"Usage:       {usage_line}")
-    # Chat posture (status still uses llama_* field names until PR3).
-    if state.llama_error == "stub_llm":
+    # Chat posture (provider-neutral chat_* fields — KD14).
+    if state.chat_error == "stub_llm":
         chat = "stub"
-    elif state.llama_error == "local_not_implemented":
+    elif state.chat_error == "local_not_implemented":
         chat = "local_not_implemented"
-    elif state.llama_ready:
-        chat = "ready"
-    elif state.provider_name == "xai" and state.credential_ok:
+    elif state.chat_ready:
         chat = "ready"
     else:
         chat = "off"

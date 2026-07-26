@@ -144,8 +144,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             snap.update(
                 {
                     "home": str(self.paths.home),
-                    "llama_busy": self.gate.busy,
-                    "llama_operation": self.gate.current_label,
+                    "chat_busy": self.gate.busy,
+                    "chat_operation": self.gate.current_label,
                     "api": f"http://{self.config.api_host}:{self.config.api_port}/",
                 }
             )

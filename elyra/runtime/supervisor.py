@@ -221,7 +221,7 @@ class ElyraSupervisor:
 
         if self._use_stub:
             # --stub-llm is the only stub trigger; never starts inference process.
-            self.state.set_llama(pid=None, ready=False, error="stub_llm")
+            self.state.set_chat_posture(ready=False, error="stub_llm")
             chat_client = StubChatClient()
             credential_ok = True
             credential_detail = None
@@ -232,9 +232,8 @@ class ElyraSupervisor:
                     None, fallback=CURATED_XAI_MODELS, current=cfg.model
                 )
         elif provider_name == "xai":
-            # Product default: no local inference process for xai.
-            # Keep historical llama_error code until PR3 renames status fields.
-            self.state.set_llama(pid=None, ready=False, error="provider_xai")
+            # Product default: chat_ready reflects client usability (KD14).
+            # Do not set chat_error="provider_xai" — absence of local process is normal.
             resolution = resolve_bearer(
                 source=cfg.credential_source,
                 data_dir=data_dir,
@@ -255,6 +254,7 @@ class ElyraSupervisor:
                     chat_client = http_client
                 credential_ok = True
                 credential_detail = None
+                self.state.set_chat_posture(ready=True, error=None)
                 models_available = models_for_picker(
                     None, fallback=CURATED_XAI_MODELS, current=cfg.model
                 )
@@ -268,6 +268,8 @@ class ElyraSupervisor:
                 chat_client = FailingChatClient(detail)
                 credential_ok = False
                 credential_detail = detail
+                # Credential failures stay on credential_*; chat stack not ready.
+                self.state.set_chat_posture(ready=False, error=None)
                 models_available = models_for_picker(
                     None, fallback=CURATED_XAI_MODELS, current=cfg.model
                 )
@@ -276,9 +278,7 @@ class ElyraSupervisor:
             _LOG.warning(
                 "local provider not implemented — use --provider xai or --stub-llm"
             )
-            self.state.set_llama(
-                pid=None, ready=False, error="local_not_implemented"
-            )
+            self.state.set_chat_posture(ready=False, error="local_not_implemented")
             chat_client = FailingChatClient("local_not_implemented")
             credential_ok = True
             credential_detail = "local_not_implemented"

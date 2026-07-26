@@ -229,7 +229,10 @@ def test_status_includes_phase_hop_pending_wait(paths):
         assert "queue_depth_by_band" in body
         assert "interject_depth" in body
         assert body["worker_busy"] is False
-        assert "llama_busy" in body
+        assert "chat_busy" in body
+        assert "chat_ready" in body
+        assert "chat_error" in body
+        assert "chat_operation" in body
         assert "home" in body
 
         # Drive one moment so hop_count lands on snapshot.

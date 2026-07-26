@@ -750,7 +750,8 @@ def test_static_index_served(paths):
         # Moments list is content-sized; detail owns leftover space.
         assert "list-panel-auto" in html
         # Phase 0 provider / usage glass (PR7 web).
-        assert 'id="pill-llama"' in html
+        assert 'id="pill-provider"' in html
+        assert 'id="pill-llama"' not in html
         assert 'id="hard-stop-banner"' in html
         assert 'id="provider-card"' in html
         assert 'id="provider-model-select"' in html
