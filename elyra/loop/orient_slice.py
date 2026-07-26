@@ -26,7 +26,10 @@ BIAS_MOMENT_CONTINUE = (
 )
 BIAS_BACKGROUND = "Prefer skill: rest unless orient shows ready work."
 BIAS_WAIT_TIMEOUT = (
-    "Prefer skill: talk if user owed a follow-up; else do-work/rest from ledger."
+    "Prefer skill: rest if nothing urgent; else do-work/plan-work from the "
+    "ledger; re-wait only with a clear new reason. Do not re-ask the same "
+    "question only because the timer fired — reason briefly, pick other work, "
+    "wait again, or go idle."
 )
 BIAS_PLAN_WORK = (
     "Prefer skill: plan-work (open goal needs tasks before execution)."

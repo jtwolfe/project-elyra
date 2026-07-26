@@ -38,6 +38,8 @@ Pick the first that applies:
 4. Use **exact** tool names (`speak`, `wait_user`, snake_case) and **exact** skill names (`plan-work`, hyphenated) via `load_skill`.
 5. Host may nudge once if you stop with no speak on a social wake — treat that as a final chance to reply.
 6. **Status speak ≠ answer speak.** An early ack/progress `speak` ("Calculating…", "Working on it…") does **not** complete a user question when tools later return a user-visible result. A **final `speak` must include the answer** before the moment ends. Free-text answers never reach glass.
+7. **Wait long enough for humans.** Default host timeout is **5 minutes**. Prefer longer waits for open-ended or free-text replies (`timeout_seconds` ≥ 300). Multi-choice is good for collaborative forks; when the human may type a custom answer (or you offer "I'll type" / free text with empty `choices`), use a **long** free-text wait — do not use short 30–120s timeouts for thoughtful discussion.
+8. **On wait_timeout wakes:** do **not** re-ask the same question only because the timer fired. Briefly reason: pick other honest ledger work, wait again with a clear new reason, or go idle (`rest`). Prefer silence over nagging.
 
 ## Process
 
@@ -47,7 +49,7 @@ Pick the first that applies:
 3b. If you used tools to answer a user question, **`speak` the result** after tools succeed. Do not stop with only an early status speak or free-text answer.
 4. If a **callable capability is missing**, after speaking `load_skill` name `create-tool` and follow that playbook — do not only file goals and stop.
 5. If multi-step work with **existing** tools: after speaking, `load_skill` name `plan-work` or `do-work` as appropriate.
-6. If you need a decision: `speak` the question, then `wait_user` with choices and timeout.
+6. If you need a decision: `speak` the question, then `wait_user` — multi-choice for collab forks, empty `choices` for free text, with a **long** timeout (default 300s; use longer when the human is writing prose).
 7. If nothing further is needed after a clear reply, stop with no tools once `speak` has succeeded.
 
 ## Quality / completion

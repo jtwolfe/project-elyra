@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
@@ -572,6 +573,7 @@ def run_do_loop(
     wake_kind: str = "",
     has_open_goals_slice: bool = False,
     continuous_enabled: bool | None = None,
+    hop_delay_seconds: float = 0.0,
     clock: Callable[[], datetime] | None = None,
     started_at: datetime | None = None,
     drain_interjections: Callable[[], Sequence[Any]] | None = None,
@@ -607,6 +609,9 @@ def run_do_loop(
     continuous_enabled:
         Override continuous toggle for this moment. When None, uses
         ``settings.continuous.enabled`` (default OFF).
+    hop_delay_seconds:
+        Optional pause (seconds) before hop N>0 so operators can follow glass
+        (dev speed mode). 0 disables. Does not invent work or wakes.
     moments:
         Optional MomentStore-like object with ``append_beat(moment_id, beat)``.
 
@@ -669,6 +674,7 @@ def run_do_loop(
             has_open_goals_slice=bool(has_open_goals_slice),
             continuous_enabled=cont_on,
             work_nudge_max=int(cont.in_moment_work_nudge_max),
+            hop_delay_seconds=max(0.0, float(hop_delay_seconds or 0.0)),
             now=now,
             t0=t0,
             openai_tools=openai_tools,
@@ -758,6 +764,7 @@ def _run_loop_body(
     has_open_goals_slice: bool,
     continuous_enabled: bool,
     work_nudge_max: int,
+    hop_delay_seconds: float,
     now: Callable[[], datetime],
     t0: datetime,
     openai_tools: list[dict[str, Any]],
@@ -770,6 +777,9 @@ def _run_loop_body(
     drain_interjections: Callable[[], Sequence[Any]] | None,
 ) -> DoLoopResult:
     while True:
+        # Dev-speed pacing: pause before hop 2+ so glass is followable.
+        if hop_delay_seconds > 0 and state.hop > 0:
+            time.sleep(hop_delay_seconds)
         t = now()
         wall = should_stop_wall_clock(t0, t, settings=loop)
         declined = should_stop_time_continue_declined(

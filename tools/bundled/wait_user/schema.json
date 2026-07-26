@@ -13,7 +13,7 @@
     "timeout_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Seconds before wait_timeout wake (default settings.wait, 120)"
+      "description": "Seconds before wait_timeout wake (default 300; free-text also defaults 300). Prefer longer for open-ended human replies."
     },
     "user_id": {
       "type": "string",

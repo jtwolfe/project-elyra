@@ -65,6 +65,10 @@ const usageHourBar = $("#usage-hour-bar");
 const usageDetail = $("#usage-detail");
 const usageOverrideToggle = $("#usage-override-toggle");
 const usageOverrideMeta = $("#usage-override-meta");
+const devSpeedToggle = $("#dev-speed-toggle");
+const devSpeedMeta = $("#dev-speed-meta");
+const devSpeedBadge = $("#dev-speed-badge");
+const devSpeedDelay = $("#dev-speed-delay");
 
 const USER_ID = "operator";
 const REASON_BUFFER_FULL = "interjection_buffer_full";
@@ -77,6 +81,12 @@ let waitReplyInFlight = false;
 let continuousToggleInFlight = false;
 /** Last known continuous.enabled from status (for toggle change detection). */
 let lastContinuousEnabled = false;
+/** True while PATCH /api/dev-speed is in flight. */
+let devSpeedInFlight = false;
+/** Last known dev_speed.enabled from status. */
+let lastDevSpeedEnabled = true;
+/** Last known dev_speed.delay_seconds from status. */
+let lastDevSpeedDelay = 8;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
 /** True while PATCH /api/provider is in flight. */
@@ -1024,6 +1034,56 @@ async function setContinuousEnabled(enabled) {
   }
 }
 
+function renderDevSpeed(s) {
+  const d = (s && s.dev_speed) || {};
+  const enabled = d.enabled !== undefined ? Boolean(d.enabled) : true;
+  const delay =
+    typeof d.delay_seconds === "number" && !Number.isNaN(d.delay_seconds)
+      ? d.delay_seconds
+      : 8;
+  lastDevSpeedEnabled = enabled;
+  lastDevSpeedDelay = delay;
+
+  if (!devSpeedInFlight) {
+    if (devSpeedToggle) devSpeedToggle.checked = enabled;
+    if (devSpeedDelay && document.activeElement !== devSpeedDelay) {
+      devSpeedDelay.value = String(Math.round(delay));
+    }
+  }
+  if (devSpeedBadge) {
+    devSpeedBadge.textContent = enabled ? "on" : "off";
+    devSpeedBadge.classList.toggle("badge-open", enabled);
+  }
+  if (devSpeedMeta) {
+    devSpeedMeta.textContent = enabled
+      ? `${delay}s between hops`
+      : "off — full speed";
+  }
+}
+
+async function patchDevSpeed(body) {
+  if (devSpeedInFlight) return;
+  devSpeedInFlight = true;
+  if (devSpeedToggle) devSpeedToggle.disabled = true;
+  if (devSpeedDelay) devSpeedDelay.disabled = true;
+  try {
+    await fetchJson("/api/dev-speed", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshStatus();
+  } catch (err) {
+    if (devSpeedToggle) devSpeedToggle.checked = lastDevSpeedEnabled;
+    if (devSpeedDelay) devSpeedDelay.value = String(lastDevSpeedDelay);
+    showNotice(String(err.message || err));
+  } finally {
+    devSpeedInFlight = false;
+    if (devSpeedToggle) devSpeedToggle.disabled = false;
+    if (devSpeedDelay) devSpeedDelay.disabled = false;
+  }
+}
+
 /**
  * Sandbox pill (KD27): ready / warming / unusable next to provider pill.
  * No secrets, no host paths — only coarse states from status.sandbox.
@@ -1038,6 +1098,9 @@ function renderSandboxPill(s) {
   const pill = box.pill || null;
   if (pill === "ready" || box.ready) {
     setPill(pillSandbox, "sandbox ready", "pill-on");
+  } else if (box.reason === "pyenv_not_ready") {
+    // Mount OK; curated guest packages still missing — tools may still work.
+    setPill(pillSandbox, "sandbox pyenv…", "pill-busy");
   } else if (pill === "warming" || box.reason === "warming") {
     setPill(pillSandbox, "sandbox warming", "pill-busy");
   } else if (pill === "off" || box.isolation_enabled === false) {
@@ -1085,6 +1148,7 @@ async function refreshStatus() {
 
   updateChatActivity(s);
   renderContinuous(s);
+  renderDevSpeed(s);
   renderWaitBar(s.pending_wait || null);
   return s;
 }
@@ -1486,6 +1550,19 @@ continuousToggles.forEach((el) => {
     setContinuousEnabled(el.checked);
   });
 });
+
+if (devSpeedToggle) {
+  devSpeedToggle.addEventListener("change", () => {
+    patchDevSpeed({ enabled: Boolean(devSpeedToggle.checked) });
+  });
+}
+if (devSpeedDelay) {
+  devSpeedDelay.addEventListener("change", () => {
+    const n = Number(devSpeedDelay.value);
+    if (!Number.isFinite(n)) return;
+    patchDevSpeed({ delay_seconds: n });
+  });
+}
 
 if (providerModelSelect) {
   providerModelSelect.addEventListener("change", () => {

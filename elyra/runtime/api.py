@@ -303,6 +303,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._patch_continuous(body)
             return
 
+        if path == "/api/dev-speed":
+            self._patch_dev_speed(body)
+            return
+
         if path == "/api/provider":
             self._patch_provider(body)
             return
@@ -551,6 +555,38 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": "enabled must be a boolean"})
             return
         result = self.worker.set_continuous_enabled(enabled)
+        if result.get("error") == "resetting":
+            self._json(503, result)
+            return
+        self._json(200, result)
+
+    def _patch_dev_speed(self, body: dict[str, Any]) -> None:
+        """PATCH /api/dev-speed — ``{ "enabled"?: bool, "delay_seconds"?: number }``.
+
+        Inter-hop pause for followable glass. Default product ON (8s, 5–15 band).
+        """
+        if "enabled" not in body and "delay_seconds" not in body:
+            self._json(
+                400,
+                {"ok": False, "error": "enabled or delay_seconds required"},
+            )
+            return
+        enabled = body.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            self._json(400, {"ok": False, "error": "enabled must be a boolean"})
+            return
+        delay = body.get("delay_seconds")
+        if delay is not None:
+            if isinstance(delay, bool) or not isinstance(delay, (int, float)):
+                self._json(
+                    400,
+                    {"ok": False, "error": "delay_seconds must be a number"},
+                )
+                return
+        result = self.worker.set_dev_speed(
+            enabled=enabled if isinstance(enabled, bool) else None,
+            delay_seconds=float(delay) if delay is not None else None,
+        )
         if result.get("error") == "resetting":
             self._json(503, result)
             return

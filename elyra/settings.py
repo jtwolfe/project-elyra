@@ -43,7 +43,18 @@ class LoopSettings:
 
 @dataclass(frozen=True)
 class WaitSettings:
-    default_timeout_seconds: int = 120
+    """User-wait timeouts for ``wait_user``.
+
+    Defaults are deliberately long so thoughtful human replies are not
+    truncated by a 2-minute timer. Free-text waits (no multi-choice) use
+    ``free_text_timeout_seconds`` when the model omits an explicit timeout —
+    collaborative multi-choice can stay on ``default_timeout_seconds``.
+    """
+
+    # Multi-choice / general default when timeout_seconds omitted.
+    default_timeout_seconds: int = 300
+    # Free-text or "I'll type" style waits (no choices) — same floor by default.
+    free_text_timeout_seconds: int = 300
 
 
 @dataclass(frozen=True)

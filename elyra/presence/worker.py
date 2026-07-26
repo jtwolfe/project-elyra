@@ -7,7 +7,7 @@ Out of scope: HTTP/web, tool internals, glass UI panels.
 
 Public API: enqueue_wake, enqueue_user_message, interject, resolve_user_input,
 busy, active_moment_id, pending_wait, status_snapshot, reset_runtime_state,
-set_continuous_enabled.
+set_continuous_enabled, set_dev_speed.
 Must not import runtime.web.
 """
 
@@ -42,6 +42,13 @@ from elyra.loop.doloop import DoLoopResult, run_do_loop
 from elyra.messages import Message, append_message, list_messages
 from elyra.moment import MomentStore
 from elyra.moment.types import STOP_REASONS
+from elyra.runtime.dev_speed import (
+    DevSpeedState,
+    dev_speed_status_block,
+    effective_hop_delay_seconds,
+    load_dev_speed_runtime,
+    save_dev_speed_runtime,
+)
 from elyra.presence.interject import (
     REASON_BUFFER_FULL,
     InterjectBuffer,
@@ -382,6 +389,8 @@ class PresenceWorker:
             paths.data_dir,
             defaults=self.settings.continuous,
         )
+        # Dev-speed pacing (default ON): inter-hop pause for followable glass.
+        self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
 
         self._phase: str = PHASE_IDLE
         self._busy = False
@@ -439,6 +448,49 @@ class PresenceWorker:
                 "changed": prev != want,
                 "cancelled_moment_continues": cancelled,
                 "continuous": block,
+            }
+
+    def set_dev_speed(
+        self,
+        *,
+        enabled: bool | None = None,
+        delay_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        """Toggle / set inter-hop delay; persist ``data/runtime/dev_speed.json``.
+
+        Does not invent wakes. When both args are None, returns current state.
+        """
+        with self._lock:
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "dev_speed": dev_speed_status_block(self._dev_speed),
+                }
+            prev_en = bool(self._dev_speed.enabled)
+            prev_delay = float(self._dev_speed.delay_seconds)
+            if enabled is not None:
+                self._dev_speed.enabled = bool(enabled)
+            if delay_seconds is not None:
+                from elyra.runtime.dev_speed import clamp_delay_seconds
+
+                self._dev_speed.delay_seconds = clamp_delay_seconds(delay_seconds)
+            try:
+                save_dev_speed_runtime(
+                    self.paths.data_dir,
+                    enabled=bool(self._dev_speed.enabled),
+                    delay_seconds=float(self._dev_speed.delay_seconds),
+                )
+            except OSError as exc:
+                _LOG.warning("persist dev_speed.json failed: %s", exc)
+            block = dev_speed_status_block(self._dev_speed)
+            return {
+                "ok": True,
+                "changed": (
+                    prev_en != bool(self._dev_speed.enabled)
+                    or abs(prev_delay - float(self._dev_speed.delay_seconds)) > 1e-9
+                ),
+                "dev_speed": block,
             }
 
     def reset_runtime_state(
@@ -791,6 +843,7 @@ class PresenceWorker:
                     self.settings.continuous,
                     pending_moment_continues=pending_continues,
                 ),
+                "dev_speed": dev_speed_status_block(self._dev_speed),
             }
 
     # ------------------------------------------------------------------
@@ -1003,6 +1056,8 @@ class PresenceWorker:
             )
 
         registry = self._ensure_registry()
+        with self._lock:
+            hop_delay = effective_hop_delay_seconds(self._dev_speed)
         result = self._run_do_loop(
             client=self.client,
             registry=registry,
@@ -1014,6 +1069,7 @@ class PresenceWorker:
             wake_kind=wake.kind,
             has_open_goals_slice=has_open,
             continuous_enabled=cont_on,
+            hop_delay_seconds=hop_delay,
             drain_interjections=self._drain_interjections,
         )
         return result, list(ctx.skills_used)
