@@ -37,12 +37,14 @@ Pick the first that applies:
 3. **Speak before wait.** If you need a choice or timeout: `speak` first, then `wait_user`. Later calls after wait are not run.
 4. Use **exact** tool names (`speak`, `wait_user`, snake_case) and **exact** skill names (`plan-work`, hyphenated) via `load_skill`.
 5. Host may nudge once if you stop with no speak on a social wake — treat that as a final chance to reply.
+6. **Status speak ≠ answer speak.** An early ack/progress `speak` ("Calculating…", "Working on it…") does **not** complete a user question when tools later return a user-visible result. A **final `speak` must include the answer** before the moment ends. Free-text answers never reach glass.
 
 ## Process
 
 1. Read orient why-now: who spoke, what they said, open waits.
 2. **Call `speak` immediately** with a short plain-language reply (even for a simple hello).
 3. If the ask is clear work, **after** speaking open or update goals/tasks when useful (`create_goal` / `create_task` / `list_goals`). Speak any plan update the human needs on glass.
+3b. If you used tools to answer a user question, **`speak` the result** after tools succeed. Do not stop with only an early status speak or free-text answer.
 4. If a **callable capability is missing**, after speaking `load_skill` name `create-tool` and follow that playbook — do not only file goals and stop.
 5. If multi-step work with **existing** tools: after speaking, `load_skill` name `plan-work` or `do-work` as appropriate.
 6. If you need a decision: `speak` the question, then `wait_user` with choices and timeout.
@@ -53,6 +55,7 @@ Pick the first that applies:
 Done when:
 
 - The human has a real glass reply (successful `speak`), and
+- If the user asked a question and tools returned a user-visible result, a **final answer speak** carried that result (not only status/ack speak, not only free-text), and
 - Either work is handed off cleanly (ledger + skill), or the moment ends honestly with nothing left to say
 
 ## Out of scope
