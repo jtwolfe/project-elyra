@@ -1831,79 +1831,116 @@ async function promoteUserDraft() {
   }
 }
 
+/** Promote CTA: primary+enabled only when a draft exists; keep btn-sm always. */
+function setPromoteBtnState(btn, hasDraft, titles) {
+  if (!btn) return;
+  btn.disabled = !hasDraft;
+  btn.classList.toggle("btn-primary", hasDraft);
+  btn.classList.toggle("btn-secondary", !hasDraft);
+  btn.title = hasDraft ? titles.enabled : titles.disabled;
+}
+
+function disablePromoteButtons() {
+  setPromoteBtnState(identityPromoteSelfBtn, false, {
+    enabled: "Promote draft to live self identity",
+    disabled: "No draft to promote",
+  });
+  setPromoteBtnState(identityPromoteUserBtn, false, {
+    enabled: "Promote draft to live user identity",
+    disabled: "No draft to promote",
+  });
+}
+
 async function refreshIdentity() {
-  const uid = identityPanelUserId || getSessionUserId();
-  const [self, user, usersList] = await Promise.all([
-    fetchJson("/api/identity?include_draft=1"),
-    fetchJson(`/api/users/${encodeURIComponent(uid)}`),
-    fetchJson("/api/users"),
-  ]);
-  const s = (self && self.self) || {};
-  if (identitySelf) {
-    identitySelf.textContent = s.body || s.digest || "(empty self digest)";
-  }
-  const selfName =
-    s.display_name ||
-    (s.meta && (s.meta.display_name || s.meta.goes_by)) ||
-    "Elyra";
-  if (identitySelfLabel) {
-    identitySelfLabel.textContent = selfName;
-  }
-  labelCache.self = selfName;
-  updateBrandChrome();
-  const hasSelfDraft = Boolean(s.has_draft);
-  if (identitySelfDraftBadge) identitySelfDraftBadge.hidden = !hasSelfDraft;
-  if (identitySelfDraftFold) {
-    identitySelfDraftFold.hidden = !hasSelfDraft;
-    if (identitySelfDraft) {
-      identitySelfDraft.textContent = s.draft_body || "(empty draft)";
+  try {
+    const uid = identityPanelUserId || getSessionUserId();
+    const [self, user, usersList] = await Promise.all([
+      fetchJson("/api/identity?include_draft=1"),
+      fetchJson(`/api/users/${encodeURIComponent(uid)}`),
+      fetchJson("/api/users"),
+    ]);
+    const s = (self && self.self) || {};
+    if (identitySelf) {
+      identitySelf.textContent = s.body || s.digest || "(empty self digest)";
     }
-  }
-  renderVersionList(identitySelfVersions, s.versions || [], async (vid) => {
-    // Versions are listed via meta index; body reload via get_identity would need
-    // a version query — for v1 show id in the version body area from list only.
-    if (identitySelfVersionBody) {
-      identitySelfVersionBody.hidden = false;
-      identitySelfVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+    const selfName =
+      s.display_name ||
+      (s.meta && (s.meta.display_name || s.meta.goes_by)) ||
+      "Elyra";
+    if (identitySelfLabel) {
+      identitySelfLabel.textContent = selfName;
     }
-  });
+    labelCache.self = selfName;
+    updateBrandChrome();
+    const hasSelfDraft = Boolean(s.has_draft);
+    if (identitySelfDraftBadge) identitySelfDraftBadge.hidden = !hasSelfDraft;
+    if (identitySelfDraftFold) {
+      identitySelfDraftFold.hidden = !hasSelfDraft;
+      // KD20: leave collapsed on has_draft; force closed when draft gone
+      if (!hasSelfDraft) identitySelfDraftFold.open = false;
+      if (identitySelfDraft) {
+        identitySelfDraft.textContent = s.draft_body || "(empty draft)";
+      }
+    }
+    setPromoteBtnState(identityPromoteSelfBtn, hasSelfDraft, {
+      enabled: "Promote draft to live self identity",
+      disabled: "No draft to promote",
+    });
+    renderVersionList(identitySelfVersions, s.versions || [], async (vid) => {
+      // Versions are listed via meta index; body reload via get_identity would need
+      // a version query — for v1 show id in the version body area from list only.
+      if (identitySelfVersionBody) {
+        identitySelfVersionBody.hidden = false;
+        identitySelfVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+      }
+    });
 
-  const users = (usersList && usersList.users) || [];
-  renderUserChips(users, uid);
+    const users = (usersList && usersList.users) || [];
+    renderUserChips(users, uid);
 
-  if (identityUser) {
-    identityUser.textContent = user.body || user.profile || "(empty profile)";
-  }
-  if (identityUserLabel) {
-    identityUserLabel.textContent =
-      user.goes_by || (user.meta && user.meta.goes_by) || uid;
-  }
-  if (identityUserMeta && user.meta) {
-    const m = user.meta;
-    const bits = [
-      `id ${uid}`,
-      m.goes_by ? `goes_by ${m.goes_by}` : null,
-      m.full_name ? `full_name ${m.full_name}` : null,
-      `provisional ${Boolean(m.provisional)}`,
-      `real_name_known ${Boolean(m.real_name_known)}`,
-    ].filter(Boolean);
-    identityUserMeta.textContent = bits.join(" · ");
-  }
-  const hasUserDraft = Boolean(user.has_draft);
-  if (identityUserDraftBadge) identityUserDraftBadge.hidden = !hasUserDraft;
-  if (identityUserDraftFold) {
-    identityUserDraftFold.hidden = !hasUserDraft;
-    if (identityUserDraft) {
-      identityUserDraft.textContent = user.draft_body || "(empty draft)";
+    if (identityUser) {
+      identityUser.textContent = user.body || user.profile || "(empty profile)";
     }
-  }
-  renderVersionList(identityUserVersions, user.versions || [], (vid) => {
-    if (identityUserVersionBody) {
-      identityUserVersionBody.hidden = false;
-      identityUserVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+    if (identityUserLabel) {
+      identityUserLabel.textContent =
+        user.goes_by || (user.meta && user.meta.goes_by) || uid;
     }
-  });
-  if (user.goes_by) labelCache.users[uid] = user.goes_by;
+    if (identityUserMeta && user.meta) {
+      const m = user.meta;
+      const bits = [
+        `id ${uid}`,
+        m.goes_by ? `goes_by ${m.goes_by}` : null,
+        m.full_name ? `full_name ${m.full_name}` : null,
+        `provisional ${Boolean(m.provisional)}`,
+        `real_name_known ${Boolean(m.real_name_known)}`,
+      ].filter(Boolean);
+      identityUserMeta.textContent = bits.join(" · ");
+    }
+    const hasUserDraft = Boolean(user.has_draft);
+    if (identityUserDraftBadge) identityUserDraftBadge.hidden = !hasUserDraft;
+    if (identityUserDraftFold) {
+      identityUserDraftFold.hidden = !hasUserDraft;
+      if (!hasUserDraft) identityUserDraftFold.open = false;
+      if (identityUserDraft) {
+        identityUserDraft.textContent = user.draft_body || "(empty draft)";
+      }
+    }
+    setPromoteBtnState(identityPromoteUserBtn, hasUserDraft, {
+      enabled: "Promote draft to live user identity",
+      disabled: "No draft to promote",
+    });
+    renderVersionList(identityUserVersions, user.versions || [], (vid) => {
+      if (identityUserVersionBody) {
+        identityUserVersionBody.hidden = false;
+        identityUserVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+      }
+    });
+    if (user.goes_by) labelCache.users[uid] = user.goes_by;
+  } catch (err) {
+    // Hard failure: do not leave promote enabled against stale draft UI
+    disablePromoteButtons();
+    throw err;
+  }
 }
 
 continuousToggles.forEach((el) => {

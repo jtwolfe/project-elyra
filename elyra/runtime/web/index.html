@@ -39,7 +39,7 @@
             New guest…
           </button>
           <p class="session-hint muted">
-            Session is who is typing — not orient USER on pure work.
+            Who is typing in this session.
           </p>
         </div>
         <div class="rail-continuous continuous-control" title="Hybrid continuous work (autopilot)">
@@ -50,12 +50,15 @@
           </label>
           <div id="continuous-status-rail" class="continuous-meta muted">off</div>
         </div>
-        <div class="rail-foot">
-          <div id="pill-llama" class="pill pill-off">llama</div>
-          <div id="pill-sandbox" class="pill pill-off">sandbox</div>
-          <div id="pill-worker" class="pill pill-off">worker</div>
-          <div id="pill-phase" class="pill pill-off">phase</div>
-          <div id="pill-autopilot" class="pill pill-off" hidden>autopilot</div>
+        <div class="rail-foot" role="group" aria-label="System status">
+          <div class="rail-foot-label muted">System</div>
+          <div class="rail-pills">
+            <div id="pill-llama" class="pill pill-off">llama</div>
+            <div id="pill-sandbox" class="pill pill-off">sandbox</div>
+            <div id="pill-worker" class="pill pill-off">worker</div>
+            <div id="pill-phase" class="pill pill-off">phase</div>
+            <div id="pill-autopilot" class="pill pill-off" hidden>autopilot</div>
+          </div>
         </div>
       </aside>
 
@@ -67,7 +70,7 @@
             <div>
               <h1>Chat</h1>
               <p class="muted">
-                Markdown glass · attachments listed in your message until vision is wired.
+                Talk with Elyra. Attachments show in your message until vision is ready.
               </p>
             </div>
             <div id="chat-activity" class="chat-activity" hidden>
@@ -132,7 +135,7 @@
         <section id="panel-goals" class="panel">
           <header class="panel-head">
             <h1>Goals</h1>
-            <p class="muted">Durable ledger from <code>/api/goals</code>.</p>
+            <p class="muted">Open goals and progress.</p>
           </header>
           <div id="goals-list" class="list-panel">loading…</div>
         </section>
@@ -141,7 +144,7 @@
           <header class="panel-head">
             <h1>Moments</h1>
             <p class="muted">
-              Recent do-loops and beats. Reasoning is collapsed by default.
+              Recent work loops. Reasoning stays collapsed until you open it.
             </p>
           </header>
           <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
@@ -153,7 +156,7 @@
             <div>
               <h1>Tools &amp; skills</h1>
               <p class="muted">
-                Live catalog (disk rescan each refresh). Local packages are host-only, not in git.
+                Tools and skills on this host. Refresh reloads the catalog.
               </p>
             </div>
             <button type="button" id="catalog-refresh-btn" class="btn-secondary btn-sm">
@@ -177,8 +180,7 @@
           <header class="panel-head">
             <h1>Identity</h1>
             <p class="muted">
-              Current digests + versions (read-only). Drafts via model tools only —
-              no Glass draft editors. Session user ≠ orient USER on pure work.
+              Who Elyra is and who you’re talking as. Drafts come from the model—promote here when ready.
             </p>
           </header>
           <div class="split-lists identity-split">
@@ -192,7 +194,13 @@
                   <button type="button" id="identity-mint-grant-btn" class="btn-secondary btn-sm">
                     Mint grant
                   </button>
-                  <button type="button" id="identity-promote-self-btn" class="btn-secondary btn-sm">
+                  <button
+                    type="button"
+                    id="identity-promote-self-btn"
+                    class="btn-secondary btn-sm"
+                    disabled
+                    title="No draft to promote"
+                  >
                     Promote self
                   </button>
                 </div>
@@ -214,7 +222,13 @@
                   <span id="identity-user-draft-badge" class="badge draft-badge" hidden>draft</span>
                 </h2>
                 <div class="identity-actions">
-                  <button type="button" id="identity-promote-user-btn" class="btn-secondary btn-sm">
+                  <button
+                    type="button"
+                    id="identity-promote-user-btn"
+                    class="btn-secondary btn-sm"
+                    disabled
+                    title="No draft to promote"
+                  >
                     Promote user
                   </button>
                 </div>
@@ -236,7 +250,7 @@
         <section id="panel-status" class="panel">
           <header class="panel-head">
             <h1>Status</h1>
-            <p class="muted">Runtime snapshot from <code>/api/status</code>.</p>
+            <p class="muted">Provider, budget, and runtime health.</p>
           </header>
           <div id="hard-stop-banner" class="hard-stop-banner" hidden role="alert"></div>
           <div class="status-cards">
@@ -382,7 +396,10 @@
               secrets (API key), skills/local, and tools/local.
             </p>
           </div>
-          <pre id="status-json" class="code-block">loading…</pre>
+          <details class="status-raw-fold">
+            <summary>Raw status JSON</summary>
+            <pre id="status-json" class="code-block">loading…</pre>
+          </details>
         </section>
       </main>
     </div>
