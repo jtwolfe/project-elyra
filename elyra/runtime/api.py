@@ -376,7 +376,16 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/imagine":
-            self._post_imagine()
+            # PR9 / KD10: Grok Imagine productization deferred — stub only.
+            self._json(
+                501,
+                {
+                    "ok": False,
+                    "error": "not implemented",
+                    "reason": "not_implemented",
+                    "hint": "Grok Imagine deferred",
+                },
+            )
             return
         if path == "/api/stt":
             self._post_stt()
