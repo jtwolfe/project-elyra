@@ -30,7 +30,11 @@ from typing import Any, Callable, Mapping, Sequence
 from elyra.llm.client import ChatClient, ChatCompletionResult, ToolCall as LlmToolCall
 from elyra.llm.reasoning_hygiene import is_channel_flood, sanitize_completion
 from elyra.llm.usage import UsageHardStopError
-from elyra.loop.context import assemble_outer_meal, estimate_tokens
+from elyra.loop.context import (
+    assemble_outer_meal,
+    estimate_content_tokens,
+    estimate_tokens,
+)
 from elyra.loop.continue_policy import (
     continue_host_message,
     idle_minutes_since,
@@ -208,9 +212,12 @@ def _now_factory() -> datetime:
 
 
 def _message_tokens(msg: Mapping[str, Any]) -> int:
-    """Token estimate including tool_calls JSON when present."""
-    content = msg.get("content")
-    n = estimate_tokens(content if isinstance(content, str) else (str(content) if content else ""))
+    """Token estimate including tool_calls JSON when present.
+
+    Multimodal list content (image_url parts) uses the shared heuristic so
+    base64 data URLs are not counted as raw characters (PR5).
+    """
+    n = estimate_content_tokens(msg.get("content"))
     tcs = msg.get("tool_calls")
     if tcs:
         try:

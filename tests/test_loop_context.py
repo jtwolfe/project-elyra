@@ -237,6 +237,63 @@ def test_meal_includes_media_only_wake_by_id():
     assert len(empties) == 1
 
 
+def test_retain_ids_keeps_message_ids_after_budget():
+    """KD25: retain_ids=True keeps history ids through slide for expand."""
+    system = "S" * 8
+    orient_t = "O" * 8 + "{{NOW}}{{SELF}}{{USER}}{{WHY_NOW}}{{GOALS}}"
+    orient_t += "{{SKILL_CATALOG}}{{SKILL_BIAS}}"
+    history = [
+        {"role": "user", "content": "old" + ("z" * 400), "id": "old-u"},
+        {"role": "assistant", "content": "reply" + ("z" * 400), "id": "old-a"},
+        {
+            "role": "user",
+            "content": "",
+            "id": "wake-media",
+            "attachments": [{"id": "att_1", "kind": "image", "filename": "x.png"}],
+        },
+    ]
+    meal = assemble_outer_meal(
+        glass_history=history,
+        system_text=system,
+        orient_template=orient_t,
+        wake_content="",
+        wake_message_id="wake-media",
+        sliding_input_tokens=40,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        retain_ids=True,
+    )
+    mid = meal[1:-1]
+    assert any(m.get("id") == "wake-media" for m in mid)
+    # Default path still strips ids.
+    meal_default = assemble_outer_meal(
+        glass_history=history,
+        system_text=system,
+        orient_template=orient_t,
+        wake_message_id="wake-media",
+        sliding_input_tokens=40,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        retain_ids=False,
+    )
+    for m in meal_default:
+        assert "id" not in m
+
+
+def test_retain_ids_default_false_strips_ids():
+    history = [
+        {"role": "user", "content": "hello", "id": "m1"},
+        {"role": "assistant", "content": "hi", "id": "m2"},
+    ]
+    meal = assemble_outer_meal(
+        glass_history=history,
+        system_text="SYS",
+        orient_template="orient {{NOW}}{{SELF}}{{USER}}{{WHY_NOW}}"
+        "{{GOALS}}{{SKILL_CATALOG}}{{SKILL_BIAS}}",
+        sliding_input_tokens=24_000,
+    )
+    assert meal[1] == {"role": "user", "content": "hello"}
+    assert meal[2] == {"role": "assistant", "content": "hi"}
+
+
 def test_injects_wake_when_missing_from_glass():
     meal = assemble_outer_meal(
         glass_history=[],

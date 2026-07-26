@@ -1,7 +1,7 @@
 """Host media store: attachments, content-addressed blobs (KD1, KD14).
 
-Stretch 2 embedding fields are stubs only (KD12). HTTP / STT / TTS / vision
-expand land in later PRs.
+Stretch 2 embedding fields are stubs only (KD12). Meal-time vision expand
+(KD6/KD20/KD25) lives in ``elyra.media.prompt``. STT / TTS land later.
 """
 
 from elyra.media.project import (
@@ -9,6 +9,11 @@ from elyra.media.project import (
     project_attachment,
     projected_path_for,
     sandbox_media_root,
+)
+from elyra.media.prompt import (
+    expand_meal_for_provider,
+    index_glass,
+    strip_meal_wire_fields,
 )
 from elyra.media.store import (
     MediaStore,
@@ -63,7 +68,9 @@ __all__ = [
     "bind_attachment_message",
     "clear_sandbox_media",
     "ensure_media_dirs",
+    "expand_meal_for_provider",
     "get_attachment",
+    "index_glass",
     "max_bytes_for_kind",
     "media_root",
     "parse_content_length",
@@ -77,5 +84,6 @@ __all__ = [
     "sniff_mime_and_kind",
     "sniff_mime_kind_source",
     "stream_to_temp",
+    "strip_meal_wire_fields",
     "validate_att_id",
 ]

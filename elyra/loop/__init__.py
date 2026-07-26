@@ -3,7 +3,13 @@
 Orchestration lives in ``elyra.presence.worker``; this package is loop internals only.
 """
 
-from elyra.loop.context import assemble_outer_meal, estimate_tokens, fill_orient
+from elyra.loop.context import (
+    assemble_outer_meal,
+    estimate_content_tokens,
+    estimate_messages_tokens,
+    estimate_tokens,
+    fill_orient,
+)
 from elyra.loop.continue_policy import (
     should_inject_continue,
     should_stop_time_continue_declined,
@@ -23,6 +29,8 @@ __all__ = [
     "DoLoopResult",
     "assemble_outer_meal",
     "enforce_in_turn_budget",
+    "estimate_content_tokens",
+    "estimate_messages_tokens",
     "estimate_tokens",
     "fill_orient",
     "resolve_host_precheck_stop",

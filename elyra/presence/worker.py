@@ -1071,6 +1071,9 @@ class PresenceWorker:
             # USER inject: work-origin policy (K13/K19) — social speaker, else
             # linked goal/task created_in_context (PR4), else empty — never
             # blind "operator" fallback.
+            # Multimodal (KD20/KD25): every rebuild re-runs assemble(retain_ids)
+            # → expand_meal_for_provider → strip_meal_wire_fields. Never stash
+            # expanded parts across hops; never expand after ids are stripped.
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
@@ -1087,7 +1090,7 @@ class PresenceWorker:
                 protect_goal_ids.add(str(payload["goal_id"]))
             if payload.get("task_id"):
                 protect_task_ids.add(str(payload["task_id"]))
-            return assemble_outer_meal(
+            meal = assemble_outer_meal(
                 glass_history=glass,
                 settings=self.settings,
                 paths=self.paths,
@@ -1107,7 +1110,23 @@ class PresenceWorker:
                 skill_bias=format_skill_bias(wake.kind, payload, goals_list),
                 wake_content=wake_content_s,
                 wake_message_id=wake_message_id_s,
+                retain_ids=True,
             )
+            from elyra.media import MediaStore
+            from elyra.media.prompt import (
+                expand_meal_for_provider,
+                index_glass,
+                strip_meal_wire_fields,
+            )
+
+            expanded = expand_meal_for_provider(
+                meal,
+                glass_by_id=index_glass(glass),
+                wake_message_id=wake_message_id_s,
+                media_store=MediaStore(self.paths),
+                provider=self.settings.provider.name,
+            )
+            return strip_meal_wire_fields(expanded)
 
         registry = self._ensure_registry()
         with self._lock:

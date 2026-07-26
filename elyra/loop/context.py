@@ -24,6 +24,10 @@ _ORIENT_PLACEHOLDER_RE = re.compile(
 )
 
 
+# Multimodal image part heuristic (design glass multimodal — approximate).
+IMAGE_PART_TOKEN_HEURISTIC = 1024
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate: ``len(text) // 4`` (design Stretch 1)."""
     if not text:
@@ -31,15 +35,44 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def estimate_content_tokens(content: Any) -> int:
+    """Token estimate for a message ``content`` field (str or multimodal list).
+
+    String content uses ``len//4``. Multimodal list parts: text parts via
+    ``len//4``; each ``image_url`` part is a fixed **1024** token heuristic
+    (or ``min(1024, byte_size//750)`` when size is known on the part).
+    """
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return estimate_tokens(content)
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if not isinstance(part, dict):
+                total += estimate_tokens(str(part))
+                continue
+            ptype = part.get("type")
+            if ptype == "text":
+                total += estimate_tokens(str(part.get("text") or ""))
+            elif ptype == "image_url":
+                # Prefer explicit byte_size when host stamped it; else fixed.
+                raw_size = part.get("byte_size")
+                if isinstance(raw_size, int) and raw_size > 0:
+                    total += min(IMAGE_PART_TOKEN_HEURISTIC, max(1, raw_size // 750))
+                else:
+                    total += IMAGE_PART_TOKEN_HEURISTIC
+            else:
+                total += estimate_tokens(str(part))
+        return total
+    return estimate_tokens(str(content))
+
+
 def estimate_messages_tokens(messages: Sequence[Mapping[str, Any]]) -> int:
     """Sum content token estimates for a message list (roles ignored)."""
     total = 0
     for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, str):
-            total += estimate_tokens(content)
-        elif content is not None:
-            total += estimate_tokens(str(content))
+        total += estimate_content_tokens(msg.get("content"))
     return total
 
 
@@ -232,6 +265,7 @@ def assemble_outer_meal(
     system_text: str | None = None,
     orient_template: str | None = None,
     sliding_input_tokens: int | None = None,
+    retain_ids: bool = False,
 ) -> list[dict[str, Any]]:
     """Build outer prefix messages: system → sliding history → orient.
 
@@ -247,6 +281,11 @@ def assemble_outer_meal(
 
     Dedupe: if ``wake_content`` / ``wake_message_id`` already appears in glass
     history, do not inject a second copy.
+
+    ``retain_ids`` (KD25): when True, history rows keep ``id`` after budget so
+    ``expand_meal_for_provider`` can correlate glass attachments. Default False
+    strips ids for legacy wire callers/tests. Media path always uses True then
+    strips via ``strip_meal_wire_fields`` immediately before Completions.
     """
     loop = _loop_settings(settings)
     budget = (
@@ -310,6 +349,18 @@ def assemble_outer_meal(
             # Only protected rows remain; stop dropping.
             break
 
-    # Wire format: strip internal ids before returning.
-    clean_history = [{"role": m["role"], "content": m["content"]} for m in history]
+    # Default wire format strips host-only ids. Media path retains ids through
+    # expand then strip_meal_wire_fields before Completions (KD25 option A).
+    if retain_ids:
+        clean_history: list[dict[str, Any]] = []
+        for m in history:
+            row: dict[str, Any] = {"role": m["role"], "content": m["content"]}
+            mid = m.get("id")
+            if mid is not None:
+                row["id"] = mid
+            clean_history.append(row)
+    else:
+        clean_history = [
+            {"role": m["role"], "content": m["content"]} for m in history
+        ]
     return [system_msg, *clean_history, orient_msg]
