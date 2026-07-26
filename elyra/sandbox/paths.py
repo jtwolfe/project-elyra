@@ -107,10 +107,12 @@ GUEST_ENV_SANDBOX_ROOT = "ELYRA_SANDBOX_ROOT"
 PRIMARY_NAME = "sandbox0"
 
 # Mount map: guest path → (host relative under primary root, readonly).
+# Single source of truth for fingerprint, fake client, and live MSB volumes (KD17).
 MOUNT_SPEC: tuple[tuple[str, str, bool], ...] = (
     (f"{GUEST_WORKSPACE_ROOT}/lib", "lib", True),
     (f"{GUEST_WORKSPACE_ROOT}/general", "general", True),
     (f"{GUEST_WORKSPACE_ROOT}/fixtures", "fixtures", True),
+    (f"{GUEST_WORKSPACE_ROOT}/media", "media", True),  # chat media projection (KD7)
     (f"{GUEST_WORKSPACE_ROOT}/tmp", "tmp", False),
     (f"{GUEST_WORKSPACE_ROOT}/tools", "tools", False),
 )
@@ -130,7 +132,7 @@ _MSB_NETWORK_DEFAULT = "public_only"
 # Backward-compat alias — prefer resolve_msb_network_policy_id() at call sites.
 MSB_NETWORK_POLICY_ID = _MSB_NETWORK_DEFAULT
 
-_PRIMARY_ALWAYS_DIRS = ("lib", "general", "fixtures", "tmp", "tools")
+_PRIMARY_ALWAYS_DIRS = ("lib", "general", "fixtures", "media", "tmp", "tools")
 
 
 def resolve_msb_network_policy_id() -> str:

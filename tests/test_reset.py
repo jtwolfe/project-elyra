@@ -271,11 +271,13 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     local_tool.mkdir(parents=True)
     (local_tool / "TOOL.md").write_text("# local keep", encoding="utf-8")
 
-    # Seed media store (KD13: clear_media wipes with messages).
+    # Seed media store (KD13: clear_media wipes with messages + sandbox projection).
     store = MediaStore(paths)
     att = store.put_bytes(b"secret-bytes", filename="secret.bin", origin="system")
     assert store.meta_path(att.id).is_file()
     assert store.blob_path(att.sha256).is_file()
+    projected = host_primary_root(paths) / "media" / att.id / "secret.bin"
+    assert projected.is_file()
 
     clear_wakes_disk(paths)
     clear_moments(paths)
@@ -294,9 +296,11 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     # Empty layout re-created
     assert (paths.data_dir / "media" / "blobs").is_dir()
     assert (paths.data_dir / "media" / "meta").is_dir()
-    # New tree: RW cleared; RO seed left
+    # New tree: RW + media projection cleared; RO seed left; media/ dir remains
     assert not (host_primary_root(paths) / "tmp" / "scratch.txt").exists()
     assert not (host_primary_root(paths) / "tools" / "staged").exists()
+    assert (host_primary_root(paths) / "media").is_dir()
+    assert not projected.exists()
     assert (host_primary_root(paths) / "lib" / "keep.txt").read_text(
         encoding="utf-8"
     ) == "seed"

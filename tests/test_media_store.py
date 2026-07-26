@@ -245,3 +245,35 @@ def test_attachment_from_dict_defaults_embedding():
     )
     assert att.embedding_status == "none"
     assert att.bound_message_id is None
+
+
+def test_put_bytes_projects_sandbox_media(store, paths):
+    """PR2: put_bytes projects into sandboxes/sandbox0/media/<id>/<name>."""
+    data = FIXTURE_PNG.read_bytes()
+    att = store.put_bytes(data, filename="shot.png", origin="user_upload")
+    mirror = (
+        paths.home / "sandboxes" / "sandbox0" / "media" / att.id / "shot.png"
+    )
+    assert mirror.is_file()
+    assert mirror.read_bytes() == data
+
+
+def test_project_attachment_hardlink_then_copy_fallback(store, paths, monkeypatch):
+    """Projection tries os.link; on OSError falls back to copy2 + chmod 0o444."""
+    from elyra.media.project import project_attachment
+
+    data = b"project-payload-unique"
+    att = store.put_bytes(data, filename="p.txt", origin="system")
+    blob = store.blob_path(att.sha256)
+    assert blob.is_file()
+
+    # Force copy path.
+    def boom_link(src, dst):  # noqa: ANN001
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr("elyra.media.project.os.link", boom_link)
+    dest = project_attachment(att, blob, paths=paths)
+    assert dest.is_file()
+    assert dest.read_bytes() == data
+    # copy path applies 0o444
+    assert dest.stat().st_mode & 0o777 == 0o444

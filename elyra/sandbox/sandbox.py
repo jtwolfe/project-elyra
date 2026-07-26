@@ -141,6 +141,37 @@ class Sandbox:
         self.ensure_root()
         return resolve(self._root, normalize_user_path(user_path))
 
+    # --- mutability (L2 host path policy; media/ only in v1 — KD7) ---
+
+    def is_readonly_relpath(self, user_path: str) -> bool:
+        """True if ``user_path`` resolves under ``media/`` (chat media projection).
+
+        v1: **media/ only**. Do not treat lib/general/fixtures as host-tool
+        write-denied — guest MSB already RO-binds those; host-stub may still
+        write seed dirs (existing dogfood/tests). Broaden only with an explicit
+        product decision.
+        """
+        self.ensure_root()
+        norm = normalize_user_path(user_path)
+        try:
+            candidate = resolve(self._root, norm)
+        except (PathEscapeError, ValueError, TypeError):
+            return False
+        media_root = (self._root / "media").resolve()
+        try:
+            candidate.relative_to(media_root)
+            return True
+        except ValueError:
+            return False
+
+    # Design alias (normative name in multimodal design doc).
+    is_media_protected_relpath = is_readonly_relpath
+
+    def assert_mutable(self, user_path: str) -> None:
+        """Raise ``PermissionError("media_readonly")`` if path is media-protected."""
+        if self.is_readonly_relpath(user_path):
+            raise PermissionError("media_readonly")
+
     # --- FS ops ---
 
     def read_text(self, user_path: str, *, encoding: str = "utf-8") -> str:
@@ -168,7 +199,11 @@ class Sandbox:
         encoding: str = "utf-8",
         make_parents: bool = True,
     ) -> Path:
-        """Write text to a path under the sandbox (creates parents by default)."""
+        """Write text to a path under the sandbox (creates parents by default).
+
+        Denies writes under ``media/`` (``PermissionError("media_readonly")``).
+        """
+        self.assert_mutable(user_path)
         norm = normalize_user_path(user_path)
         path = self.resolve(user_path)
         if make_parents:
@@ -258,10 +293,11 @@ class Sandbox:
         """Replace ``old`` with ``new`` in a file; atomic enough (temp + replace).
 
         ``count`` is passed to ``str.replace`` (0 = all). Returns number of
-        replacements performed.
+        replacements performed. Denies mutation under ``media/``.
         """
         if not old:
             raise ValueError("old must be non-empty")
+        self.assert_mutable(user_path)
         norm = normalize_user_path(user_path)
         path = self.resolve(user_path)
         path = resolve(self._root, norm)
@@ -284,7 +320,16 @@ class Sandbox:
     def _atomic_write_text(
         self, path: Path, content: str, *, encoding: str
     ) -> None:
-        """Write via temp file in the same directory then os.replace."""
+        """Write via temp file in the same directory then os.replace.
+
+        Defense-in-depth: deny if ``path`` resolves under ``media/``.
+        """
+        try:
+            rel = path.resolve().relative_to(self._root.resolve()).as_posix()
+            self.assert_mutable(rel)
+        except (ValueError, TypeError):
+            # Path outside root should not reach here; fail closed on media only.
+            pass
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(
             dir=str(path.parent),

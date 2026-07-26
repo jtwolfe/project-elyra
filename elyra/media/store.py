@@ -1,16 +1,17 @@
 """Content-addressed attachment store under ``data/media/`` (KD1, KD14).
 
-Scope: blob + meta persistence, bind, path helpers, stdlib MIME sniff.
+Scope: blob + meta persistence, bind, path helpers, stdlib MIME sniff,
+sandbox RO projection (PR2).
 In scope: sha-addressed blobs, meta JSON with bound_message_id, temp+rename
-writes, ensure dirs, read/delete helpers used by reset/tests.
-Out of scope: HTTP upload, sandbox RO projection (PR2), GC (PR10), TTS cache
-writes, vision expand.
+writes, ensure dirs, read/delete helpers used by reset/tests, project mirror.
+Out of scope: HTTP upload, GC (PR10), TTS cache writes, vision expand.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import uuid
 from datetime import UTC, datetime
@@ -24,6 +25,8 @@ from elyra.media.types import (
     ROLE_HINTS,
     Attachment,
 )
+
+_LOG = logging.getLogger(__name__)
 
 MEDIA_DIRNAME = "media"
 # att ids: att_ + uuid hex, or generic safe segment for future flexibility.
@@ -313,6 +316,14 @@ class MediaStore:
             uploader_user_id=uploader_user_id,
         )
         self._write_meta(att)
+        # Best-effort RO sandbox projection (PR2). Failure must not leave meta
+        # inconsistent — blob+meta are durable truth; mirror is disposable.
+        try:
+            from elyra.media.project import project_attachment
+
+            project_attachment(att, blob, paths=self._paths)
+        except OSError as exc:
+            _LOG.warning("media projection failed for %s: %s", aid, exc)
         return att
 
     def _write_meta(self, att: Attachment) -> None:

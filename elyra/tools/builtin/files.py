@@ -207,6 +207,12 @@ def search_replace(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return _path_fail(path, "is_directory")
     except UnicodeDecodeError:
         return _path_fail(path, "decode_error")
+    except PermissionError as exc:
+        # media_readonly is raised as PermissionError("media_readonly") (PR2).
+        reason = str(exc) or type(exc).__name__
+        if reason == "media_readonly" or "media_readonly" in reason:
+            return _path_fail(path, "media_readonly")
+        return _path_fail(path, f"os_error:{type(exc).__name__}")
     except ValueError as exc:
         msg = str(exc).lower()
         if "non-empty" in msg or "old" in msg:

@@ -533,7 +533,9 @@ def test_ensure_unknown_status_degraded(tmp_path: Path) -> None:
 
 
 def test_create_kwargs_include_volume_map(tmp_path: Path) -> None:
-    """Ensure create kwargs carry RO seed + RW tmp/tools volume map."""
+    """Ensure create kwargs carry every MOUNT_SPEC mount (incl. media RO)."""
+    from elyra.sandbox.paths import MOUNT_SPEC
+
     root = _seed_minimal(tmp_path)
     client = FakeSandboxClient()
     mgr = _manager(tmp_path, client)
@@ -542,10 +544,14 @@ def test_create_kwargs_include_volume_map(tmp_path: Path) -> None:
         kwargs = client.create_kwargs_for(PRIMARY_NAME)
         assert kwargs is not None
         volumes = kwargs.get("volumes") or {}
-        assert volumes["/workspace/lib"]["readonly"] is True
+        assert len(volumes) == len(MOUNT_SPEC)
+        for guest, host_rel, readonly in MOUNT_SPEC:
+            assert guest in volumes
+            assert volumes[guest]["readonly"] is readonly
+            assert str(root / host_rel) in volumes[guest]["host"]
+        assert volumes["/workspace/media"]["readonly"] is True
         assert volumes["/workspace/tmp"]["readonly"] is False
         assert volumes["/workspace/tools"]["readonly"] is False
-        assert str(root / "lib") in volumes["/workspace/lib"]["host"]
     finally:
         mgr.shutdown()
 
