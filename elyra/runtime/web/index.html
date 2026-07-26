@@ -24,6 +24,18 @@
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
+        <div class="rail-session" title="Who is at the keyboard (message attribution)">
+          <label class="session-label" for="session-user-select">Session user</label>
+          <select id="session-user-select" class="session-select" aria-label="Session user">
+            <option value="operator">operator</option>
+          </select>
+          <button type="button" id="session-new-guest-btn" class="btn-secondary btn-sm session-new-btn">
+            New guest…
+          </button>
+          <p class="session-hint muted">
+            Session is who is typing — not orient USER on pure work.
+          </p>
+        </div>
         <div class="rail-continuous continuous-control" title="Hybrid continuous work (autopilot)">
           <label class="toggle-label" for="continuous-toggle-rail">
             <input type="checkbox" id="continuous-toggle-rail" class="continuous-toggle" />
@@ -158,16 +170,59 @@
         <section id="panel-identity" class="panel">
           <header class="panel-head">
             <h1>Identity</h1>
-            <p class="muted">Self digest + operator profile (read-only).</p>
+            <p class="muted">
+              Current digests + versions (read-only). Drafts via model tools only —
+              no Glass draft editors. Session user ≠ orient USER on pure work.
+            </p>
           </header>
-          <div class="split-lists">
-            <div>
-              <h2 class="subhead">Self</h2>
+          <div class="split-lists identity-split">
+            <div class="identity-col">
+              <div class="identity-col-head">
+                <h2 class="subhead">
+                  Self · <span id="identity-self-label">Elyra</span>
+                  <span id="identity-self-draft-badge" class="badge draft-badge" hidden>draft</span>
+                </h2>
+                <div class="identity-actions">
+                  <button type="button" id="identity-mint-grant-btn" class="btn-secondary btn-sm">
+                    Mint grant
+                  </button>
+                  <button type="button" id="identity-promote-self-btn" class="btn-secondary btn-sm">
+                    Promote self
+                  </button>
+                </div>
+              </div>
+              <div id="identity-grant-token" class="identity-grant muted" hidden></div>
               <pre id="identity-self" class="code-block">loading…</pre>
+              <details id="identity-self-draft-fold" class="identity-draft-fold" hidden>
+                <summary>Draft body</summary>
+                <pre id="identity-self-draft" class="code-block">—</pre>
+              </details>
+              <h3 class="subhead subhead-sm">Versions</h3>
+              <div id="identity-self-versions" class="list-panel identity-versions">—</div>
+              <pre id="identity-self-version-body" class="code-block" hidden></pre>
             </div>
-            <div>
-              <h2 class="subhead">User · operator</h2>
+            <div class="identity-col">
+              <div class="identity-col-head">
+                <h2 class="subhead">
+                  User · <span id="identity-user-label">—</span>
+                  <span id="identity-user-draft-badge" class="badge draft-badge" hidden>draft</span>
+                </h2>
+                <div class="identity-actions">
+                  <button type="button" id="identity-promote-user-btn" class="btn-secondary btn-sm">
+                    Promote user
+                  </button>
+                </div>
+              </div>
+              <div id="identity-user-chips" class="identity-user-chips"></div>
+              <div id="identity-user-meta" class="identity-meta muted">—</div>
               <pre id="identity-user" class="code-block">loading…</pre>
+              <details id="identity-user-draft-fold" class="identity-draft-fold" hidden>
+                <summary>Draft body</summary>
+                <pre id="identity-user-draft" class="code-block">—</pre>
+              </details>
+              <h3 class="subhead subhead-sm">Versions</h3>
+              <div id="identity-user-versions" class="list-panel identity-versions">—</div>
+              <pre id="identity-user-version-body" class="code-block" hidden></pre>
             </div>
           </div>
         </section>
