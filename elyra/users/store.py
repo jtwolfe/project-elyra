@@ -28,6 +28,7 @@ from elyra.identity.layout import (
     load_json_object,
     mint_user_id,
     mint_version_id,
+    prune_orphan_version_files,
     read_text_or_empty,
     strip_operational_keys,
     trim_versions_index,
@@ -604,6 +605,11 @@ class UsersStore:
                 and draft_body == current_body
                 and meta.get("current_content_sha256") == draft_sha
             ):
+                versions_list = meta.get("versions") or []
+                if isinstance(versions_list, list):
+                    prune_orphan_version_files(
+                        versions_list, self.versions_dir(user_id)
+                    )
                 try:
                     draft_path.unlink(missing_ok=True)
                 except OSError:
@@ -703,6 +709,9 @@ class UsersStore:
 
             write_json_atomic(self.meta_path(user_id), meta)
 
+            # Always GC drop files after meta commit (even if draft unlink fails).
+            delete_version_files(drop_later, vdir)
+
             try:
                 draft_path.unlink(missing_ok=True)
             except OSError:
@@ -715,8 +724,6 @@ class UsersStore:
                     "promote_count": meta["promote_count"],
                     "meta": meta,
                 }
-
-            delete_version_files(drop_later, vdir)
 
             return {
                 "ok": True,

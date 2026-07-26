@@ -483,6 +483,7 @@ def test_version_gc_keeps_last_50(tmp_path):
 
 
 def test_index_heal_from_dir(tmp_path):
+    """Empty/broken index + disk archives → rebuild from dir (index-loss recovery)."""
     paths = resolve_paths(tmp_path)
     paths.ensure_data_dirs()
     store = IdentityStore(paths)
@@ -504,6 +505,64 @@ def test_index_heal_from_dir(tmp_path):
     for row in healed["versions"]:
         vid = row["version_id"]
         assert (store.versions_dir() / f"{vid}.md").is_file()
+
+
+def test_heal_prefers_meta_deletes_disk_orphans(tmp_path):
+    """Meta index non-empty: disk orphans are deleted, not re-indexed (Issue 12)."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = IdentityStore(paths)
+    store.write_draft("# A\n", reason="a")
+    store.promote(reason="a")
+    store.write_draft("# B\n", reason="b")
+    store.promote(reason="b")
+
+    meta = store.get_meta()
+    n = len(meta["versions"])
+    assert n >= 1
+    # Plant orphan version file not in index (deferred-GC crash window).
+    orphan_id = "20260101T000000Z_dead01"
+    orphan = store.versions_dir() / f"{orphan_id}.md"
+    orphan.write_text("# orphan body\n", encoding="utf-8")
+    assert orphan.is_file()
+
+    store.ensure_layout()
+    healed = store.get_meta()
+    # Index length unchanged (meta authoritative — no re-inflation)
+    assert len(healed["versions"]) == n
+    assert orphan_id not in {r["version_id"] for r in healed["versions"]}
+    assert not orphan.exists()
+
+
+def test_delete_drop_files_even_when_simulating_post_meta_gc(tmp_path):
+    """After meta commits trimmed index, drop files must not survive ensure heal.
+
+    Simulates: meta already trimmed; orphan drop file still on disk (crash
+    between meta write and delete_version_files, or unlink-fail path that
+    still ran GC). ensure_layout must not re-inflate.
+    """
+    from elyra.identity.layout import VERSION_GC_LIMIT, mint_version_id
+
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = IdentityStore(paths)
+
+    # Build > GC_LIMIT versions so trim is meaningful
+    for i in range(VERSION_GC_LIMIT + 2):
+        store.write_draft(f"# v{i}\n", reason=f"r{i}")
+        assert store.promote(reason=f"p{i}")["ok"] is True
+
+    meta = store.get_meta()
+    assert len(meta["versions"]) == VERSION_GC_LIMIT
+
+    # Re-plant a fake dropped version file
+    fake_id = mint_version_id()
+    fake = store.versions_dir() / f"{fake_id}.md"
+    fake.write_text("# should be pruned\n", encoding="utf-8")
+
+    store.ensure_layout()
+    assert len(store.get_meta()["versions"]) == VERSION_GC_LIMIT
+    assert not fake.exists()
 
 
 def test_mint_version_id_shape():

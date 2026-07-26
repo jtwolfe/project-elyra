@@ -274,9 +274,18 @@ def heal_versions_index(
     meta: dict[str, Any],
     versions_dir: Path,
 ) -> dict[str, Any]:
-    """If meta.versions and directory diverge, rebuild index from dir.
+    """Reconcile meta.versions with versions/ directory (K17).
 
-    Returns (possibly updated) meta. Logs a warning on rebuild.
+    Policy (meta authoritative when index is usable):
+
+    1. Drop index rows whose files are missing.
+    2. If cleaned index is non-empty: keep it; **delete disk orphans**
+       (files not in index). Prevents re-inflation after deferred GC
+       (meta trimmed but drop files not yet unlinked).
+    3. If cleaned index is empty but disk has version files: rebuild
+       index from directory (index-loss recovery).
+
+    Returns (possibly updated) meta. Logs a warning on rebuild/orphan prune.
     """
     index = meta.get("versions")
     if not isinstance(index, list):
@@ -303,28 +312,72 @@ def heal_versions_index(
         index_ids.add(vid)
         cleaned.append(row)
 
-    diverge = index_ids != disk_ids or len(cleaned) != len(index)
-    if not diverge:
+    disk_orphans = disk_ids - index_ids
+
+    # Case: usable meta index (non-empty after dropping missing files).
+    # Meta is authoritative — prune disk files not cited by the index.
+    if cleaned:
+        if disk_orphans or len(cleaned) != len(index):
+            if disk_orphans:
+                logger.warning(
+                    "identity versions dir has orphans under %s; "
+                    "deleting %d file(s) not in meta index",
+                    versions_dir,
+                    len(disk_orphans),
+                )
+                prune_orphan_version_files(cleaned, versions_dir)
+            meta["versions"] = cleaned
+            return meta
         meta["versions"] = cleaned
         return meta
 
-    logger.warning(
-        "identity versions index diverged from dir %s; rebuilding",
-        versions_dir,
-    )
-    # Preserve promoted_at from old index rows where possible.
-    old_by_id = {
-        r["version_id"]: r
-        for r in cleaned
-        if isinstance(r, dict) and "version_id" in r
-    }
-    rebuilt = rebuild_versions_index(versions_dir)
-    for row in rebuilt:
-        old = old_by_id.get(row["version_id"])
-        if old and old.get("promoted_at"):
-            row["promoted_at"] = old["promoted_at"]
-    meta["versions"] = rebuilt
+    # Case: empty/broken index but disk has archives — rebuild from dir.
+    if disk_ids:
+        logger.warning(
+            "identity versions index empty/missing under %s; rebuilding from dir",
+            versions_dir,
+        )
+        old_by_id = {
+            r["version_id"]: r
+            for r in index
+            if isinstance(r, dict) and isinstance(r.get("version_id"), str)
+        }
+        rebuilt = rebuild_versions_index(versions_dir)
+        for row in rebuilt:
+            old = old_by_id.get(row["version_id"])
+            if old and old.get("promoted_at"):
+                row["promoted_at"] = old["promoted_at"]
+        meta["versions"] = rebuilt
+        return meta
+
+    meta["versions"] = []
     return meta
+
+
+def prune_orphan_version_files(
+    versions: list[dict[str, Any]],
+    versions_dir: Path,
+) -> None:
+    """Delete versions/*.md files not cited by the given index (meta authoritative)."""
+    keep_ids: set[str] = set()
+    for row in versions:
+        if not isinstance(row, dict):
+            continue
+        vid = row.get("version_id")
+        if isinstance(vid, str) and VERSION_ID_RE.fullmatch(vid):
+            keep_ids.add(vid)
+    if not versions_dir.is_dir():
+        return
+    for path in list(versions_dir.iterdir()):
+        if not path.is_file() or path.suffix != ".md":
+            continue
+        if not VERSION_ID_RE.fullmatch(path.stem):
+            continue
+        if path.stem not in keep_ids:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def trim_versions_index(

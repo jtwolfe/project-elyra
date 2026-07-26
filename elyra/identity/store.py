@@ -27,6 +27,7 @@ from elyra.identity.layout import (
     heal_versions_index,
     load_json_object,
     mint_version_id,
+    prune_orphan_version_files,
     read_text_or_empty,
     strip_operational_keys,
     trim_versions_index,
@@ -386,6 +387,12 @@ class IdentityStore:
                 and draft_body == current_body
                 and meta.get("current_content_sha256") == draft_sha
             ):
+                # Meta is already authoritative — prune any deferred-GC orphans.
+                versions_list = meta.get("versions") or []
+                if isinstance(versions_list, list):
+                    prune_orphan_version_files(
+                        versions_list, self.versions_dir()
+                    )
                 try:
                     draft_path.unlink(missing_ok=True)
                 except OSError:
@@ -467,6 +474,10 @@ class IdentityStore:
 
             write_json_atomic(self.meta_path(), meta)
 
+            # GC files after committed meta (meta is authoritative). Always run
+            # even if draft unlink fails so drop_later cannot re-inflate via heal.
+            delete_version_files(drop_later, versions_dir)
+
             # Clear draft after meta commit; fail closed if unlink fails so
             # callers can retry via the idempotent path above.
             try:
@@ -480,9 +491,6 @@ class IdentityStore:
                     "promote_count": meta["promote_count"],
                     "meta": meta,
                 }
-
-            # GC files only after committed meta (no durable history loss on crash).
-            delete_version_files(drop_later, versions_dir)
 
             return {
                 "ok": True,
