@@ -21,10 +21,11 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
 | 12 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged sampling / hygiene (**superseded** by remove-gemma design; freeze body) |
 | 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
-| 14 | **[design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md)** | **Next stack:** delete llama.cpp/Gemma path; stub `provider=local` for OpenAI-compat / transformers later |
+| 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
+| 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
 
 **Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `grok-improvement`** over stale phase README status lines.  
-**Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes once the remove-gemma stack lands — freeze bodies stay until that implementation pass rewrites them.  
+**Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes — freeze bodies stay until a docs modernization pass rewrites them.  
 **Archive:** longer research notes under [archive/](archive/) (not freeze). Phase 3 essay: [memory-atoms.pdf](memory-atoms.pdf).
 
 ## Stance (short)
