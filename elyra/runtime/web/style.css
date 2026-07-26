@@ -314,6 +314,37 @@ body {
   flex-wrap: wrap;
 }
 
+/* TTS play-on-message (PR7 / KD3) — additive; never a new glass row */
+.msg-tts-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--muted);
+  border-radius: 999px;
+  width: 1.55rem;
+  height: 1.55rem;
+  padding: 0;
+  font-size: 0.65rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.msg-tts-btn:hover:not(:disabled) {
+  color: var(--gold-bright);
+  border-color: var(--gold-dim);
+}
+
+.msg-tts-btn:disabled,
+.msg-tts-btn.is-loading {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .msg .meta .role-chip {
   letter-spacing: 0.02em;
   font-size: 0.7rem;

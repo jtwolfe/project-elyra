@@ -670,6 +670,73 @@ function renderAttachmentItem(att) {
   return item;
 }
 
+/** Active TTS Audio element (stop previous play on new click). */
+let _ttsAudio = null;
+/** message_id → object URL for cached play (browser-side second click). */
+const _ttsBlobUrls = new Map();
+
+/**
+ * Play TTS for a glass message (PR7 / KD3).
+ * Host loads saved text only; disk cache on second host hit; never re-LLM.
+ * Hide play when content is empty (caller responsibility).
+ */
+async function playMessageTts(messageId, btn) {
+  if (!messageId) return;
+  // Stop any in-flight playback.
+  if (_ttsAudio) {
+    try {
+      _ttsAudio.pause();
+    } catch {
+      /* ignore */
+    }
+    _ttsAudio = null;
+  }
+  const prevLabel = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("is-loading");
+    btn.textContent = "…";
+  }
+  try {
+    let url = _ttsBlobUrls.get(messageId);
+    if (!url) {
+      const res = await fetch(
+        `/api/messages/${encodeURIComponent(messageId)}/tts?voice=eve&language=en`,
+        { method: "GET" }
+      );
+      if (!res.ok) {
+        let reason = `tts_${res.status}`;
+        try {
+          const j = await res.json();
+          if (j && j.reason) reason = j.reason;
+          else if (j && j.error) reason = String(j.error);
+        } catch {
+          /* non-json */
+        }
+        showNotice(`TTS failed: ${reason}`);
+        return;
+      }
+      const blob = await res.blob();
+      url = URL.createObjectURL(blob);
+      _ttsBlobUrls.set(messageId, url);
+    }
+    const audio = new Audio(url);
+    _ttsAudio = audio;
+    audio.addEventListener("ended", () => {
+      if (_ttsAudio === audio) _ttsAudio = null;
+    });
+    await audio.play();
+  } catch (err) {
+    showNotice(`TTS play error: ${err && err.message ? err.message : err}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("is-loading");
+      btn.textContent = prevLabel || "▶";
+    }
+  }
+}
+
 function renderMessages(messages, { force = false } = {}) {
   if (!messagesEl) return;
   const list = Array.isArray(messages) ? messages : [];
@@ -691,8 +758,23 @@ function renderMessages(messages, { force = false } = {}) {
     meta.innerHTML = `<span class="role-chip">${escapeHtml(
       label
     )}</span><span>${escapeHtml(formatMsgTime(m.created_at))}</span>`;
-    div.appendChild(meta);
+    // TTS play: only when content non-empty (media-only rows have no playable text).
     const content = m.content || "";
+    if (content.trim() && m.id) {
+      const playBtn = document.createElement("button");
+      playBtn.type = "button";
+      playBtn.className = "msg-tts-btn";
+      playBtn.textContent = "▶";
+      playBtn.title = "Play message";
+      playBtn.setAttribute("aria-label", "Play message");
+      playBtn.dataset.messageId = m.id;
+      playBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        playMessageTts(m.id, playBtn);
+      });
+      meta.appendChild(playBtn);
+    }
+    div.appendChild(meta);
     const atts = visibleAttachments(m.attachments);
     // Media-only rows: skip empty markdown shell; footer carries inventory.
     if (content.trim()) {

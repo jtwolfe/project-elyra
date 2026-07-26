@@ -356,6 +356,19 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_media()
             return
 
+
+        # POST /api/messages/{id}/tts — same as GET; optional JSON body params.
+        if path.startswith("/api/messages/") and path.endswith("/tts"):
+            clen = self.headers.get("Content-Length")
+            body = {}
+            if clen and clen.isdigit() and int(clen) > 0:
+                raw = self.rfile.read(int(clen))
+                try:
+                    body = json.loads(raw.decode("utf-8") or "{}")
+                except Exception:
+                    body = {}
+            self._message_tts(path, qs=qs, body=body or {})
+            return
         if path == "/api/stt":
             self._post_stt()
             return
@@ -1394,6 +1407,230 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
             _UPLOAD_SLOTS.release()
+
+    def _parse_message_tts_id(self, path: str) -> str | None:
+        """Extract message id from ``/api/messages/{id}/tts`` or None if invalid."""
+        # path is absolute path without query: /api/messages/<id>/tts
+        prefix = "/api/messages/"
+        suffix = "/tts"
+        if not path.startswith(prefix) or not path.endswith(suffix):
+            return None
+        mid = unquote(path[len(prefix) : -len(suffix)])
+        if not mid or "/" in mid or mid in (".", "..") or "\\" in mid:
+            return None
+        if not _SEGMENT_RE.fullmatch(mid):
+            return None
+        return mid
+
+
+    def _message_tts(
+        self,
+        path: str,
+        *,
+        qs: dict[str, list[str]],
+        body: dict[str, Any] | None,
+    ) -> None:
+        """GET/POST /api/messages/{id}/tts — TTS of stored content only (PR7 / KD3).
+
+        - Loads text via ``get_message`` only (never chat_completion, never append).
+        - Empty content → 400 ``empty_text``.
+        - Cache key: (message_id, voice, language, profile).
+        - xAI provider only; local / missing creds fail closed.
+        """
+        message_id = self._parse_message_tts_id(path)
+        if message_id is None:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "invalid message id",
+                    "reason": "invalid_message_id",
+                },
+            )
+            return
+
+        if not tts_enabled():
+            self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "tts disabled",
+                    "reason": "tts_disabled",
+                },
+            )
+            return
+
+        # Fail-closed when provider is not xAI (KD9).
+        provider = self.provider
+        if provider is not None:
+            pname = getattr(provider, "provider_name", None) or ""
+            if str(pname) != "xai":
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "tts requires xai provider",
+                        "reason": "provider_unsupported",
+                        "provider": str(pname),
+                    },
+                )
+                return
+
+        # Params: query string, then optional JSON body overrides.
+        body = body if isinstance(body, dict) else {}
+
+        def _pick(*keys: str, default: str) -> str:
+            for k in keys:
+                vals = qs.get(k)
+                if vals and str(vals[0]).strip():
+                    return str(vals[0]).strip()
+            for k in keys:
+                v = body.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return default
+
+        voice = _pick("voice", "voice_id", default=TTS_DEFAULT_VOICE)
+        language = _pick("language", "lang", default=TTS_DEFAULT_LANGUAGE)
+        profile = _pick(
+            "profile", "output_profile", default=TTS_DEFAULT_PROFILE
+        )
+
+        row = get_message(message_id, paths=self.paths)
+        if row is None:
+            self._json(
+                404,
+                {
+                    "ok": False,
+                    "error": "message not found",
+                    "reason": "not_found",
+                    "message_id": message_id,
+                },
+            )
+            return
+
+        content = row.get("content")
+        text = content if isinstance(content, str) else (str(content) if content else "")
+        if not text.strip():
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "empty message content",
+                    "reason": "empty_text",
+                    "message_id": message_id,
+                },
+            )
+            return
+
+        # Credentials + base URL (xAI only).
+        base_url = "https://api.x.ai/v1"
+        timeout = 120.0
+        bearer = ""
+        if provider is not None:
+            base_url = str(getattr(provider, "base_url", None) or base_url)
+            timeout = float(getattr(provider, "request_timeout_s", None) or timeout)
+            source = str(getattr(provider, "credential_source", "grok_build") or "grok_build")
+            grok_path = getattr(provider, "grok_auth_path", None)
+            data_dir = getattr(provider, "data_dir", None) or self.paths.data_dir
+            resolution = resolve_bearer(
+                source=source,
+                data_dir=Path(data_dir),
+                grok_auth_path=Path(grok_path) if grok_path else None,
+            )
+            if not resolution.ok or not resolution.token:
+                self._json(
+                    503,
+                    {
+                        "ok": False,
+                        "error": "credential unavailable",
+                        "reason": "credential_unavailable",
+                        "credential_detail": resolution.detail,
+                    },
+                )
+                return
+            bearer = resolution.token
+        else:
+            # Legacy tests / no provider: try api_key on data dir only.
+            resolution = resolve_bearer(
+                source="api_key",
+                data_dir=self.paths.data_dir,
+            )
+            if not resolution.ok or not resolution.token:
+                self._json(
+                    503,
+                    {
+                        "ok": False,
+                        "error": "credential unavailable",
+                        "reason": "credential_unavailable",
+                        "credential_detail": resolution.detail,
+                    },
+                )
+                return
+            bearer = resolution.token
+
+        # Optional injectable for tests (handler attribute or module-level mock).
+        http_post = getattr(self, "tts_http_post", None)
+
+        try:
+            result = get_or_synthesize(
+                text,
+                message_id=message_id,
+                voice_id=voice,
+                language=language,
+                output_profile=profile,
+                bearer_token=bearer,
+                base_url=base_url,
+                timeout=timeout,
+                paths=self.paths,
+                http_post=http_post,
+            )
+        except TtsError as exc:
+            code = 400
+            if exc.reason in ("credential_unavailable", "tts_disabled"):
+                code = 503
+            elif exc.reason.startswith("tts_http_"):
+                code = 502
+            elif exc.reason == "tts_connection_failed":
+                code = 502
+            elif exc.reason == "text_too_long":
+                code = 400
+            self._json(
+                code,
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "reason": exc.reason,
+                    "message_id": message_id,
+                },
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 — never leak secrets
+            _LOG.warning("tts.fail message_id=%s err=%s", message_id, type(exc).__name__)
+            self._json(
+                500,
+                {
+                    "ok": False,
+                    "error": "tts failed",
+                    "reason": "tts_error",
+                    "message_id": message_id,
+                },
+            )
+            return
+
+        audio = result.audio
+        self.send_response(200)
+        self.send_header("Content-Type", result.content_type)
+        self.send_header("Content-Length", str(len(audio)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "X-Tts-Cache", "hit" if result.cache_hit else "miss"
+        )
+        self.send_header("X-Tts-Voice", result.voice_id)
+        self.send_header("X-Tts-Language", result.language)
+        self.end_headers()
+        self.wfile.write(audio)
+
 
     def _post_stt(self) -> None:
         """POST /api/stt — multipart audio → xAI STT → transcript (PR6 / KD4).

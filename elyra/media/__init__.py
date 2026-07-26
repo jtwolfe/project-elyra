@@ -1,8 +1,8 @@
 """Host media store: attachments, content-addressed blobs (KD1, KD14).
 
 Stretch 2 embedding fields are stubs only (KD12). Meal-time vision expand
-(KD6/KD20/KD25) lives in ``elyra.media.prompt``. STT host client (PR6);
-TTS / GC land in later stack PRs.
+(KD6/KD20/KD25) lives in ``elyra.media.prompt``. STT and TTS host clients
+(PR6/PR7) proxy xAI; never expose API keys to the browser.
 """
 
 from elyra.media.project import (
@@ -37,6 +37,19 @@ from elyra.media.stt import (
     stt_url,
     transcribe,
 )
+from elyra.media.tts import (
+    DEFAULT_TTS_LANGUAGE,
+    DEFAULT_TTS_PROFILE,
+    DEFAULT_TTS_VOICE,
+    TtsError,
+    TtsResult,
+    cache_path_for,
+    load_cached_audio,
+    store_cached_audio,
+    synthesize,
+    tts_enabled,
+    tts_url,
+)
 from elyra.media.types import (
     ATTACHMENT_KINDS,
     ATTACHMENT_ORIGINS,
@@ -55,8 +68,8 @@ from elyra.media.upload import (
     FormFile,
     max_bytes_for_kind,
     parse_content_length,
-    parse_multipart_files,
     parse_multipart_fields,
+    parse_multipart_files,
     stream_to_temp,
 )
 
@@ -64,6 +77,9 @@ __all__ = [
     "ATTACHMENT_KINDS",
     "ATTACHMENT_ORIGINS",
     "DEFAULT_STT_MODEL",
+    "DEFAULT_TTS_LANGUAGE",
+    "DEFAULT_TTS_PROFILE",
+    "DEFAULT_TTS_VOICE",
     "EMBEDDING_STATUSES",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_AUDIO_BYTES",
@@ -78,12 +94,16 @@ __all__ = [
     "MediaStore",
     "SttError",
     "SttResult",
+    "TtsError",
+    "TtsResult",
     "bind_attachment_message",
+    "cache_path_for",
     "clear_sandbox_media",
     "ensure_media_dirs",
     "expand_meal_for_provider",
     "get_attachment",
     "index_glass",
+    "load_cached_audio",
     "max_bytes_for_kind",
     "media_root",
     "parse_content_length",
@@ -97,10 +117,14 @@ __all__ = [
     "sandbox_media_root",
     "sniff_mime_and_kind",
     "sniff_mime_kind_source",
+    "store_cached_audio",
     "stream_to_temp",
     "strip_meal_wire_fields",
     "stt_enabled",
     "stt_url",
+    "synthesize",
     "transcribe",
+    "tts_enabled",
+    "tts_url",
     "validate_att_id",
 ]
