@@ -552,12 +552,16 @@ class PresenceWorker:
         moment_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
+        bind_attachment_ids: Sequence[str] | None = None,
     ) -> tuple[Message | None, dict[str, Any] | None]:
         """Append a chat message only when not resetting.
 
         Holds ``self._lock`` for the check + append so reset's final re-clear
         cannot interleave mid-write without also holding the lock.
         Attachments/meta are persisted on the same lock as content (KD1).
+        When ``bind_attachment_ids`` is set, each id is validated (exists,
+        unbound or already bound to the new message id after append) and
+        ``bound_message_id`` is set under the same lock (PR3 / KD23).
         Returns ``(message, None)`` on success or ``(None, error_dict)``.
         """
         with self._lock:
@@ -567,16 +571,54 @@ class PresenceWorker:
                     "error": "resetting",
                     "reason": "resetting",
                 }
+            resolved_atts = attachments
+            bind_ids = list(bind_attachment_ids) if bind_attachment_ids else []
+            if bind_ids:
+                from elyra.media import MediaStore
+
+                store = MediaStore(self.paths)
+                metas: list[dict[str, Any]] = []
+                for aid in bind_ids:
+                    att = store.get(aid)
+                    if att is None:
+                        return None, {
+                            "ok": False,
+                            "error": "attachment_not_found",
+                            "reason": "attachment_not_found",
+                            "attachment_id": aid,
+                        }
+                    if (
+                        att.bound_message_id is not None
+                        and att.bound_message_id != ""
+                    ):
+                        # Only allow re-bind to same message (idempotent); new
+                        # message cannot steal another row's attachment.
+                        return None, {
+                            "ok": False,
+                            "error": "attachment_bound",
+                            "reason": "attachment_bound",
+                            "attachment_id": aid,
+                            "bound_message_id": att.bound_message_id,
+                        }
+                    metas.append(att.to_dict())
+                if resolved_atts is None:
+                    resolved_atts = metas
             msg = append_message(
                 role,
                 content,
                 user_id=user_id,
                 reasoning=reasoning,
                 moment_id=moment_id,
-                attachments=attachments,
+                attachments=resolved_atts,
                 meta=meta,
                 paths=self.paths,
             )
+            if bind_ids:
+                from elyra.media import MediaStore
+
+                store = MediaStore(self.paths)
+                for aid in bind_ids:
+                    store.bind_message(aid, msg.id)
             return msg, None
 
     def create_goal_if_allowed(
@@ -742,6 +784,7 @@ class PresenceWorker:
         *,
         from_wait_api: bool = False,
         message_id: str | None = None,
+        has_attachments: bool = False,
     ) -> dict[str, Any]:
         """Route user input via the phase/wait state machine; apply side effects."""
         with self._lock:
@@ -759,6 +802,7 @@ class PresenceWorker:
                 from_wait_api=from_wait_api,
                 phase=self._phase,
                 pending_wait=pending,
+                has_attachments=has_attachments,
             )
             if not decision.get("ok"):
                 return dict(decision)

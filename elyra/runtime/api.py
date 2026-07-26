@@ -4,8 +4,10 @@ Scope: REST JSON + SPA fallthrough for operator glass.
 In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users),
   multi-user session + identity panel (grants, promote, list/create users),
-  provider/model/credential mutators, live usage + hard-stop override.
-Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol.
+  provider/model/credential mutators, live usage + hard-stop override,
+  media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23).
+Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
+  STT/TTS, vision expand, glass UI rewrite.
 """
 
 from __future__ import annotations
@@ -36,6 +38,22 @@ from elyra.identity import (
 from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
 from elyra.llm.auth import VALID_SOURCES
 from elyra.llm.queue import ChatRequestGate
+from elyra.media import (
+    ATTACHMENT_ORIGINS,
+    MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_CONCURRENT_UPLOADS,
+    MAX_JSON_BODY_BYTES,
+    MAX_MEDIA_REQUEST_BYTES,
+    MediaStore,
+    ensure_media_dirs,
+    max_bytes_for_kind,
+    parse_content_length,
+    parse_multipart_fields,
+    parse_multipart_files,
+    sniff_mime_kind_source,
+    stream_to_temp,
+    validate_att_id,
+)
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence.interject import REASON_BUFFER_FULL
@@ -54,6 +72,9 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # Local dogfood session (not auth) — under data/runtime/.
 _GLASS_SESSION_REL = Path("runtime") / "glass_session.json"
 _DEFAULT_SESSION_USER = "operator"
+
+# In-process concurrent upload cap (KD15); shared across handler instances.
+_UPLOAD_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
 
 
 def _route_payload(result: dict[str, Any], *, message: Any | None = None) -> dict[str, Any]:
@@ -120,14 +141,41 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self._send(code, raw, "application/json; charset=utf-8")
 
-    def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length") or 0)
+    def _read_json(self) -> dict[str, Any] | None:
+        """Read a JSON object body with Content-Length pre-check (PR3).
+
+        Rejects missing/invalid Content-Length (400) and bodies over 1 MiB
+        (413) **before** reading. Returns ``None`` when an error response was
+        already sent. Empty body (``Content-Length: 0``) → ``{}``.
+        """
+        length = parse_content_length(self.headers.get("Content-Length"))
+        if length is None:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "content_length_required",
+                    "reason": "content_length_required",
+                },
+            )
+            return None
+        if length > MAX_JSON_BODY_BYTES:
+            self._json(
+                413,
+                {
+                    "ok": False,
+                    "error": "payload_too_large",
+                    "reason": "content_length",
+                    "max_bytes": MAX_JSON_BODY_BYTES,
+                },
+            )
+            return None
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
         try:
             data = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeError):
             return {}
         return data if isinstance(data, dict) else {}
 
@@ -288,12 +336,23 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, {"skills": enriched})
             return
 
+        if path.startswith("/api/media/") or path == "/api/media":
+            self._get_media(path)
+            return
+
         self._serve_static(path)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+
+        if path == "/api/media":
+            self._post_media()
+            return
+
         body = self._read_json()
+        if body is None:
+            return
 
         if path == "/api/messages":
             self._post_messages(body)
@@ -338,6 +397,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._read_json()
+        if body is None:
+            return
 
         if path == "/api/continuous":
             self._patch_continuous(body)
@@ -361,6 +422,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._read_json()
+        if body is None:
+            return
 
         if path == "/api/provider/api-key":
             self._put_api_key(body)
@@ -1158,12 +1221,262 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         # GoalsStore instance (same path; create already persisted).
         self._json(200, {"ok": True, "goal": goal})
 
+    def _post_media(self) -> None:
+        """POST /api/media — multipart upload → store + project RO (PR3).
+
+        Content-Length pre-checked before body read (max 64 MiB). Streams body
+        to temp under data/media/tmp/; stdlib magic MIME; kind size caps.
+        Concurrent uploads capped at MAX_CONCURRENT_UPLOADS (503 upload_busy).
+        """
+        if not _UPLOAD_SLOTS.acquire(blocking=False):
+            self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "upload_busy",
+                    "reason": "upload_busy",
+                },
+            )
+            return
+        tmp_path: Path | None = None
+        try:
+            length = parse_content_length(self.headers.get("Content-Length"))
+            if length is None:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "content_length_required",
+                        "reason": "content_length_required",
+                    },
+                )
+                return
+            if length > MAX_MEDIA_REQUEST_BYTES:
+                self._json(
+                    413,
+                    {
+                        "ok": False,
+                        "error": "payload_too_large",
+                        "reason": "content_length",
+                        "max_bytes": MAX_MEDIA_REQUEST_BYTES,
+                    },
+                )
+                return
+            if length <= 0:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "empty_body",
+                        "reason": "empty_body",
+                    },
+                )
+                return
+
+            content_type = self.headers.get("Content-Type") or ""
+            if "multipart/" not in content_type.lower():
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "multipart required",
+                        "reason": "multipart_required",
+                    },
+                )
+                return
+
+            ensure_media_dirs(self.paths)
+            store = MediaStore(self.paths)
+            store.ensure_dirs()
+            try:
+                tmp_path = stream_to_temp(self.rfile, length, store.tmp_dir)
+            except OSError as exc:
+                _LOG.warning("media.upload stream failed: %s", exc)
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "upload_read_failed",
+                        "reason": "upload_read_failed",
+                    },
+                )
+                return
+
+            body = tmp_path.read_bytes()
+            files = parse_multipart_files(body, content_type)
+            fields = parse_multipart_fields(body, content_type)
+            if not files:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "no files",
+                        "reason": "no_files",
+                    },
+                )
+                return
+            if len(files) > MAX_ATTACHMENTS_PER_MESSAGE:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "too many attachments",
+                        "reason": "too_many_attachments",
+                        "max": MAX_ATTACHMENTS_PER_MESSAGE,
+                    },
+                )
+                return
+
+            origin = (fields.get("origin") or "user_upload").strip()
+            if origin not in ATTACHMENT_ORIGINS:
+                origin = "user_upload"
+            uploader = (fields.get("user_id") or "operator").strip() or "operator"
+
+            attachments: list[dict[str, Any]] = []
+            for part in files:
+                _mime, kind, _src = sniff_mime_kind_source(
+                    part.data,
+                    filename=part.filename,
+                    claimed_mime=part.content_type,
+                )
+                limit = max_bytes_for_kind(kind)
+                if len(part.data) > limit:
+                    self._json(
+                        413,
+                        {
+                            "ok": False,
+                            "error": "file_too_large",
+                            "reason": "file_too_large",
+                            "kind": kind,
+                            "max_bytes": limit,
+                            "filename": part.filename,
+                        },
+                    )
+                    return
+                try:
+                    att = store.put_bytes(
+                        part.data,
+                        filename=part.filename,
+                        mime=part.content_type,
+                        origin=origin,
+                        uploader_user_id=uploader,
+                    )
+                except (TypeError, ValueError) as exc:
+                    self._json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": str(exc),
+                            "reason": "store_rejected",
+                        },
+                    )
+                    return
+                attachments.append(att.to_dict())
+                _LOG.info(
+                    "media.upload id=%s kind=%s bytes=%s",
+                    att.id,
+                    att.kind,
+                    att.byte_size,
+                )
+
+            self._json(200, {"ok": True, "attachments": attachments})
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            _UPLOAD_SLOTS.release()
+
+    def _get_media(self, path: str) -> None:
+        """GET /api/media/{id} or /api/media/{id}/meta — path-jailed serve (PR3)."""
+        if path == "/api/media" or path == "/api/media/":
+            self._json(404, {"ok": False, "error": "not found", "reason": "not_found"})
+            return
+        rest = unquote(path[len("/api/media/") :])
+        want_meta = False
+        if rest.endswith("/meta"):
+            want_meta = True
+            rest = rest[: -len("/meta")]
+        # Reject nested paths / traversal (path jail).
+        if not rest or "/" in rest or rest in (".", "..") or "\\" in rest:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "invalid attachment id",
+                    "reason": "invalid_attachment_id",
+                },
+            )
+            return
+        try:
+            att_id = validate_att_id(rest)
+        except ValueError:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "invalid attachment id",
+                    "reason": "invalid_attachment_id",
+                },
+            )
+            return
+
+        store = MediaStore(self.paths)
+        att = store.get(att_id)
+        if att is None:
+            self._json(
+                404,
+                {
+                    "ok": False,
+                    "error": "not found",
+                    "reason": "not_found",
+                    "attachment_id": att_id,
+                },
+            )
+            return
+
+        if want_meta:
+            self._json(200, {"ok": True, "attachment": att.to_dict()})
+            return
+
+        try:
+            data = store.read_bytes(att_id)
+        except FileNotFoundError:
+            self._json(
+                404,
+                {
+                    "ok": False,
+                    "error": "blob missing",
+                    "reason": "not_found",
+                    "attachment_id": att_id,
+                },
+            )
+            return
+
+        ctype = att.mime or "application/octet-stream"
+        # Content-Disposition: attachment with sanitized filename only.
+        fname = att.filename or "file"
+        # Strip CR/LF and quotes for header safety.
+        safe_disp = fname.replace('"', "").replace("\r", "").replace("\n", "")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header(
+            "Content-Disposition", f'inline; filename="{safe_disp}"'
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+        _LOG.info("media.serve id=%s bytes=%s", att_id, len(data))
+
     def _post_messages(self, body: dict[str, Any]) -> None:
         """POST /api/messages — glass chat → resolve_user_input (from_wait_api=False).
 
         Append is gated through ``worker.append_message_if_allowed`` (check +
         write under worker lock) so concurrent full reset cannot leave chat
         residue after ``ok: true``.
+
+        Body: ``{ content, user_id, attachment_ids?: string[], meta?: {} }``.
+        Empty content is allowed when ``attachment_ids`` is non-empty (R1b).
+        Bind order under worker lock (PR3 / KD23).
 
         Routing matrix (worker phase + pending wait):
         - in_moment → interject buffer
@@ -1175,11 +1488,90 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         """
         content = str(body.get("content") or "").strip()
         user_id = str(body.get("user_id") or "operator")
-        if not content:
-            self._json(400, {"ok": False, "error": "content required", "reason": "empty_content"})
+        raw_ids = body.get("attachment_ids")
+        attachment_ids: list[str] = []
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list):
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "attachment_ids must be a list",
+                        "reason": "invalid_attachment_ids",
+                    },
+                )
+                return
+            for item in raw_ids:
+                if not isinstance(item, str) or not item.strip():
+                    self._json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "invalid attachment id",
+                            "reason": "invalid_attachment_ids",
+                        },
+                    )
+                    return
+                attachment_ids.append(item.strip())
+            # Dedupe preserving order
+            seen: set[str] = set()
+            deduped: list[str] = []
+            for aid in attachment_ids:
+                if aid not in seen:
+                    seen.add(aid)
+                    deduped.append(aid)
+            attachment_ids = deduped
+            if len(attachment_ids) > MAX_ATTACHMENTS_PER_MESSAGE:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "too many attachments",
+                        "reason": "too_many_attachments",
+                        "max": MAX_ATTACHMENTS_PER_MESSAGE,
+                    },
+                )
+                return
+            for aid in attachment_ids:
+                try:
+                    validate_att_id(aid)
+                except ValueError:
+                    self._json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "invalid attachment id",
+                            "reason": "invalid_attachment_ids",
+                            "attachment_id": aid,
+                        },
+                    )
+                    return
+
+        if not content and not attachment_ids:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "content required",
+                    "reason": "empty_content",
+                },
+            )
             return
+
+        meta = body.get("meta")
+        if meta is not None and not isinstance(meta, dict):
+            self._json(
+                400,
+                {"ok": False, "error": "meta must be an object", "reason": "invalid_meta"},
+            )
+            return
+
         msg, err = self.worker.append_message_if_allowed(
-            "user", content, user_id=user_id
+            "user",
+            content,
+            user_id=user_id,
+            meta=meta if isinstance(meta, dict) else None,
+            bind_attachment_ids=attachment_ids or None,
         )
         if err is not None:
             self._json(self._status_for_route(err), err)
@@ -1190,6 +1582,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             user_id=user_id,
             message_id=msg.id,
             from_wait_api=False,
+            has_attachments=bool(attachment_ids),
         )
         payload = _route_payload(result, message=msg)
         self._json(self._status_for_route(result), payload)
