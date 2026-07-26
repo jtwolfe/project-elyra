@@ -1229,8 +1229,8 @@ def test_rebuild_outer_rereads_goals_each_call(paths):
         _stop_join(worker, stop, t)
 
 def test_rebuild_outer_task_ready_bias(paths):
-    """task_ready wake gets do-work bias in orient."""
-    from elyra.loop.orient_slice import BIAS_DO_WORK
+    """E2a: task_ready + empty ledger → BIAS_REST (payload ids do not force do-work)."""
+    from elyra.loop.orient_slice import BIAS_DO_WORK, BIAS_REST
 
     meals: list[str] = []
 
@@ -1252,6 +1252,137 @@ def test_rebuild_outer_task_ready_bias(paths):
             {"task_id": "t_xyz", "goal_id": "g_xyz"},
         )
         assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert BIAS_REST in meals[0]
+        assert BIAS_DO_WORK not in meals[0]
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_task_ready_seeded_ready_task_bias(paths):
+    """E2b: task_ready + open goal with ready task → BIAS_DO_WORK."""
+    from elyra.goals import GoalsStore
+    from elyra.loop.orient_slice import BIAS_DO_WORK
+
+    store = GoalsStore(paths)
+    goal = store.create_goal("Ship ready work", acceptance="task done")
+    task = store.create_task(goal["id"], "Act on ready task", status="ready")
+
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meals.append(rebuild()[-1]["content"])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    worker._goals = store  # noqa: SLF001
+    t = _start(worker)
+    try:
+        worker.enqueue_wake(
+            "task_ready",
+            {"task_id": task["id"], "goal_id": goal["id"]},
+        )
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
         assert BIAS_DO_WORK in meals[0]
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_background_ready_task_bias(paths):
+    """E3: background wake + ready task on ledger → BIAS_DO_WORK (ledger-aware)."""
+    from elyra.goals import GoalsStore
+    from elyra.loop.orient_slice import BIAS_BACKGROUND, BIAS_DO_WORK
+
+    store = GoalsStore(paths)
+    goal = store.create_goal("Background ready work", acceptance="done")
+    store.create_task(goal["id"], "Ready under background", status="ready")
+
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meals.append(rebuild()[-1]["content"])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    worker._goals = store  # noqa: SLF001
+    t = _start(worker)
+    try:
+        worker.enqueue_wake("background", {"reason": "housekeeping"})
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert BIAS_DO_WORK in meals[0]
+        assert BIAS_BACKGROUND not in meals[0]
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_background_empty_ledger_rest(paths):
+    """E4: background + empty ledger → BIAS_REST (not BIAS_BACKGROUND)."""
+    from elyra.loop.orient_slice import BIAS_BACKGROUND, BIAS_REST
+
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meals.append(rebuild()[-1]["content"])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        worker.enqueue_wake("background", {"reason": "housekeeping"})
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert BIAS_REST in meals[0]
+        assert BIAS_BACKGROUND not in meals[0]
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_rebuild_outer_timer_empty_ledger_rest(paths):
+    """E6: timer + empty ledger → BIAS_REST (production death of BIAS_TIMER_*)."""
+    from elyra.loop.orient_slice import (
+        BIAS_REST,
+        BIAS_TIMER_GENERIC,
+        BIAS_TIMER_LINKED,
+    )
+
+    meals: list[str] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        rebuild = kwargs["rebuild_outer"]
+        meals.append(rebuild()[-1]["content"])
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        worker.enqueue_wake(
+            "timer",
+            {"reason": "ping", "wake_at": "2099-01-01T00:00:00Z"},
+        )
+        assert _wait_until(lambda: len(meals) >= 1, timeout=2.0)
+        assert BIAS_REST in meals[0]
+        assert BIAS_TIMER_GENERIC not in meals[0]
+        assert BIAS_TIMER_LINKED not in meals[0]
     finally:
         _stop_join(worker, stop, t)
