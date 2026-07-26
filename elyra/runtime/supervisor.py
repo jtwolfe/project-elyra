@@ -33,11 +33,11 @@ from elyra.llm.client import (
     StubChatClient,
     UsageGatedChatClient,
 )
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
 from elyra.llm.constants import CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import CURATED_XAI_MODELS, models_for_picker
 from elyra.llm.provider_prefs import provider_prefs_path
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.llm.server import build_server_command, validate_model_paths
 from elyra.llm.usage import UsageMeter
 from elyra.presence.worker import PresenceWorker
@@ -79,7 +79,7 @@ class ElyraSupervisor:
         self._api_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
         self._worker: PresenceWorker | None = None
-        self._gate = LlamaServerGate()
+        self._gate = ChatRequestGate()
         self._stop = threading.Event()
         self.provider_runtime: ProviderRuntime | None = None
         # Sandbox lifecycle (H2c) — injectable for hermetic tests.
@@ -441,7 +441,7 @@ class ElyraSupervisor:
         else:
             print("llama-server failed health check", file=sys.stderr)
 
-    def _wait_for_llama(self, llama_cfg: LlamaServerConfig) -> bool:
+    def _wait_for_llama(self, llama_cfg: LocalClientConfig) -> bool:
         deadline = time.monotonic() + self.config.llama_health_timeout
         url = llama_cfg.health_url
         while time.monotonic() < deadline:

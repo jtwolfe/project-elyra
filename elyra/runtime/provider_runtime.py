@@ -28,7 +28,7 @@ from elyra.llm.client import (
     StubChatClient,
     UsageGatedChatClient,
 )
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
 from elyra.llm.models import (
     CURATED_XAI_MODELS,
     label_for_model,
@@ -36,7 +36,7 @@ from elyra.llm.models import (
     models_for_picker,
 )
 from elyra.llm.provider_prefs import ProviderPrefs, provider_prefs_path, save_provider_prefs
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import UsageMeter
 from elyra.settings import UsageSettings
 
@@ -57,8 +57,8 @@ class ProviderRuntime:
     worker: PresenceWorker | None  # for rebinding worker.client after rebuild
     usage_settings: UsageSettings
     xai_config: XaiClientConfig | None
-    llama_config: LlamaServerConfig | None
-    gate: LlamaServerGate | None
+    llama_config: LocalClientConfig | None
+    gate: ChatRequestGate | None
     prefs_path: Path
     data_dir: Path
     provider_name: str
@@ -275,11 +275,11 @@ class ProviderRuntime:
         *,
         model: str,
         usage_settings: UsageSettings,
-        llama_config: LlamaServerConfig | None,
-        gate: LlamaServerGate | None,
+        llama_config: LocalClientConfig | None,
+        gate: ChatRequestGate | None,
         meter: UsageMeter | None,
     ) -> None:
-        cfg = llama_config or LlamaServerConfig()
+        cfg = llama_config or LocalClientConfig()
         if meter is None and usage_settings.enabled:
             meter = UsageMeter.load(self.data_dir, usage_settings)
             with self._lock:

@@ -16,7 +16,7 @@ from elyra.config import resolve_paths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.client import StubChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.loop.doloop import DoLoopResult
 from elyra.moment import MomentStore
 from elyra.presence.queue import WakeQueue
@@ -85,7 +85,7 @@ class _ApiHarness:
         self._stop = stop
         config = RuntimeConfig(api_host="127.0.0.1", api_port=0)
         self.state = RuntimeState()
-        self.gate = LlamaServerGate()
+        self.gate = ChatRequestGate()
         # Real catalogs when bundled roots exist (editable tree); else empty.
         tools: ToolRegistry | None
         skills: SkillCatalog | None

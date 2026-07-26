@@ -28,8 +28,8 @@ from elyra.llm.client import (
     ToolCall,
     parse_tool_calls,
 )
-from elyra.llm.config import LlamaServerConfig
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.config import LocalClientConfig
+from elyra.llm.queue import ChatRequestGate
 from elyra.llm.server import build_server_command, validate_model_paths
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "llm_tool_responses.json"
@@ -307,7 +307,7 @@ def fake_chat_server():
 def test_http_client_includes_tools_in_payload(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_list_dir"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
     client = HttpChatClient(config)
     tools = fx["tools_list_dir"]
     result = client.chat_completion(
@@ -318,9 +318,12 @@ def test_http_client_includes_tools_in_payload(fake_chat_server):
         reasoning=False,
     )
     sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["model"] == "local"
     assert sent["tools"] == tools
     assert sent["tool_choice"] == "required"
     assert "messages" in sent
+    assert "reasoning" not in sent
+    assert "thinking_budget_tokens" not in sent
     assert result.tool_calls[0].name == "list_dir"
     assert result.tool_calls[0].arguments == {"path": "."}
     assert result.content == ""
@@ -330,7 +333,7 @@ def test_http_client_includes_tools_in_payload(fake_chat_server):
 def test_http_client_parses_malformed_args_from_response(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_malformed_args"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
     client = HttpChatClient(config)
     result = client.chat_completion([{"role": "user", "content": "x"}])
     assert len(result.tool_calls) == 1
@@ -341,7 +344,7 @@ def test_http_client_parses_malformed_args_from_response(fake_chat_server):
 def test_http_client_handles_args_already_object(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_args_object"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
     client = HttpChatClient(config)
     result = client.chat_completion([{"role": "user", "content": "x"}])
     assert result.tool_calls[0].arguments == {"text": "hello"}
@@ -351,7 +354,7 @@ def test_http_client_handles_args_already_object(fake_chat_server):
 def test_http_client_omits_tools_keys_when_none(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
     client = HttpChatClient(config)
     result = client.chat_completion(
         [{"role": "user", "content": "hi"}],
@@ -371,7 +374,7 @@ def test_http_client_omits_top_p_top_k_when_none(fake_chat_server):
     """When config top_p/top_k are None, keys are omitted from wire payload."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
+    config = LocalClientConfig(
         host="127.0.0.1",
         port=fake_chat_server,
         use_reasoning=False,
@@ -391,47 +394,54 @@ def test_http_client_omits_top_p_top_k_when_none(fake_chat_server):
     assert "top_k" not in sent
 
 
-def test_product_defaults_send_gemma_card_truncation(fake_chat_server):
-    """Product LlamaServerConfig defaults ship GEMMA_TOP_P / GEMMA_TOP_K on wire."""
-    from elyra.llm.constants import GEMMA_TOP_K, GEMMA_TOP_P
-
-    fx = _fixtures()
-    _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
-    assert config.top_p == GEMMA_TOP_P
-    assert config.top_k == GEMMA_TOP_K
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=False,
-    )
-    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+def test_local_defaults_openai_compat_payload(fake_chat_server):
+    """Local defaults: model on wire; top_p/top_k omitted when None; no reasoning."""
     from elyra.llm.constants import DEFAULT_CHAT_TEMPERATURE
 
-    assert sent["top_p"] == GEMMA_TOP_P
-    assert sent["top_k"] == GEMMA_TOP_K
-    assert sent["temperature"] == DEFAULT_CHAT_TEMPERATURE
-
-
-def test_product_defaults_send_reasoning_budget_when_reasoning_true(fake_chat_server):
-    """Stage 2 product default ships thinking_budget_tokens under reasoning=True."""
-    from elyra.llm.constants import DEFAULT_REASONING_BUDGET_TOKENS
-
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=True)
-    assert config.default_reasoning_budget_tokens == DEFAULT_REASONING_BUDGET_TOKENS
-    assert DEFAULT_REASONING_BUDGET_TOKENS == 2048
+    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server)
+    assert config.top_p is None
+    assert config.top_k is None
+    assert config.model == "local"
     client = HttpChatClient(config)
     client.chat_completion(
         [{"role": "user", "content": "hi"}],
         max_tokens=32,
         reasoning=True,
+        reasoning_budget_tokens=2048,
     )
     sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["reasoning"] is True
-    assert sent["thinking_budget_tokens"] == 2048
+    assert sent["model"] == "local"
+    assert sent["temperature"] == DEFAULT_CHAT_TEMPERATURE
+    assert "top_p" not in sent
+    assert "top_k" not in sent
+    assert "reasoning" not in sent
+    assert "thinking_budget_tokens" not in sent
+    assert "reasoning_budget_tokens" not in sent
+
+
+def test_local_payload_never_sends_reasoning_or_thinking_budget(fake_chat_server):
+    """OpenAI-compat local: reasoning kwargs accepted but never on wire."""
+    fx = _fixtures()
+    _RecordingHandler.response_payload = fx["openai_response_content_only"]
+    config = LocalClientConfig(
+        host="127.0.0.1",
+        port=fake_chat_server,
+        use_reasoning=True,
+        default_reasoning_budget_tokens=4096,
+    )
+    client = HttpChatClient(config)
+    client.chat_completion(
+        [{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        reasoning=True,
+        reasoning_budget_tokens=2048,
+    )
+    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["model"] == "local"
+    assert "reasoning" not in sent
+    assert "thinking_budget_tokens" not in sent
     assert "reasoning_budget_tokens" not in sent
 
 
@@ -439,7 +449,7 @@ def test_http_client_includes_top_p_top_k_from_kwargs(fake_chat_server):
     """Explicit kwargs override and appear on the wire even when config is None."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
+    config = LocalClientConfig(
         host="127.0.0.1",
         port=fake_chat_server,
         use_reasoning=False,
@@ -455,6 +465,7 @@ def test_http_client_includes_top_p_top_k_from_kwargs(fake_chat_server):
         top_k=64,
     )
     sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
+    assert sent["model"] == "local"
     assert sent["top_p"] == 0.95
     assert sent["top_k"] == 64
 
@@ -463,7 +474,7 @@ def test_http_client_falls_back_to_config_top_p_top_k(fake_chat_server):
     """When kwargs are None, config values are sent on the wire."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
+    config = LocalClientConfig(
         host="127.0.0.1",
         port=fake_chat_server,
         use_reasoning=False,
@@ -485,7 +496,7 @@ def test_http_client_kwarg_overrides_config_top_p_top_k(fake_chat_server):
     """Explicit kwargs win over config defaults."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
+    config = LocalClientConfig(
         host="127.0.0.1",
         port=fake_chat_server,
         use_reasoning=False,
@@ -505,122 +516,21 @@ def test_http_client_kwarg_overrides_config_top_p_top_k(fake_chat_server):
     assert sent["top_k"] == 16
 
 
-def test_http_client_includes_wire_thinking_budget_when_reasoning_enabled(fake_chat_server):
-    """Python reasoning_budget_tokens → wire thinking_budget_tokens only."""
+def test_local_payload_includes_custom_model(fake_chat_server):
+    """LocalClientConfig.model is required on wire (OpenAI-compat)."""
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=True)
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=True,
-        reasoning_budget_tokens=2048,
-    )
-    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["reasoning"] is True
-    assert sent["thinking_budget_tokens"] == 2048
-    assert "reasoning_budget_tokens" not in sent
-
-
-def test_http_client_omits_wire_thinking_budget_when_not_set(fake_chat_server):
-    """When reasoning=True and budget None (kwarg + config), omit wire key."""
-    fx = _fixtures()
-    _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
+    config = LocalClientConfig(
         host="127.0.0.1",
         port=fake_chat_server,
-        use_reasoning=True,
-        default_reasoning_budget_tokens=None,
+        model="my-local-model",
     )
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=True,
-    )
+    client = HttpChatClient.for_local(config)
+    client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=16)
     sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["reasoning"] is True
+    assert sent["model"] == "my-local-model"
+    assert "reasoning" not in sent
     assert "thinking_budget_tokens" not in sent
-    assert "reasoning_budget_tokens" not in sent
-
-
-def test_http_client_falls_back_to_config_default_reasoning_budget(fake_chat_server):
-    """Product default_reasoning_budget_tokens applied when kwarg is None."""
-    fx = _fixtures()
-    _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=True,
-        default_reasoning_budget_tokens=4096,
-    )
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=True,
-    )
-    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["thinking_budget_tokens"] == 4096
-
-
-def test_http_client_kwarg_overrides_config_reasoning_budget(fake_chat_server):
-    fx = _fixtures()
-    _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=True,
-        default_reasoning_budget_tokens=4096,
-    )
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=True,
-        reasoning_budget_tokens=1024,
-    )
-    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["thinking_budget_tokens"] == 1024
-
-
-def test_http_client_reasoning_false_sends_budget_zero_by_default(fake_chat_server):
-    """reasoning=False → always include thinking_budget_tokens (0 if unset)."""
-    fx = _fixtures()
-    _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=True,
-        default_reasoning_budget_tokens=None,
-    )
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=False,
-    )
-    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["reasoning"] is False
-    assert sent["thinking_budget_tokens"] == 0
-    assert "reasoning_budget_tokens" not in sent
-
-
-def test_http_client_reasoning_false_uses_explicit_budget(fake_chat_server):
-    fx = _fixtures()
-    _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LlamaServerConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=True)
-    client = HttpChatClient(config)
-    client.chat_completion(
-        [{"role": "user", "content": "hi"}],
-        max_tokens=32,
-        reasoning=False,
-        reasoning_budget_tokens=0,
-    )
-    sent = json.loads(_RecordingHandler.last_body.decode("utf-8"))
-    assert sent["reasoning"] is False
-    assert sent["thinking_budget_tokens"] == 0
 
 
 def test_gated_client_forwards_tools_kwargs():
@@ -648,7 +558,7 @@ def test_gated_client_forwards_tools_kwargs():
     class _Inner:
         chat_completion = staticmethod(fake_inner)
 
-    gate = LlamaServerGate()
+    gate = ChatRequestGate()
     client = GatedChatClient(_Inner(), gate)  # type: ignore[arg-type]
     tools = _fixtures()["tools_echo"]
     client.chat_completion(
@@ -696,19 +606,19 @@ def live_llama_server():
         problems = validate_model_paths(resolve_paths())
         pytest.skip("model not available: " + "; ".join(problems))
     paths = resolve_paths()
-    default_config = LlamaServerConfig()
+    default_config = LocalClientConfig()
     health = default_config.health_url
     owned_proc: subprocess.Popen[bytes] | None = None
     port = default_config.port
 
     if _server_healthy(health):
         # Reuse existing server
-        yield LlamaServerConfig(host="127.0.0.1", port=port)
+        yield LocalClientConfig(host="127.0.0.1", port=port)
         return
 
     # Start with a modest context to load faster / use less VRAM for tool smoke.
     port = _free_port()
-    config = LlamaServerConfig(host="127.0.0.1", port=port)
+    config = LocalClientConfig(host="127.0.0.1", port=port)
     cmd = build_server_command(
         paths,
         config,

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.config import LocalClientConfig
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL, label_for_model
 from elyra.llm.provider_prefs import load_provider_prefs
 from elyra.settings import Settings, UsageSettings, load_settings, merge_cli_overrides
@@ -26,7 +26,7 @@ class RuntimeConfig:
     api_port: int = 8787
     # True only when provider=local and not --no-llama and not pure stub path.
     start_llama_server: bool = False
-    llama: LlamaServerConfig = field(default_factory=LlamaServerConfig)
+    llama: LocalClientConfig = field(default_factory=LocalClientConfig)
     llama_health_timeout: float = 180.0
     # KV ceiling; lower if VRAM crashes (see docs/inference.md).
     context_tokens: int | None = None

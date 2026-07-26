@@ -1,10 +1,10 @@
-"""Chat completion client for local llama-server and xAI Grok.
+"""Chat completion client for local OpenAI-compat endpoints and xAI Grok.
 
 Scope: POST chat/completions with optional OpenAI-style tools.
 In scope: HTTP client (for_local / for_xai factories), gated wrapper,
           usage gate, failing client, stub (incl. scripted tool_calls),
-          parse message.tool_calls (arguments string → dict),
-          reasoning_budget_tokens → wire thinking_budget_tokens adapter (local).
+          parse message.tool_calls (arguments string → dict).
+Local wire is OpenAI subset (model required; no reasoning / thinking_budget).
 Out of scope: do-loop / multi-hop tool execution (loop package); supervisor wiring.
 
 **Import rule:** this module may import ``elyra.llm.usage``; usage must NEVER
@@ -21,8 +21,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
+from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import (
     TokenUsage,
     UsageHardStopError,
@@ -344,16 +344,16 @@ class StubChatClient:
 
 
 class HttpChatClient:
-    """OpenAI-compatible chat HTTP client for local llama-server and xAI.
+    """OpenAI-compatible chat HTTP client for local endpoints and xAI.
 
     Prefer factories ``for_local`` / ``for_xai`` — avoid inconsistent
-    config + kwargs combos. Positional ``HttpChatClient(LlamaServerConfig)``
+    config + kwargs combos. Positional ``HttpChatClient(LocalClientConfig)``
     remains supported for local regression (same as ``for_local``).
     """
 
     def __init__(
         self,
-        config: LlamaServerConfig | XaiClientConfig | None = None,
+        config: LocalClientConfig | XaiClientConfig | None = None,
         *,
         profile: str | None = None,
         model: str | None = None,
@@ -362,7 +362,7 @@ class HttpChatClient:
         """Internal / BC constructor. Prefer ``for_local`` / ``for_xai``.
 
         ``profile`` in ``{'local','xai'}``. When omitted: ``XaiClientConfig``
-        → xai; otherwise local (``LlamaServerConfig`` or default).
+        → xai; otherwise local (``LocalClientConfig`` or default).
         """
         if profile is None:
             if isinstance(config, XaiClientConfig):
@@ -377,12 +377,12 @@ class HttpChatClient:
 
         if profile == "local":
             if config is None:
-                self._local_config: LlamaServerConfig | None = LlamaServerConfig()
-            elif isinstance(config, LlamaServerConfig):
+                self._local_config: LocalClientConfig | None = LocalClientConfig()
+            elif isinstance(config, LocalClientConfig):
                 self._local_config = config
             else:
                 raise TypeError(
-                    "local profile requires LlamaServerConfig or None; "
+                    "local profile requires LocalClientConfig or None; "
                     f"got {type(config).__name__}"
                 )
             self._xai_config: XaiClientConfig | None = None
@@ -407,7 +407,7 @@ class HttpChatClient:
             self._bearer_token = bearer_token
 
         # BC alias used by older tests/callers: ``client._config`` for local.
-        self._config: LlamaServerConfig | XaiClientConfig
+        self._config: LocalClientConfig | XaiClientConfig
         if profile == "local":
             assert self._local_config is not None
             self._config = self._local_config
@@ -416,9 +416,9 @@ class HttpChatClient:
             self._config = self._xai_config
 
     @classmethod
-    def for_local(cls, config: LlamaServerConfig | None = None) -> HttpChatClient:
-        """Build a local llama-server client (no Authorization, Gemma fields)."""
-        return cls(config if config is not None else LlamaServerConfig(), profile="local")
+    def for_local(cls, config: LocalClientConfig | None = None) -> HttpChatClient:
+        """Build a local OpenAI-compat client (optional Bearer when api_key set)."""
+        return cls(config if config is not None else LocalClientConfig(), profile="local")
 
     @classmethod
     def for_xai(
@@ -428,7 +428,7 @@ class HttpChatClient:
         model: str,
         bearer_token: str,
     ) -> HttpChatClient:
-        """Build an xAI client (Bearer + model; omit Gemma-only wire fields)."""
+        """Build an xAI client (Bearer + model; omit top_k / reasoning wire keys)."""
         return cls(
             config if config is not None else XaiClientConfig(),
             profile="xai",
@@ -473,14 +473,14 @@ class HttpChatClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
-        """Python: ``reasoning_budget_tokens``. Wire: ``thinking_budget_tokens``.
+        """POST OpenAI-compatible chat/completions.
 
-        Local (``use_reasoning`` true):
-        - always set ``reasoning`` bool
-        - if ``reasoning`` is True: include wire budget only when resolved
-          value is not None (kwarg → config.default_reasoning_budget_tokens)
-        - if ``reasoning`` is False: always include wire budget (resolved value
-          or 0) so private channel can be disabled (elyra2 API completeness)
+        Local: body includes ``model`` (from config); optional ``top_p`` /
+        ``top_k`` when resolved non-None; **never** ``reasoning`` or
+        ``thinking_budget_tokens``. Optional ``Authorization: Bearer`` when
+        ``config.api_key`` is set. Kwargs ``reasoning`` /
+        ``reasoning_budget_tokens`` are accepted for Protocol BC but ignored
+        on the wire.
 
         xai: Authorization Bearer; body includes ``model``; omit ``top_k``,
         ``thinking_budget_tokens``, and ``reasoning`` wire keys.
@@ -509,15 +509,16 @@ class HttpChatClient:
                 cfg_local,
                 messages,
                 max_tokens=max_tokens,
-                reasoning=reasoning,
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
-                reasoning_budget_tokens=reasoning_budget_tokens,
                 tools=tools,
                 tool_choice=tool_choice,
             )
             headers = {"Content-Type": "application/json"}
+            # Optional Bearer for self-hosted OpenAI-compat (never log key).
+            if cfg_local.api_key:
+                headers["Authorization"] = f"Bearer {cfg_local.api_key}"
         else:
             payload = self._build_xai_payload(
                 cfg_xai,
@@ -557,26 +558,21 @@ class HttpChatClient:
 
     @staticmethod
     def _build_local_payload(
-        config: LlamaServerConfig,
+        config: LocalClientConfig,
         messages: list[dict[str, Any]],
         *,
         max_tokens: int,
-        reasoning: bool,
         temperature: float | None,
         top_p: float | None,
         top_k: int | None,
-        reasoning_budget_tokens: int | None,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
+        # OpenAI-compat subset: model required; no reasoning / thinking_budget.
         resolved_top_p = top_p if top_p is not None else config.top_p
         resolved_top_k = top_k if top_k is not None else config.top_k
-        resolved_budget = (
-            reasoning_budget_tokens
-            if reasoning_budget_tokens is not None
-            else config.default_reasoning_budget_tokens
-        )
         payload: dict[str, Any] = {
+            "model": config.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": (
@@ -588,15 +584,7 @@ class HttpChatClient:
             payload["top_p"] = resolved_top_p
         if resolved_top_k is not None:
             payload["top_k"] = resolved_top_k
-        if config.use_reasoning:
-            payload["reasoning"] = bool(reasoning)
-            if reasoning:
-                if resolved_budget is not None:
-                    payload["thinking_budget_tokens"] = resolved_budget
-            else:
-                payload["thinking_budget_tokens"] = (
-                    resolved_budget if resolved_budget is not None else 0
-                )
+        # Intentionally never set reasoning / thinking_budget_tokens.
         if tools is not None:
             payload["tools"] = tools
         if tool_choice is not None:
@@ -637,7 +625,7 @@ class HttpChatClient:
 
 
 class GatedChatClient:
-    def __init__(self, inner: ChatClient, gate: LlamaServerGate) -> None:
+    def __init__(self, inner: ChatClient, gate: ChatRequestGate) -> None:
         self._inner = inner
         self._gate = gate
 

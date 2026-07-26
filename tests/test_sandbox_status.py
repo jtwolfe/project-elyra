@@ -15,7 +15,7 @@ import pytest
 
 from elyra.config import resolve_paths
 from elyra.llm.client import StubChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.loop.doloop import DoLoopResult
 from elyra.presence.queue import WakeQueue
 from elyra.presence.timers import TimerService
@@ -206,7 +206,7 @@ def test_api_status_includes_sandbox_block(home: Path) -> None:
     set_sandbox_lifecycle(life)
     config = RuntimeConfig(api_host="127.0.0.1", api_port=0)
     state = RuntimeState()
-    gate = LlamaServerGate()
+    gate = ChatRequestGate()
     server, _thread = start_api_server(
         config,
         paths=paths,

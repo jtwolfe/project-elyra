@@ -20,7 +20,8 @@ CONTEXT_BUDGET_TOKENS = CONTEXT_WINDOW_TOKENS - GENERATION_RESERVED_TOKENS
 # Prefer sliding meals well under this in practice (VRAM / stability).
 DEFAULT_SLIDING_INPUT_TOKENS = 24_000
 
-# Gemma card nucleus / top-k truncation (product defaults on LlamaServerConfig).
+# Historical Gemma card trunc constants (no longer product defaults on LocalClientConfig).
+# Retained until launch-removal PR deletes unused GEMMA_* symbols.
 GEMMA_TOP_P = 0.95
 GEMMA_TOP_K = 64
 

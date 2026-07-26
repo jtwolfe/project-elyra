@@ -18,7 +18,7 @@ from elyra.config import resolve_paths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.client import StubChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.loop.doloop import DoLoopResult
 from elyra.messages import append_message, list_messages
 from elyra.moment import MomentStore
@@ -114,7 +114,7 @@ class _ApiHarness:
         self._stop = stop
         config = RuntimeConfig(api_host="127.0.0.1", api_port=0)
         self.state = RuntimeState()
-        self.gate = LlamaServerGate()
+        self.gate = ChatRequestGate()
         self.server, self._api_thread = start_api_server(
             config,
             paths=paths,

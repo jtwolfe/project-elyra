@@ -22,7 +22,7 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.llm.auth import api_key_path, write_stored_api_key
 from elyra.llm.client import FailingChatClient, StubChatClient, UsageGatedChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import TokenUsage, UsageMeter
 from elyra.loop.doloop import DoLoopResult
 from elyra.moment import MomentStore
@@ -156,7 +156,7 @@ class _ApiHarness:
             run_do_loop_fn=_stub_loop,
         )
         self.state = RuntimeState()
-        self.gate = LlamaServerGate()
+        self.gate = ChatRequestGate()
         self.provider = provider
         if provider is not None and attach_worker_to_provider:
             provider.worker = self.worker

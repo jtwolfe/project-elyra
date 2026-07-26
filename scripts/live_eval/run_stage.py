@@ -4,7 +4,7 @@
 Scope: fixed scenarios, isolated ELYRA_HOME per attempt, POST message, poll
 close/timeout, export tape/messages, fill scorecard via reasoning_hygiene.
 In scope: Stage 0 baseline + Stage 1 sampling ablation; reuse healthy llama
-or start one. Sampling knobs from scenarios.yaml applied to LlamaServerConfig
+or start one. Sampling knobs from scenarios.yaml applied to LocalClientConfig
 (KD13); CLI --temperature/--top-p/--top-k/--reasoning-budget/--cell for OFAT.
 
 Usage:
@@ -44,8 +44,8 @@ if str(_ROOT) not in sys.path:
 
 from elyra.config import ElyraPaths, project_root, resolve_paths  # noqa: E402
 from elyra.llm.client import GatedChatClient, HttpChatClient  # noqa: E402
-from elyra.llm.config import LlamaServerConfig  # noqa: E402
-from elyra.llm.queue import LlamaServerGate  # noqa: E402
+from elyra.llm.config import LocalClientConfig  # noqa: E402
+from elyra.llm.queue import ChatRequestGate  # noqa: E402
 from elyra.llm.reasoning_hygiene import (  # noqa: E402
     channel_marker_count,
     is_channel_flood,
@@ -314,7 +314,7 @@ def _now_iso() -> str:
 
 @dataclass
 class LlamaHandle:
-    config: LlamaServerConfig
+    config: LocalClientConfig
     proc: subprocess.Popen[bytes] | None = None
     owned: bool = False
 
@@ -345,7 +345,7 @@ def ensure_llama(
     if problems:
         raise SystemExit("model not available: " + "; ".join(problems))
 
-    cfg = LlamaServerConfig(host=host, port=port)
+    cfg = LocalClientConfig(host=host, port=port)
     if _server_healthy(cfg.health_url):
         _LOG.info("reusing healthy llama-server at %s:%s", host, port)
         return LlamaHandle(config=cfg, proc=None, owned=False)
@@ -363,7 +363,7 @@ def ensure_llama(
                 s.settimeout(0.3)
                 if s.connect_ex((host, port)) == 0:
                     port = _free_port()
-                    cfg = LlamaServerConfig(host=host, port=port)
+                    cfg = LocalClientConfig(host=host, port=port)
                     _LOG.warning("port 8080 busy/unhealthy — starting on %s", port)
         except OSError:
             pass
@@ -464,7 +464,7 @@ class ProductStack:
     worker_thread: threading.Thread
     api_server: Any
     api_thread: threading.Thread
-    gate: LlamaServerGate
+    gate: ChatRequestGate
     state: RuntimeState
 
     def shutdown(self) -> None:
@@ -484,7 +484,7 @@ class ProductStack:
 
 def start_product_stack(
     home: Path,
-    llama: LlamaServerConfig,
+    llama: LocalClientConfig,
     *,
     api_port: int | None = None,
 ) -> ProductStack:
@@ -494,7 +494,7 @@ def start_product_stack(
     settings = load_settings(paths.home)
 
     stop = threading.Event()
-    gate = LlamaServerGate()
+    gate = ChatRequestGate()
     state = RuntimeState()
     set_runtime_state(state)
     state.set_llama(pid=None, ready=True)
@@ -863,10 +863,10 @@ def export_attempt(
 
 
 def client_config_from_stage(
-    base: LlamaServerConfig,
+    base: LocalClientConfig,
     stage_cfg: StageConfig,
-) -> LlamaServerConfig:
-    """Apply stage sampling knobs onto a connection-bearing LlamaServerConfig.
+) -> LocalClientConfig:
+    """Apply stage sampling knobs onto a connection-bearing LocalClientConfig.
 
     Product path: do-loop never hardcodes sampling; HttpChatClient falls back
     to these config fields (KD13). Harness overrides are for ablation only.
@@ -874,10 +874,11 @@ def client_config_from_stage(
     budget = stage_cfg.reasoning_budget_tokens
     if budget is not None:
         budget = int(budget)
-    return LlamaServerConfig(
+    return LocalClientConfig(
         host=base.host,
         port=base.port,
         chat_path=base.chat_path,
+        model=base.model,
         use_reasoning=base.use_reasoning,
         reasoning_budget=base.reasoning_budget,
         connect_timeout=base.connect_timeout,
@@ -886,6 +887,7 @@ def client_config_from_stage(
         top_p=stage_cfg.top_p,
         top_k=int(stage_cfg.top_k) if stage_cfg.top_k is not None else None,
         default_reasoning_budget_tokens=budget,
+        api_key=base.api_key,
     )
 
 

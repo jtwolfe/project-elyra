@@ -21,7 +21,7 @@ import pytest
 
 from elyra.config import resolve_paths
 from elyra.llm.client import ChatCompletionResult, HttpChatClient, StubChatClient
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.config import LocalClientConfig
 from elyra.llm.reasoning_hygiene import sanitize_completion
 from elyra.llm.server import build_server_command, validate_model_paths
 from elyra.loop.context import assemble_outer_meal
@@ -2371,16 +2371,16 @@ def live_llama_server():
         problems = validate_model_paths(resolve_paths())
         pytest.skip("model not available: " + "; ".join(problems))
     paths = resolve_paths()
-    default_config = LlamaServerConfig()
+    default_config = LocalClientConfig()
     owned_proc: subprocess.Popen[bytes] | None = None
     port = default_config.port
 
     if _server_healthy(default_config.health_url):
-        yield LlamaServerConfig(host="127.0.0.1", port=port)
+        yield LocalClientConfig(host="127.0.0.1", port=port)
         return
 
     port = _free_port()
-    config = LlamaServerConfig(host="127.0.0.1", port=port)
+    config = LocalClientConfig(host="127.0.0.1", port=port)
     cmd = build_server_command(
         paths,
         config,

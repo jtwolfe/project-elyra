@@ -35,7 +35,7 @@ from elyra.identity import (
 )
 from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
 from elyra.llm.auth import VALID_SOURCES
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
 from elyra.presence.interject import REASON_BUFFER_FULL
@@ -88,7 +88,7 @@ def _safe_segment(raw: str) -> str | None:
 
 class ElyraApiHandler(BaseHTTPRequestHandler):
     paths: ElyraPaths
-    gate: LlamaServerGate
+    gate: ChatRequestGate
     state: RuntimeState
     worker: PresenceWorker
     config: RuntimeConfig
@@ -1295,7 +1295,7 @@ def start_api_server(
     config: RuntimeConfig,
     *,
     paths: ElyraPaths,
-    gate: LlamaServerGate,
+    gate: ChatRequestGate,
     state: RuntimeState,
     worker: PresenceWorker,
     provider: Any = None,

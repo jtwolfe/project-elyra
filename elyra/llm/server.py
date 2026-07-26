@@ -8,7 +8,7 @@ Out of scope: subprocess, health checks.
 from __future__ import annotations
 
 from elyra.config import ElyraPaths
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.config import LocalClientConfig
 from elyra.llm.constants import CONTEXT_WINDOW_TOKENS
 
 DEFAULT_MODEL_FILENAME = "Gemma-4-12B-OBLITERATED-Q4_K_M.gguf"
@@ -23,7 +23,7 @@ DEFAULT_CACHE_RAM_MIB = 0
 
 def build_server_command(
     paths: ElyraPaths,
-    config: LlamaServerConfig | None = None,
+    config: LocalClientConfig | None = None,
     *,
     model_filename: str = DEFAULT_MODEL_FILENAME,
     mmproj_filename: str = DEFAULT_MMPROJ_FILENAME,
@@ -35,7 +35,7 @@ def build_server_command(
     parallel_slots: int = DEFAULT_PARALLEL_SLOTS,
     cache_ram_mib: int = DEFAULT_CACHE_RAM_MIB,
 ) -> list[str]:
-    cfg = config or LlamaServerConfig()
+    cfg = config or LocalClientConfig()
     server_path = paths.model_dir / "llama.cpp" / server_binary
     model_path = paths.model_dir / model_filename
     mmproj_path = paths.model_dir / mmproj_filename

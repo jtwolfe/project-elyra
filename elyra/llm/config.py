@@ -1,10 +1,13 @@
-"""LLM server connection settings.
+"""LLM client connection settings.
 
-Scope: injectable dataclass for llama-server chat endpoint and xAI OpenAI-
-compatible base URL join rules.
-Product sampling defaults (KD13): temperature + Gemma card truncation +
-default_reasoning_budget_tokens live here; HttpChatClient falls back when
-chat_completion kwargs are None.
+Scope: injectable dataclass for local OpenAI-compatible chat endpoints and
+xAI OpenAI-compatible base URL join rules.
+
+LocalClientConfig (PR1 interim): keeps host/port/health_url/use_reasoning/
+reasoning_budget so server.py launch argv and supervisor health waits still
+compile. Wire HTTP payload is OpenAI-compat (model required; no reasoning /
+thinking_budget on wire; top_p/top_k optional None). Final base_url-only
+reshape lands when server.py is removed.
 """
 
 from __future__ import annotations
@@ -14,29 +17,38 @@ from dataclasses import dataclass
 from elyra.llm.constants import (
     DEFAULT_CHAT_TEMPERATURE,
     DEFAULT_REASONING_BUDGET_TOKENS,
-    GEMMA_TOP_K,
-    GEMMA_TOP_P,
 )
 
 
 @dataclass(frozen=True)
-class LlamaServerConfig:
+class LocalClientConfig:
+    """Local / self-hosted OpenAI-compatible chat endpoint.
+
+    PR1 interim: host/port for launch + health; wire payload is OpenAI subset.
+    """
+
     host: str = "127.0.0.1"
     port: int = 8080
     chat_path: str = "/v1/chat/completions"
+    # Required on the wire for OpenAI-compat local POST (intentional change).
+    model: str = "local"
+    # Interim: still read by build_server_command argv (not HTTP payload).
     use_reasoning: bool = True
     # None / -1 = no CLI --reasoning-budget (per-request only).
     reasoning_budget: int | None = None
     connect_timeout: float = 10.0
     read_timeout: float = 600.0
-    # Product default from constants (dogfood thrash: 1.0; Stage 1 OFAT was 0.6).
+    # Product temperature default; local sampling no longer ships Gemma trunc.
     temperature: float = DEFAULT_CHAT_TEMPERATURE
-    # Gemma card nucleus / top-k truncation (KD7). None → omit from chat payload.
-    top_p: float | None = GEMMA_TOP_P
-    top_k: int | None = GEMMA_TOP_K
-    # Stage 2: per-request private channel cap (Python → wire thinking_budget_tokens).
-    # None → omit when reasoning=True. Product ships non-None after live OFAT.
+    # Optional nucleus / top-k; None → omit from chat payload.
+    top_p: float | None = None
+    top_k: int | None = None
+    # Retained for config constructors / live_eval until launch path dies;
+    # local HTTP payload no longer emits thinking_budget_tokens.
     default_reasoning_budget_tokens: int | None = DEFAULT_REASONING_BUDGET_TOKENS
+    # Optional Bearer for for_local (unit-test / future self-hosted auth).
+    # Never log; never put in status JSON.
+    api_key: str | None = None
 
     @property
     def chat_url(self) -> str:

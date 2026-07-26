@@ -23,7 +23,7 @@ from elyra.llm.client import (
     StubChatClient,
     UsageGatedChatClient,
 )
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
 from elyra.llm.models import (
     CURATED_XAI_MODELS,
     DEFAULT_XAI_MODEL,
@@ -76,9 +76,12 @@ def test_xai_config_join_path_without_leading_slash():
     assert cfg.models_url == "https://api.x.ai/v1/models"
 
 
-def test_llama_server_config_unchanged_local_url():
-    cfg = LlamaServerConfig(host="127.0.0.1", port=8080)
+def test_local_client_config_interim_url():
+    """PR1 interim: host/port still drive chat_url (base_url reshape is PR2)."""
+    cfg = LocalClientConfig(host="127.0.0.1", port=8080)
     assert cfg.chat_url == "http://127.0.0.1:8080/v1/chat/completions"
+    assert cfg.health_url == "http://127.0.0.1:8080/health"
+    assert cfg.model == "local"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +90,7 @@ def test_llama_server_config_unchanged_local_url():
 
 
 def test_for_local_factory_profile_and_url():
-    cfg = LlamaServerConfig(host="127.0.0.1", port=9999)
+    cfg = LocalClientConfig(host="127.0.0.1", port=9999)
     client = HttpChatClient.for_local(cfg)
     assert client.profile == "local"
     assert client.chat_url == "http://127.0.0.1:9999/v1/chat/completions"
@@ -96,7 +99,7 @@ def test_for_local_factory_profile_and_url():
 def test_for_local_default_config():
     client = HttpChatClient.for_local()
     assert client.profile == "local"
-    assert client.chat_url == LlamaServerConfig().chat_url
+    assert client.chat_url == LocalClientConfig().chat_url
 
 
 def test_for_xai_factory_profile_and_exact_url():
@@ -112,8 +115,8 @@ def test_for_xai_requires_model_and_bearer():
         HttpChatClient(XaiClientConfig(), profile="xai", model="grok-4.5", bearer_token=None)  # type: ignore[arg-type]
 
 
-def test_bc_positional_llama_config_is_local():
-    cfg = LlamaServerConfig(host="10.0.0.1", port=1234)
+def test_bc_positional_local_config_is_local():
+    cfg = LocalClientConfig(host="10.0.0.1", port=1234)
     client = HttpChatClient(cfg)
     assert client.profile == "local"
     assert client.chat_url == "http://10.0.0.1:1234/v1/chat/completions"
@@ -228,9 +231,8 @@ def test_xai_set_model_and_bearer_affect_next_request():
     assert captured[1]["auth"] == "Bearer tok-b"
 
 
-def test_local_payload_still_sends_gemma_fields():
-    from elyra.llm.constants import GEMMA_TOP_K, GEMMA_TOP_P
-
+def test_local_payload_openai_compat_model_no_reasoning():
+    """Local wire: model required; omit reasoning/thinking_budget; no GEMMA defaults."""
     captured: dict[str, Any] = {}
 
     def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
@@ -239,23 +241,93 @@ def test_local_payload_still_sends_gemma_fields():
         captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
         return _FakeHTTPResponse(_ok_chat_body())
 
-    cfg = LlamaServerConfig(host="127.0.0.1", port=8080, use_reasoning=True)
+    cfg = LocalClientConfig(host="127.0.0.1", port=8080, use_reasoning=True)
     client = HttpChatClient.for_local(cfg)
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         client.chat_completion(
             [{"role": "user", "content": "hi"}],
             max_tokens=16,
             reasoning=True,
+            reasoning_budget_tokens=2048,
+            top_k=64,
         )
 
     assert captured["url"] == "http://127.0.0.1:8080/v1/chat/completions"
     assert "authorization" not in captured["headers"]
     body = captured["body"]
-    assert "model" not in body
-    assert body["top_p"] == GEMMA_TOP_P
-    assert body["top_k"] == GEMMA_TOP_K
-    assert body["reasoning"] is True
-    assert "thinking_budget_tokens" in body
+    assert body["model"] == "local"
+    assert body["max_tokens"] == 16
+    assert body["stream"] is False
+    # Optional top_k only when resolved non-None (kwarg provided above).
+    assert body["top_k"] == 64
+    # Product defaults no longer ship GEMMA top_p.
+    assert "top_p" not in body
+    assert "reasoning" not in body
+    assert "thinking_budget_tokens" not in body
+    assert "reasoning_budget_tokens" not in body
+
+
+def test_local_payload_omits_top_k_when_none():
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    cfg = LocalClientConfig(host="127.0.0.1", port=8080, top_p=None, top_k=None)
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    body = captured["body"]
+    assert body["model"] == "local"
+    assert "top_p" not in body
+    assert "top_k" not in body
+    assert "reasoning" not in body
+    assert "thinking_budget_tokens" not in body
+
+
+def test_for_local_optional_bearer_when_api_key_set():
+    """Unit-test path: LocalClientConfig.api_key → Authorization Bearer."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        # Also via get_header (urllib normalizes)
+        auth = req.get_header("Authorization") or req.get_header("authorization")
+        captured["auth"] = auth
+        captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    cfg = LocalClientConfig(
+        host="127.0.0.1",
+        port=8080,
+        api_key="local-secret-key",
+        model="ollama-model",
+    )
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    assert captured["auth"] == "Bearer local-secret-key"
+    assert captured["body"]["model"] == "ollama-model"
+    # Never leak into body
+    assert "api_key" not in captured["body"]
+    assert "local-secret-key" not in json.dumps(captured["body"])
+
+
+def test_for_local_omits_authorization_when_api_key_none():
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    client = HttpChatClient.for_local(LocalClientConfig(host="127.0.0.1", port=8080))
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    assert "authorization" not in captured["headers"]
 
 
 def test_http_error_message_omits_bearer_token():
@@ -309,7 +381,7 @@ def test_result_from_response_parses_usage():
 
 
 def test_result_missing_usage_is_none():
-    client = HttpChatClient.for_local(LlamaServerConfig(use_reasoning=False))
+    client = HttpChatClient.for_local(LocalClientConfig(use_reasoning=False))
 
     def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
         return _FakeHTTPResponse(
