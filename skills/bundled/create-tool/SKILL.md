@@ -68,6 +68,17 @@ install_tool_draft  →  verify_tool  →  promote_tool
 
 Sandbox FS tools (`list_dir`, `read_file`, …) **cannot** list host `tools/drafts/`. Seeing packages under sandbox `tools/` does not mean drafts are there.
 
+### Runtime file output (prefer)
+
+When a tool writes files for later use (plots, exports, intermediates):
+
+- Prefer guest paths under:
+  `tmp/<tool-name>/<run-id>/…`
+  (host: `sandboxes/sandbox0/tmp/<tool-name>/<run-id>/…`)
+- Use a short unique `run-id` per invocation (uuid hex / timestamp) so runs do not clobber each other.
+- Do **not** write tool product under `tools/`, `media/`, or seed dirs (`lib/`, `general/`, `fixtures/`).
+- For glass/outbound attachments, pass those `tmp/…` paths into `speak` (or leave them for the host to ingest).
+
 ### Runners (model-created)
 
 - `sandbox_python`: `runner.json` with `module` + optional `function` (default `run`); guest calls `fn(args)` with the model args dict. `module` may be a dotted import (`impl.web_search`) or a package-relative path (`impl/web_search.py`); the file must exist under the package or verify/promote fail with `invalid_runner:module_not_found`.

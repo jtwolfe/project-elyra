@@ -22,6 +22,8 @@ warm microsandbox guest under fixed root **`/workspace`**. Prepared by
 - Read only under the sandbox root (parent of `general/`, or guest `/workspace`).
 - Write only under `tmp/` (and `tools/` for staged packages) unless a tool
   declares otherwise.
+- Prefer tool-written products under `tmp/<tool-name>/<run-id>/` so runs stay
+  isolated and the tree stays orderly.
 - Guest egress defaults to microsandbox `public_only` (outbound internet).
   Override with `ELYRA_SANDBOX_NETWORK=none|public_only|allow_all` at create time.
 - Guest exec uses `python3 -B` / `PYTHONDONTWRITEBYTECODE=1` so RO mounts never
