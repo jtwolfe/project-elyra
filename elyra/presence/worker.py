@@ -997,7 +997,7 @@ class PresenceWorker:
                     catalog,
                     max_tokens=loop.orient_skill_catalog_max_tokens,
                 ),
-                skill_bias=format_skill_bias(wake.kind, payload),
+                skill_bias=format_skill_bias(wake.kind, payload, goals_list),
                 wake_content=wake_content_s,
                 wake_message_id=wake_message_id_s,
             )
