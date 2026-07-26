@@ -22,20 +22,13 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 
-if [[ ! -e model ]]; then
-  CANDIDATE="$ROOT/../aurimago/project-elyra2/model"
-  if [[ -d "$CANDIDATE" ]]; then
-    ln -sfn "$CANDIDATE" model
-    echo "Linked model/ -> $CANDIDATE"
-  else
-    echo "NOTE: model/ not found. Symlink project-elyra2/model when ready:"
-    echo "  ln -sfn ../aurimago/project-elyra2/model model"
-  fi
-fi
-
 echo ""
 echo "OK. Activate and start:"
 echo "  source .venv/bin/activate"
-echo "  elyra start                 # llama + API + UI"
-echo "  elyra start --no-llama      # stub LLM + UI only"
+echo "  # Grok (product default)"
+echo "  #   grok login   # or set XAI_API_KEY / paste key in glass Status"
+echo "  elyra start"
+echo "  # Hermetic UI / no remote calls:"
+echo "  elyra start --stub-llm"
+echo "  # Local self-hosted: not implemented (provider=local fails closed)"
 echo "  # UI: http://127.0.0.1:8787/"

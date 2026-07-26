@@ -1,7 +1,8 @@
 """Multi-hop do-loop tests (PR11).
 
-Scripted StubChatClient covers contracts; @pytest.mark.llm hits real model when
-model/ + llama-server are available.
+Scripted StubChatClient covers contracts; hermetic fake HTTP / stubs only.
+Optional live OpenAI-compat path is reserved via the registered ``llm`` marker
+(not wired in this module).
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from typing import Any
 import pytest
 
 from elyra.config import resolve_paths
-from elyra.llm.client import ChatCompletionResult, HttpChatClient, StubChatClient
+from elyra.llm.client import ChatCompletionResult, StubChatClient
 from elyra.llm.reasoning_hygiene import sanitize_completion
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.continuous_policy import WORK_CONTINUE_HOST, work_continue_host_message
@@ -2333,134 +2334,6 @@ def test_host_mark_spoke_exception_does_not_abort_loop(
     assert result.spoke is True
     assert result.error is None
     assert ctx.mark_spoke is boom
-
-
-# ---------------------------------------------------------------------------
-# Real model (@pytest.mark.llm)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def live_llama_server():
-    """Local Gemma/llama path removed (PR2); always skip live fixtures."""
-    pytest.skip("local Gemma/llama-server path removed — use hermetic fake HTTP")
-
-
-
-@pytest.mark.llm
-def test_real_model_tool_call_through_doloop(
-    live_llama_server, tmp_path: Path
-) -> None:
-    """Real completions: model emits tool_calls; do-loop executes list_dir and/or speak.
-
-    Pins tool_choice to list_dir for the first hop reliability (Gemma peg quirks),
-    then allows free choice / no tools on subsequent hops.
-    """
-    home = tmp_path
-    paths = resolve_paths(home)
-    paths.ensure_data_dirs()
-    sandbox = Sandbox(paths)
-    (sandbox.root / "notes.txt").write_text("real-model note\n", encoding="utf-8")
-    registry = ToolRegistry(paths, bundled_root=resolve_bundled_tools_root())
-    speak = SpeakTransport(paths)
-    timers = TimerService(paths, WakeQueue(paths))
-    moments = MomentStore(paths)
-    mid = moments.open_moment(why_now="llm multi-hop", user_id="operator")
-    ctx = ToolContext(
-        paths=paths,
-        sandbox=sandbox,
-        settings=default_settings(),
-        moment_id=mid,
-        user_id="operator",
-        registry=registry,
-        speak=speak,
-        timers=timers,
-        skills_used=[],
-    )
-
-    http = HttpChatClient(live_llama_server)
-    # Narrow tool surface for the live model (list_dir + speak only).
-    tools = [
-        t
-        for t in registry.openai_tools()
-        if t.get("function", {}).get("name") in ("list_dir", "speak")
-    ]
-    assert len(tools) == 2
-
-    hop_n = {"n": 0}
-
-    class _FirstHopPinned:
-        """Proxy: first completion forces list_dir; later hops free / no pin."""
-
-        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
-            hop_n["n"] += 1
-            kw = dict(kwargs)
-            kw["tools"] = tools
-            if hop_n["n"] == 1:
-                kw["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": "list_dir"},
-                }
-            else:
-                # After tools returned, prefer speak if still going.
-                if hop_n["n"] == 2:
-                    kw["tool_choice"] = {
-                        "type": "function",
-                        "function": {"name": "speak"},
-                    }
-                else:
-                    kw.pop("tool_choice", None)
-            kw.setdefault("temperature", 0.1)
-            kw.setdefault("reasoning", False)
-            kw.setdefault("max_tokens", 256)
-            return http.chat_completion(messages, **kw)
-
-    def rebuild() -> list[dict[str, Any]]:
-        return assemble_outer_meal(
-            paths=paths,
-            glass_history=[],
-            wake_content="List the sandbox directory, then greet me via speak.",
-            why_now="llm multi-hop",
-            settings=default_settings(),
-        )
-
-    meal = rebuild()
-    assert meal[0]["content"] == load_prompt("system", paths=paths)
-
-    settings = _settings(max_tool_hops=6, generation_max_tokens=256)
-    result = run_do_loop(
-        client=_FirstHopPinned(),  # type: ignore[arg-type]
-        registry=registry,
-        ctx=ctx,
-        rebuild_outer=rebuild,
-        settings=settings,
-        moments=moments,
-        social_wake=True,
-        tools=tools,
-        max_tokens=256,
-    )
-
-    assert result.hop_count >= 1
-    assert result.stop_reason in (
-        "no_tools",
-        "wait",
-        "max_hops",
-        "wall_clock",
-        "time_continue_declined",
-    )
-    beats = moments.list_beats(mid)
-    tool_beats = [b for b in beats if b.get("type") == "tool"]
-    assert tool_beats, (
-        f"expected at least one tool beat from real model; "
-        f"stop={result.stop_reason} hops={result.hop_count} beats={beats!r}"
-    )
-    names = [b.get("name") for b in tool_beats]
-    assert "list_dir" in names, f"expected list_dir executed; got {names}"
-    # Prefer speak success when model followed path; not hard-required if model
-    # stopped after list_dir with nudge, but hop should have progressed.
-    if result.spoke:
-        glass = list_messages(paths=paths)
-        assert any(m.get("role") == "assistant" for m in glass)
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """Behaviour tests for tools parameter and tool_calls parsing on ChatClient.
 
-Unit tests use stubs / fake HTTP. @pytest.mark.llm hits real llama-server when
-model weights and binary are present under model/.
+Unit tests use stubs / fake HTTP. Optional live OpenAI-compat path is reserved
+via the registered ``llm`` marker (not wired in this module).
 """
 
 from __future__ import annotations
@@ -558,113 +558,8 @@ def test_gated_client_forwards_tools_kwargs():
     assert captured["reasoning_budget_tokens"] == 2048
 
 
-# ---------------------------------------------------------------------------
-# Real model (@pytest.mark.llm)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module")
-def live_llama_server():
-    """Local Gemma/llama path removed (PR2); always skip live fixtures."""
-    pytest.skip("local Gemma/llama-server path removed — use hermetic fake HTTP")
-
-
-
-@pytest.mark.llm
-def test_real_model_accepts_tools_schema_and_emits_tool_call(live_llama_server):
-    """OpenAI tools schema accepted; model emits at least one tool_call with name.
-
-    Note: tool_choice=\"required\" can trip Gemma peg-format errors on some
-    llama.cpp builds; pin the function instead (same wire path for tools[]).
-    """
-    config = live_llama_server
-    fx = _fixtures()
-    tools = fx["tools_echo"]
-    client = HttpChatClient(config)
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a tool-using assistant. You MUST call the echo tool. "
-                "Do not answer in plain text; always use a tool call."
-            ),
-        },
-        {
-            "role": "user",
-            "content": "Please echo the word hello using the echo tool.",
-        },
-    ]
-    result = client.chat_completion(
-        messages,
-        max_tokens=256,
-        reasoning=False,
-        temperature=0.1,
-        tools=tools,
-        tool_choice={"type": "function", "function": {"name": "echo"}},
-    )
-
-    assert isinstance(result, ChatCompletionResult)
-    assert result.raw_json, "expected raw response body"
-    assert len(result.tool_calls) >= 1, (
-        f"expected tool_calls from real model; content={result.content!r} "
-        f"finish={result.finish_reason!r} raw_snip={result.raw_json[:800]!r}"
-    )
-    tc = result.tool_calls[0]
-    assert tc.name == "echo", f"unexpected tool name: {tc.name!r}"
-    assert tc.id, "tool call id should be non-empty"
-    # Parsed shape: either ok dict or flagged parse failure (no crash either way)
-    assert isinstance(tc.arguments, dict)
-    if tc.arguments_parse_ok:
-        # Prefer text key when present
-        if "text" in tc.arguments:
-            assert isinstance(tc.arguments["text"], str)
-
-
-@pytest.mark.llm
-def test_real_model_client_parses_tool_calls_shape(live_llama_server):
-    """Client correctly surfaces id, name, arguments dict from live completion."""
-    config = live_llama_server
-    tools = _fixtures()["tools_list_dir"]
-    client = HttpChatClient(config)
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You must use the list_dir tool. Call list_dir with path '.' "
-                "and nothing else."
-            ),
-        },
-        {"role": "user", "content": "List the current directory using list_dir."},
-    ]
-    result = client.chat_completion(
-        messages,
-        max_tokens=256,
-        reasoning=False,
-        temperature=0.1,
-        tools=tools,
-        tool_choice={
-            "type": "function",
-            "function": {"name": "list_dir"},
-        },
-    )
-    assert result.tool_calls, (
-        f"no tool_calls; content={result.content!r} raw={result.raw_json[:800]!r}"
-    )
-    for tc in result.tool_calls:
-        assert isinstance(tc.id, str)
-        assert isinstance(tc.name, str) and tc.name
-        assert isinstance(tc.arguments, dict)
-        assert isinstance(tc.arguments_raw, str)
-        assert isinstance(tc.arguments_parse_ok, bool)
-
-
 def test_malformed_args_partial_json_is_safe_via_parser():
-    """Invalid partial JSON arguments never crash parse (Http contract path).
-
-    Live models rarely emit broken JSON; unit/fake-HTTP cover this mode.
-    Kept as a unit test (not @pytest.mark.llm) — no llama-server call.
-    """
+    """Invalid partial JSON arguments never crash parse (Http contract path)."""
     broken = [
         {
             "id": "call_live_bad",

@@ -56,11 +56,11 @@ DONE_WHEN_TEST_MAP: dict[str, tuple[str, ...]] = {
     ),
     # PR13 — required for this checkbox; not "hardening later"
     "create-tool / create-skill fail-closed": ("test_create_tool_gates.py",),
-    "llama.cpp Gemma path works; context policy documented": (
-        "test_config.py",
+    "xAI Grok path + local stub surface; sliding context policy in constants": (
+        "test_llm_provider_client.py",
         "test_loop_context.py",
-        "test_doloop.py",
-        "test_llm_client_tools.py",
+        "test_provider_runtime.py",
+        "test_settings.py",
     ),
     "Interjections mid-moment": (
         "test_interject.py",
@@ -272,16 +272,19 @@ def test_readme_documents_llm_marker_and_donewhen() -> None:
 
 
 # ---------------------------------------------------------------------------
-# LLM marker still registered (real Gemma path documented / skippable)
+# LLM marker still registered (optional OpenAI-compat live path)
 # ---------------------------------------------------------------------------
 
 
 def test_llm_marker_registered() -> None:
-    """Real-model tests use @pytest.mark.llm; suite must declare the marker."""
+    """``llm`` marker stays registered; README documents pytest -m llm filter.
+
+    Real live fixtures were removed with the local-server path. Hermetic client
+    / context policy coverage lives under the DONE_WHEN covering modules.
+    Do not require mark.llm decorators in doloop / client_tools.
+    """
     text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     assert "llm:" in text
-    assert "Gemma" in text or "llama" in text.lower() or "model" in text.lower()
-    doloop = (TESTS / "test_doloop.py").read_text(encoding="utf-8")
-    client = (TESTS / "test_llm_client_tools.py").read_text(encoding="utf-8")
-    assert "@pytest.mark.llm" in doloop
-    assert "@pytest.mark.llm" in client
+    assert "OpenAI" in text or "openai" in text.lower() or "compat" in text.lower()
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    assert "pytest -m llm" in readme

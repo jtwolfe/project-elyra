@@ -1,170 +1,61 @@
 # Live qualitative eval harness (Stage gates)
 
-Fixed scenarios + product-path orchestration for **full-stack real-LLM**
-gates (Gemma via llama-server). Stage go/no-go is human-reviewed 3-attempt
-scorecards — not green pytest alone. Continuous multi-moment scenarios
-(`S-cont-*`) are live/operator only; hermetic YAML parse is
-`tests/test_live_eval_scenarios.py` (no GPU in CI).
+**Fail-closed:** the local Gemma/llama-server product path is **removed**.
+Operator `run_stage.py` always exits **2** with an instruction to use **xAI
+dogfood** (`elyra start`) or a future OpenAI-compat eval harness. Scenario YAML
+still loads for hermetic tests (`tests/test_live_eval_scenarios.py` — no GPU
+in CI).
 
-Operator protocol (3-attempt rule, A/B modes, P0 exit): **`docs/live-eval.md`**.  
-Design stages + Adaptive Execution Protocol:
-`docs/design-gemma-sampling-hygiene-staged.md`. Ship knobs: `docs/inference.md`.  
-Continuous design + eval plan: `docs/design-continuous-work-orient-ledger-reset.md`.
+Historical protocol (3-attempt rule, A/B modes, P0 exit): **`docs/live-eval.md`**
+(historical freeze — do not treat as active setup). Design stages + Adaptive
+Execution Protocol: `docs/design-gemma-sampling-hygiene-staged.md` (historical).
+Ship knobs inventory: `docs/inference.md` (historical freeze). Continuous design:
+`docs/design-continuous-work-orient-ledger-reset.md`.
 
 ## Layout
 
 ```text
 scripts/live_eval/
-  scenarios.yaml      # fixed prompts + eval caps
-  run_stage.py        # product-path runner
-  scorecard.md.j2     # human scorecard template
+  scenarios.yaml      # fixed prompts + eval caps (hermetic loader still reads)
+  run_stage.py        # fail-closed operator entry; Scenario/load_scenarios import-safe
+  scorecard.md.j2     # human scorecard template (historical)
   README.md           # this file
-  logs/               # scorecards + stage logs (bulky raw exports gitignored)
+  logs/               # historical scorecards + stage logs (bulky raw exports gitignored)
 ```
 
-## Prerequisites
-
-1. `./scripts/setup_venv.sh` and `source .venv/bin/activate`
-2. `model/` → Gemma GGUF + `llama.cpp/llama-server` (see root README)
-3. Vulkan-capable GPU (or enough RAM for CPU — not recommended)
-4. Prefer a healthy llama-server already on `:8080`; otherwise the harness
-   starts one (or reuses product paths)
-
-## Isolation contract
-
-Each attempt uses a **unique `ELYRA_HOME`** under `logs/runs/<attempt_id>/home/`
-with:
-
-- `model` → symlink to project `model/`
-- `skills` / `tools` / `prompts` → symlinks to project roots (bundled packages)
-- `elyra.toml` with **eval caps** (`max_tool_hops`, shorter wall clock)
-
-Attempts never share moment chains. Raw exports stay under
-`logs/runs/` (gitignored).
-
-## Product path
-
-For each attempt the harness:
-
-1. Ensures llama-server health (`GET /health` on configured host:port).
-2. Starts presence worker + HTTP API against the isolated home
-   (same stack as `elyra start`, without double-binding llama when reusing).
-3. `POST /api/messages` with the scenario prompt + `user_id=operator`.
-4. Polls `/api/status` and `/api/moments` until the moment is **closed**
-   or poll timeout fires (default ~620s; product wall clock default 10 min
-   for eval homes).
-5. Exports moment tape + `messages.jsonl` and fills a scorecard via
-   `elyra.llm.reasoning_hygiene` (flood dim only — same module as product).
-
-**Stage 1 knobs** (scenarios.yaml): card trunc `top_p=0.95`, `top_k=64`;
-temperature ablated via CLI. Product `LlamaServerConfig` ships the same trunc.
-
-## Run Stage 0 baseline (3 tries × 3 scenarios)
+## Operator entry (always fails closed)
 
 ```bash
 source .venv/bin/activate
-# optional: start llama once and leave it up
-#   elyra start   # or start llama-server alone on :8080
-
-python scripts/live_eval/run_stage.py \
-  --stage 0 \
-  --tries 3 \
-  --all-scenarios
-
-# single scenario / try
-python scripts/live_eval/run_stage.py --stage 0 --scenario S-social --try 1
-
-# reuse / force llama
-python scripts/live_eval/run_stage.py --stage 0 --all-scenarios \
-  --llama-host 127.0.0.1 --llama-port 8080
-
-# score from an existing export dir (no live run)
-python scripts/live_eval/run_stage.py --score-only \
-  --export-dir scripts/live_eval/logs/runs/stage-0_S-social_try-1
+python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
+# → exit 2; stderr explains Gemma/llama path removed
 ```
 
-## Stage 1 sampling ablation (cost-bounded OFAT)
+`--help` still works. Flags beyond argparse help are not executed.
+
+## Hermetic tests (keep green)
 
 ```bash
-# Phase 1 — freeze card trunc; OFAT temp on S-mono
-for t in 0.2 0.4 0.6; do
-  python scripts/live_eval/run_stage.py --stage 1 --scenario S-mono --tries 3 \
-    --temperature "$t" --cell "t${t}-trunc" --keep-llama
-done
-
-# Phase 2 — confirm winner on S-social + S-tools
-WIN=0.4   # replace after Phase 1
-python scripts/live_eval/run_stage.py --stage 1 \
-  --scenario S-social --scenario S-tools --tries 3 \
-  --temperature "$WIN" --cell "t${WIN}-trunc-confirm" --keep-llama
+pytest tests/test_live_eval_scenarios.py -q
 ```
 
-CLI knob overrides: `--temperature`, `--top-p`, `--top-k`, `--omit-trunc`,
-`--cell` (embedded in attempt_id / scorecard name).
-
-## Scorecard fields
-
-| Field | Source |
-|-------|--------|
-| hop_count / stop_reason / spoke | stop beat + moment meta |
-| tools | tool beat names (order) |
-| reasoning_len | sum of model-beat `reasoning` chars |
-| finish_reason | model beat if present; else `not_on_tape` (Stage 3+) |
-| markers / flood | `channel_marker_count` / `is_channel_flood` |
-| glass_speak | assistant rows in messages.jsonl |
-| free_text_only | model content non-empty while tool_calls empty on all hops |
-| latency_s | wall time open → close (or timeout) |
-| feel 1–5 | operator fill-in (auto-estimate seeded from latency/outcome) |
-
-## Stage Log
-
-After a stage’s 3×N runs, write/update:
-
-`scripts/live_eval/logs/stage-N.md`
-
-with: what we saw, intuition, baseline summary table, decision, next knobs.
-
-## Decision rule (gate)
-
-| Outcome on a dimension | Action |
-|------------------------|--------|
-| 3/3 pass | Healthy |
-| 2/3 pass | Soft pass — document variance |
-| 0–1/3 pass | Do not advance that concern |
-
-Score **(A) flood** and **(B) tools/speak** independently.
+Loads `scenarios.yaml` only — no process spawn, no model weights, no port 8080.
 
 ## Continuous scenarios (`S-cont-*`)
 
-| ID | continuous | Setup | Score focus |
-|----|------------|-------|-------------|
-| `S-social` / `S-tools` / `S-mono` | **OFF** | none | Stage 5 regression — must stay valid with continuous disabled |
-| `S-cont-speak-only` | ON | PATCH continuous | Speak-only → **no** outer `moment_continue` |
-| `S-cont-tools` | ON | PATCH continuous | `list_dir` + `create_goal` + speak under continuous |
-| `S-cont-task-ready-prefer` | ON | PATCH + preseed ready task | Prefer pending `task_ready`; no re-arm storm |
+Scenario IDs remain in YAML for hermetic parse coverage. Live continuous stage
+runs require a future OpenAI-compat or xAI-backed harness (out of scope here).
 
-```bash
-# Continuous OFF baselines only
-python scripts/live_eval/run_stage.py --stage 5 \
-  --scenario S-social --scenario S-tools --scenario S-mono --tries 3
-
-# One continuous scenario (longer poll + ~20s settle)
-python scripts/live_eval/run_stage.py --stage 5 --scenario S-cont-speak-only --try 1
-```
-
-When `continuous: true` in `scenarios.yaml`, the harness:
-
-1. `PATCH /api/continuous` `{ "enabled": true }` after stack start.
-2. Optionally preseeds open goal + ready task (`preseed_ready_task`).
-3. POSTs the scenario prompt; polls close; **settles** ~20s to observe thrash.
-4. Exports `continuous_status.json`, `wake_events.jsonl`, `moments_index.json`.
+| ID | continuous | Score focus (historical) |
+|----|------------|--------------------------|
+| `S-social` / `S-tools` / `S-mono` | **OFF** | Stage 5 regression cells |
+| `S-cont-speak-only` | ON | Speak-only → no outer `moment_continue` |
+| `S-cont-tools` | ON | Tools under continuous |
+| `S-cont-task-ready-prefer` | ON | Prefer pending `task_ready` |
 
 ## Notes
 
-- Flood scoring uses **only** `elyra.llm.reasoning_hygiene` — do not vendor a
-  second strip regex.
-- Hygiene is **boundary defense scoring** here; Stage 0 does not change product
-  sampling or wire sanitize at ingress.
-- Timeout without close → status `infra_timeout` (distinct from model fail).
+- Flood scoring helpers still import `elyra.llm.reasoning_hygiene` when
+  re-enabled — do not vendor a second strip regex.
 - Continuous policy unit tests: `tests/test_continuous_policy.py` (hermetic).
 - Scenario YAML hermetic: `tests/test_live_eval_scenarios.py` (no GPU).

@@ -14,7 +14,7 @@ Status snapshot: [docs/project-status-pass.md](docs/project-status-pass.md).
 
 ```text
 elyra start (supervisor)
-  ├── LLM (xAI Grok default on grok-improvement; local Gemma/llama optional)
+  ├── LLM (xAI Grok default; local provider reserved / not implemented)
   ├── HTTP API + glass UI  →  http://127.0.0.1:8787/
   └── PresenceWorker (single thread)
         wake queue + timers
@@ -43,7 +43,10 @@ elyra start (supervisor)
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
 
-Inference: product path on **`grok-improvement`** is **xAI Grok** (usage meter + hard-stops; continuous default **OFF**). Local **Gemma** via **llama.cpp** remains available for offline/CI. Server `-c` is a **KV ceiling** (default 86000); product meals slide at **~24k** input tokens. See [docs/inference.md](docs/inference.md) and [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).
+Inference: product path is **xAI Grok** (usage meter + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals slide at **~24k** input tokens (`CONTEXT_WINDOW_TOKENS = 86000` remains the budget ceiling constant). See [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
+[docs/inference.md](docs/inference.md) is a **historical freeze — do not follow for setup** (older local-server path removed).
+
+**Status JSON (API/glass):** inference posture fields are `chat_ready` / `chat_error` / `chat_busy` / `chat_operation` (replacing former `llama_*` keys). Clean break — no dual-write.
 
 ## Quick start
 
@@ -57,14 +60,12 @@ pip install -e '.[sandbox]'
 ./scripts/setup-microsandbox.sh --doctor-only   # KVM / import checks
 # hermetic host-stub (tests/CI): export ELYRA_SANDBOX=0
 
-# full stack (Grok credentials on gi path)
+# Grok (product default) — grok login, or XAI_API_KEY / paste key in glass Status
 elyra start
 
 # UI + API only, stub LLM (no remote calls / hermetic dogfood)
 elyra start --stub-llm
 ```
-
-> **Note:** `--no-llama` and `--context-tokens` were removed (use `--stub-llm` for hermetic UI). Full Grok-first README rewrite lands in a follow-up.
 
 Without `elyra[sandbox]`, chat still starts; guest `run` / `sandbox_*` / isolation-on `verify_tool` fail closed (`sandbox_unavailable:*`). Install the extra so create-tool does not look broken.
 
@@ -76,12 +77,6 @@ Open **http://127.0.0.1:8787/**
 | `--provider xai\|local` | Product default `xai`; `local` fails closed (not implemented) |
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
 
-Local model files (optional) live under `aurimago/project-elyra2/model`. Setup links them as `./model` when present:
-
-```bash
-ln -sfn ../aurimago/project-elyra2/model model
-```
-
 Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 24000`). CLI overrides win over toml.
 
 ## Testing
@@ -89,29 +84,21 @@ Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_
 ```bash
 source .venv/bin/activate
 
-# Default CI / local pack (no GPU, no live model)
+# Default CI / local pack (no live remote model)
 pytest -m 'not llm'
 
-# Real local Gemma via llama-server (needs model/ GGUF + Vulkan-capable GPU)
+# Reserved marker for optional future OpenAI-compat live path
+# (not wired; skips/unavailable without endpoint)
 pytest -m llm
 ```
 
-### Real LLM tests (`@pytest.mark.llm`)
-
-Marked tests live in `tests/test_doloop.py` and `tests/test_llm_client_tools.py`. They:
-
-1. Skip if `model/` is missing or incomplete (`validate_model_paths`).
-2. Reuse a healthy server on `:8080`, or start a short-lived `llama-server` on a free port.
-3. Exercise tool_calls through the HTTP client and multi-hop do-loop.
-
-Requirements: `./model` symlink (or tree) with Gemma GGUF + mmproj + `llama.cpp/llama-server`, and enough VRAM for the chosen `-c` (tests often use a smaller `-c` like 8192).
-
 ### Live qualitative stage gates
 
-Fixed scenarios + full product path (presence → moment → do-loop). **3-attempt protocol** and failure modes: [docs/live-eval.md](docs/live-eval.md). Harness: [scripts/live_eval/README.md](scripts/live_eval/README.md).
+Fixed scenarios + full product path (presence → moment → do-loop). Historical protocol: [docs/live-eval.md](docs/live-eval.md) (**historical freeze**). Harness is **fail-closed** (Gemma/llama path removed): [scripts/live_eval/README.md](scripts/live_eval/README.md). Hermetic scenario loader tests remain in `tests/test_live_eval_scenarios.py`.
 
 ```bash
 python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
+# exits 2 — use xAI dogfood (`elyra start`) or a future OpenAI-compat harness
 ```
 
 ### Stretch 1 done-when regression
@@ -130,8 +117,9 @@ Out of scope (Stretch 2+ / later phases): hypergraph memory, Lance graph, multi-
 | [docs/overview.md](docs/overview.md) | Glossary |
 | [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote; work-origin USER |
 | [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, catalog, create-tool safety |
-| [docs/inference.md](docs/inference.md) | llama / Gemma path; context and sampling knobs |
-| [docs/live-eval.md](docs/live-eval.md) | Live qualitative protocol |
+| [docs/inference.md](docs/inference.md) | **Historical freeze — do not follow for setup** (older local-server path removed) |
+| [docs/live-eval.md](docs/live-eval.md) | **Historical freeze** — live qualitative protocol |
+| [docs/design-remove-gemma-local-stub.md](docs/design-remove-gemma-local-stub.md) | Remove local-server path; stub `provider=local` |
 | [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration phases (refresh if status lags code) |
 | [docs/README.md](docs/README.md) | Full index |
 

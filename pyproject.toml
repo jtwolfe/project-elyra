@@ -29,6 +29,6 @@ elyra = ["runtime/web/**/*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "llm: real llama-server / Gemma model (needs model/ GGUF + GPU; skip in CI without GPU)",
+    "llm: optional live LLM (OpenAI-compat local/remote); skipped when unavailable",
     "microsandbox: optional live microsandbox smoke (needs KVM + elyra[sandbox])",
 ]

@@ -190,7 +190,7 @@ def test_xai_payload_includes_model_bearer_omits_gemma_fields():
     assert body["messages"][0]["content"] == "ping"
     assert body["max_tokens"] == 32
     assert body["stream"] is False
-    # Gemma-only / local-only wire fields must be absent.
+    # Local-only extension wire fields must be absent on xAI.
     assert "top_k" not in body
     assert "thinking_budget_tokens" not in body
     assert "reasoning" not in body
