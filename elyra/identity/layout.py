@@ -327,18 +327,28 @@ def heal_versions_index(
     return meta
 
 
-def gc_versions(
+def trim_versions_index(
     versions: list[dict[str, Any]],
-    versions_dir: Path,
     *,
     limit: int = VERSION_GC_LIMIT,
-) -> list[dict[str, Any]]:
-    """Drop oldest index entries + files when over limit. Returns new list."""
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split versions into (keep, drop) without touching disk.
+
+    Index order is append-oldest-first; drop from the front when over limit.
+    Callers must persist ``keep`` in meta before deleting drop files (Issue 3).
+    """
     if len(versions) <= limit:
-        return versions
-    # Index order is append-oldest-first; drop from the front.
+        return versions, []
     drop = versions[: len(versions) - limit]
     keep = versions[len(versions) - limit :]
+    return keep, drop
+
+
+def delete_version_files(
+    drop: list[dict[str, Any]],
+    versions_dir: Path,
+) -> None:
+    """Best-effort delete archived version bodies for dropped index rows."""
     for row in drop:
         vid = row.get("version_id") if isinstance(row, dict) else None
         if not isinstance(vid, str):
@@ -348,8 +358,39 @@ def gc_versions(
             path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+def gc_versions(
+    versions: list[dict[str, Any]],
+    versions_dir: Path,
+    *,
+    limit: int = VERSION_GC_LIMIT,
+) -> list[dict[str, Any]]:
+    """Trim index and delete dropped files immediately.
+
+    Prefer :func:`trim_versions_index` + commit meta + :func:`delete_version_files`
+    for promote paths so durable deletes only follow committed meta.
+    """
+    keep, drop = trim_versions_index(versions, limit=limit)
+    delete_version_files(drop, versions_dir)
     return keep
 
+
+def archive_index_entry(
+    archive_path: Path,
+    *,
+    version_id: str,
+    promoted_at: str,
+) -> dict[str, Any]:
+    """Build a versions index row by hashing the on-disk archive body (Issue 7)."""
+    body = read_text_or_empty(archive_path)
+    raw = body.encode("utf-8")
+    return {
+        "version_id": version_id,
+        "promoted_at": promoted_at,
+        "sha256": content_sha256(body),
+        "bytes": len(raw),
+    }
 
 def body_byte_len(text: str) -> int:
     return len(text.encode("utf-8"))

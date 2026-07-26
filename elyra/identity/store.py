@@ -19,15 +19,17 @@ from elyra.config import ElyraPaths
 from elyra.identity.layout import (
     VERSION_ID_RE,
     VERSION_GC_LIMIT,
+    archive_index_entry,
     check_body_size,
     content_sha256,
+    delete_version_files,
     full_name_change_requires_force,
-    gc_versions,
     heal_versions_index,
     load_json_object,
     mint_version_id,
     read_text_or_empty,
     strip_operational_keys,
+    trim_versions_index,
     utc_now_iso,
     write_atomic,
     write_json_atomic,
@@ -92,9 +94,9 @@ def maybe_migrate_self_v2(self_path: Path) -> bool:
     if content_sha256(text) != SEED_V1_SHA256:
         return False
     # Hash gate implies text == SEED_V1_TEXT (ends with \n); append Drive + marker.
-    self_path.write_text(text + _DRIVE_SECTION_APPEND, encoding="utf-8")
+    # Atomic replace so a crash mid-write cannot corrupt the live body.
+    write_atomic(self_path, text + _DRIVE_SECTION_APPEND)
     return True
-
 
 class IdentityStore:
     """Versioned self identity under ``data/identity/``."""
@@ -343,6 +345,9 @@ class IdentityStore:
         """Archive current → versions/, draft → current, clear draft.
 
         Host already passed gate + grant consume. Transactional under RLock.
+        Order: archive → write current → write meta → unlink draft → GC files.
+        Idempotent completion when draft already equals current and draft_meta
+        is cleared (recover draft left after a prior partial promote).
         """
         if not isinstance(reason, str) or not reason.strip():
             return {"ok": False, "error": "missing_reason", "actor": "self"}
@@ -371,19 +376,42 @@ class IdentityStore:
             meta = load_json_object(self.meta_path()) or self._default_meta(
                 body=self.self_digest()
             )
+            current_path = self.current_path()
+            current_body = self.self_digest()
+
+            # Idempotent completion: prior promote wrote current+meta but left draft.
+            if (
+                meta.get("draft_meta") is None
+                and current_path.is_file()
+                and draft_body == current_body
+                and meta.get("current_content_sha256") == draft_sha
+            ):
+                try:
+                    draft_path.unlink(missing_ok=True)
+                except OSError:
+                    return {
+                        "ok": False,
+                        "error": "promote_failed:draft_unlink",
+                        "actor": "self",
+                    }
+                return {
+                    "ok": True,
+                    "actor": "self",
+                    "current_version_id": meta.get("current_version_id"),
+                    "promote_count": int(meta.get("promote_count") or 0),
+                    "reason": reason.strip(),
+                    "meta": meta,
+                    "idempotent": True,
+                }
+
             now = utc_now_iso()
             versions_dir = self.versions_dir()
             versions_dir.mkdir(parents=True, exist_ok=True)
 
-            # Snapshot pre-promote meta for name_nudge (n/a for self, kept uniform).
-            pre_goes_by = meta.get("goes_by")
-            pre_real = meta.get("real_name_known")
-
-            current_body = self.self_digest()
-            current_path = self.current_path()
             versions = list(meta.get("versions") or [])
             if not isinstance(versions, list):
                 versions = []
+            drop_later: list[dict[str, Any]] = []
 
             # Archive outgoing current if present.
             if current_body and current_path.is_file():
@@ -396,22 +424,20 @@ class IdentityStore:
                 archive_path = versions_dir / f"{archive_id}.md"
                 if not archive_path.is_file():
                     write_atomic(archive_path, current_body)
-                raw = current_body.encode("utf-8")
                 # Avoid duplicate index rows if re-promote race.
                 if not any(
                     isinstance(r, dict) and r.get("version_id") == archive_id
                     for r in versions
                 ):
                     versions.append(
-                        {
-                            "version_id": archive_id,
-                            "promoted_at": now,
-                            "sha256": content_sha256(current_body),
-                            "bytes": len(raw),
-                        }
+                        archive_index_entry(
+                            archive_path,
+                            version_id=archive_id,
+                            promoted_at=now,
+                        )
                     )
-                versions = gc_versions(
-                    versions, versions_dir, limit=VERSION_GC_LIMIT
+                versions, drop_later = trim_versions_index(
+                    versions, limit=VERSION_GC_LIMIT
                 )
 
             # draft → current
@@ -435,19 +461,28 @@ class IdentityStore:
             meta["draft_meta"] = None
             meta["draft_updated_at"] = None
             meta["current_promoted_at"] = now
-            meta["current_content_sha256"] = content_sha256(draft_body)
+            meta["current_content_sha256"] = draft_sha
             meta["promote_count"] = int(meta.get("promote_count") or 0) + 1
             meta["versions"] = versions
-            # Self has no name_nudge; ignore pre_* (kept for symmetry).
-            _ = (pre_goes_by, pre_real)
 
             write_json_atomic(self.meta_path(), meta)
 
-            # Clear draft last so failure before this leaves draft intact.
+            # Clear draft after meta commit; fail closed if unlink fails so
+            # callers can retry via the idempotent path above.
             try:
                 draft_path.unlink(missing_ok=True)
             except OSError:
-                pass
+                return {
+                    "ok": False,
+                    "error": "promote_failed:draft_unlink",
+                    "actor": "self",
+                    "current_version_id": new_vid,
+                    "promote_count": meta["promote_count"],
+                    "meta": meta,
+                }
+
+            # GC files only after committed meta (no durable history loss on crash).
+            delete_version_files(drop_later, versions_dir)
 
             return {
                 "ok": True,
@@ -457,7 +492,6 @@ class IdentityStore:
                 "reason": reason.strip(),
                 "meta": meta,
             }
-
     # ── ensure / migrate ─────────────────────────────────────────────────
 
     def ensure_layout(self) -> None:

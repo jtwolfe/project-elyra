@@ -193,11 +193,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/identity":
             digest = self.identity.self_digest()
+            # Prefer live current.md; fall back to legacy self.md path for dual-file.
+            live = self.identity.current_path()
+            if not live.is_file():
+                live = self.identity.self_path
             self._json(
                 200,
                 {
                     "self": {
-                        "path": str(self.identity.self_path),
+                        "path": str(live),
                         "digest": digest,
                     }
                 },

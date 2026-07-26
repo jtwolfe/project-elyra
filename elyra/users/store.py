@@ -19,16 +19,18 @@ from elyra.config import ElyraPaths
 from elyra.identity.layout import (
     VERSION_ID_RE,
     VERSION_GC_LIMIT,
+    archive_index_entry,
     check_body_size,
     content_sha256,
+    delete_version_files,
     full_name_change_requires_force,
-    gc_versions,
     heal_versions_index,
     load_json_object,
     mint_user_id,
     mint_version_id,
     read_text_or_empty,
     strip_operational_keys,
+    trim_versions_index,
     utc_now_iso,
     validate_user_id,
     write_atomic,
@@ -39,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 _SEED_OPERATOR = Path("seeds") / "users" / "operator" / "profile.md"
 
+# Placeholder is literal; substituted via str.replace (not .format) to avoid
+# user-influenced format-string footguns if the template gains fields later.
 _PROVISIONAL_BODY = (
     "# {goes_by}\n"
     "\n"
@@ -102,6 +106,18 @@ class UsersStore:
         if legacy.is_file():
             return legacy
         return None
+
+    def _user_exists(self, user_id: str) -> bool:
+        """True when user was created/seeded (current, legacy profile, or meta).
+
+        Does not treat an empty dir as existence — path probes must not invent
+        users (see ensure_layout / write_draft).
+        """
+        return (
+            self.current_path(user_id).is_file()
+            or self.legacy_profile_path(user_id).is_file()
+            or self.meta_path(user_id).is_file()
+        )
 
     # ── read (orient) ────────────────────────────────────────────────────
 
@@ -306,7 +322,7 @@ class UsersStore:
             if body is not None and isinstance(body, str) and body.strip():
                 text = body
             else:
-                text = _PROVISIONAL_BODY.format(goes_by=goes_by)
+                text = _PROVISIONAL_BODY.replace("{goes_by}", goes_by)
 
             size_err = check_body_size(text)
             if size_err:
@@ -343,8 +359,14 @@ class UsersStore:
         *,
         meta_patch: dict[str, Any] | None = None,
         reason: str,
+        moment_id: str | None = None,
     ) -> dict[str, Any]:
-        """Write draft.md + meta.draft_meta; force_full_name; optional nudge."""
+        """Write draft.md + meta.draft_meta; force_full_name; optional nudge.
+
+        ``record_name_nudge`` requires ``moment_id`` and updates live name_nudge
+        (never draft_meta). Body may be omitted for nudge-only or meta-only
+        patches; nudge-only with missing moment_id fails closed.
+        """
         if not isinstance(reason, str) or not reason.strip():
             return {
                 "ok": False,
@@ -364,11 +386,8 @@ class UsersStore:
                     "user_id": user_id,
                 }
 
-            self.ensure_layout(user_id)
-
-            if self._resolved_live_path(user_id) is None and not (
-                self._user_dir(user_id).is_dir()
-            ):
+            # Existence before ensure — ensure must not invent empty user trees.
+            if not self._user_exists(user_id):
                 return {
                     "ok": False,
                     "error": "user_not_found",
@@ -376,18 +395,19 @@ class UsersStore:
                     "user_id": user_id,
                 }
 
-            draft_fields, ops = strip_operational_keys(meta_patch)
+            self.ensure_layout(user_id)
 
-            # Operational: record_name_nudge on live meta (not draft).
-            if ops.get("record_name_nudge") is True:
-                # moment_id may be passed as meta_patch side channel? Design:
-                # record_name_nudge(user_id, moment_id) separate API.
-                # When only flag is set without moment_id, skip unless
-                # meta_patch carries moment_id outside allow-list — not allowed.
-                # Tools will call record_name_nudge separately. Here we only
-                # accept the flag when body is None for operational-only path;
-                # actual counter update needs moment_id via record_name_nudge.
-                pass
+            draft_fields, ops = strip_operational_keys(meta_patch)
+            want_nudge = ops.get("record_name_nudge") is True
+
+            if want_nudge:
+                if not isinstance(moment_id, str) or not moment_id.strip():
+                    return {
+                        "ok": False,
+                        "error": "missing_moment_id",
+                        "actor": "user",
+                        "user_id": user_id,
+                    }
 
             if "full_name" in draft_fields:
                 meta = load_json_object(self.meta_path(user_id)) or self._default_meta(
@@ -422,14 +442,43 @@ class UsersStore:
                         "user_id": user_id,
                     }
             else:
-                # body optional for operational name_nudge-style patches.
-                if not draft_fields and ops.get("record_name_nudge") is not True:
+                # body optional for meta-only or record_name_nudge-only patches.
+                if not draft_fields and not want_nudge:
                     return {
                         "ok": False,
                         "error": "empty_body",
                         "actor": "user",
                         "user_id": user_id,
                     }
+
+            # Live nudge first (independent of draft body/meta).
+            nudge_result: dict[str, Any] | None = None
+            if want_nudge:
+                assert moment_id is not None  # validated above
+                nudge_result = self.record_name_nudge(user_id, moment_id.strip())
+                if not nudge_result.get("ok"):
+                    return {
+                        "ok": False,
+                        "error": nudge_result.get("error", "name_nudge_failed"),
+                        "actor": "user",
+                        "user_id": user_id,
+                    }
+
+            # Nudge-only: nothing else to persist.
+            if not has_body and not draft_fields:
+                return {
+                    "ok": True,
+                    "actor": "user",
+                    "user_id": user_id,
+                    "has_draft": self.draft_path(user_id).is_file(),
+                    "draft_meta": (
+                        (load_json_object(self.meta_path(user_id)) or {}).get(
+                            "draft_meta"
+                        )
+                    ),
+                    "name_nudge": (nudge_result or {}).get("name_nudge"),
+                    "reason": reason.strip(),
+                }
 
             if has_body:
                 write_atomic(self.draft_path(user_id), body)
@@ -459,7 +508,7 @@ class UsersStore:
                 meta["draft_updated_at"] = utc_now_iso()
             write_json_atomic(self.meta_path(user_id), meta)
 
-            return {
+            out: dict[str, Any] = {
                 "ok": True,
                 "actor": "user",
                 "user_id": user_id,
@@ -468,6 +517,9 @@ class UsersStore:
                 "draft_updated_at": meta.get("draft_updated_at"),
                 "reason": reason.strip(),
             }
+            if nudge_result is not None:
+                out["name_nudge"] = nudge_result.get("name_nudge")
+            return out
 
     def promote(
         self,
@@ -476,7 +528,11 @@ class UsersStore:
         reason: str,
         expected_draft_sha256: str | None = None,
     ) -> dict[str, Any]:
-        """Archive current → versions/, draft → current; name_nudge reset."""
+        """Archive current → versions/, draft → current; name_nudge reset.
+
+        Order: archive → write current → write meta → unlink draft → GC files.
+        Idempotent when draft already equals current and draft_meta is null.
+        """
         if not isinstance(reason, str) or not reason.strip():
             return {
                 "ok": False,
@@ -492,6 +548,14 @@ class UsersStore:
                 return {
                     "ok": False,
                     "error": "invalid_user_id",
+                    "actor": "user",
+                    "user_id": user_id,
+                }
+
+            if not self._user_exists(user_id):
+                return {
+                    "ok": False,
+                    "error": "user_not_found",
                     "actor": "user",
                     "user_id": user_id,
                 }
@@ -530,6 +594,36 @@ class UsersStore:
             meta = load_json_object(self.meta_path(user_id)) or self._default_meta(
                 user_id=user_id, body=self.profile(user_id)
             )
+            current_path = self.current_path(user_id)
+            current_body = self.profile(user_id)
+
+            # Idempotent completion of partial promote (draft left after meta).
+            if (
+                meta.get("draft_meta") is None
+                and current_path.is_file()
+                and draft_body == current_body
+                and meta.get("current_content_sha256") == draft_sha
+            ):
+                try:
+                    draft_path.unlink(missing_ok=True)
+                except OSError:
+                    return {
+                        "ok": False,
+                        "error": "promote_failed:draft_unlink",
+                        "actor": "user",
+                        "user_id": user_id,
+                    }
+                return {
+                    "ok": True,
+                    "actor": "user",
+                    "user_id": user_id,
+                    "current_version_id": meta.get("current_version_id"),
+                    "promote_count": int(meta.get("promote_count") or 0),
+                    "reason": reason.strip(),
+                    "meta": meta,
+                    "idempotent": True,
+                }
+
             now = utc_now_iso()
             vdir = self.versions_dir(user_id)
             vdir.mkdir(parents=True, exist_ok=True)
@@ -537,11 +631,10 @@ class UsersStore:
             pre_goes_by = meta.get("goes_by")
             pre_real = meta.get("real_name_known")
 
-            current_body = self.profile(user_id)
-            current_path = self.current_path(user_id)
             versions = list(meta.get("versions") or [])
             if not isinstance(versions, list):
                 versions = []
+            drop_later: list[dict[str, Any]] = []
 
             if current_body and (
                 current_path.is_file() or self.legacy_profile_path(user_id).is_file()
@@ -555,20 +648,20 @@ class UsersStore:
                 archive_path = vdir / f"{archive_id}.md"
                 if not archive_path.is_file():
                     write_atomic(archive_path, current_body)
-                raw = current_body.encode("utf-8")
                 if not any(
                     isinstance(r, dict) and r.get("version_id") == archive_id
                     for r in versions
                 ):
                     versions.append(
-                        {
-                            "version_id": archive_id,
-                            "promoted_at": now,
-                            "sha256": content_sha256(current_body),
-                            "bytes": len(raw),
-                        }
+                        archive_index_entry(
+                            archive_path,
+                            version_id=archive_id,
+                            promoted_at=now,
+                        )
                     )
-                versions = gc_versions(versions, vdir, limit=VERSION_GC_LIMIT)
+                versions, drop_later = trim_versions_index(
+                    versions, limit=VERSION_GC_LIMIT
+                )
 
             write_atomic(current_path, draft_body)
 
@@ -601,7 +694,7 @@ class UsersStore:
             meta["draft_meta"] = None
             meta["draft_updated_at"] = None
             meta["current_promoted_at"] = now
-            meta["current_content_sha256"] = content_sha256(draft_body)
+            meta["current_content_sha256"] = draft_sha
             meta["promote_count"] = int(meta.get("promote_count") or 0) + 1
             meta["versions"] = versions
             # Clear provisional when name known after promote (product rule soft).
@@ -613,7 +706,17 @@ class UsersStore:
             try:
                 draft_path.unlink(missing_ok=True)
             except OSError:
-                pass
+                return {
+                    "ok": False,
+                    "error": "promote_failed:draft_unlink",
+                    "actor": "user",
+                    "user_id": user_id,
+                    "current_version_id": new_vid,
+                    "promote_count": meta["promote_count"],
+                    "meta": meta,
+                }
+
+            delete_version_files(drop_later, vdir)
 
             return {
                 "ok": True,
@@ -643,6 +746,12 @@ class UsersStore:
                     "user_id": user_id,
                 }
 
+            if not self._user_exists(user_id):
+                return {
+                    "ok": False,
+                    "error": "user_not_found",
+                    "user_id": user_id,
+                }
             self.ensure_layout(user_id)
             meta = load_json_object(self.meta_path(user_id))
             if meta is None:
@@ -704,14 +813,20 @@ class UsersStore:
         except ValueError:
             return
 
+        current = self.current_path(user_id)
+        legacy = self.legacy_profile_path(user_id)
+        meta_path = self.meta_path(user_id)
+
+        # Do not invent empty user trees for unknown ids (path probe safety).
+        if not (
+            current.is_file() or legacy.is_file() or meta_path.is_file()
+        ):
+            return
+
         udir = self._user_dir(user_id)
         udir.mkdir(parents=True, exist_ok=True)
         vdir = self.versions_dir(user_id)
         vdir.mkdir(parents=True, exist_ok=True)
-
-        current = self.current_path(user_id)
-        legacy = self.legacy_profile_path(user_id)
-        meta_path = self.meta_path(user_id)
 
         if not current.is_file() and legacy.is_file():
             write_atomic(current, legacy.read_text(encoding="utf-8"))
@@ -732,8 +847,11 @@ class UsersStore:
         if meta_path.is_file():
             meta = load_json_object(meta_path)
             if meta is not None:
+                before = list(meta.get("versions") or [])
                 healed = heal_versions_index(meta, vdir)
-                write_json_atomic(meta_path, healed)
+                after = list(healed.get("versions") or [])
+                if before != after:
+                    write_json_atomic(meta_path, healed)
 
     def _seed_operator(self) -> None:
         dest = self.current_path("operator")

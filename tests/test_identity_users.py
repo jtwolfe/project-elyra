@@ -417,7 +417,6 @@ def test_users_draft_promote_force_full_name_and_nudge_reset(tmp_path):
             "goes_by": "Papa Joe",
             "force_full_name": True,
             "real_name_known": True,
-            "record_name_nudge": True,  # operational — must not land in draft_meta
         },
         reason="user stated name",
     )
@@ -535,3 +534,178 @@ def test_body_too_large(tmp_path):
     out = store.write_draft(huge, reason="too big")
     assert out["ok"] is False
     assert out["error"] == "body_too_large"
+
+
+# ── error / edge paths (review Issues 1–2, 4, 8) ─────────────────────────
+
+
+def test_write_draft_unknown_user_not_found(tmp_path):
+    """write_draft must not invent users via ensure_layout mkdir."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    out = store.write_draft("ghost_user", "# hi\n", reason="test")
+    assert out["ok"] is False
+    assert out["error"] == "user_not_found"
+    assert "ghost_user" not in store.list_user_ids()
+    assert not (paths.data_dir / "users" / "ghost_user").exists()
+
+
+def test_promote_unknown_user_not_found(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    out = store.promote("ghost_user", reason="nope")
+    assert out["ok"] is False
+    assert out["error"] == "user_not_found"
+
+
+def test_ensure_layout_unknown_id_no_mkdir(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    store.ensure_layout("stranger_xyz")
+    assert not (paths.data_dir / "users" / "stranger_xyz").exists()
+
+
+def test_meta_only_draft_promote_fails_draft_missing(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = IdentityStore(paths)
+    r = store.write_draft(
+        None,
+        meta_patch={"goes_by": "OnlyMeta"},
+        reason="meta only",
+    )
+    assert r["ok"] is True
+    assert not store.has_draft()  # no body → no draft.md
+    prom = store.promote(reason="nothing to promote")
+    assert prom["ok"] is False
+    assert prom["error"] == "draft_missing"
+
+
+def test_record_name_nudge_via_write_draft(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    # Missing moment_id → fail closed (no no-op success)
+    bad = store.write_draft(
+        "operator",
+        None,
+        meta_patch={"record_name_nudge": True},
+        reason="nudge",
+    )
+    assert bad["ok"] is False
+    assert bad["error"] == "missing_moment_id"
+    assert store.get_meta("operator")["name_nudge"]["count"] == 0
+
+    ok = store.write_draft(
+        "operator",
+        None,
+        meta_patch={"record_name_nudge": True},
+        reason="nudge",
+        moment_id="m1",
+    )
+    assert ok["ok"] is True
+    assert store.get_meta("operator")["name_nudge"]["count"] == 1
+    assert store.get_meta("operator")["name_nudge"]["last_moment_id"] == "m1"
+    # operational key never in draft_meta
+    assert "record_name_nudge" not in (store.get_meta("operator").get("draft_meta") or {})
+
+
+def test_name_nudge_sticky_when_promote_unchanged(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    store.create_user("Sticky", user_id="sticky")
+    store.record_name_nudge("sticky", "m1")
+    store.record_name_nudge("sticky", "m2")
+    assert store.get_meta("sticky")["name_nudge"]["count"] == 2
+
+    body = store.profile("sticky")
+    store.write_draft("sticky", body + "\nextra note\n", reason="notes only")
+    prom = store.promote("sticky", reason="body only no name change")
+    assert prom["ok"] is True
+    # goes_by / real_name_known unchanged → count sticky
+    assert store.get_meta("sticky")["name_nudge"]["count"] == 2
+
+
+def test_create_user_missing_goes_by(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    assert store.create_user("")["error"] == "missing_goes_by"
+    assert store.create_user("   ")["error"] == "missing_goes_by"
+
+
+def test_create_user_invalid_explicit_id(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    out = store.create_user("Sam", user_id="../x")
+    assert out["ok"] is False
+    assert out["error"] == "invalid_user_id"
+
+
+def test_write_draft_invalid_user_id(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = UsersStore(paths)
+    out = store.write_draft("../x", "# hi\n", reason="bad")
+    assert out["ok"] is False
+    assert out["error"] == "invalid_user_id"
+
+
+def test_promote_expected_draft_sha256_success(tmp_path):
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = IdentityStore(paths)
+    body = "# hashed promote\n"
+    store.write_draft(body, reason="prep")
+    sha = content_sha256(body)
+    out = store.promote(reason="ok", expected_draft_sha256=sha)
+    assert out["ok"] is True
+    assert "hashed promote" in store.self_digest()
+
+
+def test_promote_idempotent_when_draft_left_after_meta(tmp_path):
+    """Simulate partial promote: current+meta updated, draft.md still present."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = IdentityStore(paths)
+    body = "# already current\n"
+    store.write_draft(body, reason="prep")
+    first = store.promote(reason="first")
+    assert first["ok"] is True
+    count = store.get_meta()["promote_count"]
+    vid = store.get_meta()["current_version_id"]
+    n_versions = len(store.get_meta()["versions"])
+
+    # Re-plant draft equal to current (as if unlink failed).
+    store.draft_path().write_text(body, encoding="utf-8")
+    assert store.has_draft()
+
+    again = store.promote(reason="retry unlink")
+    assert again["ok"] is True
+    assert again.get("idempotent") is True
+    assert not store.has_draft()
+    # No spurious extra archive / promote_count bump
+    assert store.get_meta()["promote_count"] == count
+    assert store.get_meta()["current_version_id"] == vid
+    assert len(store.get_meta()["versions"]) == n_versions
+
+
+def test_archive_index_hashes_on_disk_body(tmp_path):
+    """Index sha256/bytes match the archive file on disk (Issue 7)."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    store = IdentityStore(paths)
+    original = store.self_digest()
+    store.write_draft("# next\n", reason="n")
+    store.promote(reason="p")
+    row = store.get_meta()["versions"][-1]
+    vpath = store.versions_dir() / f"{row['version_id']}.md"
+    on_disk = vpath.read_text(encoding="utf-8")
+    assert on_disk == original
+    assert row["sha256"] == content_sha256(on_disk)
+    assert row["bytes"] == len(on_disk.encode("utf-8"))
