@@ -1439,50 +1439,87 @@ body {
   margin: 0;
 }
 
-/* Identity panel */
+/* Identity panel — consistent column padding; toolbar not corner-jammed */
 .identity-split {
-  align-items: start;
+  align-items: stretch;
+  overflow: auto;
 }
 
 .identity-col {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.65rem;
+  padding: 1rem 1.25rem 1.25rem;
+  box-sizing: border-box;
 }
 
 .identity-col-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  justify-content: flex-start;
+  gap: 0.65rem 0.85rem;
+}
+
+/* Cancel global .subhead side padding inside identity columns */
+.identity-col .subhead {
+  padding: 0;
+  margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.95rem;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.identity-col .subhead-sm {
+  padding: 0;
+  margin: 0.35rem 0 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .identity-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  margin-left: 0;
+}
+
+.identity-actions .btn-sm {
+  white-space: nowrap;
 }
 
 .identity-grant {
   font-family: var(--mono);
   font-size: 0.75rem;
   word-break: break-all;
-  padding: 0.4rem 0.55rem;
+  padding: 0.5rem 0.65rem;
   border: 1px dashed var(--border);
   border-radius: 8px;
   background: var(--bg-soft);
 }
 
 .identity-meta {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  padding: 0.15rem 0;
 }
 
 .identity-user-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0;
 }
 
 .user-chip {
@@ -1491,10 +1528,11 @@ body {
   background: var(--bg-soft);
   color: var(--muted);
   border-radius: 999px;
-  padding: 0.2rem 0.55rem;
+  padding: 0.28rem 0.7rem;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   cursor: pointer;
+  line-height: 1.25;
 }
 
 .user-chip:hover {
@@ -1516,10 +1554,19 @@ body {
   border: 1px solid rgba(230, 180, 80, 0.35);
 }
 
-.identity-versions {
+.identity-col .list-panel.identity-versions {
   max-height: 160px;
   overflow: auto;
-  padding: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  /* Override .list-panel flex/padding so versions sit in the column gutter */
+  flex: 0 1 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+
+.identity-col .code-block {
+  margin: 0;
 }
 
 .version-row {
