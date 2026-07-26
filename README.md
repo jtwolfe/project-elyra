@@ -1,13 +1,20 @@
 # Project Elyra
 
-Communal digital teammate: always-on **presence**, **moments** (multi-hop **do-loops**), tools & skills, self ≠ user, goals.  
-**Stretch 1 is shipped** — full harness, not a one-shot chat scaffold.
+<p align="center">
+  <img src="ourlady.png" alt="Our Lady — Elyra" width="420" />
+</p>
+
+Communal digital teammate: always-on **presence**, **moments** (multi-hop **do-loops**), tools & skills, self ≠ user, goals, and a glass UI.
+
+**Stretch 1 is shipped** — full harness, not a one-shot chat scaffold.  
+**Current integration tip:** branch **`grok-improvement`** (Grok-by-default, sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, gold glass). **`main` may lag.**  
+Status snapshot: [docs/project-status-pass.md](docs/project-status-pass.md).
 
 ## Architecture (Stretch 1)
 
 ```text
 elyra start (supervisor)
-  ├── llama-server (optional; stub for CI / --no-llama)
+  ├── LLM (xAI Grok default on grok-improvement; local Gemma/llama optional)
   ├── HTTP API + glass UI  →  http://127.0.0.1:8787/
   └── PresenceWorker (single thread)
         wake queue + timers
@@ -32,10 +39,11 @@ elyra start (supervisor)
 | **Do-loop** | Sliding context meal + model tool calls + results until stop |
 | **Tools / skills** | Callable actions + markdown playbooks (catalog in orient; body on demand) |
 | **Goals / tasks** | Durable *what* (separate from the wake queue) |
+| **Self / users** | Durable *who* (separate stores; draft → promote) |
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
 
-Inference: **Gemma 4 Q4** via **llama.cpp Vulkan**, or **xAI Grok** on the `grok-improvement` path. Server `-c` is a **KV ceiling** (default 86000); product meals slide at **~24k** input tokens. See [docs/inference.md](docs/inference.md).
+Inference: product path on **`grok-improvement`** is **xAI Grok** (usage meter + hard-stops; continuous default **OFF**). Local **Gemma** via **llama.cpp** remains available for offline/CI. Server `-c` is a **KV ceiling** (default 86000); product meals slide at **~24k** input tokens. See [docs/inference.md](docs/inference.md) and [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).
 
 ## Quick start
 
@@ -49,7 +57,7 @@ pip install -e '.[sandbox]'
 ./scripts/setup-microsandbox.sh --doctor-only   # KVM / import checks
 # hermetic host-stub (tests/CI): export ELYRA_SANDBOX=0
 
-# full stack (needs model/ → elyra2 model tree, or xai credentials)
+# full stack (Grok credentials on gi path, or local model/ + llama)
 elyra start
 
 # UI + API only, stub LLM (no GPU)
@@ -67,7 +75,7 @@ Open **http://127.0.0.1:8787/**
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
 | `--context-tokens N` | llama `-c` KV ceiling (default 86000; lower if VRAM crashes) |
 
-Model files stay in `aurimago/project-elyra2/model`. Setup links them as `./model` when present:
+Local model files (optional) live under `aurimago/project-elyra2/model`. Setup links them as `./model` when present:
 
 ```bash
 ln -sfn ../aurimago/project-elyra2/model model
@@ -83,7 +91,7 @@ source .venv/bin/activate
 # Default CI / local pack (no GPU, no live model)
 pytest -m 'not llm'
 
-# Real Gemma via llama-server (needs model/ GGUF + Vulkan-capable GPU)
+# Real local Gemma via llama-server (needs model/ GGUF + Vulkan-capable GPU)
 pytest -m llm
 ```
 
@@ -97,73 +105,35 @@ Marked tests live in `tests/test_doloop.py` and `tests/test_llm_client_tools.py`
 
 Requirements: `./model` symlink (or tree) with Gemma GGUF + mmproj + `llama.cpp/llama-server`, and enough VRAM for the chosen `-c` (tests often use a smaller `-c` like 8192).
 
-```bash
-# example: only real-model do-loop smoke
-pytest -m llm tests/test_doloop.py -q
-```
+### Live qualitative stage gates
 
-### Live qualitative stage gates (Stage 0+)
-
-Fixed scenarios + full product path (presence → moment → do-loop → real Gemma).
-**3-attempt protocol**, failure modes **(A) flood** vs **(B) tools/speak**, and P0
-exit criteria: [docs/live-eval.md](docs/live-eval.md).
-
-Also: harness [scripts/live_eval/README.md](scripts/live_eval/README.md),
-design plan [docs/design-gemma-sampling-hygiene-staged.md](docs/design-gemma-sampling-hygiene-staged.md),
-ship knobs [docs/inference.md](docs/inference.md).
+Fixed scenarios + full product path (presence → moment → do-loop). **3-attempt protocol** and failure modes: [docs/live-eval.md](docs/live-eval.md). Harness: [scripts/live_eval/README.md](scripts/live_eval/README.md).
 
 ```bash
-# Stage 0 baseline: 3 tries × S-social / S-tools / S-mono (reuses :8080 if healthy)
 python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 ```
 
-Scorecards and Stage Logs land under `scripts/live_eval/logs/` (bulky raw
-exports gitignored). Flood scoring uses `elyra.llm.reasoning_hygiene`.
-
 ### Stretch 1 done-when regression
 
-`tests/test_stretch1_donewhen.py` pins that each freeze **Done when** claim has covering tests and that PR13 create-tool gates remain present. It does not re-run the full suite; it maps claims → modules and asserts gate modules/symbols exist.
+`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests and create-tool gate modules. See [docs/stretch-1.md](docs/stretch-1.md) § Done when (all Stretch 1 criteria checked).
 
-| Done-when claim | Primary tests |
-|-----------------|---------------|
-| Presence + wake + single worker do-loops | `test_presence_worker`, `test_wake_queue`, `test_doloop` |
-| Moments/beats persist; restart-safe | `test_moment_store` |
-| Base tools + sandbox; speak transport | `test_tools_fs`, `test_sandbox`, `test_speak`, `test_tool_registry` |
-| Wait + multi-choice + timeout | `test_tools_social_wait`, `test_timers` |
-| Skills mid-loop; base skills | `test_skills_catalog`, `test_doloop` |
-| Goals/tasks + review bias | `test_goals`, `test_tools_ledger` |
-| create-tool / create-skill fail-closed | **`test_create_tool_gates` (PR13)** |
-| llama path + context policy | `test_config`, `test_loop_context`, `test_*` `@pytest.mark.llm` |
-| Interjections mid-moment | `test_interject`, `test_api_routing` |
-
-**create-tool checkbox requires PR13 gates** (path jail, drafts not callable, hash verify, promote only after verify, no overwrite bundled, install_skill local-only). Those gates live in `elyra/tools/verify.py`, `promote.py`, `builtin/growth.py` — they are not deferred “hardening.”
-
-## Stretch 1 done-when status
-
-See [docs/stretch-1.md](docs/stretch-1.md) § Done when. All Stretch 1 criteria are **checked**:
-
-- [x] Presence + wake queue + single worker do-loops
-- [x] Moments/beats persist; restart-safe
-- [x] Base tools + sandbox; speak with transport feedback
-- [x] Wait + multi-choice + timeout path
-- [x] Skills loadable mid-loop; base skills present
-- [x] Goals/tasks + review-before-close bias
-- [x] create-tool / create-skill fail-closed (PR13)
-- [x] llama.cpp Gemma path works; context policy documented
-- [x] Interjections mid-moment
-
-Out of scope (Stretch 2+): hypergraph / sleep, Lance graph, multi-sandbox, subagents.
+Out of scope (Stretch 2+ / later phases): hypergraph memory, Lance graph, multi-sandbox, subagents, full per-user chat glass, Phase 1 `grok_build` self-improve instrument.
 
 ## Documentation
 
 | Doc | Role |
 |-----|------|
+| [docs/project-status-pass.md](docs/project-status-pass.md) | **Where we are now** — shipped vs gaps, prep before Build/memory |
 | [docs/stretch-1.md](docs/stretch-1.md) | Runtime contract + done-when |
-| [docs/design-stretch-1-implementation.md](docs/design-stretch-1-implementation.md) | Implementation design + PR plan |
 | [docs/engineering-principles.md](docs/engineering-principles.md) | How we build |
 | [docs/overview.md](docs/overview.md) | Glossary |
-| [docs/inference.md](docs/inference.md) | llama.cpp / Gemma; ship sampling, hygiene, RC re-feed, hop-0 speak pin |
-| [docs/live-eval.md](docs/live-eval.md) | Live 3-attempt protocol, A/B failure modes, how to run `scripts/live_eval` |
-| [docs/design-gemma-sampling-hygiene-staged.md](docs/design-gemma-sampling-hygiene-staged.md) | Staged plan (sampling / hygiene / tool-speak) |
+| [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote; work-origin USER |
 | [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, catalog, create-tool safety |
+| [docs/inference.md](docs/inference.md) | llama / Gemma path; context and sampling knobs |
+| [docs/live-eval.md](docs/live-eval.md) | Live qualitative protocol |
+| [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration phases (refresh if status lags code) |
 | [docs/README.md](docs/README.md) | Full index |
+
+## Branch tip
+
+Work and dogfood on **`grok-improvement`**. Promote to **`main`** is a separate operator step after sign-off.
