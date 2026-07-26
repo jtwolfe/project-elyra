@@ -7,19 +7,23 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 
 | # | Doc | Role |
 |---|-----|------|
+| 0 | **[project-status-pass.md](project-status-pass.md)** | **Where we are now** — shipped vs not, doc drift, small prep before Grok Build / memory, self-improve chat seed |
 | 1 | **[stretch-1.md](stretch-1.md)** | **Runtime contract** — how Stretch 1 runs + done-when |
-| 2 | **[design-stretch-1-implementation.md](design-stretch-1-implementation.md)** | **Implementation design + PR plan** (reviewed) |
+| 2 | **[design-stretch-1-implementation.md](design-stretch-1-implementation.md)** | **Implementation design + PR plan** (historical; Stretch 1 shipped) |
 | 3 | **[engineering-principles.md](engineering-principles.md)** | **How we write code** — modules, tests, config, dogfood |
 | 4 | [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
 | 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, dogfood, create-tool safety |
-| 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, time layers, speak timing |
+| 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
 | 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` vs sliding ~24k; **ship knobs** (temp 0.6, top_p/k, budget, hygiene, RC re-feed, hop-0 speak pin) |
 | 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
-| 9 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged plan for sampling / hygiene / tool-speak (design freeze) |
-| 10 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset design, PR plan, eval plan |
+| 9 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phases (Phase 0–3); **refresh status if it lags code** |
+| 10 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep (shipped on gi) |
+| 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
+| 12 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged sampling / hygiene (design freeze; historical) |
+| 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
 
-**Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime.  
-**Archive:** longer research notes under [archive/](archive/) (not freeze).
+**Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `grok-improvement`** over stale phase README status lines.  
+**Archive:** longer research notes under [archive/](archive/) (not freeze). Phase 3 essay: [memory-atoms.pdf](memory-atoms.pdf).
 
 ## Stance (short)
 
