@@ -109,13 +109,30 @@ function getSessionUserId() {
   return sessionUserId || "operator";
 }
 
+/** Self display name for glass chrome (fallback Elyra). */
+function selfDisplayName() {
+  const n = (labelCache.self || "").trim();
+  return n || "Elyra";
+}
+
+/**
+ * Rail brand: {NAME} above "Project Elyra"; document title "{NAME} - Project Elyra".
+ * NAME is whatever this instance calls itself (identity display_name / goes_by).
+ */
+function updateBrandChrome() {
+  const name = selfDisplayName();
+  if (brandNameEl) brandNameEl.textContent = name;
+  if (brandSubEl) brandSubEl.textContent = "Project Elyra";
+  document.title = `${name} - Project Elyra`;
+}
+
 function actorLabel(message) {
-  if (!message) return labelCache.self || "Elyra";
+  if (!message) return selfDisplayName();
   if (message.role === "user") {
     const uid = message.user_id || getSessionUserId();
     return labelCache.users[uid] || uid;
   }
-  return labelCache.self || "Elyra";
+  return selfDisplayName();
 }
 
 let lastPendingWaitId = null;
@@ -1631,6 +1648,7 @@ async function refreshLabelCache() {
     if (session && session.self_display_name) {
       labelCache.self = session.self_display_name;
     }
+    updateBrandChrome();
     if (session && session.user_id) {
       // Server is source of truth when available; keep localStorage in sync.
       if (session.user_id !== sessionUserId) {
@@ -1699,6 +1717,7 @@ async function switchSessionUser(userId) {
   }
   if (data.self_display_name) {
     labelCache.self = data.self_display_name;
+    updateBrandChrome();
   }
   identityPanelUserId = sessionUserId;
   showNotice(`Session user: ${labelCache.users[sessionUserId] || sessionUserId}`);
@@ -1823,11 +1842,15 @@ async function refreshIdentity() {
   if (identitySelf) {
     identitySelf.textContent = s.body || s.digest || "(empty self digest)";
   }
+  const selfName =
+    s.display_name ||
+    (s.meta && (s.meta.display_name || s.meta.goes_by)) ||
+    "Elyra";
   if (identitySelfLabel) {
-    identitySelfLabel.textContent =
-      s.display_name || (s.meta && (s.meta.display_name || s.meta.goes_by)) || "Elyra";
+    identitySelfLabel.textContent = selfName;
   }
-  if (s.display_name) labelCache.self = s.display_name;
+  labelCache.self = selfName;
+  updateBrandChrome();
   const hasSelfDraft = Boolean(s.has_draft);
   if (identitySelfDraftBadge) identitySelfDraftBadge.hidden = !hasSelfDraft;
   if (identitySelfDraftFold) {
@@ -2400,9 +2423,11 @@ if (identityPromoteUserBtn) {
 }
 
 autosizeComposer();
+updateBrandChrome();
 // Sync session + labels before first paint of messages.
 refreshLabelCache()
   .then(() => {
+    updateBrandChrome();
     // Align server session with localStorage preference on boot.
     if (sessionUserId) {
       return fetchJson("/api/session", {
