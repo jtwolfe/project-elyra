@@ -124,7 +124,7 @@ Hard policies are the **survival surface** (skeleton / immune system: glass, dis
 
 ### 3.4 Alignment with atomized memory (Phase 3 gravity)
 
-Design thesis (operator essay *What is wrong with my memory?* — recommend in-repo as `docs/memory-atoms.md` when ready): memory is **organized experience**, not a warehouse of facts. Units are **instances (atoms)** with content, context, felt signal, and connections; knowledge (facts, opinions, causal rules) is a **pattern / shadow** across many atoms; edges have strength; forgetting and consolidation keep the graph usable.
+Design thesis (operator essay *What is wrong with my memory?* — recommend in-repo as [`docs/memory-atoms.pdf`](../memory-atoms.pdf) (PDF in-repo; optional `.md` twin later)): memory is **organized experience**, not a warehouse of facts. Units are **instances (atoms)** with content, context, felt signal, and connections; knowledge (facts, opinions, causal rules) is a **pattern / shadow** across many atoms; edges have strength; forgetting and consolidation keep the graph usable.
 
 | System piece | Essay analogue |
 |--------------|----------------|

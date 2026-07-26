@@ -95,7 +95,7 @@ Long-term direction (Phase 3+ design gravity, not Stage B scope):
 
 Operator design essay *What is wrong with my memory?* (Jamie Moller, 2026-04-28) argues: memory is not a warehouse of facts; it is **organized experience** — **atoms** (instances with content, context, felt signal, connections), **hypergraph** edges with strength, knowledge as **shadows/patterns** across atoms. Forgetting and consolidation keep the graph usable.
 
-**Implication for Stage B:** soft Decide text is pattern-shaped and should stay editable; hard policies are closer to substrate rules that keep handoffs honest. Prefer placing the essay in-repo at `docs/memory-atoms.md` (or `docs/design-memory-atoms.md`) when the operator is ready — Phase 3 reference, not Stage B dependency.
+**Implication for Stage B:** soft Decide text is pattern-shaped and should stay editable; hard policies are closer to substrate rules that keep handoffs honest. Essay in-repo: [`docs/memory-atoms.pdf`](../memory-atoms.pdf) — Phase 3 reference, not Stage B dependency.
 
 ### 2.6 Engineering principles to respect
 

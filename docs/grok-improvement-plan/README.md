@@ -22,7 +22,7 @@ This folder holds the design documentation for migrating Project Elyra from loca
 | [metacognition.md](metacognition.md) | MC geometry, **hybrid soft Decide / hard policies**, dual with Memory, Stage A→B→C, handover gates, super-future thin-interpreter arc |
 | [stage-b-mc.md](stage-b-mc.md) | **Stage B / MC-beta implementation plan** for Grok Build (goal, non-goals, file targets, tests, glass dogfood, what to leave alone) |
 
-Optional (operator may add): `docs/memory-atoms.md` — design essay *What is wrong with my memory?* (atomized experience / hypergraph thesis) as Phase 3 reference. Not required to implement Stage B.
+Phase 3 reference essay (PDF in-repo): [`docs/memory-atoms.pdf`](../memory-atoms.pdf) — *What is wrong with my memory?* (atomized experience / hypergraph thesis). Optional markdown twin `docs/memory-atoms.md` may be added later. Not required to implement Stage B.
 
 ## Phase overview
 
