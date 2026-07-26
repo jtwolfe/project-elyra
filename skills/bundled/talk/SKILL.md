@@ -1,38 +1,62 @@
 ---
 name: talk
-description: Social presence — reply to people, open goals when useful. Use on user messages and social wakes.
+description: Social presence — speak first on user and wait-reply wakes; capture work only after the human has a real glass reply.
 ---
 
 # Talk
 
-You are in a social moment. A person is waiting on glass (or just spoke).
+This skill is the social stage. A person is waiting on glass (or just spoke). Glass only updates after a successful **`speak`** tool call — free-text never reaches them.
+
+## When to use
+
+Use this skill when:
+
+- The wake is a **user message**, **wait reply**, or other social reason-to-be-here
+- You need a human-facing reply before (or without) deeper work
+
+## When not to use
+
+- Pure `task_ready` / timer / background wakes with no social obligation — prefer `do-work` or `rest`
+- Deep multi-step implementation without a glass reply first (speak, then hand off)
+- Closing goals (use `review-work` first)
 
 ## First tool call (mandatory)
 
-After this playbook loads, your **next** completion must include a `tool_calls` entry from the list below (pick the first that applies). Do not answer with free-text only.
+After this playbook loads, your **next** completion must include a `tool_calls` entry. Do not answer with free-text only.
 
-- **`speak`** — required first on social wakes (greeting / answer / ack). Free-text never reaches glass.
-- Then optionally: `create_goal` / `create_task` / `list_goals` / `update_goal` / `update_task` for work capture.
-- Handoff when needed: `load_skill("plan-work")`, `load_skill("do-work")`, or `load_skill("create-tool")` if a capability is missing — **after** speak.
+Pick the first that applies:
+
+1. **`speak`** — always first on social wakes (greeting / answer / ack).
+2. Then optionally ledger tools: `create_goal`, `create_task`, `list_goals`, `get_goal`, `update_goal`, `update_task`.
+3. Then hand off only **after** speak: `load_skill` with exact name `plan-work`, `do-work`, or `create-tool` when warranted.
 
 ## Hard rules
 
-1. **Never silent on social wakes.** If the wake is a user message, wait reply, or other social reason-to-be-here, you must call `speak` before the moment ends. Silent glass after a human ping is a failure.
-2. **First action is `speak`.** On a social wake, your first structured tool call must be `speak`. Do not plan in free-text content, dump pseudo-JSON, or monologue without tools.
-3. **Speak before wait.** If you need both a message and a user choice/timeout, call `speak` **first**, then `wait_user`. Never `wait_user` without having spoken in the same turn batch — later calls after wait are not run.
-4. Host may nudge once if you stop with no speak on a social wake. Treat that as a final chance to reply, not optional flavor.
+1. **Never silent on social wakes.** User message, wait reply, or other social why-now → you must **`speak`** before the moment ends.
+2. **First structured action is `speak`.** Do not plan only in free-text content, dump pseudo-JSON, or monologue without tools.
+3. **Speak before wait.** If you need a choice or timeout: `speak` first, then `wait_user`. Later calls after wait are not run.
+4. Use **exact** tool names (`speak`, `wait_user`, snake_case) and **exact** skill names (`plan-work`, hyphenated) via `load_skill`.
+5. Host may nudge once if you stop with no speak on a social wake — treat that as a final chance to reply.
 
-## Steps
+## Process
 
-1. Read why-now (orient): who spoke, what they said, open waits.
+1. Read orient why-now: who spoke, what they said, open waits.
 2. **Call `speak` immediately** with a short plain-language reply (even for a simple hello).
-3. If the ask is clear work, **after** speaking open a goal with `create_goal` / `create_task` when useful; use `list_goals` to inspect. Still **speak** any plan update if the user needs it on glass.
-4. If the work needs a **missing tool** (e.g. web search): after speaking, `load_skill("create-tool")` and follow that checklist — do not only file goals.
-5. If multi-step work with existing tools: after speaking, `load_skill("plan-work")` or `load_skill("do-work")` as appropriate.
+3. If the ask is clear work, **after** speaking open or update goals/tasks when useful (`create_goal` / `create_task` / `list_goals`). Speak any plan update the human needs on glass.
+4. If a **callable capability is missing**, after speaking `load_skill` name `create-tool` and follow that playbook — do not only file goals and stop.
+5. If multi-step work with **existing** tools: after speaking, `load_skill` name `plan-work` or `do-work` as appropriate.
 6. If you need a decision: `speak` the question, then `wait_user` with choices and timeout.
-7. If nothing further is needed after a clear reply, stop (no tools) once `speak` has succeeded.
+7. If nothing further is needed after a clear reply, stop with no tools once `speak` has succeeded.
+
+## Quality / completion
+
+Done when:
+
+- The human has a real glass reply (successful `speak`), and
+- Either work is handed off cleanly (ledger + skill), or the moment ends honestly with nothing left to say
 
 ## Out of scope
 
-- Deep multi-step implementation without a goal/task (hand off via `load_skill("plan-work")` / `load_skill("do-work")`).
-- Closing goals without review (`load_skill("review-work")` first).
+- Deep implementation without a goal/task (hand off via `plan-work` / `do-work`)
+- Closing goals without `review-work`
+- Inventing busywork to avoid a short honest reply

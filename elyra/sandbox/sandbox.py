@@ -1,6 +1,7 @@
 """Persistent sandbox FS and process runner.
 
-Scope: one jail under data/sandbox/; text FS ops + shell=False run.
+Scope: one jail under ``sandboxes/sandbox0`` (host tree); text FS ops +
+shell=False run. Guest-style ``/workspace`` paths normalize to the root.
 In scope: read/write/list/grep/search_replace, stream-capped run with timeout.
 Out of scope: network isolation, cgroups, multi-sandbox, tool registry,
 container/namespace FS isolation for ``run``.
@@ -8,9 +9,10 @@ container/namespace FS isolation for ``run``.
 Trust boundary
 --------------
 - **FS methods** (``read_text``, ``write_text``, ``list_dir``, ``grep``,
-  ``search_replace``) are path-jailed under ``$ELYRA_HOME/data/sandbox/``.
-  Symlink targets outside the root are denied. Hard links to outside inodes
-  (same UID) are a known path-jail limitation (not mount isolation).
+  ``search_replace``) are path-jailed under
+  ``$ELYRA_HOME/sandboxes/sandbox0/``. Symlink targets outside the root are
+  denied. Hard links to outside inodes (same UID) are a known path-jail
+  limitation (not mount isolation).
 - **``run`` is process-level only**: same UID as Elyra, ``cwd`` pinned to the
   sandbox root, scrubbed env (no host secret inherit), ``shell=False``.
   It is **not** a chroot, container, or seccomp jail. Child argv can open
@@ -35,7 +37,13 @@ from pathlib import Path
 from typing import IO, Mapping, Sequence
 
 from elyra.config import ElyraPaths
-from elyra.sandbox.paths import PathEscapeError, resolve
+from elyra.sandbox.paths import (
+    GUEST_WORKSPACE_ROOT,
+    PRIMARY_NAME,
+    PathEscapeError,
+    ensure_host_tree,
+    resolve,
+)
 
 DEFAULT_RUN_TIMEOUT_SECONDS = 60
 OUTPUT_CAP_BYTES = 256 * 1024  # 256 KiB retained per stream
@@ -88,26 +96,50 @@ class RunResult:
     argv: tuple[str, ...] = ()
 
 
+def normalize_user_path(user_path: str) -> str:
+    """Map guest-style ``/workspace`` prefixes to sandbox-relative paths.
+
+    Models often pass guest paths after seeing docs. Absolute paths that are
+    *not* under ``/workspace`` are left unchanged (path jail still rejects
+    host escapes).
+    """
+    if not isinstance(user_path, str):
+        return user_path
+    if user_path == GUEST_WORKSPACE_ROOT or user_path == f"{GUEST_WORKSPACE_ROOT}/":
+        return "."
+    prefix = f"{GUEST_WORKSPACE_ROOT}/"
+    if user_path.startswith(prefix):
+        rest = user_path[len(prefix) :]
+        return rest if rest else "."
+    return user_path
+
+
 class Sandbox:
-    """One persistent workspace under ``$ELYRA_HOME/data/sandbox/``."""
+    """One persistent workspace under ``$ELYRA_HOME/sandboxes/sandbox0/``."""
 
     def __init__(self, paths: ElyraPaths) -> None:
         self._paths = paths
-        self._root = (paths.data_dir / "sandbox").resolve()
+        # Product FS root (H2c cutover): host tree for sandbox0, not data/sandbox.
+        # Ensure seed + RW scaffold on construct so FS tools never see a missing root.
+        self._root = ensure_host_tree(PRIMARY_NAME, paths)
 
     @property
     def root(self) -> Path:
         return self._root
 
     def ensure_root(self) -> Path:
-        """Create the sandbox directory if missing; return resolved root."""
-        self._root.mkdir(parents=True, exist_ok=True)
+        """Ensure host tree (seed + RW dirs); return resolved root."""
+        self._root = ensure_host_tree(PRIMARY_NAME, self._paths)
         return self._root
 
     def resolve(self, user_path: str) -> Path:
-        """Resolve a user path inside the jail (see ``paths.resolve``)."""
+        """Resolve a user path inside the jail (see ``paths.resolve``).
+
+        Accepts guest-style absolute prefixes (``/workspace``, ``/workspace/...``)
+        and normalizes them to sandbox-relative before the path jail.
+        """
         self.ensure_root()
-        return resolve(self._root, user_path)
+        return resolve(self._root, normalize_user_path(user_path))
 
     # --- FS ops ---
 
@@ -118,9 +150,10 @@ class Sandbox:
         Raises ``IsADirectoryError`` when the path is a directory;
         ``FileNotFoundError`` when missing or not a regular file.
         """
+        norm = normalize_user_path(user_path)
         path = self.resolve(user_path)
         # Re-check immediately before open (mitigate resolve→use TOCTOU).
-        path = resolve(self._root, user_path)
+        path = resolve(self._root, norm)
         if path.is_dir():
             raise IsADirectoryError(f"is a directory: {user_path!r}")
         if not path.is_file():
@@ -136,6 +169,7 @@ class Sandbox:
         make_parents: bool = True,
     ) -> Path:
         """Write text to a path under the sandbox (creates parents by default)."""
+        norm = normalize_user_path(user_path)
         path = self.resolve(user_path)
         if make_parents:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,7 +181,7 @@ class Sandbox:
                     f"parent escapes sandbox: {user_path!r}"
                 ) from exc
         # Re-resolve before write (symlink swap between check and use).
-        path = resolve(self._root, user_path)
+        path = resolve(self._root, norm)
         path.write_text(content, encoding=encoding)
         return path
 
@@ -228,8 +262,9 @@ class Sandbox:
         """
         if not old:
             raise ValueError("old must be non-empty")
+        norm = normalize_user_path(user_path)
         path = self.resolve(user_path)
-        path = resolve(self._root, user_path)
+        path = resolve(self._root, norm)
         if path.is_dir():
             raise IsADirectoryError(f"is a directory: {user_path!r}")
         if not path.is_file():

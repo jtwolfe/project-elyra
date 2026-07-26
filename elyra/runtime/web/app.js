@@ -4,8 +4,22 @@ const messagesEl = $("#messages");
 const form = $("#chat-form");
 const input = $("#chat-input");
 const sendBtn = $("#send-btn");
+const attachBtn = $("#attach-btn");
+const attachInput = $("#attach-input");
+const attachTray = $("#attach-tray");
+const dropOverlay = $("#drop-overlay");
+const jumpLatestBtn = $("#jump-latest");
+const chatActivity = $("#chat-activity");
+const chatActivityLabel = $("#chat-activity-label");
+const chatActivityDetail = $("#chat-activity-detail");
+const chatActivityTrail = $("#chat-activity-trail");
+const catalogMeta = $("#catalog-meta");
+const toolsCountEl = $("#tools-count");
+const skillsCountEl = $("#skills-count");
+const catalogRefreshBtn = $("#catalog-refresh-btn");
 const statusJson = $("#status-json");
 const pillLlama = $("#pill-llama");
+const pillSandbox = $("#pill-sandbox");
 const pillWorker = $("#pill-worker");
 const pillPhase = $("#pill-phase");
 const pillAutopilot = $("#pill-autopilot");
@@ -20,7 +34,9 @@ const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
-const continuousToggles = document.querySelectorAll(".continuous-toggle");
+const continuousToggles = document.querySelectorAll(
+  ".continuous-toggle:not(#usage-override-toggle)"
+);
 const continuousMetaEls = [$("#continuous-status-rail")].filter(Boolean);
 const continuousSummary = $("#continuous-summary");
 const continuousBadge = $("#continuous-badge");
@@ -29,6 +45,26 @@ const resetOpenBtn = $("#reset-open-btn");
 const resetModal = $("#reset-modal");
 const resetConfirmInput = $("#reset-confirm-input");
 const resetConfirmBtn = $("#reset-confirm-btn");
+const hardStopBanner = $("#hard-stop-banner");
+const providerBadge = $("#provider-badge");
+const providerNameEl = $("#provider-name");
+const providerModelSelect = $("#provider-model-select");
+const providerCredentialSelect = $("#provider-credential-select");
+const providerCredentialOk = $("#provider-credential-ok");
+const providerApiKeyInput = $("#provider-api-key-input");
+const providerApiKeySave = $("#provider-api-key-save");
+const providerApiKeyClear = $("#provider-api-key-clear");
+const providerApiKeyMeta = $("#provider-api-key-meta");
+const usageBadge = $("#usage-badge");
+const usageWeekPct = $("#usage-week-pct");
+const usageDayPct = $("#usage-day-pct");
+const usageHourPct = $("#usage-hour-pct");
+const usageWeekBar = $("#usage-week-bar");
+const usageDayBar = $("#usage-day-bar");
+const usageHourBar = $("#usage-hour-bar");
+const usageDetail = $("#usage-detail");
+const usageOverrideToggle = $("#usage-override-toggle");
+const usageOverrideMeta = $("#usage-override-meta");
 
 const USER_ID = "operator";
 const REASON_BUFFER_FULL = "interjection_buffer_full";
@@ -43,6 +79,21 @@ let continuousToggleInFlight = false;
 let lastContinuousEnabled = false;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
+/** True while PATCH /api/provider is in flight. */
+let providerPatchInFlight = false;
+/** True while PUT/DELETE api-key is in flight. */
+let apiKeyInFlight = false;
+/** True while PATCH /api/usage (hard-stop override) is in flight. */
+let usageOverrideInFlight = false;
+/** Last known hard_stop_override / override_active from status. */
+let lastOverrideActive = false;
+/** Last known usage.hard_stop value (for transition notices). */
+let lastHardStop = null;
+/** False until first successful status paint (skip transition notices on boot). */
+let statusPrimed = false;
+/** Last known model / credential_source (for select change detection). */
+let lastProviderModel = null;
+let lastCredentialSource = null;
 /** Active nav panel name (chat | goals | moments | tools | identity | status). */
 let activePanel = "chat";
 /** Currently open moment detail id (null when closed). */
@@ -53,6 +104,18 @@ let selectedMomentSnapshot = null;
 let momentDetailLoadGen = 0;
 /** Single-flight guard so overlapping setInterval ticks do not race. */
 let tickInFlight = false;
+/** Fingerprint of last rendered message list (avoid scroll thrash). */
+let lastMessagesFp = "";
+/** True when chat viewport is near the bottom (auto-stick). */
+let chatStickToBottom = true;
+/** Pending multimodal attachments (UI-only; sent as inventory text). */
+let pendingAttachments = [];
+/** Drag depth for composer drop overlay. */
+let composerDragDepth = 0;
+/** Fingerprint of last rendered activity trail (animate only on change). */
+let lastActivityTrailFp = "";
+/** Ordered event ids currently shown in the activity trail (oldest → newest). */
+let activityTrailIds = [];
 
 function setPill(el, label, mode) {
   el.textContent = label;
@@ -92,18 +155,276 @@ async function fetchJson(url, opts) {
   return data;
 }
 
-function renderMessages(messages) {
+function messagesFingerprint(messages) {
+  if (!messages || !messages.length) return "empty";
+  const last = messages[messages.length - 1] || {};
+  return `${messages.length}|${last.id || ""}|${(last.content || "").length}|${
+    last.created_at || ""
+  }|${(last.reasoning || "").length}`;
+}
+
+function formatMsgTime(iso) {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return String(iso);
+  }
+}
+
+function isNearBottom(el, threshold = 80) {
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+}
+
+function scrollMessagesToBottom({ smooth = false } = {}) {
+  if (!messagesEl) return;
+  if (smooth) {
+    messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: "smooth" });
+  } else {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+  chatStickToBottom = true;
+  if (jumpLatestBtn) jumpLatestBtn.hidden = true;
+}
+
+function updateJumpLatestVisibility() {
+  if (!jumpLatestBtn || !messagesEl) return;
+  jumpLatestBtn.hidden = isNearBottom(messagesEl);
+}
+
+/**
+ * Safe markdown → HTML for chat glass (GFM-ish subset).
+ * Escapes first; allows headings, emphasis, lists, quotes, code, tables, links.
+ */
+function renderMarkdown(src) {
+  const raw = String(src || "");
+  if (!raw.trim()) return "<p></p>";
+
+  const fences = [];
+  let text = raw.replace(/\r\n/g, "\n");
+  text = text.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const i = fences.length;
+    fences.push({ lang: String(lang || "").trim(), code: code.replace(/\n$/, "") });
+    return `\n\n%%FENCE${i}%%\n\n`;
+  });
+
+  const escape = (s) =>
+    String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
+  const inline = (s) => {
+    let t = escape(s);
+    // images ![alt](url) — only http(s) or data:image
+    t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => {
+      const u = url.trim();
+      if (!/^(https?:|data:image\/)/i.test(u)) return escape(`![${alt}](${url})`);
+      return `<img src="${escape(u)}" alt="${escape(alt)}" loading="lazy" style="max-width:100%;border-radius:8px;margin:0.35rem 0" />`;
+    });
+    // links [text](url)
+    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
+      const u = url.trim();
+      if (!/^https?:\/\//i.test(u)) return escape(`[${label}](${url})`);
+      return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
+    });
+    // inline code
+    t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escape(code)}</code>`);
+    // bold / italic
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+    t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
+    return t;
+  };
+
+  const lines = text.split("\n");
+  const out = [];
+  let i = 0;
+  let para = [];
+
+  const flushPara = () => {
+    if (!para.length) return;
+    out.push(`<p>${inline(para.join(" "))}</p>`);
+    para = [];
+  };
+
+  const isTableSep = (line) =>
+    /^\s*\|?[\s:-]+\|[\s|:-]+\|?\s*$/.test(line) && line.includes("-");
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushPara();
+      i += 1;
+      continue;
+    }
+
+    const fenceMatch = trimmed.match(/^%%FENCE(\d+)%%$/);
+    if (fenceMatch) {
+      flushPara();
+      const f = fences[Number(fenceMatch[1])];
+      if (f) {
+        const lang = f.lang ? escape(f.lang) : "";
+        out.push(
+          `<div class="md-code-wrap"><button type="button" class="md-copy">Copy</button><pre><code class="language-${lang}">${escape(
+            f.code
+          )}</code></pre></div>`
+        );
+      }
+      i += 1;
+      continue;
+    }
+
+    if (/^---+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
+      flushPara();
+      out.push("<hr />");
+      i += 1;
+      continue;
+    }
+
+    const hm = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (hm) {
+      flushPara();
+      const level = hm[1].length;
+      out.push(`<h${level}>${inline(hm[2])}</h${level}>`);
+      i += 1;
+      continue;
+    }
+
+    if (trimmed.startsWith(">")) {
+      flushPara();
+      const quote = [];
+      while (i < lines.length && lines[i].trim().startsWith(">")) {
+        quote.push(lines[i].trim().replace(/^>\s?/, ""));
+        i += 1;
+      }
+      out.push(`<blockquote>${inline(quote.join(" "))}</blockquote>`);
+      continue;
+    }
+
+    // GFM table
+    if (
+      trimmed.includes("|") &&
+      i + 1 < lines.length &&
+      isTableSep(lines[i + 1])
+    ) {
+      flushPara();
+      const splitRow = (row) =>
+        row
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((c) => c.trim());
+      const header = splitRow(lines[i]);
+      i += 2; // skip header + separator
+      const bodyRows = [];
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
+        bodyRows.push(splitRow(lines[i]));
+        i += 1;
+      }
+      let table = "<table><thead><tr>";
+      header.forEach((h) => {
+        table += `<th>${inline(h)}</th>`;
+      });
+      table += "</tr></thead><tbody>";
+      bodyRows.forEach((row) => {
+        table += "<tr>";
+        header.forEach((_, idx) => {
+          table += `<td>${inline(row[idx] || "")}</td>`;
+        });
+        table += "</tr>";
+      });
+      table += "</tbody></table>";
+      out.push(table);
+      continue;
+    }
+
+    // lists
+    const ul = trimmed.match(/^[-*+]\s+(.+)$/);
+    const ol = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (ul || ol) {
+      flushPara();
+      const ordered = Boolean(ol);
+      const items = [];
+      while (i < lines.length) {
+        const t = lines[i].trim();
+        const m = ordered ? t.match(/^\d+\.\s+(.+)$/) : t.match(/^[-*+]\s+(.+)$/);
+        if (!m) break;
+        items.push(`<li>${inline(m[1])}</li>`);
+        i += 1;
+      }
+      out.push(
+        ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`
+      );
+      continue;
+    }
+
+    para.push(trimmed);
+    i += 1;
+  }
+  flushPara();
+  return out.join("\n") || "<p></p>";
+}
+
+function wireMessageBodyInteractions(root) {
+  if (!root) return;
+  root.querySelectorAll(".md-copy").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const codeEl = btn.parentElement && btn.parentElement.querySelector("code");
+      const text = codeEl ? codeEl.textContent || "" : "";
+      try {
+        await navigator.clipboard.writeText(text);
+        const prev = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => {
+          btn.textContent = prev || "Copy";
+        }, 1200);
+      } catch {
+        showNotice("Copy failed — select the code manually.");
+      }
+    });
+  });
+}
+
+function renderMessages(messages, { force = false } = {}) {
+  if (!messagesEl) return;
+  const list = Array.isArray(messages) ? messages : [];
+  const fp = messagesFingerprint(list);
+  if (!force && fp === lastMessagesFp) {
+    updateJumpLatestVisibility();
+    return;
+  }
+  const stick = chatStickToBottom || isNearBottom(messagesEl);
+  lastMessagesFp = fp;
   messagesEl.innerHTML = "";
-  for (const m of messages) {
+  for (const m of list) {
     const div = document.createElement("div");
-    div.className = `msg ${m.role === "user" ? "user" : "assistant"}`;
+    const role = m.role === "user" ? "user" : "assistant";
+    div.className = `msg ${role}`;
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${m.role} · ${m.created_at || ""}`;
+    meta.innerHTML = `<span class="role-chip">${escapeHtml(
+      role
+    )}</span><span>${escapeHtml(formatMsgTime(m.created_at))}</span>`;
     div.appendChild(meta);
     const body = document.createElement("div");
-    body.textContent = m.content || "";
+    body.className = "msg-body";
+    body.innerHTML = renderMarkdown(m.content || "");
     div.appendChild(body);
+    wireMessageBodyInteractions(body);
     if (m.reasoning) {
       const details = document.createElement("details");
       details.className = "reason-fold";
@@ -118,7 +439,8 @@ function renderMessages(messages) {
     }
     messagesEl.appendChild(div);
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (stick) scrollMessagesToBottom();
+  else updateJumpLatestVisibility();
 }
 
 function setWaitChoicesDisabled(disabled) {
@@ -190,9 +512,9 @@ async function sendWaitChoice(choice) {
   }
 }
 
-async function refreshMessages() {
+async function refreshMessages(opts = {}) {
   const data = await fetchJson("/api/messages?limit=200");
-  renderMessages(data.messages || []);
+  renderMessages(data.messages || [], opts);
 }
 
 function formatContinuousMeta(c) {
@@ -204,6 +526,415 @@ function formatContinuousMeta(c) {
   if (pending > 0) parts.push(`pending ${pending}`);
   if (c.last_skip_reason) parts.push(`skip ${c.last_skip_reason}`);
   return parts.join(" · ");
+}
+
+function formatPctRemaining(frac) {
+  if (frac == null || Number.isNaN(Number(frac))) return "—";
+  const pct = Math.max(0, Math.min(100, Math.round(Number(frac) * 100)));
+  return `${pct}%`;
+}
+
+function setUsageBar(barEl, frac) {
+  if (!barEl) return;
+  const f = Math.max(0, Math.min(1, Number(frac) || 0));
+  barEl.style.width = `${Math.round(f * 100)}%`;
+  barEl.classList.remove("usage-bar-warn", "usage-bar-crit");
+  if (f <= 0.05) barEl.classList.add("usage-bar-crit");
+  else if (f <= 0.2) barEl.classList.add("usage-bar-warn");
+}
+
+/**
+ * Provider-aware rail pill (keeps id pill-llama for less churn).
+ * xai ready/busy/auth/limit/ovrd; local llama; stub.
+ */
+function renderProviderPill(s) {
+  if (!pillLlama) return;
+  const provider = (s && s.provider) || null;
+  const usage = (s && s.usage) || {};
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  const credentialOk = s && s.credential_ok !== false;
+  const workerBusy = Boolean(s && s.worker_busy);
+  const phase = (s && s.phase) || "";
+  const busy = workerBusy || phase === "in_moment";
+
+  // Legacy / no provider field: fall back to llama-centric display.
+  if (!provider) {
+    if (s && s.llama_ready) {
+      setPill(
+        pillLlama,
+        s.llama_busy ? "llama busy" : "llama ready",
+        s.llama_busy ? "pill-busy" : "pill-on"
+      );
+    } else if (s && s.llama_error === "stub_llm") {
+      setPill(pillLlama, "stub llm", "pill-off");
+    } else {
+      setPill(
+        pillLlama,
+        s && s.llama_error ? "llama error" : "llama off",
+        "pill-off"
+      );
+    }
+    return;
+  }
+
+  if (provider === "local") {
+    if (s.llama_ready) {
+      setPill(
+        pillLlama,
+        s.llama_busy || busy ? "llama busy" : "llama ready",
+        s.llama_busy || busy ? "pill-busy" : "pill-on"
+      );
+    } else if (s.llama_error === "stub_llm") {
+      setPill(pillLlama, "stub llm", "pill-off");
+    } else {
+      setPill(
+        pillLlama,
+        s.llama_error ? "llama error" : "llama off",
+        "pill-off"
+      );
+    }
+    return;
+  }
+
+  // xai (and any non-local remote)
+  if (s.llama_error === "stub_llm" && !s.credential_ok && !s.model) {
+    setPill(pillLlama, "stub llm", "pill-off");
+    return;
+  }
+  if (!credentialOk) {
+    setPill(pillLlama, `${provider} auth`, "pill-off");
+    return;
+  }
+  if (hardStop && !overrideActive) {
+    setPill(pillLlama, `${provider} limit`, "pill-off");
+    return;
+  }
+  if (hardStop && overrideActive) {
+    setPill(pillLlama, `${provider} ovrd`, "pill-busy");
+    return;
+  }
+  setPill(
+    pillLlama,
+    busy ? `${provider} busy` : `${provider} ready`,
+    busy ? "pill-busy" : "pill-on"
+  );
+}
+
+function renderHardStopBanner(s) {
+  if (!hardStopBanner) return;
+  const usage = (s && s.usage) || {};
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  const credentialOk = !(s && s.provider === "xai" && s.credential_ok === false);
+
+  if (!credentialOk) {
+    hardStopBanner.hidden = false;
+    hardStopBanner.className = "hard-stop-banner hard-stop-auth";
+    const detail = (s && s.credential_detail) || "credential missing";
+    hardStopBanner.textContent = `Auth paused — ${detail}. Model moments will not open until credentials resolve.`;
+    return;
+  }
+
+  if (hardStop && !overrideActive) {
+    hardStopBanner.hidden = false;
+    hardStopBanner.className = "hard-stop-banner hard-stop-limit";
+    const reason = usage.hard_stop_reason || hardStop;
+    hardStopBanner.textContent = `Usage hard stop (${hardStop}) — queue paused for budget. ${reason}`;
+    return;
+  }
+
+  if (hardStop && overrideActive) {
+    hardStopBanner.hidden = false;
+    hardStopBanner.className = "hard-stop-banner hard-stop-override";
+    hardStopBanner.textContent = `Over budget (${hardStop}) — hard-stop override ON. Model calls continue; usage still recorded.`;
+    return;
+  }
+
+  hardStopBanner.hidden = true;
+  hardStopBanner.textContent = "";
+  hardStopBanner.className = "hard-stop-banner";
+}
+
+function fillModelSelect(models, current) {
+  if (!providerModelSelect) return;
+  const list = Array.isArray(models) ? models.slice() : [];
+  if (current && !list.includes(current)) list.unshift(current);
+  const prev = providerModelSelect.value;
+  // Skip rebuild if options + selection unchanged (preserve focus).
+  const existing = Array.from(providerModelSelect.options).map((o) => o.value);
+  const same =
+    existing.length === list.length &&
+    existing.every((v, i) => v === list[i]) &&
+    providerModelSelect.value === (current || "");
+  if (same) return;
+  providerModelSelect.innerHTML = "";
+  if (!list.length) {
+    const opt = document.createElement("option");
+    opt.value = current || "";
+    opt.textContent = current || "—";
+    providerModelSelect.appendChild(opt);
+  } else {
+    for (const mid of list) {
+      const opt = document.createElement("option");
+      opt.value = mid;
+      opt.textContent = mid;
+      providerModelSelect.appendChild(opt);
+    }
+  }
+  const pick = current || prev || (list[0] || "");
+  if (pick) providerModelSelect.value = pick;
+}
+
+function renderProviderCard(s) {
+  const provider = (s && s.provider) || null;
+  if (providerNameEl) {
+    providerNameEl.textContent = provider
+      ? `${provider}${s.model_label ? ` · ${s.model_label}` : s.model ? ` · ${s.model}` : ""}`
+      : "— (legacy)";
+  }
+  if (providerBadge) {
+    if (!provider) {
+      providerBadge.textContent = "legacy";
+      providerBadge.classList.remove("badge-open", "badge-bad");
+    } else if (s.credential_ok) {
+      providerBadge.textContent = "ok";
+      providerBadge.classList.add("badge-open");
+      providerBadge.classList.remove("badge-bad");
+    } else {
+      providerBadge.textContent = "auth";
+      providerBadge.classList.remove("badge-open");
+      providerBadge.classList.add("badge-bad");
+    }
+  }
+  if (!providerPatchInFlight) {
+    fillModelSelect(s && s.models_available, s && s.model);
+    lastProviderModel = (s && s.model) || null;
+    if (providerCredentialSelect && s && s.credential_source) {
+      providerCredentialSelect.value = s.credential_source;
+      lastCredentialSource = s.credential_source;
+    }
+  }
+  if (providerCredentialOk) {
+    if (!provider) {
+      providerCredentialOk.textContent = "—";
+    } else {
+      const ok = Boolean(s.credential_ok);
+      const detail = s.credential_detail || "";
+      const email = s.credential_email || "";
+      const parts = [ok ? "yes" : "no"];
+      if (detail) parts.push(detail);
+      if (email) parts.push(email);
+      if (s.credential_expires_at) parts.push(`exp ${s.credential_expires_at}`);
+      providerCredentialOk.textContent = parts.join(" · ");
+      providerCredentialOk.classList.toggle("status-ok", ok);
+      providerCredentialOk.classList.toggle("status-bad", !ok);
+    }
+  }
+  if (providerApiKeyMeta) {
+    const configured = Boolean(s && s.api_key_configured);
+    providerApiKeyMeta.textContent = configured
+      ? "API key configured (secret not shown)"
+      : "not configured";
+  }
+}
+
+function renderUsageCard(s) {
+  const usage = (s && s.usage) || null;
+  const enabled = Boolean(usage && usage.enabled);
+  const overrideActive = Boolean(usage && usage.override_active);
+  const hardStop = (usage && usage.hard_stop) || null;
+
+  if (usageBadge) {
+    if (!usage) {
+      usageBadge.textContent = "n/a";
+      usageBadge.classList.remove("badge-open", "badge-bad");
+    } else if (!enabled) {
+      usageBadge.textContent = "off";
+      usageBadge.classList.remove("badge-open", "badge-bad");
+    } else if (hardStop && !overrideActive) {
+      usageBadge.textContent = `stop · ${hardStop}`;
+      usageBadge.classList.remove("badge-open");
+      usageBadge.classList.add("badge-bad");
+    } else if (hardStop && overrideActive) {
+      usageBadge.textContent = "override";
+      usageBadge.classList.add("badge-open");
+      usageBadge.classList.remove("badge-bad");
+    } else {
+      usageBadge.textContent = "ok";
+      usageBadge.classList.add("badge-open");
+      usageBadge.classList.remove("badge-bad");
+    }
+  }
+
+  const week = usage ? usage.week_remaining_fraction : null;
+  const day = usage ? usage.day_remaining_fraction : null;
+  const hour = usage ? usage.hour_remaining_fraction : null;
+  if (usageWeekPct) usageWeekPct.textContent = formatPctRemaining(week);
+  if (usageDayPct) usageDayPct.textContent = formatPctRemaining(day);
+  if (usageHourPct) usageHourPct.textContent = formatPctRemaining(hour);
+  setUsageBar(usageWeekBar, week);
+  setUsageBar(usageDayBar, day);
+  setUsageBar(usageHourBar, hour);
+
+  if (usageDetail) {
+    if (!usage) {
+      usageDetail.textContent = "Usage meter not bound.";
+    } else if (!enabled) {
+      usageDetail.textContent = "Usage meter disabled.";
+    } else {
+      const parts = [];
+      if (usage.week_used_tokens != null) {
+        parts.push(
+          `week ${usage.week_used_tokens}/${usage.week_limit_tokens ?? "—"}`
+        );
+      }
+      if (usage.day_used_tokens != null) {
+        parts.push(
+          `day ${usage.day_used_tokens}/${usage.day_limit_tokens ?? "—"}`
+        );
+      }
+      if (usage.hour_used_tokens != null) {
+        parts.push(
+          `hour ${usage.hour_used_tokens}/${usage.hour_limit_tokens ?? "—"}`
+        );
+      }
+      if (usage.last_record_at) parts.push(`last ${usage.last_record_at}`);
+      usageDetail.textContent = parts.length ? parts.join(" · ") : "no usage yet";
+    }
+  }
+
+  if (usageOverrideToggle && !usageOverrideInFlight) {
+    usageOverrideToggle.checked = overrideActive;
+    usageOverrideToggle.disabled = !enabled;
+  }
+  lastOverrideActive = overrideActive;
+  if (usageOverrideMeta) {
+    usageOverrideMeta.textContent = overrideActive
+      ? "override ON"
+      : "default off";
+  }
+}
+
+async function patchProvider(body) {
+  if (providerPatchInFlight) return;
+  providerPatchInFlight = true;
+  if (providerModelSelect) providerModelSelect.disabled = true;
+  if (providerCredentialSelect) providerCredentialSelect.disabled = true;
+  try {
+    await fetchJson("/api/provider", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshStatus();
+  } catch (err) {
+    if (providerModelSelect && lastProviderModel != null) {
+      providerModelSelect.value = lastProviderModel;
+    }
+    if (providerCredentialSelect && lastCredentialSource != null) {
+      providerCredentialSelect.value = lastCredentialSource;
+    }
+    showNotice(String(err.message || err));
+  } finally {
+    providerPatchInFlight = false;
+    if (providerModelSelect) providerModelSelect.disabled = false;
+    if (providerCredentialSelect) providerCredentialSelect.disabled = false;
+  }
+}
+
+async function saveApiKey() {
+  if (apiKeyInFlight || !providerApiKeyInput) return;
+  const api_key = providerApiKeyInput.value.trim();
+  if (!api_key) {
+    showNotice("API key required.");
+    return;
+  }
+  apiKeyInFlight = true;
+  if (providerApiKeySave) providerApiKeySave.disabled = true;
+  if (providerApiKeyClear) providerApiKeyClear.disabled = true;
+  try {
+    await fetchJson("/api/provider/api-key", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key }),
+    });
+    // Never re-display secret.
+    providerApiKeyInput.value = "";
+    showNotice("API key saved.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    apiKeyInFlight = false;
+    if (providerApiKeySave) providerApiKeySave.disabled = false;
+    if (providerApiKeyClear) providerApiKeyClear.disabled = false;
+  }
+}
+
+async function clearApiKey() {
+  if (apiKeyInFlight) return;
+  apiKeyInFlight = true;
+  if (providerApiKeySave) providerApiKeySave.disabled = true;
+  if (providerApiKeyClear) providerApiKeyClear.disabled = true;
+  try {
+    await fetchJson("/api/provider/api-key", { method: "DELETE" });
+    if (providerApiKeyInput) providerApiKeyInput.value = "";
+    showNotice("API key cleared.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    apiKeyInFlight = false;
+    if (providerApiKeySave) providerApiKeySave.disabled = false;
+    if (providerApiKeyClear) providerApiKeyClear.disabled = false;
+  }
+}
+
+async function setHardStopOverride(active) {
+  if (usageOverrideInFlight) return;
+  usageOverrideInFlight = true;
+  if (usageOverrideToggle) {
+    usageOverrideToggle.disabled = true;
+    usageOverrideToggle.checked = active;
+  }
+  try {
+    await fetchJson("/api/usage", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hard_stop_override: Boolean(active) }),
+    });
+    if (active) {
+      showNotice("Hard-stop override ON — model calls continue past budget.");
+    }
+    await refreshStatus();
+  } catch (err) {
+    if (usageOverrideToggle) usageOverrideToggle.checked = lastOverrideActive;
+    showNotice(String(err.message || err));
+  } finally {
+    usageOverrideInFlight = false;
+    if (usageOverrideToggle) usageOverrideToggle.disabled = false;
+  }
+}
+
+function maybeNoticeHardStopTransition(s) {
+  const usage = (s && s.usage) || {};
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  // First paint: seed without notice.
+  if (!statusPrimed) {
+    lastHardStop = hardStop;
+    lastOverrideActive = overrideActive;
+    statusPrimed = true;
+    return;
+  }
+  if (hardStop && hardStop !== lastHardStop && !overrideActive) {
+    showNotice(
+      `Usage hard stop (${hardStop}) — queue paused until budget resets or override is enabled.`,
+      { sticky: true }
+    );
+  }
+  lastHardStop = hardStop;
 }
 
 function renderContinuous(s) {
@@ -293,24 +1024,53 @@ async function setContinuousEnabled(enabled) {
   }
 }
 
+/**
+ * Sandbox pill (KD27): ready / warming / unusable next to provider pill.
+ * No secrets, no host paths — only coarse states from status.sandbox.
+ */
+function renderSandboxPill(s) {
+  if (!pillSandbox) return;
+  const box = (s && s.sandbox) || null;
+  if (!box) {
+    setPill(pillSandbox, "sandbox", "pill-off");
+    return;
+  }
+  const pill = box.pill || null;
+  if (pill === "ready" || box.ready) {
+    setPill(pillSandbox, "sandbox ready", "pill-on");
+  } else if (pill === "warming" || box.reason === "warming") {
+    setPill(pillSandbox, "sandbox warming", "pill-busy");
+  } else if (pill === "off" || box.isolation_enabled === false) {
+    setPill(pillSandbox, "sandbox off", "pill-off");
+  } else {
+    // unusable / client_unusable / degraded after warm
+    setPill(pillSandbox, "sandbox unusable", "pill-off");
+  }
+}
+
 async function refreshStatus() {
   const s = await fetchJson("/api/status");
   statusJson.textContent = JSON.stringify(s, null, 2);
 
-  if (s.llama_ready) {
-    setPill(
-      pillLlama,
-      s.llama_busy ? "llama busy" : "llama ready",
-      s.llama_busy ? "pill-busy" : "pill-on"
-    );
-  } else if (s.llama_error === "stub_llm") {
-    setPill(pillLlama, "stub llm", "pill-off");
-  } else {
-    setPill(pillLlama, s.llama_error ? "llama error" : "llama off", "pill-off");
-  }
+  renderProviderPill(s);
+  renderSandboxPill(s);
+  renderHardStopBanner(s);
+  renderProviderCard(s);
+  renderUsageCard(s);
+  maybeNoticeHardStopTransition(s);
+
+  // When hard-stopped without override, surface queue pause on worker pill.
+  const usage = s.usage || {};
+  const queuePaused =
+    Boolean(usage.hard_stop) && !usage.override_active;
+  const authPaused = s.provider === "xai" && s.credential_ok === false;
 
   if (s.worker_busy) {
     setPill(pillWorker, "worker busy", "pill-busy");
+  } else if (queuePaused) {
+    setPill(pillWorker, "queue paused", "pill-off");
+  } else if (authPaused) {
+    setPill(pillWorker, "auth paused", "pill-off");
   } else if (s.worker_pending > 0) {
     setPill(pillWorker, `queue ${s.worker_pending}`, "pill-busy");
   } else {
@@ -323,6 +1083,7 @@ async function refreshStatus() {
   else if (phase === "waiting") phaseMode = "pill-busy";
   setPill(pillPhase, phase, phaseMode);
 
+  updateChatActivity(s);
   renderContinuous(s);
   renderWaitBar(s.pending_wait || null);
   return s;
@@ -380,7 +1141,7 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-function momentListSnapshot(m) {
+function momentListSnapshot(m, beatCount) {
   if (!m) return null;
   return {
     id: m.id || null,
@@ -388,6 +1149,7 @@ function momentListSnapshot(m) {
     ended_at: m.ended_at || null,
     stop_reason: m.stop_reason || null,
     why_now: m.why_now || null,
+    beat_count: beatCount != null ? beatCount : m.beat_count ?? null,
   };
 }
 
@@ -398,7 +1160,8 @@ function momentSnapshotChanged(prev, next) {
     prev.hop_count !== next.hop_count ||
     prev.ended_at !== next.ended_at ||
     prev.stop_reason !== next.stop_reason ||
-    prev.why_now !== next.why_now
+    prev.why_now !== next.why_now ||
+    prev.beat_count !== next.beat_count
   );
 }
 
@@ -590,10 +1353,14 @@ async function loadMomentDetail(id, opts = {}) {
     // Stale: closed, switched, or a newer load superseded this one.
     if (selectedMomentId !== id || gen !== momentDetailLoadGen) return;
     const m = data.moment || {};
-    const nextSnap = momentListSnapshot(m);
-    // Soft path: if same-id snapshot unchanged, skip DOM rebuild (keeps folds/scroll).
+    const beats = data.beats || [];
+    const nextSnap = momentListSnapshot(m, beats.length);
+    // Soft path: skip rebuild only when closed and snapshot unchanged.
+    // Open moments always re-render so live beats stream while the tape grows.
+    const isOpen = !m.ended_at;
     if (
       soft &&
+      !isOpen &&
       hasLastGoodFor(id) &&
       !momentSnapshotChanged(selectedMomentSnapshot, nextSnap)
     ) {
@@ -605,11 +1372,11 @@ async function loadMomentDetail(id, opts = {}) {
     const body = document.createDocumentFragment();
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = `${m.id} · stop=${m.stop_reason || "—"} · hops=${
+    meta.textContent = `${m.id} · stop=${m.stop_reason || (isOpen ? "open" : "—")} · hops=${
       m.hop_count ?? 0
-    }`;
+    } · beats=${beats.length}`;
     body.appendChild(meta);
-    body.appendChild(renderBeats(data.beats || []));
+    body.appendChild(renderBeats(beats));
     renderMomentDetailChrome(
       `<strong>${escapeHtml(m.why_now || m.id)}</strong>`,
       body
@@ -648,6 +1415,11 @@ async function refreshMoments() {
     await loadMomentDetail(selectedMomentId, { soft: true });
     return;
   }
+  // Always soft-refresh open moments (live beats); closed only when meta changes.
+  if (!row.ended_at) {
+    await loadMomentDetail(selectedMomentId, { soft: true });
+    return;
+  }
   const next = momentListSnapshot(row);
   // Do not pre-commit snapshot before load succeeds.
   if (momentSnapshotChanged(selectedMomentSnapshot, next)) {
@@ -664,11 +1436,18 @@ function renderCatalog(el, items, emptyLabel) {
   for (const t of items) {
     const card = document.createElement("article");
     card.className = "card";
+    const source = t.source || t.kind || "";
+    const kind = t.kind && t.source ? t.kind : "";
     card.innerHTML = `
       <div class="card-head">
         <strong>${escapeHtml(t.name)}</strong>
-        <span class="badge">${escapeHtml(t.kind || t.source || "")}</span>
+        <span class="badge">${escapeHtml(source)}</span>
       </div>
+      ${
+        kind
+          ? `<div class="meta">${escapeHtml(kind)}</div>`
+          : ""
+      }
       <p class="muted">${escapeHtml(t.description || "")}</p>`;
     el.appendChild(card);
   }
@@ -679,8 +1458,17 @@ async function refreshTools() {
     fetchJson("/api/tools"),
     fetchJson("/api/skills"),
   ]);
-  renderCatalog(toolsList, tools.tools || [], "No tools.");
-  renderCatalog(skillsList, skills.skills || [], "No skills.");
+  const toolItems = tools.tools || [];
+  const skillItems = skills.skills || [];
+  renderCatalog(toolsList, toolItems, "No tools.");
+  renderCatalog(skillsList, skillItems, "No skills.");
+  if (toolsCountEl) toolsCountEl.textContent = String(toolItems.length);
+  if (skillsCountEl) skillsCountEl.textContent = String(skillItems.length);
+  if (catalogMeta) {
+    const localTools = toolItems.filter((t) => t.source === "local").length;
+    const localSkills = skillItems.filter((s) => s.source === "local").length;
+    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · rescanned from disk`;
+  }
 }
 
 async function refreshIdentity() {
@@ -698,6 +1486,44 @@ continuousToggles.forEach((el) => {
     setContinuousEnabled(el.checked);
   });
 });
+
+if (providerModelSelect) {
+  providerModelSelect.addEventListener("change", () => {
+    const model = providerModelSelect.value;
+    if (!model || model === lastProviderModel) return;
+    patchProvider({ model });
+  });
+}
+if (providerCredentialSelect) {
+  providerCredentialSelect.addEventListener("change", () => {
+    const credential_source = providerCredentialSelect.value;
+    if (!credential_source || credential_source === lastCredentialSource) return;
+    patchProvider({ credential_source });
+  });
+}
+if (providerApiKeySave) {
+  providerApiKeySave.addEventListener("click", () => {
+    saveApiKey();
+  });
+}
+if (providerApiKeyClear) {
+  providerApiKeyClear.addEventListener("click", () => {
+    clearApiKey();
+  });
+}
+if (providerApiKeyInput) {
+  providerApiKeyInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveApiKey();
+    }
+  });
+}
+if (usageOverrideToggle) {
+  usageOverrideToggle.addEventListener("change", () => {
+    setHardStopOverride(usageOverrideToggle.checked);
+  });
+}
 
 function openResetModal() {
   if (!resetModal) return;
@@ -799,10 +1625,240 @@ if (resetModal) {
   });
 }
 
+function formatBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KB`;
+  return `${(v / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAttachTray() {
+  if (!attachTray) return;
+  if (!pendingAttachments.length) {
+    attachTray.hidden = true;
+    attachTray.innerHTML = "";
+    return;
+  }
+  attachTray.hidden = false;
+  attachTray.innerHTML = "";
+  pendingAttachments.forEach((att, idx) => {
+    const chip = document.createElement("div");
+    chip.className = "attach-chip";
+    if (att.kind === "image" && att.previewUrl) {
+      const img = document.createElement("img");
+      img.src = att.previewUrl;
+      img.alt = att.name;
+      chip.appendChild(img);
+    } else {
+      const icon = document.createElement("span");
+      icon.textContent = "📄";
+      icon.setAttribute("aria-hidden", "true");
+      chip.appendChild(icon);
+    }
+    const meta = document.createElement("div");
+    meta.className = "chip-meta";
+    meta.innerHTML = `<span class="chip-name" title="${escapeHtml(
+      att.name
+    )}">${escapeHtml(att.name)}</span><span class="chip-sub">${escapeHtml(
+      att.kind
+    )} · ${escapeHtml(formatBytes(att.size))}</span>`;
+    chip.appendChild(meta);
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "chip-remove";
+    rm.setAttribute("aria-label", `Remove ${att.name}`);
+    rm.textContent = "×";
+    rm.addEventListener("click", () => {
+      if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      pendingAttachments.splice(idx, 1);
+      renderAttachTray();
+    });
+    chip.appendChild(rm);
+    attachTray.appendChild(chip);
+  });
+}
+
+function addFilesAsAttachments(fileList) {
+  const files = Array.from(fileList || []);
+  for (const file of files) {
+    if (!file || !file.name) continue;
+    if (pendingAttachments.length >= 8) {
+      showNotice("Attachment limit: 8 files per message.");
+      break;
+    }
+    const isImage = String(file.type || "").startsWith("image/");
+    const att = {
+      name: file.name,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+      kind: isImage ? "image" : "file",
+      previewUrl: isImage ? URL.createObjectURL(file) : null,
+    };
+    pendingAttachments.push(att);
+  }
+  renderAttachTray();
+}
+
+function buildAttachmentInventory() {
+  if (!pendingAttachments.length) return "";
+  const lines = pendingAttachments.map(
+    (a, i) =>
+      `${i + 1}. ${a.name} (${a.kind}, ${a.type || "unknown"}, ${formatBytes(
+        a.size
+      )})`
+  );
+  return (
+    "\n\n---\n**Attachments** (listed for Elyra; binary vision/file I/O not wired yet):\n" +
+    lines.join("\n")
+  );
+}
+
+function clearAttachments() {
+  pendingAttachments.forEach((a) => {
+    if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+  });
+  pendingAttachments = [];
+  renderAttachTray();
+}
+
+function autosizeComposer() {
+  if (!input) return;
+  input.style.height = "auto";
+  const next = Math.min(180, Math.max(44, input.scrollHeight));
+  input.style.height = `${next}px`;
+}
+
+function activityEventKey(ev, idx) {
+  if (!ev || typeof ev !== "object") return `e-${idx}`;
+  return String(ev.id || `${ev.kind || "x"}:${ev.label || ""}:${idx}`);
+}
+
+/**
+ * Render last ≤3 events oldest→newest (left→right).
+ * On change: newest chip enters from the right; older chips reflow left.
+ */
+function renderActivityTrail(events) {
+  if (!chatActivityTrail) return;
+  const list = Array.isArray(events) ? events.slice(-3) : [];
+  const ids = list.map((ev, i) => activityEventKey(ev, i));
+  const fp = ids.join("|");
+
+  if (!list.length) {
+    chatActivityTrail.innerHTML = "";
+    lastActivityTrailFp = "";
+    activityTrailIds = [];
+    return;
+  }
+
+  if (fp === lastActivityTrailFp) return;
+
+  const prevIds = activityTrailIds.slice();
+  const prevNewest = prevIds.length ? prevIds[prevIds.length - 1] : null;
+  const newestId = ids[ids.length - 1];
+  const newestIsNew = Boolean(newestId && newestId !== prevNewest);
+
+  // Exit animation for the oldest chip when the window slides (3→3 replace).
+  const droppedOldest =
+    prevIds.length >= 3 && ids.length === 3 && !ids.includes(prevIds[0])
+      ? prevIds[0]
+      : null;
+
+  chatActivityTrail.innerHTML = "";
+
+  if (droppedOldest) {
+    const ghost = document.createElement("span");
+    ghost.className = "activity-chip chip-exit";
+    ghost.textContent = "…";
+    chatActivityTrail.appendChild(ghost);
+    setTimeout(() => {
+      if (ghost.parentNode) ghost.remove();
+    }, 300);
+  }
+
+  list.forEach((ev, i) => {
+    const chip = document.createElement("span");
+    const kind = String(ev.kind || "event").replace(/[^a-z0-9_-]/gi, "");
+    chip.className = `activity-chip kind-${kind}`;
+    chip.dataset.eventId = ids[i];
+    if (i === list.length - 1) chip.classList.add("is-newest");
+    if (i === list.length - 1 && newestIsNew && prevIds.length) {
+      chip.classList.add("chip-enter");
+    }
+    chip.textContent = String(ev.label || ev.short || ev.kind || "…");
+    chip.title = [ev.kind, ev.label, ev.name, ev.error_reason, ev.hop != null ? `hop ${ev.hop}` : ""]
+      .filter(Boolean)
+      .join(" · ");
+    chatActivityTrail.appendChild(chip);
+  });
+
+  lastActivityTrailFp = fp;
+  activityTrailIds = ids;
+}
+
+function updateChatActivity(status) {
+  if (!chatActivity) return;
+  const phase = (status && status.phase) || "";
+  const worker = status && status.worker;
+  const busy =
+    phase === "in_moment" ||
+    phase === "waiting" ||
+    (worker && worker.busy) ||
+    (status && status.busy) ||
+    Boolean(status && status.worker_busy);
+  if (!busy) {
+    chatActivity.hidden = true;
+    if (chatActivityTrail) chatActivityTrail.innerHTML = "";
+    lastActivityTrailFp = "";
+    activityTrailIds = [];
+    return;
+  }
+
+  chatActivity.hidden = false;
+  const activity = (status && status.activity) || {};
+  const recent = (status && status.recent_activity) || [];
+
+  let label =
+    activity.label ||
+    (phase === "waiting"
+      ? "waiting for you"
+      : phase === "in_moment"
+        ? "in moment…"
+        : "working…");
+  let detail = activity.detail || "";
+
+  // Fallback detail from hop / last_tool when activity block missing (older workers).
+  if (!detail) {
+    const bits = [];
+    if (status.hop_count) bits.push(`hop ${status.hop_count}`);
+    if (status.last_tool) bits.push(String(status.last_tool));
+    detail = bits.join(" · ");
+  }
+
+  if (chatActivityLabel) chatActivityLabel.textContent = label;
+  if (chatActivityDetail) chatActivityDetail.textContent = detail;
+
+  // Waiting: ensure trail ends with a waiting chip when no recent beats.
+  let trail = Array.isArray(recent) ? recent.slice(-3) : [];
+  if (phase === "waiting") {
+    const waitChip = {
+      id: "waiting-you",
+      kind: "waiting",
+      label: "you",
+      short: "wait",
+    };
+    if (!trail.length || trail[trail.length - 1].kind !== "waiting") {
+      trail = trail.concat([waitChip]).slice(-3);
+    }
+  }
+  renderActivityTrail(trail);
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const content = input.value.trim();
-  if (!content) return;
+  const text = input.value.trim();
+  const inventory = buildAttachmentInventory();
+  if (!text && !inventory) return;
+  const content = (text + inventory).trim();
   sendBtn.disabled = true;
   try {
     const data = await fetchJson("/api/messages", {
@@ -811,12 +1867,15 @@ form.addEventListener("submit", async (e) => {
       body: JSON.stringify({ content, user_id: USER_ID }),
     });
     input.value = "";
+    autosizeComposer();
+    clearAttachments();
+    chatStickToBottom = true;
     if (data.ok === false && data.reason === REASON_BUFFER_FULL) {
       showNotice(
         "Interjection buffer full — message queued as a wake for after this moment."
       );
     }
-    await refreshMessages();
+    await refreshMessages({ force: true });
   } catch (err) {
     showNotice(String(err.message || err));
   } finally {
@@ -831,6 +1890,79 @@ input.addEventListener("keydown", (e) => {
     form.requestSubmit();
   }
 });
+
+input.addEventListener("input", autosizeComposer);
+
+input.addEventListener("paste", (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  const files = [];
+  for (const item of items) {
+    if (item.kind === "file") {
+      const f = item.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  if (files.length) {
+    e.preventDefault();
+    addFilesAsAttachments(files);
+  }
+});
+
+if (attachBtn && attachInput) {
+  attachBtn.addEventListener("click", () => attachInput.click());
+  attachInput.addEventListener("change", () => {
+    addFilesAsAttachments(attachInput.files);
+    attachInput.value = "";
+  });
+}
+
+if (form) {
+  form.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    composerDragDepth += 1;
+    if (dropOverlay) dropOverlay.hidden = false;
+  });
+  form.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    composerDragDepth = Math.max(0, composerDragDepth - 1);
+    if (composerDragDepth === 0 && dropOverlay) dropOverlay.hidden = true;
+  });
+  form.addEventListener("dragover", (e) => {
+    e.preventDefault();
+  });
+  form.addEventListener("drop", (e) => {
+    e.preventDefault();
+    composerDragDepth = 0;
+    if (dropOverlay) dropOverlay.hidden = true;
+    if (e.dataTransfer && e.dataTransfer.files) {
+      addFilesAsAttachments(e.dataTransfer.files);
+    }
+  });
+}
+
+if (messagesEl) {
+  messagesEl.addEventListener("scroll", () => {
+    chatStickToBottom = isNearBottom(messagesEl);
+    updateJumpLatestVisibility();
+  });
+}
+
+if (jumpLatestBtn) {
+  jumpLatestBtn.addEventListener("click", () => {
+    scrollMessagesToBottom({ smooth: true });
+  });
+}
+
+if (catalogRefreshBtn) {
+  catalogRefreshBtn.addEventListener("click", () => {
+    refreshTools()
+      .then(() => showNotice("Tools & skills rescanned from disk."))
+      .catch((e) => panelLoadError("Tools", e));
+  });
+}
+
+autosizeComposer();
 
 function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);

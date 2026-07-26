@@ -324,6 +324,48 @@ def test_get_tools_and_skills_catalog(paths):
         h.close()
 
 
+def test_get_tools_rescans_after_local_delete(paths):
+    """GET /api/tools reloads so operator-deleted local packages leave the catalog."""
+    import json
+    import shutil
+
+    local = paths.tools_dir / "local" / "ghost_tool"
+    local.mkdir(parents=True)
+    (local / "TOOL.md").write_text(
+        "---\nname: ghost_tool\ndescription: temp\nkind: read\n---\n",
+        encoding="utf-8",
+    )
+    (local / "schema.json").write_text(
+        json.dumps({"type": "object", "properties": {}}), encoding="utf-8"
+    )
+    (local / "runner.json").write_text(
+        json.dumps({"kind": "sandbox_python", "module": "main"}), encoding="utf-8"
+    )
+    (local / "main.py").write_text("def run(args):\n    return {'ok': True}\n")
+
+    h = _ApiHarness(paths)
+    try:
+        if h.server is None:
+            return
+        # Harness may have failed to resolve tools if bundled root missing.
+        code, body = h.get("/api/tools")
+        assert code == 200
+        if body.get("error") == "tools catalog unavailable":
+            return
+        names = {t["name"] for t in body["tools"]}
+        assert "ghost_tool" in names
+
+        # External delete (operator rm) without process restart
+        shutil.rmtree(local)
+
+        code, body = h.get("/api/tools")
+        assert code == 200
+        names = {t["name"] for t in body["tools"]}
+        assert "ghost_tool" not in names
+    finally:
+        h.close()
+
+
 def test_existing_status_and_messages_still_work(paths):
     h = _ApiHarness(paths)
     try:
@@ -485,6 +527,28 @@ def test_static_index_served(paths):
         assert "continuous-toggle-status" not in html
         # Moments list is content-sized; detail owns leftover space.
         assert "list-panel-auto" in html
+        # Phase 0 provider / usage glass (PR7 web).
+        assert 'id="pill-llama"' in html
+        assert 'id="hard-stop-banner"' in html
+        assert 'id="provider-card"' in html
+        assert 'id="provider-model-select"' in html
+        assert 'id="provider-credential-select"' in html
+        assert 'id="provider-api-key-input"' in html
+        assert 'type="password"' in html
+        assert 'id="provider-api-key-save"' in html
+        assert 'id="provider-api-key-clear"' in html
+        assert 'id="usage-card"' in html
+        assert 'id="usage-override-toggle"' in html
+        assert "Hard-stop override" in html
+        assert "Usage budget" in html
+        assert "Provider / model" in html
+        # Reset checklist preserves secrets / provider prefs / usage meter.
+        assert "data/secrets/" in html
+        assert "data/runtime/provider.json" in html
+        assert "data/runtime/usage.json" in html
+        assert "will-keep" in html
+        # Confirm copy does not claim runtime dir is wiped wholesale.
+        assert "runtime dir" not in html.lower() or "preserves" in html.lower()
     finally:
         h.close()
 
@@ -513,13 +577,51 @@ def test_static_app_js_active_panel_poll(paths):
         # Soft detail path + 404 closes vanished moments.
         assert "soft: true" in js or "{ soft: true }" in js
         assert "err.status === 404" in js or "err.status == 404" in js
+        # Phase 0 provider pill + usage/override wiring.
+        assert "renderProviderPill" in js
+        assert "renderProviderCard" in js
+        assert "renderUsageCard" in js
+        assert "renderHardStopBanner" in js
+        assert "setHardStopOverride" in js
+        assert "hard_stop_override" in js
+        assert 'method: "PATCH"' in js
+        assert '"/api/usage"' in js or "'/api/usage'" in js
+        assert '"/api/provider"' in js or "'/api/provider'" in js
+        assert '"/api/provider/api-key"' in js or "'/api/provider/api-key'" in js
+        assert 'method: "PUT"' in js
+        assert 'method: "DELETE"' in js
+        assert "xai ready" in js or "${provider} ready" in js
+        assert "xai limit" in js or "${provider} limit" in js
+        assert "xai ovrd" in js or "${provider} ovrd" in js
+        assert "xai auth" in js or "${provider} auth" in js
+        # API key never re-displayed after save.
+        assert "providerApiKeyInput.value = \"\"" in js or "providerApiKeyInput.value = ''" in js
+        assert "usageOverrideInFlight" in js
+        assert "providerPatchInFlight" in js
+        # Chat polish + multimodal-ready composer
+        assert "renderMarkdown" in js
+        assert "pendingAttachments" in js
+        assert "chatStickToBottom" in js
+        assert "updateChatActivity" in js
+        assert "renderActivityTrail" in js
+        assert "recent_activity" in js
 
         req_css = urllib.request.Request(h.base + "/style.css", method="GET")
         with urllib.request.urlopen(req_css, timeout=5) as resp:
             assert resp.status == 200
             css = resp.read().decode("utf-8")
         assert "list-panel-auto" in css
-        assert "position: sticky" in css
-        assert "height: 100vh" in css
+        # Viewport-locked shell: app/rail/main do not page-scroll together.
+        assert "overflow: hidden" in css
+        assert "overscroll-behavior: contain" in css
+        assert "hard-stop-banner" in css
+        assert "usage-bar-fill" in css
+        assert "status-cards" in css
+        # Chat polish surface
+        assert "msg-body" in css
+        assert "jump-latest" in css
+        assert "attach-tray" in css
+        assert "activity-trail" in css
+        assert "activity-chip" in css
     finally:
         h.close()

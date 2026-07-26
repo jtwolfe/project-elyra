@@ -34,6 +34,7 @@
         </div>
         <div class="rail-foot">
           <div id="pill-llama" class="pill pill-off">llama</div>
+          <div id="pill-sandbox" class="pill pill-off">sandbox</div>
           <div id="pill-worker" class="pill pill-off">worker</div>
           <div id="pill-phase" class="pill pill-off">phase</div>
           <div id="pill-autopilot" class="pill pill-off" hidden>autopilot</div>
@@ -44,26 +45,69 @@
         <div id="notice" class="notice" hidden role="status"></div>
 
         <section id="panel-chat" class="panel active">
-          <header class="panel-head">
-            <h1>Chat</h1>
-            <p class="muted">
-              Messages route via presence (<code>resolve_user_input</code>). Wait
-              choices post to <code>/api/wait/reply</code>.
-            </p>
+          <header class="panel-head panel-head-row">
+            <div>
+              <h1>Chat</h1>
+              <p class="muted">
+                Markdown glass · attachments listed in your message until vision is wired.
+              </p>
+            </div>
+            <div id="chat-activity" class="chat-activity" hidden>
+              <div class="chat-activity-main">
+                <span class="pulse-dot" aria-hidden="true"></span>
+                <div class="chat-activity-text">
+                  <span id="chat-activity-label">working…</span>
+                  <span id="chat-activity-detail" class="chat-activity-detail"></span>
+                </div>
+              </div>
+              <div
+                id="chat-activity-trail"
+                class="activity-trail"
+                aria-label="Recent moment events"
+              ></div>
+            </div>
           </header>
           <div id="wait-bar" class="wait-bar" hidden>
             <div class="wait-prompt" id="wait-prompt"></div>
             <div class="wait-choices" id="wait-choices"></div>
           </div>
-          <div id="messages" class="messages" aria-live="polite"></div>
-          <form id="chat-form" class="composer">
-            <textarea
-              id="chat-input"
-              rows="2"
-              placeholder="Message Elyra…"
-              autocomplete="off"
-            ></textarea>
-            <button type="submit" id="send-btn">Send</button>
+          <div class="chat-stage">
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <button type="button" id="jump-latest" class="jump-latest" hidden>
+              ↓ Latest
+            </button>
+          </div>
+          <div id="attach-tray" class="attach-tray" hidden></div>
+          <form id="chat-form" class="composer composer-rich">
+            <div id="drop-overlay" class="drop-overlay" hidden>Drop files to attach</div>
+            <div class="composer-main">
+              <button
+                type="button"
+                id="attach-btn"
+                class="icon-btn"
+                title="Attach images or files"
+                aria-label="Attach files"
+              >
+                +
+              </button>
+              <input
+                type="file"
+                id="attach-input"
+                multiple
+                hidden
+                accept="image/*,.txt,.md,.json,.csv,.py,.pdf,.log"
+              />
+              <textarea
+                id="chat-input"
+                rows="1"
+                placeholder="Message Elyra…"
+                autocomplete="off"
+              ></textarea>
+              <button type="submit" id="send-btn">Send</button>
+            </div>
+            <p class="composer-hint muted">
+              Enter send · Shift+Enter newline · paste or drop images/files
+            </p>
           </form>
         </section>
 
@@ -87,17 +131,25 @@
         </section>
 
         <section id="panel-tools" class="panel">
-          <header class="panel-head">
-            <h1>Tools &amp; skills</h1>
-            <p class="muted">Callable catalog from <code>/api/tools</code> and <code>/api/skills</code>.</p>
+          <header class="panel-head panel-head-row">
+            <div>
+              <h1>Tools &amp; skills</h1>
+              <p class="muted">
+                Live catalog (disk rescan each refresh). Local packages are host-only, not in git.
+              </p>
+            </div>
+            <button type="button" id="catalog-refresh-btn" class="btn-secondary btn-sm">
+              Refresh
+            </button>
           </header>
+          <div class="catalog-meta muted" id="catalog-meta">—</div>
           <div class="split-lists">
             <div>
-              <h2 class="subhead">Tools</h2>
+              <h2 class="subhead">Tools <span id="tools-count" class="count-pill">0</span></h2>
               <div id="tools-list" class="list-panel">loading…</div>
             </div>
             <div>
-              <h2 class="subhead">Skills</h2>
+              <h2 class="subhead">Skills <span id="skills-count" class="count-pill">0</span></h2>
               <div id="skills-list" class="list-panel">loading…</div>
             </div>
           </div>
@@ -125,13 +177,108 @@
             <h1>Status</h1>
             <p class="muted">Runtime snapshot from <code>/api/status</code>.</p>
           </header>
-          <div id="continuous-summary" class="continuous-summary" hidden>
-            <div class="card continuous-card">
+          <div id="hard-stop-banner" class="hard-stop-banner" hidden role="alert"></div>
+          <div class="status-cards">
+            <div class="card status-card" id="provider-card">
               <div class="card-head">
-                <strong>Continuous work</strong>
-                <span id="continuous-badge" class="badge">off</span>
+                <strong>Provider / model</strong>
+                <span id="provider-badge" class="badge">—</span>
               </div>
-              <p id="continuous-detail" class="muted">—</p>
+              <div class="status-fields">
+                <div class="status-row">
+                  <span class="status-label">Provider</span>
+                  <span id="provider-name" class="status-value">—</span>
+                </div>
+                <div class="status-row">
+                  <span class="status-label">Model</span>
+                  <select id="provider-model-select" class="status-select" aria-label="Model">
+                    <option value="">—</option>
+                  </select>
+                </div>
+                <div class="status-row">
+                  <span class="status-label">Credential</span>
+                  <select id="provider-credential-select" class="status-select" aria-label="Credential source">
+                    <option value="grok_build">Grok Build (auth.json)</option>
+                    <option value="api_key">API key</option>
+                  </select>
+                </div>
+                <div class="status-row">
+                  <span class="status-label">Credential ok</span>
+                  <span id="provider-credential-ok" class="status-value">—</span>
+                </div>
+                <div class="status-row status-row-stack">
+                  <span class="status-label">API key</span>
+                  <div class="api-key-stack">
+                    <div class="api-key-row">
+                      <input
+                        id="provider-api-key-input"
+                        type="password"
+                        class="status-input"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="Paste key (never re-displayed)"
+                        aria-label="API key"
+                      />
+                      <button type="button" id="provider-api-key-save" class="btn-secondary btn-sm">Save</button>
+                      <button type="button" id="provider-api-key-clear" class="btn-secondary btn-sm">Clear</button>
+                    </div>
+                    <span id="provider-api-key-meta" class="muted status-helper">not configured</span>
+                  </div>
+                </div>
+              </div>
+              <p class="muted status-helper">
+                Model applies to next call. API key save does not switch source until you select it.
+              </p>
+            </div>
+            <div class="card status-card" id="usage-card">
+              <div class="card-head">
+                <strong>Usage budget</strong>
+                <span id="usage-badge" class="badge">—</span>
+              </div>
+              <div class="usage-meters" id="usage-meters">
+                <div class="usage-meter" data-window="week">
+                  <div class="usage-meter-head">
+                    <span>Week remaining</span>
+                    <span id="usage-week-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar" aria-hidden="true"><div id="usage-week-bar" class="usage-bar-fill"></div></div>
+                </div>
+                <div class="usage-meter" data-window="day">
+                  <div class="usage-meter-head">
+                    <span>Day remaining</span>
+                    <span id="usage-day-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar" aria-hidden="true"><div id="usage-day-bar" class="usage-bar-fill"></div></div>
+                </div>
+                <div class="usage-meter" data-window="hour">
+                  <div class="usage-meter-head">
+                    <span>Hour remaining</span>
+                    <span id="usage-hour-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar" aria-hidden="true"><div id="usage-hour-bar" class="usage-bar-fill"></div></div>
+                </div>
+              </div>
+              <p id="usage-detail" class="muted status-helper">—</p>
+              <div class="usage-override continuous-control">
+                <label class="toggle-label" for="usage-override-toggle">
+                  <input type="checkbox" id="usage-override-toggle" class="continuous-toggle" />
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">Hard-stop override</span>
+                </label>
+                <div id="usage-override-meta" class="continuous-meta muted">default off</div>
+              </div>
+              <p class="muted status-helper">
+                When ON, model calls continue past budget limits. Usage is still recorded. Default OFF.
+              </p>
+            </div>
+            <div id="continuous-summary" class="continuous-summary">
+              <div class="card continuous-card status-card">
+                <div class="card-head">
+                  <strong>Continuous work</strong>
+                  <span id="continuous-badge" class="badge">off</span>
+                </div>
+                <p id="continuous-detail" class="muted">—</p>
+              </div>
             </div>
           </div>
           <div class="reset-actions">
@@ -140,7 +287,8 @@
             </button>
             <p class="muted reset-hint">
               Clears moments, chat, goals, wakes/timers, sandbox, and tool drafts.
-              Preserves identity, users, continuous toggle, skills/local, and tools/local.
+              Preserves identity, users, continuous toggle, provider/usage prefs,
+              secrets (API key), skills/local, and tools/local.
             </p>
           </div>
           <pre id="status-json" class="code-block">loading…</pre>
@@ -168,6 +316,9 @@
           <li class="will-clear">continuous streak counters (toggle preference kept)</li>
           <li class="will-keep">identity/self, users</li>
           <li class="will-keep">continuous.json enabled flag</li>
+          <li class="will-keep">data/secrets/ (API key)</li>
+          <li class="will-keep">data/runtime/provider.json (model / credential source prefs)</li>
+          <li class="will-keep">data/runtime/usage.json (usage meter + hard-stop override flag)</li>
           <li class="will-keep">skills/local (always)</li>
           <li class="will-keep">tools/local promoted tools</li>
           <li class="will-keep">settings / model paths</li>

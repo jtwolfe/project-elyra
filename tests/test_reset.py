@@ -210,7 +210,19 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     moments.close_moment(mid, "no_tools", hop_count=1)
 
     sandbox = paths.data_dir / "sandbox" / "work.txt"
+    sandbox.parent.mkdir(parents=True, exist_ok=True)
     sandbox.write_text("scratch", encoding="utf-8")
+    # New host tree RW content (H2c clear_sandbox wipes tmp/tools, keeps seed).
+    from elyra.sandbox.workspace_seed import ensure_primary_sandbox_tree, host_primary_root
+
+    primary = ensure_primary_sandbox_tree(paths)
+    (primary / "tmp" / "scratch.txt").write_text("rw", encoding="utf-8")
+    (primary / "tools" / "staged").mkdir(parents=True, exist_ok=True)
+    (primary / "tools" / "staged" / "x.txt").write_text("x", encoding="utf-8")
+    seed_marker = primary / "lib"
+    seed_marker.mkdir(exist_ok=True)
+    (seed_marker / "keep.txt").write_text("seed", encoding="utf-8")
+
     drafts = paths.tools_dir / "drafts" / "mytool"
     drafts.mkdir(parents=True)
     (drafts / "TOOL.md").write_text("# draft", encoding="utf-8")
@@ -245,6 +257,12 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     assert GoalsStore(paths).list_goals() == []
     assert MomentStore(paths).list_moments() == []
     assert not sandbox.exists()
+    # New tree: RW cleared; RO seed left
+    assert not (host_primary_root(paths) / "tmp" / "scratch.txt").exists()
+    assert not (host_primary_root(paths) / "tools" / "staged").exists()
+    assert (host_primary_root(paths) / "lib" / "keep.txt").read_text(
+        encoding="utf-8"
+    ) == "seed"
     assert not (paths.tools_dir / "drafts" / "mytool").exists()
     assert (paths.tools_dir / "drafts").is_dir()
 

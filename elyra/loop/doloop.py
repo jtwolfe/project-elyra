@@ -28,6 +28,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from elyra.llm.client import ChatClient, ChatCompletionResult, ToolCall as LlmToolCall
 from elyra.llm.reasoning_hygiene import is_channel_flood, sanitize_completion
+from elyra.llm.usage import UsageHardStopError
 from elyra.loop.context import assemble_outer_meal, estimate_tokens
 from elyra.loop.continue_policy import (
     continue_host_message,
@@ -67,6 +68,7 @@ from elyra.loop.tool_thrash_policy import (
 )
 from elyra.loop.stop import (
     STOP_ERROR,
+    STOP_POLICY,
     resolve_host_precheck_stop,
     stop_for_no_tools,
     stop_from_tool_result,
@@ -677,6 +679,39 @@ def run_do_loop(
             loop=loop,
             rebuild_outer=rebuild_outer,
             drain_interjections=drain_interjections,
+        )
+    except UsageHardStopError as exc:
+        # Dedicated catch BEFORE broad Exception so hard-stop is policy, not error.
+        # Continuous will not auto-chain (policy ∉ MOMENT_CONTINUE_STOP_ALLOWLIST).
+        err_detail = f"usage_hard_stop:{exc.level}:{exc.reason}"
+        _LOG.warning("do-loop usage hard stop: %s", err_detail)
+        _append_beat(
+            moments,
+            moment_id,
+            {
+                "type": "stop",
+                "stop_reason": STOP_POLICY,
+                "error": err_detail,
+            },
+        )
+        return DoLoopResult(
+            stop_reason=STOP_POLICY,
+            hop_count=state.hop,
+            arm_wait=state.arm_wait,
+            spoke=state.spoke,
+            moment_id=moment_id,
+            reouter_count=state.reouter_count,
+            continue_injects=state.continue_injects,
+            work_continue_injects=state.work_continue_injects,
+            skill_commit_injects=state.skill_commit_injects,
+            thrash_host_injects=state.thrash_host_sent,
+            thrash_skips=state.thrash_skip_count,
+            tools_ran=state.tools_ran,
+            ledger_mutated=state.ledger_mutated,
+            model_beats=state.model_beats,
+            channel_flood_beats=state.channel_flood_beats,
+            last_stop_hop_was_flood=state.last_stop_hop_was_flood,
+            error=err_detail,
         )
     except Exception as exc:  # noqa: BLE001 — surface as stop error
         _LOG.exception("do-loop uncaught error")

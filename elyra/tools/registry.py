@@ -2,7 +2,7 @@
 
 Scope: scan roots, local-over-bundled priority, execute → ToolResult.
 In scope: BUNDLED_TOOLS_ROOT assert, drafts never scanned, openai_tools().
-Out of scope: verify/promote, create-tool, full FS tool set (PR7).
+Out of scope: promote gates.
 """
 
 from __future__ import annotations
@@ -157,7 +157,34 @@ class ToolRegistry:
         if pkg is None:
             return ToolResult(ok=False, payload={}, error_reason="unknown_tool")
 
-        result = dispatch(pkg.runner, args, ctx, handler=pkg.handler)
+        # Local packages can be deleted out-of-band (operator rm). Rescan once
+        # so the ghost entry drops instead of failing mid-stage with OSError.
+        if pkg.source == SOURCE_LOCAL and not Path(pkg.package_dir).is_dir():
+            try:
+                self.reload()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("registry.reload after missing package: %s", exc)
+            pkg = self._by_key.get(key)
+            if pkg is None:
+                return ToolResult(
+                    ok=False,
+                    payload={"name": name},
+                    error_reason="unknown_tool",
+                )
+            if pkg.source == SOURCE_LOCAL and not Path(pkg.package_dir).is_dir():
+                return ToolResult(
+                    ok=False,
+                    payload={"name": name, "package_dir": str(pkg.package_dir)},
+                    error_reason="package_missing",
+                )
+
+        result = dispatch(
+            pkg.runner,
+            args,
+            ctx,
+            handler=pkg.handler,
+            package_dir=pkg.package_dir,
+        )
         return self._enforce_control_policy(pkg, result)
 
     def _enforce_control_policy(

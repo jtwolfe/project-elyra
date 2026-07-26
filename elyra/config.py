@@ -1,8 +1,9 @@
 """Central path resolution.
 
 Scope: ELYRA_HOME and conventional directories; seed copy on first run.
-In scope: home override, model/data/skills/tools/prompts paths, ensure_data_dirs.
-Out of scope: feature flags, secrets, settings.toml, runtime.
+In scope: home override, model/data/skills/tools/prompts paths, ensure_data_dirs
+(including ``data/secrets`` for API key store and ``data/runtime`` prefs).
+Out of scope: feature flags, settings.toml, secret *values* (see ``elyra.llm.auth``).
 """
 
 from __future__ import annotations
@@ -58,9 +59,17 @@ class ElyraPaths:
             "users",
             "goals",
             "sandbox",
-            "runtime",  # continuous.json + other process-owned runtime state
+            "runtime",  # continuous.json + provider.json + usage.json
         ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
+
+        # API key secret store (mode 0700). Values written by elyra.llm.auth.
+        secrets = self.data_dir / "secrets"
+        secrets.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(secrets, 0o700)
+        except OSError:
+            pass
 
         for path in (
             self.skills_dir / "local",

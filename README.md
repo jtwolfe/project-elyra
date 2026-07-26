@@ -32,10 +32,10 @@ elyra start (supervisor)
 | **Do-loop** | Sliding context meal + model tool calls + results until stop |
 | **Tools / skills** | Callable actions + markdown playbooks (catalog in orient; body on demand) |
 | **Goals / tasks** | Durable *what* (separate from the wake queue) |
-| **Sandbox** | One persistent workspace for FS tools and `run` |
+| **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
 
-Inference: **Gemma 4 Q4** via **llama.cpp Vulkan**. Server `-c` is a **KV ceiling** (default 86000); product meals slide at **~24k** input tokens. See [docs/inference.md](docs/inference.md).
+Inference: **Gemma 4 Q4** via **llama.cpp Vulkan**, or **xAI Grok** on the `grok-improvement` path. Server `-c` is a **KV ceiling** (default 86000); product meals slide at **~24k** input tokens. See [docs/inference.md](docs/inference.md).
 
 ## Quick start
 
@@ -44,12 +44,19 @@ Inference: **Gemma 4 Q4** via **llama.cpp Vulkan**. Server `-c` is a **KV ceilin
 ./scripts/setup_venv.sh
 source .venv/bin/activate
 
-# full stack (needs model/ → elyra2 model tree)
+# optional: warm microsandbox isolation (product default ON when ELYRA_SANDBOX unset)
+pip install -e '.[sandbox]'
+./scripts/setup-microsandbox.sh --doctor-only   # KVM / import checks
+# hermetic host-stub (tests/CI): export ELYRA_SANDBOX=0
+
+# full stack (needs model/ → elyra2 model tree, or xai credentials)
 elyra start
 
 # UI + API only, stub LLM (no GPU)
 elyra start --no-llama
 ```
+
+Without `elyra[sandbox]`, chat still starts; guest `run` / `sandbox_*` / isolation-on `verify_tool` fail closed (`sandbox_unavailable:*`). Install the extra so create-tool does not look broken.
 
 Open **http://127.0.0.1:8787/**
 

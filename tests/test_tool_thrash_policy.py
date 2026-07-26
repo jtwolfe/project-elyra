@@ -15,9 +15,11 @@ from elyra.loop.tool_thrash_policy import (
     SKIP_IDENTICAL_AFTER,
     SKIP_IDENTICAL_ENABLED,
     THRASH_HOST,
+    THRASH_HOST_ISOLATION,
     THRASH_LESSON_REQUEST,
     canonical_args,
     compact_lesson,
+    is_isolation_error,
     lesson_pin_host_message,
     lesson_request_host_message,
     should_inject_thrash_host,
@@ -218,11 +220,54 @@ def test_thrash_host_message_normative_copy() -> None:
     )
 
 
+def test_is_isolation_error() -> None:
+    assert is_isolation_error("sandbox_unavailable") is True
+    assert is_isolation_error("sandbox_unavailable:client_unusable") is True
+    assert is_isolation_error("sandbox_unavailable:lifecycle_unregistered") is True
+    assert is_isolation_error("guest_pytest_unavailable") is True
+    assert is_isolation_error("GUEST_PYTEST_UNAVAILABLE") is True
+    assert is_isolation_error("not_found") is False
+    assert is_isolation_error("ok") is False
+    assert is_isolation_error(None) is False
+    assert is_isolation_error("") is False
+    assert is_isolation_error("sandbox_unavailable_extra") is False
+
+
+def test_thrash_host_message_isolation_wording() -> None:
+    """H5: isolation thrash says change approach / block — not change tool/args."""
+    for detail in (
+        "sandbox_unavailable:client_unusable",
+        "sandbox_unavailable",
+        "guest_pytest_unavailable",
+    ):
+        msg = thrash_host_message(tool_name="run", streak=3, detail=detail)
+        assert msg == THRASH_HOST_ISOLATION.format(
+            tool_name="run", streak=3, detail=detail
+        )
+        assert "isolation error" in msg
+        assert "Sandbox unavailable" in msg
+        assert "update_task blocked" in msg
+        assert "Change tool or arguments" not in msg
+        assert "call tools to continue" not in msg
+        assert detail in msg
+
+
 def test_thrash_detail() -> None:
     assert thrash_detail(last_ok=True, last_error=None) == "ok"
     assert thrash_detail(last_ok=False, last_error="not_found") == "not_found"
     assert thrash_detail(last_ok=False, last_error=None) == "error"
     assert thrash_detail(last_ok=None, last_error=None) == "unknown"
+    # Isolation machine keys pass through for thrash HOST branch.
+    assert (
+        thrash_detail(
+            last_ok=False, last_error="sandbox_unavailable:client_unusable"
+        )
+        == "sandbox_unavailable:client_unusable"
+    )
+    assert (
+        thrash_detail(last_ok=False, last_error="guest_pytest_unavailable")
+        == "guest_pytest_unavailable"
+    )
 
 
 def test_work_continue_thrash_recovery_gate() -> None:
@@ -348,6 +393,28 @@ def test_synthesize_lesson_labeled() -> None:
     pin = lesson_pin_host_message(body)
     assert pin.startswith("HOST:")
     assert "HOST-synthesized" in pin
+
+
+def test_synthesize_lesson_isolation() -> None:
+    """H5: isolation lessons say block/speak/rest, not change-args."""
+    body = synthesize_lesson(
+        tried=["run|{}", "run|{}"],
+        last_error="sandbox_unavailable:client_unusable",
+        tool_name="run",
+    )
+    assert "HOST-synthesized" in body
+    assert "isolation blocked" in body
+    assert "sandbox_unavailable:client_unusable" in body
+    assert "block task" in body
+    assert "change args or stop" not in body
+
+    body2 = synthesize_lesson(
+        tried=["verify_tool|{}"],
+        last_error="guest_pytest_unavailable",
+        tool_name="verify_tool",
+    )
+    assert "isolation blocked" in body2
+    assert "guest_pytest_unavailable" in body2
 
 
 def test_lesson_constants() -> None:

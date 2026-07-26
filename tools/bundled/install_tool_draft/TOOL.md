@@ -11,5 +11,9 @@ Create or update a draft tool package. Paths in `files` must be relative
 `.verify.*`, `.promote.*`) are rejected. After writes, `.verify.json` is
 always deleted so a previous green verify cannot be reused.
 
+**`files` shape:** a JSON **object** map `relative_path → string content`.
+Not a list of objects, not a stringified JSON blob. On shape errors the
+result includes `received_type`, `args_keys`, and a `hint`.
+
 Use via the `load_skill("create-tool")` checklist order:
 `install_tool_draft` → `verify_tool` → `promote_tool`.

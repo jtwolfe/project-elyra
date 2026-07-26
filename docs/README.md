@@ -45,10 +45,15 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 
 ```bash
 ./scripts/setup_venv.sh && source .venv/bin/activate
-elyra start              # llama + API + UI
+pip install -e '.[sandbox]'   # optional but needed for guest isolation (default ON)
+./scripts/setup-microsandbox.sh --doctor-only
+elyra start              # API + UI (+ llama or xai per provider settings)
 elyra start --no-llama   # stub LLM + UI
+# hermetic host-stub: ELYRA_SANDBOX=0
 # http://127.0.0.1:8787/
 ```
+
+Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).
 
 ## Tests
 

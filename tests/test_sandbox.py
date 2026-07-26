@@ -86,11 +86,15 @@ def test_symlink_inside_allowed(tmp_path: Path) -> None:
     assert got.read_text(encoding="utf-8") == "inside\n"
 
 
-def test_sandbox_resolve_uses_data_sandbox(sandbox: Sandbox) -> None:
-    assert sandbox.root.name == "sandbox"
+def test_sandbox_resolve_uses_sandbox0_host_tree(sandbox: Sandbox) -> None:
+    """H2c cutover: product Sandbox roots at sandboxes/sandbox0."""
+    assert sandbox.root.name == "sandbox0"
+    assert sandbox.root.parent.name == "sandboxes"
     p = sandbox.write_text("notes/hi.txt", "hello\n")
     assert p.is_file()
     assert sandbox.read_text("notes/hi.txt") == "hello\n"
+    # Guest-style /workspace alias
+    assert sandbox.read_text("/workspace/notes/hi.txt") == "hello\n"
 
 
 # --- FS happy path ---

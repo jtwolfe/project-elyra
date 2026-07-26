@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Callable, Sequence
@@ -123,6 +124,203 @@ def _user_id_from_wake(wake: WakeItem) -> str | None:
     return str(uid)
 
 
+def compact_activity_event(beat: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a moment beat → small glass trail event (or None if uninteresting)."""
+    if not isinstance(beat, dict):
+        return None
+    btype = beat.get("type")
+    ts = beat.get("ts")
+
+    if btype == "model":
+        raw_calls = beat.get("tool_calls") or []
+        names: list[str] = []
+        if isinstance(raw_calls, list):
+            for call in raw_calls:
+                if isinstance(call, dict):
+                    n = call.get("name")
+                    if isinstance(n, str) and n.strip():
+                        names.append(n.strip())
+        hop = beat.get("hop")
+        if names:
+            detail = ", ".join(names[:3])
+            if len(names) > 3:
+                detail += f" +{len(names) - 3}"
+            return {
+                "id": f"model-{hop}-{detail}",
+                "kind": "model_tools",
+                "label": detail,
+                "short": "model",
+                "tools": names,
+                "hop": hop,
+                "ts": ts,
+            }
+        content = beat.get("content") or ""
+        has_speech = isinstance(content, str) and bool(content.strip())
+        return {
+            "id": f"model-{hop}-{'speak' if has_speech else 'think'}",
+            "kind": "model",
+            "label": "speak" if has_speech else "think",
+            "short": "model",
+            "hop": hop,
+            "ts": ts,
+        }
+
+    if btype == "tool":
+        name = beat.get("name") or beat.get("tool") or beat.get("tool_name") or "tool"
+        if not isinstance(name, str):
+            name = "tool"
+        ok = beat.get("ok")
+        err = beat.get("error_reason")
+        label = name if ok is not False else f"{name}✗"
+        return {
+            "id": f"tool-{name}-{ok}-{err or ''}",
+            "kind": "tool_err" if ok is False else "tool",
+            "label": label,
+            "short": name,
+            "name": name,
+            "ok": ok,
+            "error_reason": err if isinstance(err, str) else None,
+            "ts": ts,
+        }
+
+    if btype == "obs":
+        kind = beat.get("kind") or "obs"
+        kind_s = str(kind)
+        name = beat.get("name")
+        label = f"{kind_s}:{name}" if isinstance(name, str) and name else kind_s
+        return {
+            "id": f"obs-{label}",
+            "kind": "obs",
+            "label": label[:28],
+            "short": kind_s[:14],
+            "ts": ts,
+        }
+
+    if btype == "stop":
+        reason = beat.get("stop_reason") or "stop"
+        return {
+            "id": f"stop-{reason}",
+            "kind": "stop",
+            "label": str(reason),
+            "short": "stop",
+            "ts": ts,
+        }
+
+    return None
+
+
+def _activity_headline(
+    *,
+    phase: str,
+    recent: list[dict[str, Any]],
+    pending_wait: dict[str, Any] | None,
+    hop_count: int,
+    last_tool: str | None,
+) -> dict[str, Any]:
+    """Human-facing headline for the chat activity pill."""
+    hop_bit = f"hop {hop_count}" if hop_count else ""
+
+    if phase == PHASE_WAITING:
+        prompt = ""
+        if isinstance(pending_wait, dict):
+            raw = pending_wait.get("prompt") or ""
+            if isinstance(raw, str) and raw.strip():
+                prompt = raw.strip()
+                if len(prompt) > 48:
+                    prompt = prompt[:45] + "…"
+        return {
+            "label": "waiting for you",
+            "detail": prompt,
+            "state": "waiting",
+            "hop": hop_count,
+            "last_tool": last_tool,
+        }
+
+    if phase != PHASE_IN_MOMENT:
+        return {
+            "label": "working…",
+            "detail": hop_bit,
+            "state": "busy",
+            "hop": hop_count,
+            "last_tool": last_tool,
+        }
+
+    if not recent:
+        return {
+            "label": "starting…",
+            "detail": hop_bit,
+            "state": "in_moment",
+            "hop": hop_count,
+            "last_tool": last_tool,
+        }
+
+    last = recent[-1]
+    kind = last.get("kind")
+    if kind == "model_tools":
+        tools = last.get("tools") or []
+        first = tools[0] if tools else last.get("label") or "tools"
+        more = f" +{len(tools) - 1}" if len(tools) > 1 else ""
+        return {
+            "label": f"calling {first}{more}",
+            "detail": hop_bit,
+            "state": "tool_call",
+            "hop": hop_count,
+            "last_tool": first if isinstance(first, str) else last_tool,
+        }
+    if kind == "tool":
+        name = last.get("name") or last.get("label") or "tool"
+        return {
+            "label": f"ran {name}",
+            "detail": " · ".join(x for x in (hop_bit, "thinking…") if x),
+            "state": "after_tool",
+            "hop": hop_count,
+            "last_tool": name if isinstance(name, str) else last_tool,
+        }
+    if kind == "tool_err":
+        name = last.get("name") or last.get("label") or "tool"
+        err = last.get("error_reason") or "error"
+        return {
+            "label": f"{name} failed",
+            "detail": str(err)[:40],
+            "state": "tool_error",
+            "hop": hop_count,
+            "last_tool": name if isinstance(name, str) else last_tool,
+        }
+    if kind == "model":
+        lab = last.get("label") or "model"
+        if lab == "speak":
+            return {
+                "label": "speaking…",
+                "detail": hop_bit,
+                "state": "speak",
+                "hop": hop_count,
+                "last_tool": last_tool,
+            }
+        return {
+            "label": "thinking…",
+            "detail": hop_bit,
+            "state": "model",
+            "hop": hop_count,
+            "last_tool": last_tool,
+        }
+    if kind == "stop":
+        return {
+            "label": f"stop: {last.get('label') or 'done'}",
+            "detail": hop_bit,
+            "state": "stop",
+            "hop": hop_count,
+            "last_tool": last_tool,
+        }
+
+    return {
+        "label": str(last.get("label") or "in moment…"),
+        "detail": hop_bit,
+        "state": "in_moment",
+        "hop": hop_count,
+        "last_tool": last_tool,
+    }
+
+
 class PresenceWorker:
     """Single worker thread: wake queue → open moment → do-loop → close.
 
@@ -148,8 +346,10 @@ class PresenceWorker:
         goals: GoalsStore | None = None,
         skills: SkillCatalog | None = None,
         run_do_loop_fn: RunDoLoopFn | None = None,
+        model_available: Callable[[], bool] | None = None,
     ) -> None:
         self.paths = paths
+        # Rebindable: ProviderRuntime.rebuild_chat_stack sets worker.client.
         self.client = client
         self._stop = stop_event
         self._poll = poll_seconds
@@ -165,6 +365,13 @@ class PresenceWorker:
         self._goals = goals
         self._skills = skills
         self._run_do_loop: RunDoLoopFn = run_do_loop_fn or run_do_loop
+        # Pre-claim gate: safe to open a model-using moment (creds + budget).
+        # Default True preserves prior behaviour for unit tests without a meter.
+        self._model_available: Callable[[], bool] = (
+            model_available if model_available is not None else (lambda: True)
+        )
+        # Rate-limit "skip claim" log to once/minute (usage vs credential).
+        self._model_unavailable_log_at: float = 0.0
 
         self._identity = IdentityStore(paths)
         self._users = UsersStore(paths)
@@ -547,14 +754,33 @@ class PresenceWorker:
         """Snapshot for ``/api/status`` (phase, hops, queue depths, wait)."""
         with self._lock:
             pending_continues = len(self._queue.pending_of_kind("moment_continue"))
+            pending_wait = self._pending_wait_unlocked()
+            # Live tape summary while a moment is open (beats append mid-loop).
+            recent: list[dict[str, Any]] = []
+            live_hop = self._hop_count
+            live_tool = self._last_tool
+            mid = self._active_moment_id
+            if mid and self._phase in (PHASE_IN_MOMENT, PHASE_WAITING):
+                recent, live_hop, live_tool = self._live_activity_from_tape(
+                    mid, hop_fallback=live_hop, tool_fallback=live_tool
+                )
+            activity = _activity_headline(
+                phase=self._phase,
+                recent=recent,
+                pending_wait=pending_wait,
+                hop_count=live_hop,
+                last_tool=live_tool,
+            )
             return {
                 "phase": self._phase,
                 "active_moment_id": self._active_moment_id,
-                "hop_count": self._hop_count,
-                "last_tool": self._last_tool,
+                "hop_count": live_hop,
+                "last_tool": live_tool,
+                "activity": activity,
+                "recent_activity": recent,
                 "continue_injects": self._continue_injects,
                 "queue_depth_by_band": self._queue_depth_by_band_unlocked(),
-                "pending_wait": self._pending_wait_unlocked(),
+                "pending_wait": pending_wait,
                 "worker_error": self._worker_error,
                 "worker_busy": self._busy,
                 "worker_pending": len(self._queue.pending()),
@@ -639,11 +865,39 @@ class PresenceWorker:
 
         If claim succeeds but ``open_moment`` fails, the wake is cancelled so it
         is not left stuck in ``claimed``. Skips claim while full reset runs.
+
+        Pre-claim gate: when ``model_available()`` is false (usage hard-stop with
+        override OFF, or ``!credential_ok`` / FailingChatClient), do **not**
+        claim — wakes stay pending (never cancelled). Timers still fire via
+        ``_fire_due_unlocked`` so due work lands on the queue.
         """
         with self._lock:
             if self._continuous.resetting:
                 return None
             self._fire_due_unlocked()
+            # Pre-claim model gate (usage hard-stop / missing credentials).
+            try:
+                available = bool(self._model_available())
+            except Exception:  # noqa: BLE001 — never block worker on gate errors
+                available = False
+                now = time.monotonic()
+                if now - self._model_unavailable_log_at >= 60.0:
+                    self._model_unavailable_log_at = now
+                    _LOG.exception(
+                        "model_available hook failed; treating as unavailable"
+                    )
+            if not available:
+                pending = self._queue.pending()
+                if pending:
+                    now = time.monotonic()
+                    if now - self._model_unavailable_log_at >= 60.0:
+                        self._model_unavailable_log_at = now
+                        _LOG.warning(
+                            "model_available=false; skipping claim "
+                            "(%d pending wake(s) left untouched)",
+                            len(pending),
+                        )
+                return None
             moment_id = str(uuid.uuid4())
             wake = self._queue.claim(moment_id)
             if wake is None:
@@ -1042,6 +1296,38 @@ class PresenceWorker:
                 last = name
         return last
 
+    def _live_activity_from_tape(
+        self,
+        moment_id: str,
+        *,
+        hop_fallback: int = 0,
+        tool_fallback: str | None = None,
+    ) -> tuple[list[dict[str, Any]], int, str | None]:
+        """Last 3 glass events + live hop/tool from the open moment tape."""
+        try:
+            beats = self._moments.list_beats(moment_id)
+        except (KeyError, ValueError, OSError):
+            return [], hop_fallback, tool_fallback
+        events: list[dict[str, Any]] = []
+        hop = hop_fallback
+        last_tool = tool_fallback
+        for beat in beats:
+            if not isinstance(beat, dict):
+                continue
+            if beat.get("type") == "model":
+                try:
+                    hop = max(hop, int(beat.get("hop") or 0))
+                except (TypeError, ValueError):
+                    pass
+            if beat.get("type") == "tool":
+                name = beat.get("name") or beat.get("tool") or beat.get("tool_name")
+                if isinstance(name, str) and name:
+                    last_tool = name
+            event = compact_activity_event(beat)
+            if event is not None:
+                events.append(event)
+        return events[-3:], hop, last_tool
+
     def _flush_interjects_as_wakes_unlocked(self) -> None:
         for item in self._interject.drain():
             self._queue.enqueue(
@@ -1076,8 +1362,11 @@ class PresenceWorker:
         return self._registry
 
     def _ensure_sandbox(self) -> Sandbox:
+        """Product FS jail rooted at sandboxes/sandbox0 (H2c cutover)."""
         if self._sandbox is None:
             self._sandbox = Sandbox(self.paths)
+            # Ensure seed + RW dirs exist before first FS tool call.
+            self._sandbox.ensure_root()
         return self._sandbox
 
     def _ensure_speak(self) -> SpeakTransport:

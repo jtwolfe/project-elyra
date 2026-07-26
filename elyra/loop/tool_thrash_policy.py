@@ -41,6 +41,21 @@ THRASH_HOST = (
     "or honest no-tool stop — rest is not a tool name."
 )
 
+# Isolation / guest-env failures: retrying same guest tool is useless.
+# Distinct from generic "change tool or arguments" (H5 / KD26 no orient inject).
+THRASH_HOST_ISOLATION = (
+    "HOST: tool thrash — repeated {tool_name} ×{streak} with isolation error "
+    "({detail}). Sandbox unavailable / guest not ready — do not retry the same "
+    "guest call. Change approach: update_task blocked with reason, speak if the "
+    "operator must fix MSB/pyenv, or load_skill(\"rest\"). Rest is not a tool name."
+)
+
+# Machine error_reason families treated as isolation lessons (prefix match).
+_ISOLATION_ERROR_PREFIXES = (
+    "sandbox_unavailable",
+    "guest_pytest_unavailable",
+)
+
 # Phase C: thrash lesson request (free-text form; not free-text inject order).
 THRASH_LESSON_REQUEST = (
     "HOST: thrash lesson — reply in free-text only (1–3 sentences) OR structured:\n"
@@ -231,20 +246,49 @@ def should_inject_thrash_host(
     return ThrashHostDecision(inject=False, reason="below_threshold", kind="")
 
 
+def is_isolation_error(error_reason: str | None) -> bool:
+    """True when error_reason is a sandbox isolation / guest-env family.
+
+    Recognizes ``sandbox_unavailable`` / ``sandbox_unavailable:*`` and
+    ``guest_pytest_unavailable`` (optional suffix). Used so thrash HOST and
+    HOST-synthesized lessons say "change approach / block" instead of
+    "change tool or arguments".
+    """
+    if not error_reason:
+        return False
+    er = str(error_reason).strip().casefold()
+    if not er:
+        return False
+    for prefix in _ISOLATION_ERROR_PREFIXES:
+        if er == prefix or er.startswith(prefix + ":"):
+            return True
+    return False
+
+
 def thrash_host_message(*, tool_name: str, streak: int, detail: str) -> str:
     """HOST thrash line injected into the in-turn chain (obs / user).
 
     ``tool_name`` must be non-empty (builder invariant when inject=True).
+    When ``detail`` is an isolation error family, use isolation wording so the
+    model is not told to retry the same guest path.
     """
-    return THRASH_HOST.format(
+    detail_s = detail if detail else "unknown"
+    template = (
+        THRASH_HOST_ISOLATION if is_isolation_error(detail_s) else THRASH_HOST
+    )
+    return template.format(
         tool_name=tool_name,
         streak=int(streak),
-        detail=detail if detail else "unknown",
+        detail=detail_s,
     )
 
 
 def thrash_detail(*, last_ok: bool | None, last_error: str | None) -> str:
-    """Short detail fragment for thrash HOST ({summary_error_or_ok})."""
+    """Short detail fragment for thrash HOST ({summary_error_or_ok}).
+
+    Isolation error_reasons pass through unchanged so thrash HOST can branch
+    on the machine key via ``is_isolation_error``.
+    """
     if last_ok is True:
         return "ok"
     if last_error:
@@ -346,10 +390,19 @@ def synthesize_lesson(
 
     Returned string is the lesson body (without pin HOST prefix); caller wraps
     with lesson_pin_host_message for chain inject.
+
+    Isolation errors get a distinct next= block/speak/rest (not change-args).
     """
     name = (tool_name or "").strip() or "tool"
     err = last_error if last_error else "ok_spam"
     tried_tail = list(tried)[-4:] if tried else []
+    if is_isolation_error(last_error):
+        return (
+            f"HOST-synthesized lesson: isolation blocked {name} "
+            f"({err}); tried={tried_tail}; "
+            f"next=block task / speak / rest — not retry same guest tool; "
+            f"not a first-person claim."
+        )
     return (
         f"HOST-synthesized lesson: failed repeating {name} "
         f"({err}); tried={tried_tail}; "
@@ -368,6 +421,7 @@ __all__ = [
     "SKIP_IDENTICAL_AFTER",
     "SKIP_IDENTICAL_ENABLED",
     "THRASH_HOST",
+    "THRASH_HOST_ISOLATION",
     "THRASH_LESSON_REQUEST",
     "THRASH_TRIED_CAP",
     "SkipIdenticalDecision",
@@ -375,6 +429,7 @@ __all__ = [
     "ThrashUpdate",
     "canonical_args",
     "compact_lesson",
+    "is_isolation_error",
     "lesson_pin_host_message",
     "lesson_request_host_message",
     "should_inject_thrash_host",

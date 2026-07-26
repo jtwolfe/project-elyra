@@ -353,7 +353,7 @@ def test_control_flags_stripped_for_non_control(
         user_id="operator",
     )
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={"forced": True},
@@ -384,7 +384,7 @@ def test_control_flags_stripped_without_ends_moment(
     paths = resolve_paths(home)
     reg = ToolRegistry(paths, bundled_root=bundled_root)
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={},
@@ -419,7 +419,7 @@ def test_control_kind_keeps_ends_moment(
 
     wait = WaitArm("w2", 60, "choose", ["y", "n"], "operator")
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={"waiting": True},
@@ -450,7 +450,7 @@ def test_speak_kind_keeps_counts_as_speak(
     _write_package(local, "speak_stub", kind="speak")
     reg = ToolRegistry(paths, bundled_root=bundled_root)
 
-    def _fake_dispatch(runner, args, ctx, handler=None) -> ToolResult:
+    def _fake_dispatch(runner, args, ctx, handler=None, package_dir=None) -> ToolResult:
         return ToolResult(
             ok=True,
             payload={},
@@ -526,6 +526,24 @@ def test_reload_picks_up_new_local(home: Path, bundled_root: Path) -> None:
     _write_package(local, "echo_tool", description="added later")
     reg.reload()
     assert reg.has("echo_tool")
+
+
+def test_execute_missing_local_package_reloads(home: Path, bundled_root: Path) -> None:
+    """Operator-deleted local tools should not stay callable as ghosts."""
+    import shutil
+
+    paths = resolve_paths(home)
+    local = paths.tools_dir / "local"
+    local.mkdir(parents=True, exist_ok=True)
+    _write_package(local, "ghost_echo", description="doomed")
+    reg = ToolRegistry(paths, bundled_root=bundled_root)
+    assert reg.has("ghost_echo")
+    shutil.rmtree(local / "ghost_echo")
+    ctx = ToolContext(paths=paths)
+    result = reg.execute("ghost_echo", {}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "unknown_tool"
+    assert not reg.has("ghost_echo")
 
 
 def test_incomplete_package_skipped(home: Path, bundled_root: Path) -> None:

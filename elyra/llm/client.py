@@ -1,23 +1,34 @@
-"""Chat completion client for llama-server.
+"""Chat completion client for local llama-server and xAI Grok.
 
-Scope: POST /v1/chat/completions with optional OpenAI-style tools.
-In scope: HTTP client, gated wrapper, stub (incl. scripted tool_calls),
+Scope: POST chat/completions with optional OpenAI-style tools.
+In scope: HTTP client (for_local / for_xai factories), gated wrapper,
+          usage gate, failing client, stub (incl. scripted tool_calls),
           parse message.tool_calls (arguments string → dict),
-          reasoning_budget_tokens → wire thinking_budget_tokens adapter.
-Out of scope: do-loop / multi-hop tool execution (loop package).
+          reasoning_budget_tokens → wire thinking_budget_tokens adapter (local).
+Out of scope: do-loop / multi-hop tool execution (loop package); supervisor wiring.
+
+**Import rule:** this module may import ``elyra.llm.usage``; usage must NEVER
+import this module (cycle-free).
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.config import LlamaServerConfig, XaiClientConfig
 from elyra.llm.queue import LlamaServerGate
+from elyra.llm.usage import (
+    TokenUsage,
+    UsageHardStopError,
+    UsageMeter,
+    parse_token_usage,
+)
 
 
 @dataclass(frozen=True)
@@ -42,6 +53,7 @@ class ChatCompletionResult:
     raw_json: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
+    usage: TokenUsage | None = None
 
 
 class ChatClient(Protocol):
@@ -171,13 +183,24 @@ def _result_from_response_data(data: dict[str, Any], raw: str) -> ChatCompletion
             for part in content
         )
     tool_calls = parse_tool_calls(message.get("tool_calls"))
+    usage = parse_token_usage(data.get("usage"))
     return ChatCompletionResult(
         content=str(content),
         reasoning_content=str(reasoning_content),
         raw_json=raw,
         tool_calls=tool_calls,
         finish_reason=_coerce_finish_reason(choice.get("finish_reason")),
+        usage=usage,
     )
+
+
+def _coerce_usage(value: Any) -> TokenUsage | None:
+    """Accept TokenUsage, OpenAI-style usage dict, or None."""
+    if value is None:
+        return None
+    if isinstance(value, TokenUsage):
+        return value
+    return parse_token_usage(value)
 
 
 def _result_from_scripted(item: ChatCompletionResult | dict[str, Any]) -> ChatCompletionResult:
@@ -192,7 +215,10 @@ def _result_from_scripted(item: ChatCompletionResult | dict[str, Any]) -> ChatCo
         if "choices" in item:
             return _result_from_response_data(item, raw)
         # bare message dict
-        wrap = {"choices": [{"message": item, "finish_reason": item.get("finish_reason")}]}
+        wrap = {
+            "choices": [{"message": item, "finish_reason": item.get("finish_reason")}],
+            "usage": item.get("usage"),
+        }
         return _result_from_response_data(wrap, raw)
     tool_calls_raw = item.get("tool_calls", [])
     if tool_calls_raw and isinstance(tool_calls_raw, list) and tool_calls_raw:
@@ -205,6 +231,7 @@ def _result_from_scripted(item: ChatCompletionResult | dict[str, Any]) -> ChatCo
     else:
         tool_calls = []
     finish_reason = _coerce_finish_reason(item.get("finish_reason"))
+    usage = _coerce_usage(item.get("usage"))
     if "raw_json" in item and item["raw_json"] is not None:
         raw_json = str(item["raw_json"])
     else:
@@ -232,6 +259,7 @@ def _result_from_scripted(item: ChatCompletionResult | dict[str, Any]) -> ChatCo
         raw_json=raw_json,
         tool_calls=tool_calls,
         finish_reason=finish_reason,
+        usage=usage,
     )
 
 
@@ -316,8 +344,121 @@ class StubChatClient:
 
 
 class HttpChatClient:
-    def __init__(self, config: LlamaServerConfig | None = None) -> None:
-        self._config = config or LlamaServerConfig()
+    """OpenAI-compatible chat HTTP client for local llama-server and xAI.
+
+    Prefer factories ``for_local`` / ``for_xai`` — avoid inconsistent
+    config + kwargs combos. Positional ``HttpChatClient(LlamaServerConfig)``
+    remains supported for local regression (same as ``for_local``).
+    """
+
+    def __init__(
+        self,
+        config: LlamaServerConfig | XaiClientConfig | None = None,
+        *,
+        profile: str | None = None,
+        model: str | None = None,
+        bearer_token: str | None = None,
+    ) -> None:
+        """Internal / BC constructor. Prefer ``for_local`` / ``for_xai``.
+
+        ``profile`` in ``{'local','xai'}``. When omitted: ``XaiClientConfig``
+        → xai; otherwise local (``LlamaServerConfig`` or default).
+        """
+        if profile is None:
+            if isinstance(config, XaiClientConfig):
+                profile = "xai"
+            else:
+                profile = "local"
+        if profile not in ("local", "xai"):
+            raise ValueError(f"profile must be 'local' or 'xai', got {profile!r}")
+
+        self._profile = profile
+        self._lock = threading.Lock()
+
+        if profile == "local":
+            if config is None:
+                self._local_config: LlamaServerConfig | None = LlamaServerConfig()
+            elif isinstance(config, LlamaServerConfig):
+                self._local_config = config
+            else:
+                raise TypeError(
+                    "local profile requires LlamaServerConfig or None; "
+                    f"got {type(config).__name__}"
+                )
+            self._xai_config: XaiClientConfig | None = None
+            self._model: str | None = None
+            self._bearer_token: str | None = None
+        else:
+            if config is None:
+                self._xai_config = XaiClientConfig()
+            elif isinstance(config, XaiClientConfig):
+                self._xai_config = config
+            else:
+                raise TypeError(
+                    "xai profile requires XaiClientConfig or None; "
+                    f"got {type(config).__name__}"
+                )
+            self._local_config = None
+            if not model or not isinstance(model, str):
+                raise ValueError("xai profile requires a non-empty model string")
+            if bearer_token is None or not isinstance(bearer_token, str):
+                raise ValueError("xai profile requires a bearer_token string")
+            self._model = model
+            self._bearer_token = bearer_token
+
+        # BC alias used by older tests/callers: ``client._config`` for local.
+        self._config: LlamaServerConfig | XaiClientConfig
+        if profile == "local":
+            assert self._local_config is not None
+            self._config = self._local_config
+        else:
+            assert self._xai_config is not None
+            self._config = self._xai_config
+
+    @classmethod
+    def for_local(cls, config: LlamaServerConfig | None = None) -> HttpChatClient:
+        """Build a local llama-server client (no Authorization, Gemma fields)."""
+        return cls(config if config is not None else LlamaServerConfig(), profile="local")
+
+    @classmethod
+    def for_xai(
+        cls,
+        config: XaiClientConfig | None = None,
+        *,
+        model: str,
+        bearer_token: str,
+    ) -> HttpChatClient:
+        """Build an xAI client (Bearer + model; omit Gemma-only wire fields)."""
+        return cls(
+            config if config is not None else XaiClientConfig(),
+            profile="xai",
+            model=model,
+            bearer_token=bearer_token,
+        )
+
+    def set_model(self, model: str) -> None:
+        """Thread-safe; next chat_completion uses the new model (xai only)."""
+        if not model or not isinstance(model, str):
+            raise ValueError("model must be a non-empty string")
+        with self._lock:
+            if self._profile != "xai":
+                return
+            self._model = model
+
+    def set_bearer_token(self, token: str | None) -> None:
+        """Thread-safe; never log token. Empty/None clears Authorization."""
+        with self._lock:
+            if self._profile != "xai":
+                return
+            self._bearer_token = token
+
+    @property
+    def profile(self) -> str:
+        return self._profile
+
+    @property
+    def chat_url(self) -> str:
+        return self._config.chat_url
 
     def chat_completion(
         self,
@@ -334,27 +475,112 @@ class HttpChatClient:
     ) -> ChatCompletionResult:
         """Python: ``reasoning_budget_tokens``. Wire: ``thinking_budget_tokens``.
 
-        When ``use_reasoning`` is true:
+        Local (``use_reasoning`` true):
         - always set ``reasoning`` bool
         - if ``reasoning`` is True: include wire budget only when resolved
           value is not None (kwarg → config.default_reasoning_budget_tokens)
         - if ``reasoning`` is False: always include wire budget (resolved value
           or 0) so private channel can be disabled (elyra2 API completeness)
 
+        xai: Authorization Bearer; body includes ``model``; omit ``top_k``,
+        ``thinking_budget_tokens``, and ``reasoning`` wire keys.
+
         Never emit chat-body key ``reasoning_budget_tokens``.
+        Never put Authorization values into exception messages.
         """
-        resolved_top_p = top_p if top_p is not None else self._config.top_p
-        resolved_top_k = top_k if top_k is not None else self._config.top_k
+        # Copy mutables under lock; release before HTTP I/O.
+        with self._lock:
+            profile = self._profile
+            chat_url = self._config.chat_url
+            request_timeout = self._config.request_timeout
+            if profile == "local":
+                assert self._local_config is not None
+                cfg_local = self._local_config
+                model: str | None = None
+                bearer: str | None = None
+            else:
+                assert self._xai_config is not None
+                cfg_xai = self._xai_config
+                model = self._model
+                bearer = self._bearer_token
+
+        if profile == "local":
+            payload = self._build_local_payload(
+                cfg_local,
+                messages,
+                max_tokens=max_tokens,
+                reasoning=reasoning,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                reasoning_budget_tokens=reasoning_budget_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+            headers = {"Content-Type": "application/json"}
+        else:
+            payload = self._build_xai_payload(
+                cfg_xai,
+                messages,
+                model=model or "",
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+            headers = {"Content-Type": "application/json"}
+            if bearer:
+                headers["Authorization"] = f"Bearer {bearer}"
+
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            chat_url,
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            # Never include Authorization header values in the message.
+            raise RuntimeError(f"chat HTTP {exc.code}: {detail[:500]}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"chat connection failed: {exc.reason}") from exc
+
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise RuntimeError("chat response is not a JSON object")
+        return _result_from_response_data(data, raw)
+
+    @staticmethod
+    def _build_local_payload(
+        config: LlamaServerConfig,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int,
+        reasoning: bool,
+        temperature: float | None,
+        top_p: float | None,
+        top_k: int | None,
+        reasoning_budget_tokens: int | None,
+        tools: list[dict[str, Any]] | None,
+        tool_choice: str | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        resolved_top_p = top_p if top_p is not None else config.top_p
+        resolved_top_k = top_k if top_k is not None else config.top_k
         resolved_budget = (
             reasoning_budget_tokens
             if reasoning_budget_tokens is not None
-            else self._config.default_reasoning_budget_tokens
+            else config.default_reasoning_budget_tokens
         )
         payload: dict[str, Any] = {
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": (
-                temperature if temperature is not None else self._config.temperature
+                temperature if temperature is not None else config.temperature
             ),
             "stream": False,
         }
@@ -362,7 +588,7 @@ class HttpChatClient:
             payload["top_p"] = resolved_top_p
         if resolved_top_k is not None:
             payload["top_k"] = resolved_top_k
-        if self._config.use_reasoning:
+        if config.use_reasoning:
             payload["reasoning"] = bool(reasoning)
             if reasoning:
                 if resolved_budget is not None:
@@ -375,29 +601,39 @@ class HttpChatClient:
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
+        return payload
 
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            self._config.chat_url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self._config.request_timeout
-            ) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"chat HTTP {exc.code}: {detail[:500]}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"chat connection failed: {exc.reason}") from exc
-
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise RuntimeError("chat response is not a JSON object")
-        return _result_from_response_data(data, raw)
+    @staticmethod
+    def _build_xai_payload(
+        config: XaiClientConfig,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        max_tokens: int,
+        temperature: float | None,
+        top_p: float | None,
+        tools: list[dict[str, Any]] | None,
+        tool_choice: str | dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        # xai: model required; omit top_k / thinking_budget_tokens / reasoning.
+        resolved_top_p = top_p if top_p is not None else config.top_p
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": (
+                temperature if temperature is not None else config.temperature
+            ),
+            "stream": False,
+        }
+        if resolved_top_p is not None:
+            payload["top_p"] = resolved_top_p
+        # Intentionally never set top_k / reasoning / thinking_budget_tokens.
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        return payload
 
 
 class GatedChatClient:
@@ -432,3 +668,83 @@ class GatedChatClient:
                 tool_choice=tool_choice,
             ),
         )
+
+
+class UsageGatedChatClient:
+    """ChatClient wrapper that enforces UsageMeter hard stops.
+
+    Lives in client.py (not usage.py) so usage never imports client.
+
+    - refuse when ``!meter.can_call`` → raise ``UsageHardStopError``
+      (can_call is True when override_active even if over budget);
+    - on success → ``meter.record(result.usage)`` always (override does not
+      skip record; failures do not record — durable state stays consistent);
+    - when ``meter`` is None, pure pass-through.
+    """
+
+    def __init__(self, inner: ChatClient, meter: UsageMeter | None) -> None:
+        self._inner = inner
+        self._meter = meter
+
+    def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int = 4096,
+        reasoning: bool = True,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> ChatCompletionResult:
+        meter = self._meter
+        if meter is not None and not meter.can_call():
+            snap = meter.snapshot()
+            level = snap.hard_stop or "week"
+            reason = snap.hard_stop_reason or "usage hard stop"
+            raise UsageHardStopError(reason, level=level)
+
+        result = self._inner.chat_completion(
+            messages,
+            max_tokens=max_tokens,
+            reasoning=reasoning,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            reasoning_budget_tokens=reasoning_budget_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        # Record only after success so exception paths leave meter unchanged.
+        if meter is not None:
+            meter.record(result.usage)
+        return result
+
+
+class FailingChatClient:
+    """Required when provider=xai and credentials cannot resolve.
+
+    ``chat_completion`` always raises ``RuntimeError`` with a stable,
+    non-secret message (includes ``credential_detail``). Never echoes
+    user content. Live repair replaces ``worker.client`` via rebuild.
+    """
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+
+    def chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int = 4096,
+        reasoning: bool = True,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        reasoning_budget_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> ChatCompletionResult:
+        raise RuntimeError(f"llm unavailable: {self.detail}")

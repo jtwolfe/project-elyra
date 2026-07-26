@@ -1,6 +1,7 @@
 """Settings from defaults, optional elyra.toml, and CLI overrides.
 
-Scope: load/merge loop, wait, tools, goals, continuous (and common CLI) knobs.
+Scope: load/merge loop, wait, tools, goals, continuous, provider, usage
+(and common CLI) knobs.
 In scope: tomllib, frozen defaults, precedence defaults < toml < CLI, type checks.
 Out of scope: runtime wiring, argv parsing, ELYRA_HOME (see config).
 """
@@ -14,7 +15,11 @@ from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
 
 import tomllib
 
+from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
+
 _CLOSE_GATES = frozenset({"soft", "hard"})
+_PROVIDER_NAMES = frozenset({"xai", "local"})
+_CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
 
 
 @dataclass(frozen=True)
@@ -76,12 +81,55 @@ class ContinuousSettings:
 
 
 @dataclass(frozen=True)
+class ProviderSettings:
+    """LLM provider config (product default: xAI / Grok).
+
+    Settings surface only until supervisor/CLI wiring (later PR). Defaults
+    match Phase 0 product posture; runtime still starts local/llama until then.
+    """
+
+    name: str = "xai"  # xai | local
+    model: str = DEFAULT_XAI_MODEL
+    model_label: str = DEFAULT_XAI_MODEL_LABEL
+    base_url: str = "https://api.x.ai/v1"
+    credential_source: str = "grok_build"  # grok_build | api_key
+    grok_auth_path: str | None = None  # None → ~/.grok/auth.json
+    request_timeout_s: float = 120.0
+
+
+@dataclass(frozen=True)
+class UsageSettings:
+    """Hierarchical token-usage meter ceilings (Phase 0).
+
+    ``weekly_allowed_tokens`` is the enforcement ceiling for the allowed week
+    (ship default 5_000_000). ``weekly_allowed_fraction`` is **informational
+    only** — product policy target (50% of real SuperGrok weekly quota). It is
+    stored so elyra.toml can record the target next to the absolute ceiling;
+    it is **not** multiplied into meter math until an external real-quota hook
+    exists.
+
+    ``hard_stop_override`` is a *runtime* preference (usage.json), not a
+    Settings ship default — always starts/persists default False unless the
+    operator turns it ON.
+    """
+
+    enabled: bool = True
+    weekly_allowed_tokens: int = 5_000_000
+    weekly_allowed_fraction: float = 0.50
+    hour_block_minutes: int = 60
+    day_allowed_tokens: int | None = None
+    hour_allowed_tokens: int | None = None
+
+
+@dataclass(frozen=True)
 class Settings:
     loop: LoopSettings = field(default_factory=LoopSettings)
     wait: WaitSettings = field(default_factory=WaitSettings)
     tools: ToolsSettings = field(default_factory=ToolsSettings)
     goals: GoalsSettings = field(default_factory=GoalsSettings)
     continuous: ContinuousSettings = field(default_factory=ContinuousSettings)
+    provider: ProviderSettings = field(default_factory=ProviderSettings)
+    usage: UsageSettings = field(default_factory=UsageSettings)
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"
     api_port: int = 8787
@@ -140,6 +188,12 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
         kwargs["continuous"] = _replace_section(
             settings.continuous, data["continuous"], "continuous"
         )
+    if "provider" in data and isinstance(data["provider"], Mapping):
+        kwargs["provider"] = _replace_section(
+            settings.provider, data["provider"], "provider"
+        )
+    if "usage" in data and isinstance(data["usage"], Mapping):
+        kwargs["usage"] = _replace_section(settings.usage, data["usage"], "usage")
 
     # get_type_hints resolves postponed annotations (str -> real types).
     top_types = get_type_hints(Settings)
@@ -168,6 +222,33 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                 f"{path}: must be true (K18 — no empty-ledger outer continue); "
                 f"got {coerced!r}"
             )
+        if path == "provider.name" and coerced not in _PROVIDER_NAMES:
+            raise ValueError(
+                f"{path}: expected one of {sorted(_PROVIDER_NAMES)}, got {coerced!r}"
+            )
+        if (
+            path == "provider.credential_source"
+            and coerced not in _CREDENTIAL_SOURCES
+        ):
+            raise ValueError(
+                f"{path}: expected one of {sorted(_CREDENTIAL_SOURCES)}, "
+                f"got {coerced!r}"
+            )
+        if path == "provider.request_timeout_s" and coerced <= 0:
+            raise ValueError(f"{path}: expected positive float, got {coerced!r}")
+        if path == "usage.weekly_allowed_fraction":
+            if not (0.0 < coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in (0, 1], got {coerced!r}"
+                )
+        if path == "usage.weekly_allowed_tokens" and coerced <= 0:
+            raise ValueError(f"{path}: expected positive int, got {coerced!r}")
+        if path == "usage.hour_block_minutes" and coerced < 1:
+            raise ValueError(f"{path}: expected int >= 1, got {coerced!r}")
+        # Optional tighter ceilings (when set) must be positive like weekly.
+        if path in ("usage.day_allowed_tokens", "usage.hour_allowed_tokens"):
+            if coerced <= 0:
+                raise ValueError(f"{path}: expected positive int, got {coerced!r}")
         filtered[k] = coerced
     return replace(section, **filtered) if filtered else section
 
