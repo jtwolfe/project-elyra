@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "properties": {
+    "actor": {
+      "type": "string",
+      "enum": ["self", "user"],
+      "description": "Whose identity to read"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Required when actor=user"
+    },
+    "which": {
+      "type": "string",
+      "enum": ["current", "draft", "version"],
+      "description": "Default current"
+    },
+    "version_id": {
+      "type": "string",
+      "description": "Required when which=version"
+    },
+    "list_versions": {
+      "type": "boolean",
+      "description": "If true, include versions summary (not full bodies)"
+    }
+  },
+  "required": ["actor"],
+  "additionalProperties": false
+}
