@@ -9,7 +9,7 @@ from elyra.media.ingest import (
     IngestError,
     clone_attachment,
     ingest_sandbox_path,
-    resolve_speak_attachments,
+    prepare_speak_attachments,
 )
 from elyra.media.project import (
     clear_sandbox_media,
@@ -82,8 +82,8 @@ from elyra.media.upload import (
 __all__ = [
     "IngestError",
     "clone_attachment",
+    "prepare_speak_attachments",
     "ingest_sandbox_path",
-    "resolve_speak_attachments",
     "ATTACHMENT_KINDS",
     "ATTACHMENT_ORIGINS",
     "DEFAULT_STT_MODEL",
