@@ -180,8 +180,18 @@ let tickInFlight = false;
 let lastMessagesFp = "";
 /** True when chat viewport is near the bottom (auto-stick). */
 let chatStickToBottom = true;
-/** Pending multimodal attachments (UI-only; sent as inventory text). */
+/**
+ * Pending composer attachments (local File + preview).
+ * On send: POST /api/media → attachment_ids on POST /api/messages (no inventory prose).
+ */
 let pendingAttachments = [];
+/** Soft client caps matching host (elyra/media/upload.py). */
+const MAX_PENDING_ATTACHMENTS = 8;
+const MAX_CLIENT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_CLIENT_AUDIO_BYTES = 25 * 1024 * 1024;
+const MAX_CLIENT_FILE_BYTES = 48 * 1024 * 1024;
+/** Safe attachment id segment (matches host validate_att_id). */
+const ATT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Drag depth for composer drop overlay. */
 let composerDragDepth = 0;
 /** Fingerprint of last rendered activity trail (animate only on change). */
@@ -230,9 +240,69 @@ async function fetchJson(url, opts) {
 function messagesFingerprint(messages) {
   if (!messages || !messages.length) return "empty";
   const last = messages[messages.length - 1] || {};
+  const attFp = Array.isArray(last.attachments)
+    ? last.attachments.map((a) => a && a.id).filter(Boolean).join(",")
+    : "";
   return `${messages.length}|${last.id || ""}|${(last.content || "").length}|${
     last.created_at || ""
-  }|${(last.reasoning || "").length}`;
+  }|${(last.reasoning || "").length}|${attFp}`;
+}
+
+/**
+ * Resolve markdown media/link targets for glass CSP.
+ * attachment:<id> and /api/media/<id> → same-origin serve URL; else http(s)/data:image.
+ * Rejects javascript:, path traversal, and non-image data:.
+ */
+function resolveMediaUrl(url) {
+  const u = String(url || "").trim();
+  if (!u) return null;
+  if (/^javascript:/i.test(u) || /^vbscript:/i.test(u)) return null;
+  const attScheme = u.match(/^attachment:([A-Za-z0-9][A-Za-z0-9._-]*)$/i);
+  if (attScheme && ATT_ID_RE.test(attScheme[1])) {
+    return `/api/media/${attScheme[1]}`;
+  }
+  const apiPath = u.match(/^\/api\/media\/([A-Za-z0-9][A-Za-z0-9._-]*)$/i);
+  if (apiPath && ATT_ID_RE.test(apiPath[1]) && !u.includes("..")) {
+    return `/api/media/${apiPath[1]}`;
+  }
+  if (/^https?:\/\//i.test(u)) return u;
+  if (/^data:image\//i.test(u)) return u;
+  return null;
+}
+
+function mediaUrlForAttachment(att) {
+  if (!att || !att.id || !ATT_ID_RE.test(String(att.id))) return null;
+  return `/api/media/${att.id}`;
+}
+
+function visibleAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((a) => a && a.kind !== "tts_cache");
+}
+
+function detectAttachmentKind(file) {
+  const mime = String((file && file.type) || "").toLowerCase();
+  const name = String((file && file.name) || "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)) return "image";
+  if (/\.(mp3|wav|ogg|opus|m4a|aac|flac)$/i.test(name)) return "audio";
+  if (/\.(mp4|mov|mkv|avi|webm)$/i.test(name)) return "video";
+  return "file";
+}
+
+function clientMaxBytesForKind(kind) {
+  if (kind === "image") return MAX_CLIENT_IMAGE_BYTES;
+  if (kind === "audio") return MAX_CLIENT_AUDIO_BYTES;
+  return MAX_CLIENT_FILE_BYTES;
+}
+
+function kindIcon(kind) {
+  if (kind === "image") return "🖼";
+  if (kind === "audio") return "🔊";
+  if (kind === "video") return "🎬";
+  return "📄";
 }
 
 function formatMsgTime(iso) {
@@ -297,17 +367,41 @@ function renderMarkdown(src) {
 
   const inline = (s) => {
     let t = escape(s);
-    // images ![alt](url) — only http(s) or data:image
+    // images ![alt](url) — http(s), data:image, attachment:<id>, /api/media/<id>
     t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => {
-      const u = url.trim();
-      if (!/^(https?:|data:image\/)/i.test(u)) return escape(`![${alt}](${url})`);
-      return `<img src="${escape(u)}" alt="${escape(alt)}" loading="lazy" style="max-width:100%;border-radius:8px;margin:0.35rem 0" />`;
+      const resolved = resolveMediaUrl(url);
+      if (!resolved) return escape(`![${alt}](${url})`);
+      // Only render as <img> for image-like targets (not raw non-image data:)
+      if (/^data:/i.test(resolved) && !/^data:image\//i.test(resolved)) {
+        return escape(`![${alt}](${url})`);
+      }
+      return `<img class="md-img" src="${escape(resolved)}" alt="${escape(
+        alt
+      )}" loading="lazy" />`;
     });
-    // links [text](url)
+    // links [text](url) — https?, attachment:<id>, /api/media/<id>
     t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
-      const u = url.trim();
-      if (!/^https?:\/\//i.test(u)) return escape(`[${label}](${url})`);
-      return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
+      const resolved = resolveMediaUrl(url);
+      if (!resolved || /^data:/i.test(resolved)) {
+        // data: links not allowed as anchors; bare https only without resolve miss
+        const u = String(url || "").trim();
+        if (/^https?:\/\//i.test(u)) {
+          return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(
+            label
+          )}</a>`;
+        }
+        return escape(`[${label}](${url})`);
+      }
+      const external = /^https?:\/\//i.test(resolved);
+      if (external) {
+        return `<a href="${escape(resolved)}" target="_blank" rel="noopener noreferrer">${escape(
+          label
+        )}</a>`;
+      }
+      // same-origin media: open in new tab / download
+      return `<a class="md-att-link" href="${escape(
+        resolved
+      )}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
     });
     // inline code
     t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escape(code)}</code>`);
@@ -471,6 +565,104 @@ function wireMessageBodyInteractions(root) {
   });
 }
 
+/**
+ * Attachments footer inventory (always when non-tts attachments present).
+ * Body embeds are views; this section is the durable inventory.
+ */
+function renderAttachmentsFooter(attachments) {
+  const atts = visibleAttachments(attachments);
+  if (!atts.length) return null;
+  const foot = document.createElement("div");
+  foot.className = "msg-attachments";
+  const heading = document.createElement("div");
+  heading.className = "msg-attachments-label";
+  heading.textContent = atts.length === 1 ? "Attachment" : "Attachments";
+  foot.appendChild(heading);
+  const list = document.createElement("div");
+  list.className = "msg-attachments-list";
+  for (const att of atts) {
+    list.appendChild(renderAttachmentItem(att));
+  }
+  foot.appendChild(list);
+  return foot;
+}
+
+function renderAttachmentItem(att) {
+  const kind = String(att.kind || "file");
+  const name = String(att.filename || att.name || att.id || "file");
+  const size = Number(att.byte_size != null ? att.byte_size : att.size) || 0;
+  const href = mediaUrlForAttachment(att);
+  const item = document.createElement("div");
+  item.className = `msg-att msg-att-${kind}`;
+  item.dataset.attId = String(att.id || "");
+
+  if (kind === "image" && href) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "msg-att-thumb-link";
+    a.title = name;
+    const img = document.createElement("img");
+    img.className = "msg-att-thumb";
+    img.src = href;
+    img.alt = name;
+    img.loading = "lazy";
+    a.appendChild(img);
+    item.appendChild(a);
+  } else if (kind === "audio" && href) {
+    const audio = document.createElement("audio");
+    audio.className = "msg-att-player";
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.src = href;
+    item.appendChild(audio);
+  } else if (kind === "video" && href) {
+    const video = document.createElement("video");
+    video.className = "msg-att-player msg-att-video";
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = href;
+    item.appendChild(video);
+  } else {
+    const icon = document.createElement("span");
+    icon.className = "msg-att-icon";
+    icon.textContent = kindIcon(kind);
+    icon.setAttribute("aria-hidden", "true");
+    item.appendChild(icon);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "msg-att-meta";
+  const title = document.createElement("div");
+  title.className = "msg-att-name";
+  title.textContent = name;
+  title.title = name;
+  meta.appendChild(title);
+  const sub = document.createElement("div");
+  sub.className = "msg-att-sub";
+  const bits = [kind];
+  if (size) bits.push(formatBytes(size));
+  if (att.mime) bits.push(String(att.mime));
+  sub.textContent = bits.join(" · ");
+  meta.appendChild(sub);
+  item.appendChild(meta);
+
+  if (href) {
+    const dl = document.createElement("a");
+    dl.className = "msg-att-download";
+    dl.href = href;
+    dl.download = name;
+    dl.target = "_blank";
+    dl.rel = "noopener noreferrer";
+    dl.textContent = "↓";
+    dl.title = `Download ${name}`;
+    dl.setAttribute("aria-label", `Download ${name}`);
+    item.appendChild(dl);
+  }
+  return item;
+}
+
 function renderMessages(messages, { force = false } = {}) {
   if (!messagesEl) return;
   const list = Array.isArray(messages) ? messages : [];
@@ -493,11 +685,23 @@ function renderMessages(messages, { force = false } = {}) {
       label
     )}</span><span>${escapeHtml(formatMsgTime(m.created_at))}</span>`;
     div.appendChild(meta);
-    const body = document.createElement("div");
-    body.className = "msg-body";
-    body.innerHTML = renderMarkdown(m.content || "");
-    div.appendChild(body);
-    wireMessageBodyInteractions(body);
+    const content = m.content || "";
+    const atts = visibleAttachments(m.attachments);
+    // Media-only rows: skip empty markdown shell; footer carries inventory.
+    if (content.trim()) {
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      body.innerHTML = renderMarkdown(content);
+      div.appendChild(body);
+      wireMessageBodyInteractions(body);
+    } else if (!atts.length) {
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      body.innerHTML = renderMarkdown("");
+      div.appendChild(body);
+    }
+    const foot = renderAttachmentsFooter(m.attachments);
+    if (foot) div.appendChild(foot);
     if (m.reasoning) {
       const details = document.createElement("details");
       details.className = "reason-fold";
@@ -2096,7 +2300,7 @@ function renderAttachTray() {
       chip.appendChild(img);
     } else {
       const icon = document.createElement("span");
-      icon.textContent = "📄";
+      icon.textContent = kindIcon(att.kind);
       icon.setAttribute("aria-hidden", "true");
       chip.appendChild(icon);
     }
@@ -2127,35 +2331,72 @@ function addFilesAsAttachments(fileList) {
   const files = Array.from(fileList || []);
   for (const file of files) {
     if (!file || !file.name) continue;
-    if (pendingAttachments.length >= 8) {
-      showNotice("Attachment limit: 8 files per message.");
+    if (pendingAttachments.length >= MAX_PENDING_ATTACHMENTS) {
+      showNotice(
+        `Attachment limit: ${MAX_PENDING_ATTACHMENTS} files per message.`
+      );
       break;
     }
-    const isImage = String(file.type || "").startsWith("image/");
+    const kind = detectAttachmentKind(file);
+    const maxBytes = clientMaxBytesForKind(kind);
+    if (file.size > maxBytes) {
+      showNotice(
+        `${file.name} is too large (${formatBytes(file.size)}; max ${formatBytes(
+          maxBytes
+        )} for ${kind}).`
+      );
+      continue;
+    }
     const att = {
       name: file.name,
       size: file.size,
       type: file.type || "application/octet-stream",
-      kind: isImage ? "image" : "file",
-      previewUrl: isImage ? URL.createObjectURL(file) : null,
+      kind,
+      previewUrl: kind === "image" ? URL.createObjectURL(file) : null,
+      file, // File/Blob for POST /api/media on send
     };
     pendingAttachments.push(att);
   }
   renderAttachTray();
 }
 
-function buildAttachmentInventory() {
-  if (!pendingAttachments.length) return "";
-  const lines = pendingAttachments.map(
-    (a, i) =>
-      `${i + 1}. ${a.name} (${a.kind}, ${a.type || "unknown"}, ${formatBytes(
-        a.size
-      )})`
-  );
-  return (
-    "\n\n---\n**Attachments** (listed for Elyra; binary vision/file I/O not wired yet):\n" +
-    lines.join("\n")
-  );
+/**
+ * Upload pending tray files via multipart POST /api/media.
+ * Returns attachment id list (durable store). Does not clear tray.
+ */
+async function uploadPendingAttachments() {
+  if (!pendingAttachments.length) return [];
+  const formData = new FormData();
+  formData.append("user_id", getSessionUserId());
+  formData.append("origin", "user_upload");
+  for (const att of pendingAttachments) {
+    const blob = att.file;
+    if (!blob) {
+      throw new Error(`Missing file bytes for ${att.name || "attachment"}`);
+    }
+    formData.append("files", blob, att.name || "file");
+  }
+  const res = await fetch("/api/media", { method: "POST", body: formData });
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) {
+    const msg =
+      (data && (data.error || data.reason)) || text || res.statusText;
+    const err = new Error(`${res.status}: ${msg}`);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+  const uploaded = Array.isArray(data.attachments) ? data.attachments : [];
+  if (!uploaded.length) {
+    throw new Error("Upload returned no attachments");
+  }
+  return uploaded.map((a) => a.id).filter(Boolean);
 }
 
 function clearAttachments() {
@@ -2301,15 +2542,26 @@ function updateChatActivity(status) {
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = input.value.trim();
-  const inventory = buildAttachmentInventory();
-  if (!text && !inventory) return;
-  const content = (text + inventory).trim();
+  const hasPending = pendingAttachments.length > 0;
+  // Media-only send allowed: empty text + attachments (R1b / glass empty-content).
+  if (!text && !hasPending) return;
   sendBtn.disabled = true;
   try {
+    let attachmentIds = [];
+    if (hasPending) {
+      attachmentIds = await uploadPendingAttachments();
+    }
+    const payload = {
+      content: text, // user text only — no inventory prose (PR4)
+      user_id: getSessionUserId(),
+    };
+    if (attachmentIds.length) {
+      payload.attachment_ids = attachmentIds;
+    }
     const data = await fetchJson("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, user_id: getSessionUserId() }),
+      body: JSON.stringify(payload),
     });
     input.value = "";
     autosizeComposer();

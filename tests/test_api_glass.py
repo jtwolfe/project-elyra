@@ -828,6 +828,19 @@ def test_static_app_js_active_panel_poll(paths):
         assert "updateChatActivity" in js
         assert "renderActivityTrail" in js
         assert "recent_activity" in js
+        # PR4: durable attach upload + render matrix (no inventory-text hack)
+        assert "uploadPendingAttachments" in js
+        assert "attachment_ids" in js
+        assert '"/api/media"' in js or "'/api/media'" in js
+        assert "resolveMediaUrl" in js
+        assert "attachment:" in js
+        assert "renderAttachmentsFooter" in js
+        assert "msg-attachments" in js
+        assert "buildAttachmentInventory" not in js
+        assert "binary vision/file I/O not wired yet" not in js
+        assert "detectAttachmentKind" in js
+        assert "media-only" in js.lower() or "hasPending" in js
+        assert "MAX_PENDING_ATTACHMENTS" in js
 
         req_css = urllib.request.Request(h.base + "/style.css", method="GET")
         with urllib.request.urlopen(req_css, timeout=5) as resp:
@@ -846,5 +859,26 @@ def test_static_app_js_active_panel_poll(paths):
         assert "attach-tray" in css
         assert "activity-trail" in css
         assert "activity-chip" in css
+        # PR4 attachment footer / players
+        assert "msg-attachments" in css
+        assert "msg-att-thumb" in css
+        assert "msg-att-player" in css
+    finally:
+        h.close()
+
+
+def test_static_glass_pr4_html_accepts_audio(paths):
+    """Composer file input accepts audio; no inventory-only attach copy."""
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+            html = resp.read().decode("utf-8")
+        assert 'id="attach-input"' in html
+        assert "audio/*" in html
+        assert "image/*" in html
+        # Placeholder signals media-only send is OK
+        assert "attachments alone" in html or "media-only" in html.lower()
     finally:
         h.close()
