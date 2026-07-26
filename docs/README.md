@@ -74,4 +74,5 @@ Live protocol: [live-eval.md](live-eval.md). Ship knobs: [inference.md](inferenc
 
 ## Status
 
-**Stretch 1 complete.** Presence worker → moments (multi-hop do-loops) → tools/skills → speak/wait → glass panels; create-tool gates from PR13; no one-shot chat path. See [stretch-1.md](stretch-1.md) Done when (all checked).
+**Stretch 1 complete** on the foundation path. Integration branch **`grok-improvement`** also carries Grok-by-default (Phase 0), sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, and gold glass — see [project-status-pass.md](project-status-pass.md). `main` may lag. Phase 3 memory not started (essay only).
+
