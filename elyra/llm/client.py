@@ -664,10 +664,13 @@ class UsageGatedChatClient:
     Lives in client.py (not usage.py) so usage never imports client.
 
     - refuse when ``!meter.can_call`` → raise ``UsageHardStopError``
-      (can_call is True when override_active even if over budget);
+      with ``level`` from the meter (``account`` | ``week`` | ``day`` | ``hour``);
+      ``can_call`` is True when override_active even if over budget;
+    - soft yellow/red pace bands never refuse (only true hard levels do);
     - on success → ``meter.record(result.usage)`` always (override does not
       skip record; failures do not record — durable state stays consistent);
     - when ``meter`` is None, pure pass-through.
+    - No auto model throttle, hop-delay, or session_id plumbing here.
     """
 
     def __init__(self, inner: ChatClient, meter: UsageMeter | None) -> None:
@@ -689,6 +692,7 @@ class UsageGatedChatClient:
     ) -> ChatCompletionResult:
         meter = self._meter
         if meter is not None and not meter.can_call():
+            # hard_stop already uses precedence account > week > day > hour.
             snap = meter.snapshot()
             level = snap.hard_stop or "week"
             reason = snap.hard_stop_reason or "usage hard stop"

@@ -10,6 +10,7 @@ import ast
 import json
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -31,6 +32,7 @@ from elyra.llm.models import (
     list_remote_models,
     models_for_picker,
 )
+from elyra.llm.credits import CreditsSnapshot
 from elyra.llm.usage import (
     TokenUsage,
     UsageHardStopError,
@@ -38,6 +40,16 @@ from elyra.llm.usage import (
     parse_token_usage,
 )
 from elyra.settings import UsageSettings
+
+
+class _FixedClock:
+    """Injectable clock so account-hard snapshots are not treated as stale."""
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 # ---------------------------------------------------------------------------
@@ -498,7 +510,8 @@ def test_usage_gate_raises_hard_stop_when_over_budget(tmp_path: Path):
     gated = UsageGatedChatClient(StubChatClient(responses=_boom), meter)
     with pytest.raises(UsageHardStopError) as ei:
         gated.chat_completion([{"role": "user", "content": "nope"}])
-    assert ei.value.level in ("week", "day", "hour")
+    assert ei.value.level in ("account", "week", "day", "hour")
+    assert ei.value.level == "week"
     assert calls["n"] == 0  # inner never invoked
     # Exception path must not record further.
     assert meter.snapshot().week_used_tokens == 10
@@ -524,6 +537,123 @@ def test_usage_gate_records_under_override_even_when_over(tmp_path: Path):
     assert meter.snapshot().week_used_tokens == 17
     assert meter.snapshot().override_active is True
 
+
+def _account_hard_meter(
+    tmp_path: Path,
+    *,
+    weekly_allowed_tokens: int = 1_000_000,
+    credit_usage_percent: float = 96.0,
+    account_hard_stop_percent: float = 95.0,
+) -> UsageMeter:
+    """Meter with fresh injected SuperGrok snapshot over account hard cap."""
+    clock = _FixedClock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    meter = UsageMeter.load(
+        tmp_path,
+        _settings(
+            weekly_allowed_tokens=weekly_allowed_tokens,
+            account_hard_stop_percent=account_hard_stop_percent,
+        ),
+        clock=clock,
+    )
+    meter.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=credit_usage_percent,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    return meter
+
+
+def test_usage_gate_account_hard_injected_snapshot(tmp_path: Path):
+    """Account A≥A_hard (injected CreditsSnapshot) refuses with level=account."""
+    meter = _account_hard_meter(tmp_path)
+    meter.record(TokenUsage(total_tokens=10))
+    assert meter.can_call() is False
+    assert meter.snapshot().hard_stop == "account"
+
+    calls = {"n": 0}
+
+    def _boom(*_a: Any, **_k: Any) -> ChatCompletionResult:
+        calls["n"] += 1
+        return ChatCompletionResult(content="x", reasoning_content="", raw_json="{}")
+
+    gated = UsageGatedChatClient(StubChatClient(responses=_boom), meter)
+    with pytest.raises(UsageHardStopError) as ei:
+        gated.chat_completion([{"role": "user", "content": "account cap"}])
+    assert ei.value.level == "account"
+    assert "account" in ei.value.reason
+    assert calls["n"] == 0
+    # Exception path must not record.
+    assert meter.snapshot().week_used_tokens == 10
+
+
+def test_usage_gate_account_hard_beats_week(tmp_path: Path):
+    """When both account and week ceilings hit, UsageHardStopError.level is account."""
+    meter = _account_hard_meter(
+        tmp_path, weekly_allowed_tokens=100, credit_usage_percent=99.0
+    )
+    meter.record(TokenUsage(total_tokens=100))
+    assert meter.snapshot().hard_stop == "account"
+    assert meter.can_call() is False
+
+    gated = UsageGatedChatClient(StubChatClient(), meter)
+    with pytest.raises(UsageHardStopError) as ei:
+        gated.chat_completion([{"role": "user", "content": "both caps"}])
+    assert ei.value.level == "account"
+
+
+def test_usage_gate_override_allows_account_hard(tmp_path: Path):
+    """hard_stop_override ON → account hard still visible but calls proceed + record."""
+    meter = _account_hard_meter(tmp_path, credit_usage_percent=99.0)
+    assert meter.can_call() is False
+    meter.set_hard_stop_override(True)
+    assert meter.can_call() is True
+    assert meter.snapshot().hard_stop == "account"  # glass honesty
+
+    inner = StubChatClient.scripted(
+        [{"content": "override ok", "usage": TokenUsage(total_tokens=5)}]
+    )
+    gated = UsageGatedChatClient(inner, meter)
+    result = gated.chat_completion([{"role": "user", "content": "x"}])
+    assert result.content == "override ok"
+    assert meter.snapshot().week_used_tokens == 5
+    assert meter.snapshot().override_active is True
+
+
+def test_usage_gate_yellow_band_still_calls(tmp_path: Path):
+    """Soft yellow pace band never refuses — gate invokes inner and records."""
+    B, k = 7000, 4.0
+    H = 168.0
+    t_hours = 24.0
+    week_start = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+    clock = _FixedClock(week_start + timedelta(hours=t_hours))
+
+    meter = UsageMeter.load(
+        tmp_path,
+        _settings(weekly_allowed_tokens=B, burst_hours=k),
+        clock=clock,
+    )
+    # p=1.2 → yellow (over burst, under week hard B)
+    S = int(round(1.2 * B * t_hours / H))
+    assert S < B
+    meter.record(TokenUsage(total_tokens=S))
+    snap = meter.snapshot()
+    assert snap.hard_stop is None
+    assert snap.pace_band == "yellow"
+    assert meter.can_call() is True
+
+    inner = StubChatClient.scripted(
+        [{"content": "yellow ok", "usage": TokenUsage(total_tokens=3)}]
+    )
+    gated = UsageGatedChatClient(inner, meter)
+    result = gated.chat_completion([{"role": "user", "content": "pace soft"}])
+    assert result.content == "yellow ok"
+    assert meter.snapshot().week_used_tokens == S + 3
+    assert meter.snapshot().pace_band in ("yellow", "red", "green")
 
 def test_usage_gate_none_meter_is_passthrough():
     inner = StubChatClient()

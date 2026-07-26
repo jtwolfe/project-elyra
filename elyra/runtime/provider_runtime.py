@@ -148,7 +148,9 @@ class ProviderRuntime:
 
         provider=xai: credential_ok and (meter.can_call() if meter present and
           usage enabled; if meter missing while usage enabled → False).
-          meter.can_call() is True when under budget OR hard_stop_override ON.
+          meter.can_call() is True when under all hard ceilings (account/week/
+          optional day/hour) OR hard_stop_override ON. Soft yellow/red pace
+          bands never refuse. No auto model throttle or hop-delay here.
         provider=local: FailingChatClient → False (local_not_implemented).
         Never opens moments that would only hit FailingChatClient noise.
         """
