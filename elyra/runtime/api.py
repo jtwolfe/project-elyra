@@ -39,6 +39,13 @@ from elyra.identity import (
 from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
 from elyra.llm.auth import VALID_SOURCES, resolve_bearer
 from elyra.llm.queue import ChatRequestGate
+from elyra.media.tts import (
+    TTS_DEFAULT_LANGUAGE,
+    TTS_DEFAULT_PROFILE,
+    TTS_DEFAULT_VOICE,
+    get_or_synthesize,
+)
+from elyra.media.limits import allow_stt, allow_tts
 from elyra.media import (
     ATTACHMENT_ORIGINS,
     DEFAULT_STT_MODEL,
@@ -49,6 +56,9 @@ from elyra.media import (
     MAX_MEDIA_REQUEST_BYTES,
     MediaStore,
     SttError,
+    TtsError,
+    allow_stt,
+    allow_tts,
     ensure_media_dirs,
     max_bytes_for_kind,
     parse_content_length,
@@ -57,10 +67,12 @@ from elyra.media import (
     sniff_mime_kind_source,
     stream_to_temp,
     stt_enabled,
+    synthesize,
     transcribe,
+    tts_enabled,
     validate_att_id,
 )
-from elyra.messages import list_messages
+from elyra.messages import get_message, list_messages
 from elyra.moment import MomentStore
 from elyra.presence.interject import REASON_BUFFER_FULL
 from elyra.presence.worker import PresenceWorker
@@ -200,6 +212,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             # PresenceWorker.status_snapshot: phase, hop_count, last_tool,
             # pending_wait, continue_injects, queue_depth_by_band, …
             snap.update(self.worker.status_snapshot())
+            try:
+                from elyra.media.activity import recent_media_activity
+                from elyra.media.gc import media_stats
+                from elyra.media import MediaStore
+                snap["media"] = media_stats(MediaStore(self.paths))
+                snap["media_activity"] = recent_media_activity(limit=8)
+            except Exception:
+                snap["media"] = {"error": "unavailable"}
+                snap["media_activity"] = []
             snap.update(
                 {
                     "home": str(self.paths.home),
@@ -356,6 +377,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        qs = parse_qs(parsed.query)
 
         if path == "/api/media":
             self._post_media()
