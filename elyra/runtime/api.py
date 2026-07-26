@@ -374,6 +374,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     body = {}
             self._message_tts(path, qs=qs, body=body or {})
             return
+
+        if path == "/api/imagine":
+            self._post_imagine()
+            return
         if path == "/api/stt":
             self._post_stt()
             return

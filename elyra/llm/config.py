@@ -58,6 +58,8 @@ class XaiClientConfig:
     # Paths relative to base_url — NOT /v1/chat/completions.
     chat_path: str = "/chat/completions"
     models_path: str = "/models"
+    # Files API (PR9) — upload docs; Completions attach remains gated separately.
+    files_path: str = "/files"
     connect_timeout: float = 10.0
     read_timeout: float = 120.0
     temperature: float = 0.7
@@ -79,6 +81,11 @@ class XaiClientConfig:
     def models_url(self) -> str:
         # → https://api.x.ai/v1/models
         return self._join(self.base_url, self.models_path)
+
+    @property
+    def files_url(self) -> str:
+        # → https://api.x.ai/v1/files
+        return self._join(self.base_url, self.files_path)
 
     @property
     def request_timeout(self) -> float:

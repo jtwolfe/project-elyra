@@ -1,10 +1,11 @@
-"""Meal-time multimodal expansion for Chat Completions (KD6, KD20, KD25).
+"""Meal-time multimodal expansion for Chat Completions (KD5, KD6, KD20, KD25).
 
 Scope: inventory text for history attachment rows; full vision + text-extract
 for the protected wake message; strip host-only fields before Completions.
 In scope: expand_meal_for_provider, strip_meal_wire_fields, inventory format,
-tier-A text extract for small files, local fail-closed vision skip.
-Out of scope: JSONL writes, TTS, STT, Files API attach (PR9), glass UI.
+tier-A text extract (always, incl. best-effort PDF), local fail-closed vision
+skip, Files tier B optional upload hook, Completions file attach gated off.
+Out of scope: JSONL writes, TTS, STT, Responses API rewrite, glass UI.
 
 Glass JSONL stays string content + attachments[]; base64 exists only in memory
 on the Completions wire for the wake row.
@@ -15,6 +16,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from typing import Any, Mapping, Protocol, Sequence
 
 _LOG = logging.getLogger(__name__)
@@ -23,14 +25,18 @@ _LOG = logging.getLogger(__name__)
 MAX_VISION_IMAGES = 4
 MAX_VISION_IMAGE_BYTES_TOTAL = 20 * 1024 * 1024  # 20 MiB decoded
 
-# Tier A text extract: small text-like files only.
+# Tier A text extract: small text-like files + best-effort PDF (PR9).
 TEXT_EXTRACT_MAX_BYTES = 256 * 1024  # 256 KiB
+PDF_EXTRACT_MAX_BYTES = 48 * 1024 * 1024  # KD15 file cap for PDF best-effort
 
 # Local / non-xAI notice when wake would have expanded images.
 _LOCAL_VISION_NOTICE = (
     "[host notice: vision/image expansion requires xAI provider; "
     "showing attachment inventory only]"
 )
+
+# PR9: PDF / doc not inlined into Completions text (extract failed + no attach).
+_NOT_INLINED_NOTICE = "[host notice: file pdf not_inlined]"
 
 # Legacy glass inventory prose (PR3 dual-path) — do not double-append.
 _LEGACY_INVENTORY_MARKERS = (
@@ -103,6 +109,18 @@ class _MediaReadable(Protocol):
     def get(self, att_id: str) -> Any: ...
 
     def read_bytes(self, att_id: str) -> bytes: ...
+
+
+class _XaiFilesClientLike(Protocol):
+    def upload_bytes(
+        self,
+        data: bytes,
+        *,
+        filename: str,
+        purpose: str = "assistants",
+        expires_after: int | None = ...,
+        content_type: str = "application/octet-stream",
+    ) -> Any: ...
 
 
 def index_glass(
@@ -223,6 +241,8 @@ def _enrich_attachment(
         "byte_size",
         "sandbox_relpath",
         "sha256",
+        "xai_file_id",
+        "xai_file_expires_at",
     ):
         if d.get(key) in (None, "") and getattr(meta, key, None) not in (None, ""):
             d[key] = getattr(meta, key)
@@ -271,6 +291,16 @@ def append_inventory_to_content(
     return f"\n{block}"
 
 
+def is_pdf_attachment(*, mime: str, filename: str, kind: str = "") -> bool:
+    m = (mime or "").lower().strip()
+    name = (filename or "").lower()
+    if m == "application/pdf" or name.endswith(".pdf"):
+        return True
+    if (kind or "").lower() == "file" and name.endswith(".pdf"):
+        return True
+    return False
+
+
 def is_text_extractable(*, mime: str, filename: str, byte_size: int) -> bool:
     if byte_size < 0 or byte_size > TEXT_EXTRACT_MAX_BYTES:
         return False
@@ -286,11 +316,76 @@ def is_text_extractable(*, mime: str, filename: str, byte_size: int) -> bool:
     return False
 
 
+# Parenthesized PDF string literals: (Hello) / (Hello \(world\))
+_PDF_PAREN_STRING_RE = re.compile(
+    rb"\(((?:\\.|[^\\()]+)*)\)\s*Tj",
+    re.IGNORECASE,
+)
+_PDF_HEX_STRING_RE = re.compile(rb"<([0-9A-Fa-f\s]+)>\s*Tj")
+
+
+def extract_pdf_text_best_effort(data: bytes) -> str | None:
+    """Best-effort PDF text without new hard deps (PR9 / KD21).
+
+    Extracts ``(...) Tj`` and ``<hex> Tj`` show-string operators. Not a full
+    PDF parser — enough for simple text PDFs / fixtures; returns None when
+    nothing useful is found.
+    """
+    if not data or not data.startswith(b"%PDF"):
+        return None
+    if len(data) > PDF_EXTRACT_MAX_BYTES:
+        return None
+    chunks: list[str] = []
+    for m in _PDF_PAREN_STRING_RE.finditer(data):
+        raw = m.group(1)
+        # Unescape common PDF string escapes.
+        try:
+            unescaped = (
+                raw.replace(b"\\n", b"\n")
+                .replace(b"\\r", b"\r")
+                .replace(b"\\t", b"\t")
+                .replace(b"\\(", b"(")
+                .replace(b"\\)", b")")
+                .replace(b"\\\\", b"\\")
+            )
+            text = unescaped.decode("latin-1", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        text = text.strip()
+        if text:
+            chunks.append(text)
+    for m in _PDF_HEX_STRING_RE.finditer(data):
+        hex_s = re.sub(rb"\s+", b"", m.group(1))
+        if len(hex_s) % 2:
+            continue
+        try:
+            raw = bytes.fromhex(hex_s.decode("ascii"))
+            text = raw.decode("latin-1", errors="replace").strip()
+        except (ValueError, UnicodeError):
+            continue
+        if text:
+            chunks.append(text)
+    if not chunks:
+        # No show-string operators found — refuse crude whole-file string scrape
+        # (would inline PDF structural tokens as "content"). Caller notes not_inlined.
+        return None
+    text = "\n".join(chunks).strip()
+    return text or None
+
+
+def _fence_extract(filename: str, text: str, *, fence_lang: str = "") -> str:
+    return f"```{fence_lang}\n# file: {filename}\n{text}\n```"
+
+
 def extract_text_for_attachment(
     att: Mapping[str, Any],
     media_store: _MediaReadable | None,
 ) -> str | None:
-    """Tier A: return fenced text with filename header, or None if not extractable."""
+    """Tier A: return fenced text with filename header, or None if not extractable.
+
+    Always attempts supported text MIME and best-effort PDF (PR9). Size caps
+    apply; no new hard dependencies.
+    """
     if media_store is None:
         return None
     aid = str(att.get("id") or "")
@@ -298,12 +393,31 @@ def extract_text_for_attachment(
         return None
     filename = str(att.get("filename") or "file")
     mime = str(att.get("mime") or "")
+    kind = str(att.get("kind") or "")
     size = att.get("byte_size")
     try:
         size_i = int(size) if size is not None else -1
     except (TypeError, ValueError):
         size_i = -1
-    # If size unknown, try read with hard cap.
+
+    is_pdf = is_pdf_attachment(mime=mime, filename=filename, kind=kind)
+
+    if is_pdf:
+        if size_i > PDF_EXTRACT_MAX_BYTES:
+            return None
+        try:
+            data = media_store.read_bytes(aid)
+        except (OSError, FileNotFoundError, ValueError) as exc:
+            _LOG.debug("pdf extract read failed for %s: %s", aid, exc)
+            return None
+        if len(data) > PDF_EXTRACT_MAX_BYTES:
+            return None
+        pdf_text = extract_pdf_text_best_effort(data)
+        if not pdf_text:
+            return None
+        return _fence_extract(filename, pdf_text)
+
+    # Text-like files.
     if size_i < 0:
         size_i = TEXT_EXTRACT_MAX_BYTES  # allow attempt; re-check after read
     if not is_text_extractable(mime=mime, filename=filename, byte_size=size_i):
@@ -322,7 +436,6 @@ def extract_text_for_attachment(
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         text = data.decode("utf-8", errors="replace")
-    # Fence with filename header (design: inline fenced text).
     fence_lang = ""
     lower = filename.lower()
     if lower.endswith(".json"):
@@ -333,7 +446,7 @@ def extract_text_for_attachment(
         fence_lang = "python"
     elif lower.endswith(".csv"):
         fence_lang = "csv"
-    return f"```{fence_lang}\n# file: {filename}\n{text}\n```"
+    return _fence_extract(filename, text, fence_lang=fence_lang)
 
 
 def _vision_allowed(provider: str) -> bool:
@@ -392,6 +505,29 @@ def _build_image_parts(
     return parts
 
 
+def _needs_not_inlined_notice(
+    att: Mapping[str, Any],
+    *,
+    extracted: bool,
+) -> bool:
+    """PDF/docs without successful extract and without Completions file attach."""
+    if extracted:
+        return False
+    mime = str(att.get("mime") or "")
+    filename = str(att.get("filename") or "")
+    kind = str(att.get("kind") or "file")
+    if is_pdf_attachment(mime=mime, filename=filename, kind=kind):
+        return True
+    # Non-image binary files that were not text-extracted.
+    if kind == "file" and not mime.startswith("text/") and mime not in _TEXT_MIME_EXACT:
+        if kind not in ("image", "audio", "video"):
+            # Only note when it looks like a document candidate.
+            lower = filename.lower()
+            if lower.endswith((".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx")):
+                return True
+    return False
+
+
 def expand_meal_for_provider(
     messages: Sequence[Mapping[str, Any]],
     *,
@@ -400,16 +536,25 @@ def expand_meal_for_provider(
     media_store: _MediaReadable | None = None,
     provider: str = "xai",
     expand_last_user_images: bool = False,
+    xai_files_client: _XaiFilesClientLike | None = None,
+    upload_files_to_xai: bool = False,
 ) -> list[dict[str, Any]]:
     """Return a **new** message list with meal-time inventory + wake vision.
 
     Correlates history rows via ``msg["id"]`` only (KD25). Invoked on every
-    ``rebuild_outer`` (KD20). Idempotent for the same inputs.
+    ``rebuild_outer`` (KD20). Idempotent for the same inputs (aside from
+    optional Files upload side effects when ``upload_files_to_xai`` is set).
 
     * All history rows with resolvable id + attachments → inventory text.
     * Full vision ``image_url`` parts + tier-A text extract: wake row only
       (``id == wake_message_id``), and only when provider is xAI with vision
       enabled.
+    * PDF/docs: always attempt extract; on failure inventory notes
+      ``file pdf not_inlined`` (PR9 / KD5). Completions Files attach is off
+      unless ``ELYRA_XAI_FILES_ATTACH=1`` **and** a stored ``xai_file_id``
+      exists (unproven with tools — default extract+inventory only).
+    * Optional ``upload_files_to_xai`` + ``xai_files_client``: persist
+      ``xai_file_id`` even when wire-attach is off.
     * Local / non-xAI: inventory + fail-closed notice on wake; no data URLs.
     * Never mutates glass JSONL; never writes base64 to store.
 
@@ -421,6 +566,18 @@ def expand_meal_for_provider(
     vision_ok = _vision_allowed(provider)
     wake_id = str(wake_message_id) if wake_message_id else None
     logged_missing_id = False
+
+    from elyra.media.xai_files import (
+        completions_file_attach_enabled,
+        completions_file_part,
+        ensure_xai_file_id,
+        is_files_tier_candidate,
+    )
+
+    attach_enabled = completions_file_attach_enabled()
+    ensure_fn = ensure_xai_file_id
+    file_part_fn = completions_file_part
+    is_candidate_fn = is_files_tier_candidate
 
     out: list[dict[str, Any]] = []
     for msg in messages:
@@ -471,38 +628,93 @@ def expand_meal_for_provider(
         text = append_inventory_to_content(content, atts)
 
         if is_wake:
-            # Tier A text extracts into the text part (wake only).
+            # Tier A text extracts into the text part (wake only) — always.
             extracts: list[str] = []
+            extracted_ids: set[str] = set()
+            file_parts: list[dict[str, Any]] = []
             for a in atts:
                 extracted = extract_text_for_attachment(a, media_store)
                 if extracted:
                     extracts.append(extracted)
+                    extracted_ids.add(str(a.get("id") or ""))
+                # Optional Files upload (tier B storage) — does not require attach.
+                if (
+                    upload_files_to_xai
+                    and xai_files_client is not None
+                    and media_store is not None
+                    and ensure_fn is not None
+                    and is_candidate_fn is not None
+                    and is_candidate_fn(
+                        mime=str(a.get("mime") or ""),
+                        filename=str(a.get("filename") or ""),
+                        kind=str(a.get("kind") or "file"),
+                    )
+                ):
+                    aid = str(a.get("id") or "")
+                    if aid:
+                        fid = ensure_fn(
+                            aid,
+                            media_store=media_store,  # type: ignore[arg-type]
+                            client=xai_files_client,  # type: ignore[arg-type]
+                        )
+                        if fid:
+                            a = dict(a)
+                            a["xai_file_id"] = fid
+                # Completions attach only when smoke-gated env is on (default off).
+                if (
+                    attach_enabled
+                    and file_part_fn is not None
+                    and a.get("xai_file_id")
+                    and is_candidate_fn is not None
+                    and is_candidate_fn(
+                        mime=str(a.get("mime") or ""),
+                        filename=str(a.get("filename") or ""),
+                        kind=str(a.get("kind") or "file"),
+                    )
+                ):
+                    file_parts.append(file_part_fn(str(a["xai_file_id"])))
+
             if extracts:
                 text = text + "\n\n" + "\n\n".join(extracts)
 
+            # not_inlined notice for PDFs/docs without extract and without attach parts.
+            not_inlined = False
+            for a in atts:
+                aid = str(a.get("id") or "")
+                if _needs_not_inlined_notice(a, extracted=aid in extracted_ids):
+                    # If we actually attached a file part, content is "inlined" via Files.
+                    if attach_enabled and a.get("xai_file_id") and file_parts:
+                        continue
+                    not_inlined = True
+                    break
+            if not_inlined and _NOT_INLINED_NOTICE not in text:
+                text = f"{text}\n\n{_NOT_INLINED_NOTICE}"
+
+            extra_parts: list[dict[str, Any]] = list(file_parts)
             if vision_ok:
                 image_parts = _build_image_parts(atts, media_store)
-                if image_parts:
-                    new_msg["content"] = [
-                        {"type": "text", "text": text},
-                        *image_parts,
-                    ]
-                else:
-                    new_msg["content"] = text
+                extra_parts = image_parts + extra_parts
+
+            if extra_parts:
+                new_msg["content"] = [
+                    {"type": "text", "text": text},
+                    *extra_parts,
+                ]
             else:
-                # Local / vision kill-switch: inventory + fail-closed notice.
-                has_image = any(
-                    str(a.get("kind") or "") == "image"
-                    or str(a.get("mime") or "").startswith("image/")
-                    for a in atts
-                )
-                if has_image and (provider or "").lower() != "xai":
-                    text = f"{text}\n\n{_LOCAL_VISION_NOTICE}"
-                elif has_image and not _env_flag_enabled("ELYRA_VISION"):
-                    text = (
-                        f"{text}\n\n"
-                        "[host notice: ELYRA_VISION=0; vision expansion skipped]"
+                if not vision_ok:
+                    # Local / vision kill-switch: inventory + fail-closed notice.
+                    has_image = any(
+                        str(a.get("kind") or "") == "image"
+                        or str(a.get("mime") or "").startswith("image/")
+                        for a in atts
                     )
+                    if has_image and (provider or "").lower() != "xai":
+                        text = f"{text}\n\n{_LOCAL_VISION_NOTICE}"
+                    elif has_image and not _env_flag_enabled("ELYRA_VISION"):
+                        text = (
+                            f"{text}\n\n"
+                            "[host notice: ELYRA_VISION=0; vision expansion skipped]"
+                        )
                 new_msg["content"] = text
         else:
             # Inventory only for non-wake attachment rows (user and assistant).
@@ -535,13 +747,16 @@ def assemble_outer_meal_with_media(
 __all__ = [
     "MAX_VISION_IMAGE_BYTES_TOTAL",
     "MAX_VISION_IMAGES",
+    "PDF_EXTRACT_MAX_BYTES",
     "TEXT_EXTRACT_MAX_BYTES",
     "append_inventory_to_content",
     "assemble_outer_meal_with_media",
     "expand_meal_for_provider",
+    "extract_pdf_text_best_effort",
     "extract_text_for_attachment",
     "format_inventory_block",
     "index_glass",
+    "is_pdf_attachment",
     "is_text_extractable",
     "strip_meal_wire_fields",
 ]

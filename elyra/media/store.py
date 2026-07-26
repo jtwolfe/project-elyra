@@ -381,6 +381,28 @@ class MediaStore:
         self._write_meta(att)
         return att
 
+    def set_xai_file(
+        self,
+        att_id: str,
+        *,
+        xai_file_id: str,
+        xai_file_expires_at: str | None = None,
+    ) -> Attachment:
+        """Persist xAI Files API id + optional expiry ISO on attachment meta (PR9).
+
+        Raises FileNotFoundError if meta missing; ValueError if ``xai_file_id``
+        is empty/whitespace.
+        """
+        if not isinstance(xai_file_id, str) or not xai_file_id.strip():
+            raise ValueError(f"invalid xai_file_id: {xai_file_id!r}")
+        att = self.get(att_id)
+        if att is None:
+            raise FileNotFoundError(f"attachment not found: {att_id!r}")
+        att.xai_file_id = xai_file_id.strip()
+        att.xai_file_expires_at = xai_file_expires_at
+        self._write_meta(att)
+        return att
+
     def read_bytes(self, att_id: str) -> bytes:
         """Read blob bytes for attachment id. Raises FileNotFoundError if missing."""
         att = self.get(att_id)
