@@ -28,8 +28,10 @@ from elyra.presence.user_input import PHASE_IN_MOMENT
 from elyra.presence.worker import PresenceWorker
 from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
+from elyra.media import MediaStore
 from elyra.runtime.reset import (
     clear_goals,
+    clear_media,
     clear_messages,
     clear_moments,
     clear_sandbox,
@@ -269,9 +271,16 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     local_tool.mkdir(parents=True)
     (local_tool / "TOOL.md").write_text("# local keep", encoding="utf-8")
 
+    # Seed media store (KD13: clear_media wipes with messages).
+    store = MediaStore(paths)
+    att = store.put_bytes(b"secret-bytes", filename="secret.bin", origin="system")
+    assert store.meta_path(att.id).is_file()
+    assert store.blob_path(att.sha256).is_file()
+
     clear_wakes_disk(paths)
     clear_moments(paths)
     clear_messages(paths)
+    clear_media(paths)
     clear_goals(paths)
     clear_sandbox(paths)
     clear_tool_drafts(paths)
@@ -280,6 +289,11 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     assert GoalsStore(paths).list_goals() == []
     assert MomentStore(paths).list_moments() == []
     assert not sandbox.exists()
+    assert store.list_meta_ids() == []
+    assert not store.blob_path(att.sha256).is_file()
+    # Empty layout re-created
+    assert (paths.data_dir / "media" / "blobs").is_dir()
+    assert (paths.data_dir / "media" / "meta").is_dir()
     # New tree: RW cleared; RO seed left
     assert not (host_primary_root(paths) / "tmp" / "scratch.txt").exists()
     assert not (host_primary_root(paths) / "tools" / "staged").exists()
@@ -570,6 +584,57 @@ def test_reset_queue_empty_and_messages_gone(paths):
     assert w._queue.pending() == []  # noqa: SLF001
     assert w.pending_wait is None
     assert w.phase == "idle"
+
+
+def test_reset_clears_media_store(paths):
+    """Full reset wipes data/media and reports media in cleared (KD13)."""
+    w = _worker(paths)
+    store = MediaStore(paths)
+    att = store.put_bytes(b"png-ish", filename="x.bin", origin="user_upload")
+    # Media-only message row
+    append_message(
+        "user",
+        "",
+        attachments=[att.to_dict()],
+        paths=paths,
+    )
+    assert store.get(att.id) is not None
+
+    out = w.reset_runtime_state()
+    assert out["ok"] is True
+    assert "media" in out["cleared"]
+    assert "messages" in out["cleared"]
+    assert list_messages(paths=paths) == []
+    assert store.list_meta_ids() == []
+    assert not store.blob_path(att.sha256).is_file()
+
+
+def test_append_message_if_allowed_accepts_attachments(paths):
+    w = _worker(paths)
+    att = {
+        "id": "att_worker",
+        "kind": "file",
+        "origin": "user_upload",
+        "filename": "n.txt",
+        "mime": "text/plain",
+        "byte_size": 1,
+        "sha256": "b" * 64,
+        "created_at": "2026-07-26T00:00:00Z",
+        "embedding_status": "none",
+        "embedding_ref": None,
+    }
+    msg, err = w.append_message_if_allowed(
+        "user",
+        "",
+        attachments=[att],
+        meta={"input_mode": "mixed"},
+    )
+    assert err is None
+    assert msg is not None
+    assert msg.content == ""
+    assert msg.attachments is not None and msg.attachments[0]["id"] == "att_worker"
+    rows = list_messages(paths=paths)
+    assert rows[-1]["attachments"][0]["id"] == "att_worker"
 
 
 # ---------------------------------------------------------------------------

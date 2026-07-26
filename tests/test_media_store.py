@@ -1,0 +1,181 @@
+"""Content-addressed media store + Attachment schema (PR1 / KD1, KD12)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from elyra.config import resolve_paths
+from elyra.media import (
+    Attachment,
+    MediaStore,
+    ensure_media_dirs,
+    put_bytes,
+    sniff_mime_and_kind,
+)
+from elyra.media.store import _atomic_write_bytes
+from elyra.media.types import EMBEDDING_STATUSES
+
+
+FIXTURE_PNG = Path(__file__).parent / "fixtures" / "media" / "1x1.png"
+
+
+@pytest.fixture
+def paths(tmp_path):
+    p = resolve_paths(tmp_path)
+    p.ensure_data_dirs()
+    return p
+
+
+@pytest.fixture
+def store(paths):
+    return MediaStore(paths)
+
+
+def test_ensure_media_dirs_layout(paths):
+    root = ensure_media_dirs(paths)
+    assert root == paths.data_dir / "media"
+    for sub in ("blobs", "meta", "tts", "by_message", "tmp"):
+        assert (root / sub).is_dir()
+
+
+def test_put_bytes_png_sniff_and_dedupe(store, paths):
+    data = FIXTURE_PNG.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+
+    att1 = store.put_bytes(
+        data,
+        filename="shot.png",
+        origin="user_upload",
+        uploader_user_id="operator",
+    )
+    assert att1.id.startswith("att_")
+    assert att1.kind == "image"
+    assert att1.mime == "image/png"
+    assert att1.byte_size == len(data)
+    assert att1.bound_message_id is None
+    assert att1.embedding_status == "none"
+    assert att1.embedding_ref is None
+    assert att1.sandbox_relpath == f"media/{att1.id}/shot.png"
+    assert att1.sha256
+    assert store.blob_path(att1.sha256).is_file()
+    assert store.meta_path(att1.id).is_file()
+
+    raw_meta = json.loads(store.meta_path(att1.id).read_text(encoding="utf-8"))
+    assert raw_meta["embedding_status"] == "none"
+    assert raw_meta["embedding_ref"] is None
+    assert raw_meta["bound_message_id"] is None
+    assert set(EMBEDDING_STATUSES) >= {raw_meta["embedding_status"]}
+
+    # Same bytes → same blob path; new att id.
+    att2 = store.put_bytes(data, filename="again.png", origin="user_upload")
+    assert att2.id != att1.id
+    assert att2.sha256 == att1.sha256
+    assert store.blob_path(att1.sha256).read_bytes() == data
+    assert store.read_bytes(att1.id) == data
+    assert store.read_bytes(att2.id) == data
+
+
+def test_bind_message_and_reject_rebinding(store):
+    att = store.put_bytes(b"hello text", filename="note.txt", origin="tool")
+    assert att.kind == "file"
+    assert att.mime in ("text/plain", "application/octet-stream")
+
+    bound = store.bind_message(att.id, "msg-1")
+    assert bound.bound_message_id == "msg-1"
+    # Idempotent same message
+    again = store.bind_message(att.id, "msg-1")
+    assert again.bound_message_id == "msg-1"
+    with pytest.raises(ValueError, match="already bound"):
+        store.bind_message(att.id, "msg-2")
+
+
+def test_get_missing_and_invalid_id(store):
+    assert store.get("att_doesnotexist000000000000000000") is None
+    assert store.get("../escape") is None
+    with pytest.raises(ValueError):
+        store.meta_path("..")
+
+
+def test_atomic_write_cleans_temp_on_failure(paths, monkeypatch):
+    """Failed replace must not leave a durable final path; temp is cleaned."""
+    ensure_media_dirs(paths)
+    dest = paths.data_dir / "media" / "blobs" / "aa" / "deadbeef"
+    tmp_dir = paths.data_dir / "media" / "tmp"
+
+    def boom_replace(self, target):  # noqa: ANN001
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", boom_replace)
+    with pytest.raises(OSError, match="disk full"):
+        _atomic_write_bytes(dest, b"payload", tmp_dir=tmp_dir)
+    assert not dest.exists()
+    # No leftover .part files
+    parts = list(tmp_dir.glob("*.part"))
+    assert parts == []
+
+
+def test_put_bytes_meta_failure_no_half_meta(store, monkeypatch):
+    """If meta write fails after blob, no corrupt meta file remains."""
+    data = b"unique-payload-for-meta-fail"
+    calls = {"n": 0}
+    real = store._write_meta
+
+    def fail_once(att):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("meta fail")
+        return real(att)
+
+    monkeypatch.setattr(store, "_write_meta", fail_once)
+    with pytest.raises(OSError, match="meta fail"):
+        store.put_bytes(data, filename="x.bin", origin="system")
+    assert store.list_meta_ids() == []
+
+
+def test_sniff_jpeg_and_pdf():
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+    mime, kind = sniff_mime_and_kind(jpeg)
+    assert mime == "image/jpeg" and kind == "image"
+
+    pdf = b"%PDF-1.4\n%"
+    mime, kind = sniff_mime_and_kind(pdf, filename="doc.pdf")
+    assert mime == "application/pdf" and kind == "file"
+
+
+def test_module_put_bytes_wrapper(paths):
+    att = put_bytes(b"abc", filename="a.txt", paths=paths, origin="system")
+    assert isinstance(att, Attachment)
+    assert MediaStore(paths).get(att.id) is not None
+
+
+def test_delete_attachment_orphan_blob(store):
+    data = b"orphan-me"
+    a = store.put_bytes(data, filename="o.txt", origin="system")
+    b = store.put_bytes(data, filename="o2.txt", origin="system")
+    assert a.sha256 == b.sha256
+    assert store.delete_attachment(a.id) is True
+    # blob still held by b
+    assert store.blob_path(a.sha256).is_file()
+    assert store.delete_attachment(b.id) is True
+    assert not store.blob_path(a.sha256).is_file()
+
+
+def test_attachment_from_dict_defaults_embedding():
+    att = Attachment.from_dict(
+        {
+            "id": "att_x",
+            "kind": "image",
+            "origin": "user_upload",
+            "filename": "x.png",
+            "mime": "image/png",
+            "byte_size": 1,
+            "sha256": "a" * 64,
+            "created_at": "2026-01-01T00:00:00Z",
+            "embedding_status": "bogus",
+        }
+    )
+    assert att.embedding_status == "none"
+    assert att.bound_message_id is None

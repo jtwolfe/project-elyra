@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from elyra.loop.context import (
+    _glass_to_history,
     assemble_outer_meal,
     estimate_messages_tokens,
     estimate_tokens,
@@ -177,6 +178,63 @@ def test_dedupe_wake_message_already_in_glass():
     )
     users = [m for m in meal if m["role"] == "user" and m["content"] == "please help"]
     assert len(users) == 1
+
+
+def test_glass_to_history_keeps_empty_content_with_attachments():
+    """KD19: media-only rows stay in history for wake id protection."""
+    glass = [
+        {
+            "role": "user",
+            "content": "",
+            "id": "media-only-1",
+            "attachments": [
+                {
+                    "id": "att_1",
+                    "kind": "image",
+                    "filename": "1x1.png",
+                    "mime": "image/png",
+                }
+            ],
+        },
+        {"role": "user", "content": "", "id": "empty-no-att"},
+        {"role": "assistant", "content": "saw it", "id": "a1"},
+        {"role": "system", "content": "ignored"},
+    ]
+    hist = _glass_to_history(glass)
+    ids = [m.get("id") for m in hist]
+    assert "media-only-1" in ids
+    assert "empty-no-att" not in ids
+    assert "a1" in ids
+    media_row = next(m for m in hist if m.get("id") == "media-only-1")
+    assert media_row["content"] == ""
+    assert media_row["attachments"][0]["id"] == "att_1"
+
+
+def test_meal_includes_media_only_wake_by_id():
+    """Empty content + attachments retained so wake_message_id is findable."""
+    history = [
+        {
+            "role": "user",
+            "content": "",
+            "id": "wake-media",
+            "attachments": [{"id": "att_x", "kind": "image", "filename": "x.png"}],
+        }
+    ]
+    meal = assemble_outer_meal(
+        glass_history=history,
+        system_text="SYS",
+        orient_template="orient {{NOW}}{{SELF}}{{USER}}{{WHY_NOW}}"
+        "{{GOALS}}{{SKILL_CATALOG}}{{SKILL_BIAS}}",
+        wake_content="",
+        wake_message_id="wake-media",
+        sliding_input_tokens=24_000,
+    )
+    # clean_history strips ids but keeps empty content row from glass.
+    assert any(m["role"] == "user" and m["content"] == "" for m in meal[1:-1])
+    # Must not inject a second empty wake copy (wake_content falsy).
+    empties = [m for m in meal if m["role"] == "user" and m["content"] == ""]
+    # orient is also role=user but non-empty after fill — only glass empty row.
+    assert len(empties) == 1
 
 
 def test_injects_wake_when_missing_from_glass():

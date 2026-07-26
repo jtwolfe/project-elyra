@@ -99,7 +99,12 @@ def _loop_settings(settings: Settings | LoopSettings | None) -> LoopSettings:
 def _glass_to_history(
     glass_history: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Keep user/assistant speak rows only; strip reasoning and empty content."""
+    """Keep user/assistant speak rows; strip reasoning.
+
+    KD19: keep a row if content is non-empty **or** attachments is non-empty
+    so media-only user messages remain in sliding history for wake id
+    protection and later vision expand.
+    """
     out: list[dict[str, Any]] = []
     for row in glass_history:
         role = row.get("role")
@@ -108,13 +113,17 @@ def _glass_to_history(
         content = row.get("content") or ""
         if not isinstance(content, str):
             content = str(content)
-        if not content:
+        atts = row.get("attachments")
+        has_atts = isinstance(atts, list) and len(atts) > 0
+        if not content and not has_atts:
             continue
         msg: dict[str, Any] = {"role": role, "content": content}
         # Carry id for wake dedupe when present; never include reasoning.
         mid = row.get("id")
         if mid is not None:
             msg["id"] = mid
+        if has_atts:
+            msg["attachments"] = atts
         out.append(msg)
     return out
 

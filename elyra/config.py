@@ -57,8 +57,14 @@ class ElyraPaths:
             "goals",
             "sandbox",
             "runtime",  # continuous.json + provider.json + usage.json
+            "media",  # content-addressed attachments (KD1)
         ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
+
+        # Media store subdirs (blobs/meta/tts/by_message/tmp).
+        from elyra.media.store import ensure_media_dirs
+
+        ensure_media_dirs(self)
 
         # API key secret store (mode 0700). Values written by elyra.llm.auth.
         secrets = self.data_dir / "secrets"

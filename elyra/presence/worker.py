@@ -74,6 +74,7 @@ from elyra.presence.user_input import (
 from elyra.runtime.reset import (
     clear_goals,
     clear_local_tools,
+    clear_media,
     clear_messages,
     clear_moments,
     clear_sandbox,
@@ -549,11 +550,14 @@ class PresenceWorker:
         user_id: str | None = "operator",
         reasoning: str = "",
         moment_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> tuple[Message | None, dict[str, Any] | None]:
         """Append a chat message only when not resetting.
 
         Holds ``self._lock`` for the check + append so reset's final re-clear
         cannot interleave mid-write without also holding the lock.
+        Attachments/meta are persisted on the same lock as content (KD1).
         Returns ``(message, None)`` on success or ``(None, error_dict)``.
         """
         with self._lock:
@@ -569,6 +573,8 @@ class PresenceWorker:
                 user_id=user_id,
                 reasoning=reasoning,
                 moment_id=moment_id,
+                attachments=attachments,
+                meta=meta,
                 paths=self.paths,
             )
             return msg, None
@@ -1583,6 +1589,8 @@ class PresenceWorker:
 
         _step("moments", _moments)
         _step("messages", lambda: clear_messages(self.paths))
+        # KD13: full reset clears data/media with messages (no orphan blobs).
+        _step("media", lambda: clear_media(self.paths))
         _step("goals", lambda: clear_goals(self.paths))
 
         if flags.get("clear_sandbox", True):
@@ -1609,6 +1617,7 @@ class PresenceWorker:
             # Final re-clear closes TOCTOU: concurrent append/create that raced
             # phase-1 clears (or bypassed API gates) cannot survive ok:true.
             _step("messages", lambda: clear_messages(self.paths))
+            _step("media", lambda: clear_media(self.paths))
             _step("goals", lambda: clear_goals(self.paths))
 
             def _continuous_zero() -> None:

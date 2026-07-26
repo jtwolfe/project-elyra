@@ -89,6 +89,25 @@ def clear_messages(paths: ElyraPaths) -> dict[str, Any]:
     return {"step": "messages", "existed": existed}
 
 
+def clear_media(paths: ElyraPaths) -> dict[str, Any]:
+    """Wipe ``data/media/**`` contents and re-create empty store dirs (KD13).
+
+    Full reset clears media with messages so glass refs never point at retained
+    private blobs. Does not touch ``sandboxes/sandbox0/media`` (PR2 projection).
+    """
+    media = _assert_under(
+        paths.data_dir / "media", paths.data_dir, label="media"
+    )
+    removed = 0
+    if media.is_dir():
+        removed = _clear_dir_contents(media)
+    # Re-scaffold empty layout for subsequent puts.
+    from elyra.media.store import ensure_media_dirs
+
+    ensure_media_dirs(paths)
+    return {"step": "media", "removed": removed}
+
+
 def clear_goals(paths: ElyraPaths) -> dict[str, Any]:
     """Write ``data/goals/goals.json`` = ``{"goals": []}``."""
     goals_dir = _assert_under(
@@ -195,8 +214,12 @@ def ensure_preserved_dirs(paths: ElyraPaths) -> None:
         "goals",
         "sandbox",
         "runtime",
+        "media",
     ):
         (paths.data_dir / name).mkdir(parents=True, exist_ok=True)
+    from elyra.media.store import ensure_media_dirs
+
+    ensure_media_dirs(paths)
     (paths.skills_dir / "local").mkdir(parents=True, exist_ok=True)
     (paths.tools_dir / "local").mkdir(parents=True, exist_ok=True)
     (paths.tools_dir / "drafts").mkdir(parents=True, exist_ok=True)
