@@ -1356,7 +1356,7 @@ body {
 
 .hard-stop-banner.hard-stop-limit {
   color: var(--bad);
-  border-color: rgba(201, 138, 107, 0.55);
+  border-color: color-mix(in srgb, var(--bad) 55%, transparent);
   background: var(--bad-soft);
 }
 
@@ -1811,7 +1811,7 @@ body {
 .reset-confirm-label input:focus-visible {
   outline: none;
   border-color: var(--bad);
-  box-shadow: 0 0 0 3px rgba(201, 138, 107, 0.35);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 35%, transparent);
 }
 
 .modal-actions {
