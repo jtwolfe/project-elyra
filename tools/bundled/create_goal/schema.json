@@ -13,6 +13,15 @@
       "type": "string",
       "enum": ["open", "review", "cancelled"],
       "description": "Initial goal status (default open; closed not allowed on create)"
+    },
+    "created_in_context": {
+      "type": "object",
+      "description": "Optional provenance override; host usually snapshots from session user",
+      "properties": {
+        "user_id": { "type": "string" },
+        "goes_by": { "type": "string" }
+      },
+      "additionalProperties": false
     }
   },
   "required": ["title"],

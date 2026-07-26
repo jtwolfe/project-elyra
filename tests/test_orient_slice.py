@@ -566,3 +566,59 @@ def test_format_goals_slice_protects_wake_ids():
     # Protected goal/task must remain even if oldest-updated.
     assert "g_old" in text
     assert "t_prot" in text
+
+
+def test_format_goals_slice_shows_goes_by_when_present():
+    goals = [
+        {
+            "id": "g_jim",
+            "title": "Ship feature",
+            "status": "open",
+            "updated_at": "2026-07-22T12:00:00+00:00",
+            "created_in_context": {
+                "user_id": "jim",
+                "goes_by": "Jim",
+                "source": "tool",
+            },
+            "tasks": [
+                {"id": "t1", "title": "Do it", "status": "ready"},
+            ],
+        },
+        {
+            "id": "g_solo",
+            "title": "Autonomous",
+            "status": "open",
+            "updated_at": "2026-07-22T11:00:00+00:00",
+            "tasks": [],
+        },
+    ]
+    text = format_goals_slice(goals, max_tokens=600)
+    assert "Goal g_jim [open]: Ship feature · Jim" in text
+    # No · annotation when created_in_context absent.
+    assert "Goal g_solo [open]: Autonomous" in text
+    assert "Autonomous ·" not in text
+
+
+def test_format_goals_slice_skips_goes_by_when_missing_or_blank():
+    goals = [
+        {
+            "id": "g1",
+            "title": "Only user_id",
+            "status": "open",
+            "updated_at": "2026-07-22T12:00:00+00:00",
+            "created_in_context": {"user_id": "jim"},
+            "tasks": [],
+        },
+        {
+            "id": "g2",
+            "title": "Blank goes_by",
+            "status": "open",
+            "updated_at": "2026-07-22T11:00:00+00:00",
+            "created_in_context": {"user_id": "jim", "goes_by": "  "},
+            "tasks": [],
+        },
+    ]
+    text = format_goals_slice(goals, max_tokens=600)
+    assert "·" not in text
+    assert "Only user_id" in text
+    assert "Blank goes_by" in text

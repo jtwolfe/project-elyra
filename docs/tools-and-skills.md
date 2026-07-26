@@ -1,7 +1,9 @@
 # Tools and skills
 
 **Freeze for runtime shape:** [stretch-1.md](stretch-1.md).  
-This page: **formats**, **base catalog**, **dogfood**, **create-tool safety**.
+This page: **formats**, **base catalog**, **dogfood**, **create-tool safety**, **identity tools/skills**.
+
+Identity store design (layout, gates, work-origin USER): [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) · life-shell rules: [time-and-identity.md](time-and-identity.md).
 
 ---
 
@@ -14,7 +16,7 @@ This page: **formats**, **base catalog**, **dogfood**, **create-tool safety**.
 | Model | Load body when needed | Call with args |
 | Security | Instructions only | Runtime executes under policy |
 
-Goals, identity, and users are **state**, not skills/tools.
+Goals and identity digests are **state**. Identity mutation uses a **thin tool trio** + skills for process — not a fused “update who” tool, and not skills granting host power by prose alone.
 
 ---
 
@@ -32,6 +34,8 @@ $ELYRA_HOME/
 ```
 
 Bundled and local use the **same** layout. Priority: project (later) → local → bundled.
+
+Identity *state* (not tool packages) lives under `data/identity/` and `data/users/<id>/` — see [time-and-identity.md](time-and-identity.md).
 
 ---
 
@@ -120,10 +124,32 @@ The `create-tool` skill body should be a strict checklist matching the above so 
 | Social | `speak`, wait/questions, `schedule_wake` |
 | Skills | `load_skill` (or host equivalent) |
 | Growth | `install_tool_draft`, `verify_tool`, `promote_tool`, `install_skill` |
+| Identity | `get_identity`, `draft_identity`, `promote_identity` |
 | Optional later | `search_tools`, `use_tool` |
 
 `speak` failure → tool result with reason.  
 `run` = guest exec when isolation on (fail closed `sandbox_unavailable:*` if unusable); host `Sandbox.run` only when `ELYRA_SANDBOX=0`. Not a host login shell.
+
+### Identity tools (thin trio)
+
+Parallel to create-tool’s draft→promote culture, **without** a verify package step (identity is prose + meta; gates are social/host):
+
+| Tool | Kind | Role |
+|------|------|------|
+| `get_identity` | read | Current / draft / version body + meta; optional `list_versions`; users get host-computed `should_name_nudge` |
+| `draft_identity` | mutate | Write **draft only** (body and/or `meta_patch`); current unchanged |
+| `promote_identity` | mutate | Draft → current after host gates; archives previous current into `versions/` |
+
+**Rules:**
+
+- **Draft never injects** into orient — only promoted `current.md`.  
+- **Self promote:** hard gate (operator grant token; Glass Identity panel is primary).  
+- **User promote:** medium gate (social wake + reason + target `user_id` == session user; Glass admin may promote other profiles).  
+- **`full_name`:** set/change requires `force_full_name: true` in draft meta (operational; never stored in `draft_meta`). Prefer living **`goes_by`**.  
+- **No** `patch_identity` / `patch_user`. No list-users tool (user discovery is Glass/session).  
+- Identity writes are **host builtins**, not sandbox FS.
+
+Process playbooks: skills `review-identity` and `update-identity` below. Orient USER policy (work-origin, not blind operator): [time-and-identity.md](time-and-identity.md).
 
 ### Operator sandbox install (isolation on)
 
@@ -150,6 +176,17 @@ Glass `/api/status` sandbox block: `mount_ready`, `pyenv_ready`, `ready` / `warm
 | `rest` | Idle honestly |
 | `create-skill` | New playbook on disk |
 | `create-tool` | Draft → verify → promote path |
+| `review-identity` | Read/compare self or user identity (current/draft/versions); speak; **never** promote |
+| `update-identity` | Draft identity changes; self stops for Glass grant; user may promote under medium gate |
+
+### Identity skills (process)
+
+| Skill | First tool path (summary) |
+|-------|---------------------------|
+| `review-identity` | `get_identity` → optional second get → `speak` findings. No `draft_identity` / `promote_identity`. |
+| `update-identity` | `get_identity` → `draft_identity` → **self:** speak + stop for grant; **user:** `promote_identity` when medium gate + session match. Soft name-nudge via `should_name_nudge` / `record_name_nudge`. |
+
+Exact checklists live in `skills/bundled/review-identity/SKILL.md` and `skills/bundled/update-identity/SKILL.md`.
 
 ---
 
@@ -157,11 +194,12 @@ Glass `/api/status` sandbox block: `mount_ready`, `pyenv_ready`, `ready` / `warm
 
 1. One skill format; one tool package format  
 2. No capability without a package (tiny loader excepted)  
-3. Draft ≠ promoted  
-4. Verify before promote  
+3. Draft ≠ promoted (tools **and** identity digests)  
+4. Verify before promote (**callable tools**); identity promote uses host gates, not package verify  
 5. Catalog short; bodies/schemas on demand  
 6. Skills never grant host power by prose  
 7. Finite runners  
+8. Linked work wake → USER from goal/task `created_in_context` when present; autonomous → empty USER (not operator)  
 
 ---
 

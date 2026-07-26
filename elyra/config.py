@@ -15,11 +15,6 @@ from pathlib import Path
 
 ENV_HOME = "ELYRA_HOME"
 
-# Relative seed paths under prompts/
-_SEED_SELF = Path("seeds") / "identity" / "self.md"
-_SEED_OPERATOR = Path("seeds") / "users" / "operator" / "profile.md"
-
-
 def project_root() -> Path:
     """Repo / install root (parent of the elyra package)."""
     return Path(__file__).resolve().parent.parent
@@ -42,11 +37,13 @@ class ElyraPaths:
     prompts_dir: Path
 
     def ensure_data_dirs(self) -> None:
-        """Create runtime dirs; seed templates never overwrite existing digests.
+        """Create runtime dirs; seed/migrate identity + users layouts.
 
-        Canonical seed-v1 ``self.md`` may receive an append-only migrate (Drive
-        section + ``<!-- elyra-self-v2 -->``). Customized digests and already-marked
-        v2 self files are left untouched.
+        Seeds write ``current.md`` (not only legacy ``self.md`` / ``profile.md``).
+        ``IdentityStore.ensure_layout`` / ``UsersStore.ensure_layout`` run the
+        normative migrate order (legacy → current, meta.json, seed-v1 Drive
+        append on resolved live path, versions index heal). Customized digests
+        and already-marked v2 self files are left untouched.
 
         Missing seed templates are a quiet no-op (dirs are still created) so a
         tmp ELYRA_HOME without repo prompts does not hard-fail ensure; packaging
@@ -78,18 +75,14 @@ class ElyraPaths:
         ):
             path.mkdir(parents=True, exist_ok=True)
 
-        self._seed_if_missing(
-            dest=self.data_dir / "identity" / "self.md",
-            seed_rel=_SEED_SELF,
-        )
-        self._seed_if_missing(
-            dest=self.data_dir / "users" / "operator" / "profile.md",
-            seed_rel=_SEED_OPERATOR,
-        )
-        # Lazy import avoids config↔identity cycle at module load.
-        from elyra.identity.store import maybe_migrate_self_v2
+        # Prefer current.md destinations; do not re-seed legacy if current exists.
+        # Stores own full ensure/migrate (seed, legacy copy, meta, v2 append, heal).
+        # Lazy import avoids config↔identity/users cycle at module load.
+        from elyra.identity.store import IdentityStore
+        from elyra.users.store import UsersStore
 
-        maybe_migrate_self_v2(self.data_dir / "identity" / "self.md")
+        IdentityStore(self).ensure_layout()
+        UsersStore(self).ensure_layout()
 
     def resolve_seed(self, seed_rel: Path | str) -> Path | None:
         """Locate a seed template: home prompts first, then project-root prompts.

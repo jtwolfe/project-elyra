@@ -13,7 +13,7 @@ else:
   stop / wait / speak
 ```
 
-Wrapped in a **life shell**: multi-user identity walls, timers, voice as a tool, durable goals.
+Wrapped in a **life shell**: multi-user identity walls (versioned self/users, draft→promote), timers, voice as a tool, durable goals.
 
 ## Glossary
 
@@ -26,8 +26,8 @@ Wrapped in a **life shell**: multi-user identity walls, timers, voice as a tool,
 | **Skill** | Markdown playbook (`SKILL.md`) — how to work |
 | **Tool** | Callable action with schema + runner |
 | **Goal / task** | Durable *what* (ledger) |
-| **Self** | Elyra’s identity files |
-| **User model** | Per-person relationship files (never fused with self) |
+| **Self** | Elyra’s identity (`data/identity/current.md` + draft/versions) |
+| **User model** | Per-person relationship files under `data/users/<id>/` (never fused with self) |
 | **Reasoning** | Provider private CoT stream — store for glass; usually omit from next model prompt |
 | **Speak** | Tool that addresses a user; transport delivers it |
 | **Interjection** | User message mid-moment, injected into the same do-loop |
@@ -63,4 +63,5 @@ If it is not one of these, it does not ship as a new subsystem:
 | Wake queue | Scheduling |
 | Sandbox | Isolated work FS |
 
-See [stretch-1.md](stretch-1.md) for how they run.
+See [stretch-1.md](stretch-1.md) for how they run.  
+Self ≠ user, work-origin USER inject, draft→promote: [time-and-identity.md](time-and-identity.md) · design: [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md).

@@ -1,0 +1,4 @@
+{
+  "kind": "builtin",
+  "entry": "elyra.tools.builtin.identity:get_identity"
+}

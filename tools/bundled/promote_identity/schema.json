@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "actor": {
+      "type": "string",
+      "enum": ["self", "user"]
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Target profile when actor=user (target_user_id). Compared to session."
+    },
+    "reason": {
+      "type": "string"
+    },
+    "grant_token": {
+      "type": "string",
+      "description": "Required for actor=self on model path (operator grant)"
+    },
+    "expected_draft_sha256": {
+      "type": "string",
+      "description": "Optional optimistic lock"
+    }
+  },
+  "required": ["actor", "reason"],
+  "additionalProperties": false
+}

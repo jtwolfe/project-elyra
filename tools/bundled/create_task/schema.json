@@ -17,6 +17,15 @@
     "notes": {
       "type": "string",
       "description": "Optional notes"
+    },
+    "created_in_context": {
+      "type": "object",
+      "description": "Optional provenance override; host usually snapshots from session user",
+      "properties": {
+        "user_id": { "type": "string" },
+        "goes_by": { "type": "string" }
+      },
+      "additionalProperties": false
     }
   },
   "required": ["goal_id", "title"],

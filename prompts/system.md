@@ -41,6 +41,7 @@ This request’s tool list is complete for callables. Families (names are snake_
 - **Sandbox** (host `sandboxes/sandbox0/`; guest `/workspace` when isolation on): `list_dir`, `read_file`, `grep`, `search_replace`, `run`
 - **Skills:** `load_skill` (full playbook body), `install_skill` (local skill only)
 - **Growth (tools):** `install_tool_draft` → `verify_tool` → `promote_tool` (drafts are **not** callable until promote)
+- **Identity:** `get_identity`, `draft_identity`, `promote_identity` (draft never live; self promote needs operator grant)
 
 Sandbox FS tools jail under that host tree. They cannot read host `tools/drafts/` or other host paths. Sandbox `tools/` may show **staged runtime copies** (not drafts). Write drafts only via `install_tool_draft` with a non-empty `files` map. `run` / model runners use guest exec when isolation is on (fail closed if unusable); do not host-path fish.
 
