@@ -41,6 +41,7 @@ from elyra.settings import UsageSettings
 
 if TYPE_CHECKING:
     from elyra.presence.worker import PresenceWorker
+    from elyra.runtime.credits_poller import CreditsPoller
     from elyra.runtime.state import RuntimeState
 
 _LOG = logging.getLogger(__name__)
@@ -77,6 +78,8 @@ class ProviderRuntime:
     # Durable --stub-llm session flag: rebuild/apply_model must not install
     # live HTTP or Failing(local) and erase hermetic Stub posture.
     stub_llm: bool = False
+    # SuperGrok credits poller (supervisor-owned); status may only *signal*.
+    credits_poller: CreditsPoller | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def status_provider_fields(self) -> dict[str, Any]:
@@ -97,10 +100,21 @@ class ProviderRuntime:
             }
 
     def usage_status_block(self) -> dict[str, Any]:
-        """Live meter.snapshot() or disabled placeholder. Called every GET."""
+        """Live meter.snapshot() or disabled placeholder. Called every GET.
+
+        KD26: may only *signal* the credits poller — never billing HTTP and
+        never await the poller. Returns immediately from last applied snapshot.
+        """
         with self._lock:
             meter = self.meter
             enabled = bool(self.usage_settings.enabled)
+            poller = self.credits_poller
+        # Non-blocking signal only (debounced inside poller).
+        if poller is not None:
+            try:
+                poller.request_poll()
+            except Exception:  # noqa: BLE001
+                _LOG.debug("credits poller signal failed", exc_info=True)
         if meter is None or not enabled:
             return {
                 "enabled": False,

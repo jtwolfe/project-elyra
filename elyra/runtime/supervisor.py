@@ -36,6 +36,7 @@ from elyra.llm.usage import UsageMeter
 from elyra.presence.worker import PresenceWorker
 from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
+from elyra.runtime.credits_poller import CreditsPoller
 from elyra.runtime.provider_runtime import ProviderRuntime
 from elyra.runtime.state import RuntimeState, set_runtime_state
 from elyra.sandbox.lifecycle import SandboxLifecycleManager
@@ -81,6 +82,7 @@ class ElyraSupervisor:
         self._sandbox_warm_reason: str | None = "warming"
         self._sandbox_warm_done: bool = False
         self._sandbox_stop = threading.Event()
+        self._credits_poller: CreditsPoller | None = None
 
     def sandbox_status(self) -> dict[str, Any]:
         """Operator status block (also used by GET /api/status)."""
@@ -334,6 +336,10 @@ class ElyraSupervisor:
         )
         pr.worker = self._worker
 
+        # SuperGrok credits poller (daemon): after meter + provider runtime.
+        # No-op when usage.enabled=false or credits_poll_enabled=false.
+        self._start_credits_poller(meter=meter, pr=pr)
+
         self._worker_thread = threading.Thread(
             target=self._worker.run,
             name="elyra-presence",
@@ -357,6 +363,44 @@ class ElyraSupervisor:
                 pr.refresh_models()
             except Exception:  # noqa: BLE001
                 _LOG.debug("initial refresh_models failed", exc_info=True)
+
+    def _start_credits_poller(
+        self,
+        *,
+        meter: UsageMeter,
+        pr: ProviderRuntime,
+    ) -> None:
+        """Start daemon credits poller when usage + poll flags allow."""
+        cfg = self.config
+        if not cfg.usage.enabled or not cfg.usage.credits_poll_enabled:
+            self._credits_poller = None
+            pr.credits_poller = None
+            return
+
+        def _get_source() -> str:
+            return str(pr.credential_source or cfg.credential_source)
+
+        def _get_settings():
+            return pr.usage_settings
+
+        poller = CreditsPoller(
+            meter=meter,
+            usage_settings=cfg.usage,
+            data_dir=self.paths.data_dir,
+            credential_source=cfg.credential_source,
+            grok_auth_path=pr.grok_auth_path,
+            get_credential_source=_get_source,
+            get_usage_settings=_get_settings,
+            enabled=True,
+        )
+        self._credits_poller = poller
+        pr.credits_poller = poller
+        poller.start()
+        _LOG.debug(
+            "credits poller started interval_s=%s base=%s",
+            cfg.usage.credits_poll_interval_s,
+            cfg.usage.credits_base_url,
+        )
 
     def run_forever(self) -> None:
         self.start()
@@ -387,6 +431,15 @@ class ElyraSupervisor:
         self._stop.set()
         self._sandbox_stop.set()
         self._gate.shutdown()
+        # 0. Credits poller stop (daemon; best-effort join).
+        if self._credits_poller is not None:
+            try:
+                self._credits_poller.stop(join_timeout_s=2.0)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("credits poller stop failed: %s", exc)
+            self._credits_poller = None
+            if self.provider_runtime is not None:
+                self.provider_runtime.credits_poller = None
         # 1. Presence worker join before sandbox stop.
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=5)

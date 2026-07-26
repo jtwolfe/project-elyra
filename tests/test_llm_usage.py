@@ -1279,7 +1279,8 @@ def test_record_accumulates_week_cached(tmp_path: Path):
     assert snap.week_cached_tokens == 40
 
 
-def test_credits_module_no_http_imports():
+def test_credits_module_import_boundary():
+    """PR4 may use stdlib urllib; must not import client/usage (or third-party HTTP)."""
     import ast
     from pathlib import Path as P
 
@@ -1292,10 +1293,17 @@ def test_credits_module_no_http_imports():
             mod = getattr(node, "module", None) or ""
             names = [a.name for a in node.names] if isinstance(node, ast.Import) else []
             blob = " ".join([mod] + names)
-            assert "urllib" not in blob
+            # Stdlib urllib is allowed for fetch_billing; ban third-party HTTP.
             assert "httpx" not in blob
             assert "requests" not in blob
-            assert "client" not in blob.split(".")
+            parts = blob.replace("/", ".").split(".")
+            assert "client" not in parts
+            assert "usage" not in parts
+            # Never import elyra.llm.client / elyra.llm.usage.
+            if mod.startswith("elyra"):
+                assert "client" not in mod.split(".")
+                assert not mod.endswith(".usage")
+                assert ".usage" not in mod
 
 
 # ---------------------------------------------------------------------------
