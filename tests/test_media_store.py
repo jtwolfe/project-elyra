@@ -258,6 +258,42 @@ def test_put_bytes_projects_sandbox_media(store, paths):
     assert mirror.read_bytes() == data
 
 
+def test_idempotent_put_reprojects_missing_mirror(store, paths):
+    """Idempotent put (same att_id + sha) re-projects if sandbox mirror is gone.
+
+    Repro: put → clear_sandbox (mirror wiped, meta+blob remain) → put same id
+    must heal the mirror (L3 disposable projection).
+    """
+    from elyra.runtime.reset import clear_sandbox
+
+    data = b"idempotent-reproject-payload"
+    att = store.put_bytes(
+        data, filename="heal.txt", origin="system", att_id="att_heal_reproject"
+    )
+    mirror = (
+        paths.home
+        / "sandboxes"
+        / "sandbox0"
+        / "media"
+        / att.id
+        / "heal.txt"
+    )
+    assert mirror.is_file()
+    clear_sandbox(paths)
+    assert not mirror.exists()
+    # Meta + blob still durable.
+    assert store.get(att.id) is not None
+    assert store.blob_path(att.sha256).is_file()
+
+    again = store.put_bytes(
+        data, filename="heal.txt", origin="system", att_id=att.id
+    )
+    assert again.id == att.id
+    assert again.sha256 == att.sha256
+    assert mirror.is_file()
+    assert mirror.read_bytes() == data
+
+
 def test_project_attachment_hardlink_then_copy_fallback(store, paths, monkeypatch):
     """Projection tries os.link; on OSError falls back to copy2 + chmod 0o444."""
     from elyra.media.project import project_attachment

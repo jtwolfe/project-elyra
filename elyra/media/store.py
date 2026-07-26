@@ -285,7 +285,10 @@ class MediaStore:
             existing = self.get(aid)
             if existing is not None:
                 if existing.sha256 == sha:
-                    # Idempotent put: same id + same bytes.
+                    # Idempotent put: same id + same bytes. Re-project so a
+                    # missing mirror (failed first project / clear_sandbox)
+                    # heals without a new att id (L3 disposable mirror).
+                    self._best_effort_project(existing)
                     return existing
                 raise ValueError(
                     f"attachment id already exists with different bytes: {aid!r}"
@@ -308,7 +311,7 @@ class MediaStore:
             sha256=sha,
             created_at=_now(),
             role_hint=role_hint,
-            # Planned sandbox projection path (actual project in PR2).
+            # Sandbox mirror path; projected best-effort after meta write.
             sandbox_relpath=f"media/{aid}/{fname}",
             embedding_status="none",
             embedding_ref=None,
@@ -316,15 +319,22 @@ class MediaStore:
             uploader_user_id=uploader_user_id,
         )
         self._write_meta(att)
-        # Best-effort RO sandbox projection (PR2). Failure must not leave meta
-        # inconsistent — blob+meta are durable truth; mirror is disposable.
+        self._best_effort_project(att)
+        return att
+
+    def _best_effort_project(self, att: Attachment) -> None:
+        """Project blob into sandbox media mirror; log OSError, never raise.
+
+        Failure must not leave meta inconsistent — blob+meta are durable truth;
+        mirror is disposable and re-projectable (PR2 / L3).
+        """
         try:
             from elyra.media.project import project_attachment
 
+            blob = self.blob_path(att.sha256)
             project_attachment(att, blob, paths=self._paths)
         except OSError as exc:
-            _LOG.warning("media projection failed for %s: %s", aid, exc)
-        return att
+            _LOG.warning("media projection failed for %s: %s", att.id, exc)
 
     def _write_meta(self, att: Attachment) -> None:
         path = self.meta_path(att.id)
