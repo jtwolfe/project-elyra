@@ -119,9 +119,11 @@ class UsageSettings:
     it is **not** multiplied into meter math until an external real-quota hook
     exists.
 
-    Day/hour hard stops default **off** (soft bars only until operators opt in).
-    Pace/burst/account/credits fields are settings surface only until later PRs
-    wire meter and poller behavior.
+    Day/hour hard-stop *flags* default **off** (settings surface only). Until
+    a later PR wires those flags into the meter, Phase 0 still hard-stops day
+    and hour from derived ceilings regardless of these booleans. Pace/burst/
+    account/credits fields are likewise settings-only until later PRs wire
+    meter and poller behavior.
 
     ``hard_stop_override`` is a *runtime* preference (usage.json), not a
     Settings ship default — always starts/persists default False unless the
@@ -292,7 +294,9 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                 f"(http/https host, path empty or '/', no query/fragment), "
                 f"got {coerced!r}"
             )
-        if path == "usage.throttle_model" and coerced == "":
+        if path == "usage.throttle_model" and (
+            not isinstance(coerced, str) or not coerced.strip()
+        ):
             raise ValueError(
                 f"{path}: expected None or non-empty str, got {coerced!r}"
             )
@@ -334,14 +338,30 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
 def _is_origin_url(url: str) -> bool:
     """True if ``url`` is an absolute http(s) origin (no path/query/fragment).
 
-    Path may be empty or a single ``/``. Host is required.
+    Accepts ``http(s)://host[:port]`` with path empty or a single ``/``.
+    Rejects userinfo, whitespace padding, non-numeric/out-of-range ports,
+    query, fragment, and non-empty paths other than ``/``.
     """
     if not isinstance(url, str) or not url:
         return False
-    parsed = urlparse(url)
+    # No silent normalize: leading/trailing whitespace is not an origin form.
+    if url.strip() != url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
     if parsed.scheme not in ("http", "https"):
         return False
     if not parsed.hostname:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port is not None and not (1 <= port <= 65535):
         return False
     if parsed.path not in ("", "/"):
         return False

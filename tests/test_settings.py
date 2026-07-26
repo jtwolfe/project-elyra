@@ -528,6 +528,23 @@ def test_invalid_credits_poll_and_stale_raise(tmp_path):
     s = load_settings(tmp_path)
     assert s.usage.credits_poll_interval_s == 60.0
     assert s.usage.credits_stale_after_s == 60.0
+    # floor boundary: poll interval == 30 is ok
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\ncredits_poll_interval_s = 30\ncredits_stale_after_s = 30\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.usage.credits_poll_interval_s == 30.0
+    assert s.usage.credits_stale_after_s == 30.0
+
+
+def test_account_hard_stop_percent_boundary_accepts_100(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\naccount_hard_stop_percent = 100\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.usage.account_hard_stop_percent == 100.0
 
 
 def test_invalid_credits_base_url_raises(tmp_path):
@@ -539,6 +556,11 @@ def test_invalid_credits_base_url_raises(tmp_path):
         "https://example.com?q=1",  # query
         "https://example.com#frag",  # fragment
         "http://example.com/path/",
+        "https://[::1",  # malformed IPv6 — must surface credits_base_url path
+        "https://u:p@example.com",  # userinfo
+        "https://example.com:abc",  # non-numeric port
+        " https://example.com",  # leading whitespace
+        "https://example.com ",  # trailing whitespace
     ]
     for url in bad_urls:
         (tmp_path / "elyra.toml").write_text(
@@ -554,11 +576,24 @@ def test_invalid_credits_base_url_raises(tmp_path):
     )
     s = load_settings(tmp_path)
     assert s.usage.credits_base_url == "http://127.0.0.1:8080/"
+    # valid IPv6 origin is allowed
+    (tmp_path / "elyra.toml").write_text(
+        '[usage]\ncredits_base_url = "https://[::1]"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.usage.credits_base_url == "https://[::1]"
 
 
 def test_invalid_throttle_model_and_bool_types_raise(tmp_path):
     (tmp_path / "elyra.toml").write_text(
         '[usage]\nthrottle_model = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="throttle_model"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        '[usage]\nthrottle_model = "   "\n',
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="throttle_model"):
