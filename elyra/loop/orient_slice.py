@@ -37,7 +37,6 @@ _GOAL_STATUSES = frozenset({"open", "review"})
 _TASK_STATUSES_PRIMARY = frozenset({"ready", "in_progress", "blocked"})
 _TASK_STATUSES_OPTIONAL = frozenset({"pending"})
 _TASK_STATUSES_DO_WORK = frozenset({"ready", "in_progress"})
-_GOAL_STATUSES_OPEN = frozenset({"open", "review"})
 
 _EMPTY_GOALS = "(no open goals)"
 
@@ -149,7 +148,7 @@ def _summarize_ledger_shape(
     for g in goals:
         if not isinstance(g, Mapping):
             continue
-        if g.get("status") not in _GOAL_STATUSES_OPEN:
+        if g.get("status") not in _GOAL_STATUSES:
             continue
         has_open_or_review_goal = True
         tasks = g.get("tasks")
