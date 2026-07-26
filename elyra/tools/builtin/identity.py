@@ -321,12 +321,11 @@ def _promote_self(
     has_draft = bool(store.has_draft())
     draft_sha = _draft_sha(store, actor="self", user_id=None)
 
-    # Resolve token (model path: args.grant_token required)
+    # Resolve token (model path: args.grant_token required).
+    # Gate membership uses the active set only — do NOT union `resolved`
+    # (unknown/forged/exhausted tokens must fail at gate as self_grant_required).
     resolved = grant_token.strip() if isinstance(grant_token, str) and grant_token.strip() else None
-    active = load_active_token_set(ctx.paths)
-    operator_tokens = active
-    if resolved:
-        operator_tokens = frozenset(set(active) | {resolved})
+    operator_tokens = load_active_token_set(ctx.paths)
 
     gate = evaluate_promote_gate(
         PromoteContext(
@@ -340,6 +339,7 @@ def _promote_self(
             has_draft=has_draft and draft_sha is not None,
             draft_sha256=draft_sha,
             expected_draft_sha256=expected_draft_sha256,
+            # Host-only flags: always False on model path (ignore args/extras smuggling).
             identity_promote_user_ok=False,
             identity_promote_any_user=False,
             operator_grant_tokens=operator_tokens,

@@ -600,7 +600,7 @@ def test_draft_and_promote_self_with_grant(paths, identity):
     assert not identity.has_draft()
     assert "carefully revised" in identity.self_digest()
 
-    # Second promote with same token fails (exhausted)
+    # Second promote with same token fails at gate (exhausted → not in active set)
     identity.write_draft(
         "# again\n\nsecond draft body\n", reason="another draft for test"
     )
@@ -613,7 +613,46 @@ def test_draft_and_promote_self_with_grant(paths, identity):
         ctx,
     )
     assert not again.ok
-    assert again.error_reason in ("self_grant_required", "grant_exhausted")
+    assert again.error_reason == "self_grant_required"
+
+
+def test_promote_self_unknown_grant_token_gate_deny(paths, identity):
+    """Unknown/forged grant fails at gate (self_grant_required), not at consume."""
+    ctx = _ctx(paths, identity=identity)
+    body = "# Self draft\n\nforged token test\n"
+    draft_identity(
+        {"actor": "self", "body": body, "reason": "compose for forged test"},
+        ctx,
+    )
+    # Real grant present so file is non-empty; forged token must still be denied.
+    real = mint_grant(paths, note="other")
+    real_token = real["token"]
+    forged = "grant_" + "f" * 32
+
+    before = load_grants(paths)
+    uses_before = {
+        row["token"]: row["uses_remaining"] for row in before["tokens"]
+    }
+
+    denied = promote_identity(
+        {
+            "actor": "self",
+            "reason": "adopt with forged token xx",
+            "grant_token": forged,
+        },
+        ctx,
+    )
+    assert not denied.ok
+    assert denied.error_reason == "self_grant_required"
+    # No consume side effects; real token still active; draft intact
+    after = load_grants(paths)
+    uses_after = {
+        row["token"]: row["uses_remaining"] for row in after["tokens"]
+    }
+    assert uses_after == uses_before
+    assert real_token in load_active_token_set(paths)
+    assert identity.has_draft()
+    assert "forged token test" not in identity.self_digest() or identity.has_draft()
 
 
 def test_promote_self_does_not_consume_on_gate_deny(paths, identity):
@@ -764,3 +803,129 @@ def test_bundled_identity_tools_discovered(paths):
     assert "get_identity" in names
     assert "draft_identity" in names
     assert "promote_identity" in names
+
+
+def test_promote_identity_schema_excludes_host_only_flags(paths):
+    """Bundled schema must not accept host-only promote flags."""
+    from elyra.tools import ToolRegistry
+
+    reg = ToolRegistry(paths)
+    pkg = reg._by_key.get("promote_identity")  # noqa: SLF001
+    assert pkg is not None
+    schema = pkg.meta.parameters_schema if hasattr(pkg.meta, "parameters_schema") else None
+    if schema is None:
+        # Load schema.json directly from package dir
+        import json
+        from pathlib import Path
+
+        schema_path = Path(pkg.package_dir) / "schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    props = schema.get("properties") or {}
+    for banned in (
+        "identity_promote_user_ok",
+        "identity_promote_any_user",
+        "allow_self_promote_without_grant",
+        "operator_grant_tokens",
+    ):
+        assert banned not in props
+    assert schema.get("additionalProperties") is False
+
+
+def test_host_only_flags_smuggled_in_args_ignored(paths, users):
+    """Model cannot set identity_promote_* via tool args (hardcoded False)."""
+    users.create_user("Jim", user_id="jim")
+    users.write_draft(
+        "jim",
+        "# Jim\n\nsmuggle test body\n",
+        reason="draft for smuggle test",
+    )
+
+    # Pure work: even with smuggled flags in args, still context_required
+    ctx_work = _ctx(paths, users=users, user_id="jim", wake_kind="timer")
+    r = promote_identity(
+        {
+            "actor": "user",
+            "user_id": "jim",
+            "reason": "smuggle host flags attempt",
+            "identity_promote_user_ok": True,
+            "identity_promote_any_user": True,
+            "allow_self_promote_without_grant": True,
+        },
+        ctx_work,
+    )
+    assert not r.ok
+    assert r.error_reason == "user_promote_context_required"
+    assert users.has_draft("jim")
+
+    # Wrong session: smuggled any_user must not allow promote
+    ctx_wrong = _ctx(paths, users=users, user_id="operator", wake_kind="user_message")
+    r2 = promote_identity(
+        {
+            "actor": "user",
+            "user_id": "jim",
+            "reason": "smuggle wrong user flags",
+            "identity_promote_user_ok": True,
+            "identity_promote_any_user": True,
+        },
+        ctx_wrong,
+    )
+    assert not r2.ok
+    assert r2.error_reason == "user_promote_wrong_user"
+    assert users.has_draft("jim")
+
+
+def test_host_only_flags_smuggled_in_extras_ignored(paths, users, identity):
+    """Model cannot set host-only flags via ctx.extras either."""
+    users.create_user("Jim", user_id="jim")
+    users.write_draft(
+        "jim",
+        "# Jim\n\nextras smuggle body\n",
+        reason="draft for extras smuggle",
+    )
+    ctx = ToolContext(
+        paths=paths,
+        moment_id="m1",
+        user_id="operator",  # wrong session
+        extras={
+            "users": users,
+            "identity": identity,
+            "wake_kind": "timer",  # pure work
+            # Smuggled host-only flags — handlers must ignore these.
+            "identity_promote_user_ok": True,
+            "identity_promote_any_user": True,
+            "allow_self_promote_without_grant": True,
+        },
+    )
+    r = promote_identity(
+        {
+            "actor": "user",
+            "user_id": "jim",
+            "reason": "extras smuggle host flags",
+        },
+        ctx,
+    )
+    assert not r.ok
+    assert r.error_reason == "user_promote_context_required"
+
+    # Self path: allow_self_promote_without_grant in extras must not bypass grant
+    identity.write_draft(
+        "# Self\n\nextras self smuggle\n", reason="self extras smuggle draft"
+    )
+    ctx_self = ToolContext(
+        paths=paths,
+        moment_id="m2",
+        user_id=None,
+        extras={
+            "identity": identity,
+            "wake_kind": "timer",
+            "allow_self_promote_without_grant": True,
+            "identity_promote_user_ok": True,
+        },
+    )
+    r_self = promote_identity(
+        {"actor": "self", "reason": "try promote without grant via extras"},
+        ctx_self,
+    )
+    assert not r_self.ok
+    assert r_self.error_reason == "self_grant_required"
+    assert identity.has_draft()
