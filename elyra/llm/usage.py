@@ -40,10 +40,14 @@ class TokenUsage:
     completion_tokens: int = 0
     total_tokens: int = 0
     reasoning_tokens: int = 0
+    cached_tokens: int = 0  # prompt_tokens_details.cached_tokens (informational)
 
     @property
     def billable_tokens(self) -> int:
-        """Prefer total_tokens; else prompt+completion; else 0."""
+        """Prefer total_tokens; else prompt+completion; else 0.
+
+        Does **not** subtract cached_tokens — billable is unchanged by cache hits.
+        """
         if self.total_tokens > 0:
             return int(self.total_tokens)
         summed = int(self.prompt_tokens) + int(self.completion_tokens)
@@ -80,11 +84,19 @@ def parse_token_usage(raw: Any) -> TokenUsage | None:
     elif "reasoning_tokens" in raw:
         reasoning = _as_nonneg_int(raw.get("reasoning_tokens"))
 
+    cached = 0
+    prompt_details = raw.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict) and "cached_tokens" in prompt_details:
+        cached = _as_nonneg_int(prompt_details.get("cached_tokens"))
+    elif "cached_tokens" in raw:
+        cached = _as_nonneg_int(raw.get("cached_tokens"))
+
     return TokenUsage(
         prompt_tokens=prompt,
         completion_tokens=completion,
         total_tokens=total,
         reasoning_tokens=reasoning,
+        cached_tokens=cached,
     )
 
 

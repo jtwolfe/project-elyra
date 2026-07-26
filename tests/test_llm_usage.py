@@ -90,7 +90,84 @@ def test_parse_token_usage_openai_shape():
     assert u.completion_tokens == 50
     assert u.total_tokens == 150
     assert u.reasoning_tokens == 12
+    assert u.cached_tokens == 0
     assert u.billable_tokens == 150
+
+
+def test_parse_token_usage_cached_from_prompt_tokens_details():
+    raw = {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "prompt_tokens_details": {"cached_tokens": 40},
+    }
+    u = parse_token_usage(raw)
+    assert u is not None
+    assert u.cached_tokens == 40
+    # Billable is total_tokens; do not subtract cached.
+    assert u.billable_tokens == 150
+
+
+def test_parse_token_usage_cached_top_level():
+    raw = {
+        "prompt_tokens": 80,
+        "completion_tokens": 20,
+        "total_tokens": 100,
+        "cached_tokens": 25,
+    }
+    u = parse_token_usage(raw)
+    assert u is not None
+    assert u.cached_tokens == 25
+    assert u.billable_tokens == 100
+
+
+def test_parse_token_usage_prompt_details_preferred_over_top_level_cached():
+    raw = {
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "total_tokens": 110,
+        "cached_tokens": 99,
+        "prompt_tokens_details": {"cached_tokens": 30},
+    }
+    u = parse_token_usage(raw)
+    assert u is not None
+    assert u.cached_tokens == 30
+
+
+def test_parse_token_usage_cached_invalid_types_zero():
+    raw = {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "prompt_tokens_details": {"cached_tokens": "nope"},
+    }
+    u = parse_token_usage(raw)
+    assert u is not None
+    assert u.cached_tokens == 0
+    assert u.billable_tokens == 15
+
+    raw2 = {
+        "prompt_tokens": 10,
+        "total_tokens": 10,
+        "prompt_tokens_details": "not-a-dict",
+        "cached_tokens": True,  # bool excluded like other fields
+    }
+    u2 = parse_token_usage(raw2)
+    assert u2 is not None
+    assert u2.cached_tokens == 0
+
+
+def test_token_usage_billable_ignores_cached():
+    """cached_tokens is informational; never reduces billable_tokens."""
+    u = TokenUsage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        cached_tokens=100,
+    )
+    assert u.billable_tokens == 150
+    u2 = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=0, cached_tokens=8)
+    assert u2.billable_tokens == 15
 
 
 def test_parse_token_usage_missing_returns_none():
@@ -105,6 +182,7 @@ def test_parse_token_usage_partial_fields():
     assert u is not None
     assert u.prompt_tokens == 3
     assert u.completion_tokens == 0
+    assert u.cached_tokens == 0
     assert u.billable_tokens == 3
 
 
