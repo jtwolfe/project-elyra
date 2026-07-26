@@ -90,6 +90,72 @@ def test_bind_message_and_reject_rebinding(store):
     assert again.bound_message_id == "msg-1"
     with pytest.raises(ValueError, match="already bound"):
         store.bind_message(att.id, "msg-2")
+    with pytest.raises(ValueError, match="invalid message_id"):
+        store.bind_message(att.id, "")
+    with pytest.raises(ValueError, match="invalid message_id"):
+        store.bind_message(att.id, "   ")
+
+
+def test_magic_mime_prefers_sniff_over_claimed(store):
+    """Confident magic hit stores sniffed mime, not a bogus client claim."""
+    data = FIXTURE_PNG.read_bytes()
+    att = store.put_bytes(
+        data,
+        filename="shot.bin",
+        mime="application/octet-stream",
+        origin="user_upload",
+    )
+    assert att.mime == "image/png"
+    assert att.kind == "image"
+    # Explicit kind= still overrides kind for product "treat image as file".
+    att2 = store.put_bytes(
+        data,
+        filename="as-file.png",
+        mime="application/octet-stream",
+        kind="file",
+        origin="system",
+    )
+    assert att2.mime == "image/png"
+    assert att2.kind == "file"
+
+
+def test_put_bytes_att_id_idempotent_or_reject(store):
+    data = b"same-payload-id-reuse"
+    att = store.put_bytes(
+        data, filename="a.txt", origin="system", att_id="att_fixedid001"
+    )
+    # Same id + same bytes → idempotent return.
+    again = store.put_bytes(
+        data, filename="b.txt", origin="system", att_id="att_fixedid001"
+    )
+    assert again.id == att.id
+    assert again.sha256 == att.sha256
+    # Same id + different bytes → reject (no orphan prior-blob overwrite).
+    with pytest.raises(ValueError, match="already exists"):
+        store.put_bytes(
+            b"other-payload",
+            filename="c.txt",
+            origin="system",
+            att_id="att_fixedid001",
+        )
+    assert store.read_bytes(att.id) == data
+
+
+def test_role_hint_unknown_defaults_to_primary(store):
+    att = store.put_bytes(
+        b"x",
+        filename="x.txt",
+        origin="system",
+        role_hint="not-a-hint",
+    )
+    assert att.role_hint == "primary"
+    att2 = store.put_bytes(
+        b"y",
+        filename="y.txt",
+        origin="system",
+        role_hint="inline",
+    )
+    assert att2.role_hint == "inline"
 
 
 def test_get_missing_and_invalid_id(store):

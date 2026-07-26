@@ -13,12 +13,14 @@ from elyra.media.store import (
     put_bytes,
     safe_filename,
     sniff_mime_and_kind,
+    sniff_mime_kind_source,
     validate_att_id,
 )
 from elyra.media.types import (
     ATTACHMENT_KINDS,
     ATTACHMENT_ORIGINS,
     EMBEDDING_STATUSES,
+    ROLE_HINTS,
     Attachment,
 )
 
@@ -26,6 +28,7 @@ __all__ = [
     "ATTACHMENT_KINDS",
     "ATTACHMENT_ORIGINS",
     "EMBEDDING_STATUSES",
+    "ROLE_HINTS",
     "Attachment",
     "MediaStore",
     "bind_attachment_message",
@@ -35,5 +38,6 @@ __all__ = [
     "put_bytes",
     "safe_filename",
     "sniff_mime_and_kind",
+    "sniff_mime_kind_source",
     "validate_att_id",
 ]
