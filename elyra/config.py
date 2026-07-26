@@ -61,10 +61,10 @@ class ElyraPaths:
         ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
 
-        # Media store subdirs (blobs/meta/tts/by_message/tmp).
-        from elyra.media.store import ensure_media_dirs
+        # Media store subdirs + lightweight reconcile/GC (PR10 / KD23).
+        from elyra.media.gc import ensure_media
 
-        ensure_media_dirs(self)
+        ensure_media(self)
 
         # API key secret store (mode 0700). Values written by elyra.llm.auth.
         secrets = self.data_dir / "secrets"

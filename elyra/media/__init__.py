@@ -5,6 +5,27 @@ Stretch 2 embedding fields are stubs only (KD12). Meal-time vision expand
 (PR6/PR7) proxy xAI; never expose API keys to the browser.
 """
 
+from elyra.media.activity import (
+    clear_media_activity_for_tests,
+    note_media_activity,
+    recent_media_activity,
+)
+from elyra.media.gc import (
+    UNBOUND_MAX_AGE,
+    UNBOUND_MAX_BYTES,
+    ensure_media,
+    gc_unbound_attachments,
+    media_stats,
+    reconcile_mirrors,
+)
+from elyra.media.limits import (
+    RATE_LIMITED_PAYLOAD,
+    STT_MAX_PER_MINUTE,
+    TTS_MAX_PER_MINUTE,
+    allow_stt,
+    allow_tts,
+    reset_rate_limits_for_tests,
+)
 from elyra.media.ingest import (
     IngestError,
     clone_attachment,

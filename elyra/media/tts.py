@@ -6,7 +6,9 @@ output_profile)``. Never creates glass rows; never calls chat_completion.
 
 In scope: synthesize, cache path/read/write, 15k char guard, empty-text refuse,
 kill switch ``ELYRA_TTS=0``, local/provider fail-closed helpers.
-Out of scope: STT, streaming WS, rate limits (PR10), glass UI wiring.
+Out of scope: STT, streaming WS, glass UI wiring.
+  Rate limits enforced at the HTTP layer (``elyra.media.limits``, PR10).
+
 """
 
 from __future__ import annotations

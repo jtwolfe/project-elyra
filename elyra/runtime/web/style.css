@@ -794,6 +794,19 @@ body {
   border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
+/* Media observability chips (PR10): upload / stt / tts */
+.activity-chip.kind-upload {
+  border-color: rgba(100, 160, 220, 0.4);
+}
+
+.activity-chip.kind-stt {
+  border-color: rgba(180, 140, 220, 0.45);
+}
+
+.activity-chip.kind-tts {
+  border-color: rgba(220, 160, 100, 0.45);
+}
+
 .activity-chip.chip-enter {
   animation: activity-chip-in 0.32s ease-out;
 }

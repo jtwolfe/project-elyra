@@ -4,7 +4,8 @@ Scope: blob + meta persistence, bind, path helpers, stdlib MIME sniff,
 sandbox RO projection (PR2).
 In scope: sha-addressed blobs, meta JSON with bound_message_id, temp+rename
 writes, ensure dirs, read/delete helpers used by reset/tests, project mirror.
-Out of scope: HTTP upload, GC (PR10), TTS cache writes, vision expand.
+Out of scope: HTTP upload, TTS cache writes, vision expand.
+  GC / reconcile live in ``elyra.media.gc`` (PR10 / KD23).
 """
 
 from __future__ import annotations
