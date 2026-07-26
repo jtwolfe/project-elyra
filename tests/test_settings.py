@@ -55,6 +55,19 @@ def test_default_settings_match_design():
     assert s.usage.hour_block_minutes == 60
     assert s.usage.day_allowed_tokens is None
     assert s.usage.hour_allowed_tokens is None
+    # Soft day/hour hard-stops by default; pace/burst/account/credits knobs
+    assert s.usage.day_hard_stop_enabled is False
+    assert s.usage.hour_hard_stop_enabled is False
+    assert s.usage.account_hard_stop_percent == 95.0
+    assert s.usage.pace_yellow_ratio == 1.0
+    assert s.usage.pace_red_ratio == 1.5
+    assert s.usage.burst_hours == 4.0
+    assert s.usage.credits_poll_enabled is True
+    assert s.usage.credits_base_url == "https://cli-chat-proxy.grok.com"
+    assert s.usage.credits_poll_interval_s == 300.0
+    assert s.usage.credits_stale_after_s == 3600.0
+    assert s.usage.auto_throttle_model is False
+    assert s.usage.throttle_model is None
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert not hasattr(s, "context_tokens")
@@ -149,6 +162,13 @@ def test_settings_as_dict_round_structure():
     assert d["provider"]["model"] == "grok-4.5"
     assert d["usage"]["enabled"] is True
     assert d["usage"]["weekly_allowed_tokens"] == 5_000_000
+    assert d["usage"]["day_hard_stop_enabled"] is False
+    assert d["usage"]["hour_hard_stop_enabled"] is False
+    assert d["usage"]["pace_yellow_ratio"] == 1.0
+    assert d["usage"]["pace_red_ratio"] == 1.5
+    assert d["usage"]["burst_hours"] == 4.0
+    assert d["usage"]["account_hard_stop_percent"] == 95.0
+    assert d["usage"]["credits_base_url"] == "https://cli-chat-proxy.grok.com"
     assert d["continuous"]["enabled"] is False
 
 
@@ -170,6 +190,18 @@ weekly_allowed_fraction = 0.25
 hour_block_minutes = 30
 day_allowed_tokens = 100
 hour_allowed_tokens = 10
+day_hard_stop_enabled = true
+hour_hard_stop_enabled = true
+account_hard_stop_percent = 90.0
+pace_yellow_ratio = 0.8
+pace_red_ratio = 1.2
+burst_hours = 2.0
+credits_poll_enabled = false
+credits_base_url = "https://billing.example.com"
+credits_poll_interval_s = 60.0
+credits_stale_after_s = 120.0
+auto_throttle_model = true
+throttle_model = "grok-3-mini"
 
 [continuous]
 enabled = false
@@ -192,6 +224,18 @@ enabled = false
     assert s.usage.hour_block_minutes == 30
     assert s.usage.day_allowed_tokens == 100
     assert s.usage.hour_allowed_tokens == 10
+    assert s.usage.day_hard_stop_enabled is True
+    assert s.usage.hour_hard_stop_enabled is True
+    assert s.usage.account_hard_stop_percent == 90.0
+    assert s.usage.pace_yellow_ratio == 0.8
+    assert s.usage.pace_red_ratio == 1.2
+    assert s.usage.burst_hours == 2.0
+    assert s.usage.credits_poll_enabled is False
+    assert s.usage.credits_base_url == "https://billing.example.com"
+    assert s.usage.credits_poll_interval_s == 60.0
+    assert s.usage.credits_stale_after_s == 120.0
+    assert s.usage.auto_throttle_model is True
+    assert s.usage.throttle_model == "grok-3-mini"
     assert s.continuous.enabled is False
 
 
@@ -365,6 +409,184 @@ def test_cli_invalid_provider_and_usage_raise():
         merge_cli_overrides(base, {"usage": {"hour_allowed_tokens": -5}})
     with pytest.raises(ValueError, match="request_timeout_s"):
         merge_cli_overrides(base, {"provider": {"request_timeout_s": 0.0}})
+    with pytest.raises(ValueError, match="account_hard_stop_percent"):
+        merge_cli_overrides(base, {"usage": {"account_hard_stop_percent": 0}})
+    with pytest.raises(ValueError, match="pace_yellow_ratio"):
+        merge_cli_overrides(base, {"usage": {"pace_yellow_ratio": 0}})
+    with pytest.raises(ValueError, match="pace_red_ratio"):
+        merge_cli_overrides(base, {"usage": {"pace_red_ratio": 0.5}})
+    with pytest.raises(ValueError, match="burst_hours"):
+        merge_cli_overrides(base, {"usage": {"burst_hours": -1}})
+    with pytest.raises(ValueError, match="credits_poll_interval_s"):
+        merge_cli_overrides(base, {"usage": {"credits_poll_interval_s": 10}})
+    with pytest.raises(ValueError, match="credits_stale_after_s"):
+        merge_cli_overrides(base, {"usage": {"credits_stale_after_s": 100}})
+    with pytest.raises(ValueError, match="credits_base_url"):
+        merge_cli_overrides(
+            base, {"usage": {"credits_base_url": "https://x.com/v1"}}
+        )
+    with pytest.raises(ValueError, match="throttle_model"):
+        merge_cli_overrides(base, {"usage": {"throttle_model": ""}})
+
+
+def test_invalid_account_hard_stop_percent_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\naccount_hard_stop_percent = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="account_hard_stop_percent"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\naccount_hard_stop_percent = 100.1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="account_hard_stop_percent"):
+        load_settings(tmp_path)
+
+
+def test_invalid_pace_ratios_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\npace_yellow_ratio = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="pace_yellow_ratio"):
+        load_settings(tmp_path)
+    # red must be strictly greater than yellow (default yellow=1.0)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\npace_red_ratio = 1.0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="pace_red_ratio"):
+        load_settings(tmp_path)
+    # raising yellow above existing red fails
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\npace_yellow_ratio = 2.0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="pace_red_ratio"):
+        load_settings(tmp_path)
+    # both set together with red <= yellow fails
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\npace_yellow_ratio = 1.5\npace_red_ratio = 1.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="pace_red_ratio"):
+        load_settings(tmp_path)
+
+
+def test_valid_pace_ratios_accept(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\npace_yellow_ratio = 0.5\npace_red_ratio = 0.75\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.usage.pace_yellow_ratio == 0.5
+    assert s.usage.pace_red_ratio == 0.75
+
+
+def test_invalid_burst_hours_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nburst_hours = -0.1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="burst_hours"):
+        load_settings(tmp_path)
+    # zero is allowed
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nburst_hours = 0\n",
+        encoding="utf-8",
+    )
+    assert load_settings(tmp_path).usage.burst_hours == 0.0
+
+
+def test_invalid_credits_poll_and_stale_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\ncredits_poll_interval_s = 29\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="credits_poll_interval_s"):
+        load_settings(tmp_path)
+    # stale must be >= poll interval (default poll=300)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\ncredits_stale_after_s = 299\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="credits_stale_after_s"):
+        load_settings(tmp_path)
+    # raising poll above existing stale fails
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\ncredits_poll_interval_s = 4000\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="credits_stale_after_s"):
+        load_settings(tmp_path)
+    # boundary: stale == poll is ok
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\ncredits_poll_interval_s = 60\ncredits_stale_after_s = 60\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.usage.credits_poll_interval_s == 60.0
+    assert s.usage.credits_stale_after_s == 60.0
+
+
+def test_invalid_credits_base_url_raises(tmp_path):
+    bad_urls = [
+        "not-a-url",
+        "ftp://example.com",
+        "https://",  # no host
+        "https://example.com/v1",  # path not empty or /
+        "https://example.com?q=1",  # query
+        "https://example.com#frag",  # fragment
+        "http://example.com/path/",
+    ]
+    for url in bad_urls:
+        (tmp_path / "elyra.toml").write_text(
+            f'[usage]\ncredits_base_url = "{url}"\n',
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="credits_base_url"):
+            load_settings(tmp_path)
+    # trailing slash origin is allowed
+    (tmp_path / "elyra.toml").write_text(
+        '[usage]\ncredits_base_url = "http://127.0.0.1:8080/"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.usage.credits_base_url == "http://127.0.0.1:8080/"
+
+
+def test_invalid_throttle_model_and_bool_types_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[usage]\nthrottle_model = ""\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="throttle_model"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nday_hard_stop_enabled = 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="day_hard_stop_enabled"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        '[usage]\ncredits_poll_enabled = "yes"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="credits_poll_enabled"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nauto_throttle_model = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="auto_throttle_model"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[usage]\nhour_hard_stop_enabled = 1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="hour_hard_stop_enabled"):
+        load_settings(tmp_path)
 
 
 def test_malformed_toml_raises(tmp_path):

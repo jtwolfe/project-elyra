@@ -12,6 +12,7 @@ import types
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
+from urllib.parse import urlparse
 
 import tomllib
 
@@ -109,7 +110,7 @@ class ProviderSettings:
 
 @dataclass(frozen=True)
 class UsageSettings:
-    """Hierarchical token-usage meter ceilings (Phase 0).
+    """Hierarchical token-usage meter ceilings + SuperGrok pacing knobs.
 
     ``weekly_allowed_tokens`` is the enforcement ceiling for the allowed week
     (ship default 5_000_000). ``weekly_allowed_fraction`` is **informational
@@ -117,6 +118,10 @@ class UsageSettings:
     stored so elyra.toml can record the target next to the absolute ceiling;
     it is **not** multiplied into meter math until an external real-quota hook
     exists.
+
+    Day/hour hard stops default **off** (soft bars only until operators opt in).
+    Pace/burst/account/credits fields are settings surface only until later PRs
+    wire meter and poller behavior.
 
     ``hard_stop_override`` is a *runtime* preference (usage.json), not a
     Settings ship default — always starts/persists default False unless the
@@ -129,6 +134,18 @@ class UsageSettings:
     hour_block_minutes: int = 60
     day_allowed_tokens: int | None = None
     hour_allowed_tokens: int | None = None
+    day_hard_stop_enabled: bool = False
+    hour_hard_stop_enabled: bool = False
+    account_hard_stop_percent: float = 95.0
+    pace_yellow_ratio: float = 1.0
+    pace_red_ratio: float = 1.5
+    burst_hours: float = 4.0
+    credits_poll_enabled: bool = True
+    credits_base_url: str = "https://cli-chat-proxy.grok.com"
+    credits_poll_interval_s: float = 300.0
+    credits_stale_after_s: float = 3600.0
+    auto_throttle_model: bool = False
+    throttle_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -258,8 +275,79 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         if path in ("usage.day_allowed_tokens", "usage.hour_allowed_tokens"):
             if coerced <= 0:
                 raise ValueError(f"{path}: expected positive int, got {coerced!r}")
+        if path == "usage.account_hard_stop_percent":
+            if not (0.0 < coerced <= 100.0):
+                raise ValueError(
+                    f"{path}: expected float in (0, 100], got {coerced!r}"
+                )
+        if path == "usage.pace_yellow_ratio" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        if path == "usage.burst_hours" and coerced < 0:
+            raise ValueError(f"{path}: expected float >= 0, got {coerced!r}")
+        if path == "usage.credits_poll_interval_s" and coerced < 30:
+            raise ValueError(f"{path}: expected float >= 30, got {coerced!r}")
+        if path == "usage.credits_base_url" and not _is_origin_url(coerced):
+            raise ValueError(
+                f"{path}: expected absolute origin URL "
+                f"(http/https host, path empty or '/', no query/fragment), "
+                f"got {coerced!r}"
+            )
+        if path == "usage.throttle_model" and coerced == "":
+            raise ValueError(
+                f"{path}: expected None or non-empty str, got {coerced!r}"
+            )
         filtered[k] = coerced
+
+    # Cross-field usage constraints use the post-merge effective values.
+    if prefix == "usage" and filtered:
+        yellow = filtered.get(
+            "pace_yellow_ratio", getattr(section, "pace_yellow_ratio")
+        )
+        red = filtered.get("pace_red_ratio", getattr(section, "pace_red_ratio"))
+        if "pace_red_ratio" in filtered or "pace_yellow_ratio" in filtered:
+            if not (red > yellow):
+                raise ValueError(
+                    f"usage.pace_red_ratio: expected > pace_yellow_ratio "
+                    f"({yellow!r}), got {red!r}"
+                )
+        poll_s = filtered.get(
+            "credits_poll_interval_s",
+            getattr(section, "credits_poll_interval_s"),
+        )
+        stale_s = filtered.get(
+            "credits_stale_after_s",
+            getattr(section, "credits_stale_after_s"),
+        )
+        if (
+            "credits_stale_after_s" in filtered
+            or "credits_poll_interval_s" in filtered
+        ):
+            if stale_s < poll_s:
+                raise ValueError(
+                    f"usage.credits_stale_after_s: expected >= "
+                    f"credits_poll_interval_s ({poll_s!r}), got {stale_s!r}"
+                )
+
     return replace(section, **filtered) if filtered else section
+
+
+def _is_origin_url(url: str) -> bool:
+    """True if ``url`` is an absolute http(s) origin (no path/query/fragment).
+
+    Path may be empty or a single ``/``. Host is required.
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.hostname:
+        return False
+    if parsed.path not in ("", "/"):
+        return False
+    if parsed.query or parsed.fragment or parsed.params:
+        return False
+    return True
 
 
 def _coerce_value(key: str, value: Any, annotation: Any) -> Any:
