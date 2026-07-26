@@ -34,6 +34,28 @@ const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
+const identitySelfLabel = $("#identity-self-label");
+const identityUserLabel = $("#identity-user-label");
+const identitySelfDraftBadge = $("#identity-self-draft-badge");
+const identityUserDraftBadge = $("#identity-user-draft-badge");
+const identitySelfDraftFold = $("#identity-self-draft-fold");
+const identityUserDraftFold = $("#identity-user-draft-fold");
+const identitySelfDraft = $("#identity-self-draft");
+const identityUserDraft = $("#identity-user-draft");
+const identitySelfVersions = $("#identity-self-versions");
+const identityUserVersions = $("#identity-user-versions");
+const identitySelfVersionBody = $("#identity-self-version-body");
+const identityUserVersionBody = $("#identity-user-version-body");
+const identityUserMeta = $("#identity-user-meta");
+const identityUserChips = $("#identity-user-chips");
+const identityMintGrantBtn = $("#identity-mint-grant-btn");
+const identityPromoteSelfBtn = $("#identity-promote-self-btn");
+const identityPromoteUserBtn = $("#identity-promote-user-btn");
+const identityGrantToken = $("#identity-grant-token");
+const brandNameEl = $("#brand-name");
+const brandSubEl = $("#brand-sub");
+const sessionUserSelect = $("#session-user-select");
+const sessionNewGuestBtn = $("#session-new-guest-btn");
 const continuousToggles = document.querySelectorAll(
   ".continuous-toggle:not(#usage-override-toggle)"
 );
@@ -70,8 +92,48 @@ const devSpeedMeta = $("#dev-speed-meta");
 const devSpeedBadge = $("#dev-speed-badge");
 const devSpeedDelay = $("#dev-speed-delay");
 
-const USER_ID = "operator";
+/** Active glass session user (who is typing) — not orient USER on pure work. */
+let sessionUserId =
+  (typeof localStorage !== "undefined" &&
+    localStorage.getItem("elyra.sessionUserId")) ||
+  "operator";
+/** Display labels: self + per-user goes_by. */
+let labelCache = { self: "Elyra", users: {} };
+/** Selected user id in identity panel (may differ from session for review). */
+let identityPanelUserId = sessionUserId;
+/** Last minted grant token shown once in the identity panel. */
+let lastMintedGrantToken = null;
 const REASON_BUFFER_FULL = "interjection_buffer_full";
+
+function getSessionUserId() {
+  return sessionUserId || "operator";
+}
+
+/** Self display name for glass chrome (fallback Elyra). */
+function selfDisplayName() {
+  const n = (labelCache.self || "").trim();
+  return n || "Elyra";
+}
+
+/**
+ * Rail brand: {NAME} above "Project Elyra"; document title "{NAME} - Project Elyra".
+ * NAME is whatever this instance calls itself (identity display_name / goes_by).
+ */
+function updateBrandChrome() {
+  const name = selfDisplayName();
+  if (brandNameEl) brandNameEl.textContent = name;
+  if (brandSubEl) brandSubEl.textContent = "Project Elyra";
+  document.title = `${name} - Project Elyra`;
+}
+
+function actorLabel(message) {
+  if (!message) return selfDisplayName();
+  if (message.role === "user") {
+    const uid = message.user_id || getSessionUserId();
+    return labelCache.users[uid] || uid;
+  }
+  return selfDisplayName();
+}
 
 let lastPendingWaitId = null;
 let noticeTimer = null;
@@ -426,8 +488,9 @@ function renderMessages(messages, { force = false } = {}) {
     div.className = `msg ${role}`;
     const meta = document.createElement("div");
     meta.className = "meta";
+    const label = actorLabel(m);
     meta.innerHTML = `<span class="role-chip">${escapeHtml(
-      role
+      label
     )}</span><span>${escapeHtml(formatMsgTime(m.created_at))}</span>`;
     div.appendChild(meta);
     const body = document.createElement("div");
@@ -509,7 +572,7 @@ async function sendWaitChoice(choice) {
     const data = await fetchJson("/api/wait/reply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ choice, user_id: USER_ID }),
+      body: JSON.stringify({ choice, user_id: getSessionUserId() }),
     });
     if (data && data.routed && data.routed !== "wait_reply") {
       showNotice(`Wait reply routed as ${data.routed} (wait may have already cleared).`);
@@ -1535,14 +1598,349 @@ async function refreshTools() {
   }
 }
 
-async function refreshIdentity() {
-  const [self, user] = await Promise.all([
-    fetchJson("/api/identity"),
-    fetchJson(`/api/users/${USER_ID}`),
+function renderVersionList(el, versions, onPick) {
+  if (!el) return;
+  el.innerHTML = "";
+  const list = Array.isArray(versions) ? versions : [];
+  if (!list.length) {
+    el.textContent = "No archived versions yet.";
+    return;
+  }
+  for (const v of list) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "version-row";
+    const vid = v.version_id || "";
+    const when = v.promoted_at || "";
+    row.textContent = when ? `${vid} · ${when}` : vid;
+    row.title = vid;
+    row.addEventListener("click", () => onPick && onPick(vid));
+    el.appendChild(row);
+  }
+}
+
+function renderUserChips(users, selectedId) {
+  if (!identityUserChips) return;
+  identityUserChips.innerHTML = "";
+  const list = Array.isArray(users) ? users : [];
+  for (const u of list) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className =
+      "user-chip" + (u.user_id === selectedId ? " user-chip-active" : "");
+    const label = u.goes_by || u.user_id;
+    btn.textContent = u.provisional ? `${label} · provisional` : label;
+    btn.title = u.user_id;
+    btn.addEventListener("click", () => {
+      identityPanelUserId = u.user_id;
+      refreshIdentity().catch((e) => panelLoadError("Identity", e));
+    });
+    identityUserChips.appendChild(btn);
+  }
+}
+
+async function refreshLabelCache() {
+  try {
+    const [session, users] = await Promise.all([
+      fetchJson("/api/session"),
+      fetchJson("/api/users"),
+    ]);
+    if (session && session.self_display_name) {
+      labelCache.self = session.self_display_name;
+    }
+    updateBrandChrome();
+    if (session && session.user_id) {
+      // Server is source of truth when available; keep localStorage in sync.
+      if (session.user_id !== sessionUserId) {
+        // Prefer localStorage if operator just switched (race); only adopt
+        // server when local is default or matches.
+        const local = localStorage.getItem("elyra.sessionUserId");
+        if (!local || local === session.user_id) {
+          sessionUserId = session.user_id;
+        }
+      }
+      labelCache.users[session.user_id] = session.goes_by || session.user_id;
+    }
+    const rows = (users && users.users) || [];
+    for (const u of rows) {
+      if (u && u.user_id) {
+        labelCache.users[u.user_id] = u.goes_by || u.user_id;
+      }
+    }
+    populateSessionSelect(rows);
+  } catch {
+    /* offline */
+  }
+}
+
+function populateSessionSelect(users) {
+  if (!sessionUserSelect) return;
+  const list = Array.isArray(users) ? users : [];
+  const prev = getSessionUserId();
+  sessionUserSelect.innerHTML = "";
+  let hasPrev = false;
+  for (const u of list) {
+    const opt = document.createElement("option");
+    opt.value = u.user_id;
+    const label = u.goes_by || u.user_id;
+    opt.textContent = u.provisional ? `${label} (${u.user_id} · provisional)` : `${label} (${u.user_id})`;
+    if (u.user_id === prev) {
+      opt.selected = true;
+      hasPrev = true;
+    }
+    sessionUserSelect.appendChild(opt);
+  }
+  if (!hasPrev && prev) {
+    const opt = document.createElement("option");
+    opt.value = prev;
+    opt.textContent = prev;
+    opt.selected = true;
+    sessionUserSelect.appendChild(opt);
+  }
+}
+
+async function switchSessionUser(userId) {
+  if (!userId) return;
+  const data = await fetchJson("/api/session", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  sessionUserId = data.user_id || userId;
+  try {
+    localStorage.setItem("elyra.sessionUserId", sessionUserId);
+  } catch {
+    /* private mode */
+  }
+  if (data.goes_by) {
+    labelCache.users[sessionUserId] = data.goes_by;
+  }
+  if (data.self_display_name) {
+    labelCache.self = data.self_display_name;
+    updateBrandChrome();
+  }
+  identityPanelUserId = sessionUserId;
+  showNotice(`Session user: ${labelCache.users[sessionUserId] || sessionUserId}`);
+  await Promise.all([
+    refreshLabelCache(),
+    refreshMessages({ force: true }),
+    refreshIdentity().catch(() => {}),
   ]);
-  identitySelf.textContent =
-    (self.self && self.self.digest) || "(empty self digest)";
-  identityUser.textContent = user.profile || "(empty profile)";
+}
+
+async function createProvisionalUser() {
+  const goesBy = window.prompt("Goes by (display name for the new guest)?");
+  if (!goesBy || !goesBy.trim()) return;
+  try {
+    const data = await fetchJson("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goes_by: goesBy.trim() }),
+    });
+    if (!data.ok && data.error) {
+      showNotice(`Create user failed: ${data.error}`);
+      return;
+    }
+    const uid = data.user_id;
+    showNotice(`Created provisional user ${data.goes_by || uid} (${uid})`);
+    await switchSessionUser(uid);
+  } catch (err) {
+    showNotice(String(err.message || err));
+  }
+}
+
+async function mintSelfGrant() {
+  try {
+    const data = await fetchJson("/api/identity/grants", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: "glass mint" }),
+    });
+    if (!data.ok) {
+      showNotice(`Mint grant failed: ${data.error || "unknown"}`);
+      return;
+    }
+    lastMintedGrantToken = data.token || null;
+    if (identityGrantToken && lastMintedGrantToken) {
+      identityGrantToken.hidden = false;
+      identityGrantToken.textContent = `Grant token (copy once): ${lastMintedGrantToken}`;
+    }
+    showNotice("Self-promote grant minted (one-time). Click Promote self to adopt draft.");
+  } catch (err) {
+    showNotice(String(err.message || err));
+  }
+}
+
+async function promoteSelfDraft() {
+  const reason =
+    window.prompt(
+      "Promote self draft — reason (min 8 chars)?",
+      "operator adopt via glass"
+    ) || "";
+  if (!reason.trim()) return;
+  try {
+    const body = { reason: reason.trim() };
+    if (lastMintedGrantToken) {
+      body.grant_token = lastMintedGrantToken;
+    }
+    const data = await fetchJson("/api/identity/promote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!data.ok) {
+      showNotice(`Promote self failed: ${data.error || "denied"}`);
+      return;
+    }
+    lastMintedGrantToken = null;
+    if (identityGrantToken) {
+      identityGrantToken.hidden = true;
+      identityGrantToken.textContent = "";
+    }
+    showNotice("Self identity promoted.");
+    await refreshIdentity();
+    await refreshLabelCache();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  }
+}
+
+async function promoteUserDraft() {
+  const uid = identityPanelUserId || getSessionUserId();
+  const reason =
+    window.prompt(
+      `Promote user draft for ${uid} — reason (min 4 chars)?`,
+      "operator glass promote"
+    ) || "";
+  if (!reason.trim()) return;
+  try {
+    const data = await fetchJson(`/api/users/${encodeURIComponent(uid)}/promote`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason.trim() }),
+    });
+    if (!data.ok) {
+      showNotice(`Promote user failed: ${data.error || "denied"}`);
+      return;
+    }
+    showNotice(`User ${uid} identity promoted.`);
+    await refreshIdentity();
+    await refreshLabelCache();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  }
+}
+
+/** Promote CTA: primary+enabled only when a draft exists; keep btn-sm always. */
+function setPromoteBtnState(btn, hasDraft, titles) {
+  if (!btn) return;
+  btn.disabled = !hasDraft;
+  btn.classList.toggle("btn-primary", hasDraft);
+  btn.classList.toggle("btn-secondary", !hasDraft);
+  btn.title = hasDraft ? titles.enabled : titles.disabled;
+}
+
+function disablePromoteButtons() {
+  setPromoteBtnState(identityPromoteSelfBtn, false, {
+    enabled: "Promote draft to live self identity",
+    disabled: "No draft to promote",
+  });
+  setPromoteBtnState(identityPromoteUserBtn, false, {
+    enabled: "Promote draft to live user identity",
+    disabled: "No draft to promote",
+  });
+}
+
+async function refreshIdentity() {
+  try {
+    const uid = identityPanelUserId || getSessionUserId();
+    const [self, user, usersList] = await Promise.all([
+      fetchJson("/api/identity?include_draft=1"),
+      fetchJson(`/api/users/${encodeURIComponent(uid)}`),
+      fetchJson("/api/users"),
+    ]);
+    const s = (self && self.self) || {};
+    if (identitySelf) {
+      identitySelf.textContent = s.body || s.digest || "(empty self digest)";
+    }
+    const selfName =
+      s.display_name ||
+      (s.meta && (s.meta.display_name || s.meta.goes_by)) ||
+      "Elyra";
+    if (identitySelfLabel) {
+      identitySelfLabel.textContent = selfName;
+    }
+    labelCache.self = selfName;
+    updateBrandChrome();
+    const hasSelfDraft = Boolean(s.has_draft);
+    if (identitySelfDraftBadge) identitySelfDraftBadge.hidden = !hasSelfDraft;
+    if (identitySelfDraftFold) {
+      identitySelfDraftFold.hidden = !hasSelfDraft;
+      // KD20: leave collapsed on has_draft; force closed when draft gone
+      if (!hasSelfDraft) identitySelfDraftFold.open = false;
+      if (identitySelfDraft) {
+        identitySelfDraft.textContent = s.draft_body || "(empty draft)";
+      }
+    }
+    setPromoteBtnState(identityPromoteSelfBtn, hasSelfDraft, {
+      enabled: "Promote draft to live self identity",
+      disabled: "No draft to promote",
+    });
+    renderVersionList(identitySelfVersions, s.versions || [], async (vid) => {
+      // Versions are listed via meta index; body reload via get_identity would need
+      // a version query — for v1 show id in the version body area from list only.
+      if (identitySelfVersionBody) {
+        identitySelfVersionBody.hidden = false;
+        identitySelfVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+      }
+    });
+
+    const users = (usersList && usersList.users) || [];
+    renderUserChips(users, uid);
+
+    if (identityUser) {
+      identityUser.textContent = user.body || user.profile || "(empty profile)";
+    }
+    if (identityUserLabel) {
+      identityUserLabel.textContent =
+        user.goes_by || (user.meta && user.meta.goes_by) || uid;
+    }
+    if (identityUserMeta && user.meta) {
+      const m = user.meta;
+      const bits = [
+        `id ${uid}`,
+        m.goes_by ? `goes_by ${m.goes_by}` : null,
+        m.full_name ? `full_name ${m.full_name}` : null,
+        `provisional ${Boolean(m.provisional)}`,
+        `real_name_known ${Boolean(m.real_name_known)}`,
+      ].filter(Boolean);
+      identityUserMeta.textContent = bits.join(" · ");
+    }
+    const hasUserDraft = Boolean(user.has_draft);
+    if (identityUserDraftBadge) identityUserDraftBadge.hidden = !hasUserDraft;
+    if (identityUserDraftFold) {
+      identityUserDraftFold.hidden = !hasUserDraft;
+      if (!hasUserDraft) identityUserDraftFold.open = false;
+      if (identityUserDraft) {
+        identityUserDraft.textContent = user.draft_body || "(empty draft)";
+      }
+    }
+    setPromoteBtnState(identityPromoteUserBtn, hasUserDraft, {
+      enabled: "Promote draft to live user identity",
+      disabled: "No draft to promote",
+    });
+    renderVersionList(identityUserVersions, user.versions || [], (vid) => {
+      if (identityUserVersionBody) {
+        identityUserVersionBody.hidden = false;
+        identityUserVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+      }
+    });
+    if (user.goes_by) labelCache.users[uid] = user.goes_by;
+  } catch (err) {
+    // Hard failure: do not leave promote enabled against stale draft UI
+    disablePromoteButtons();
+    throw err;
+  }
 }
 
 continuousToggles.forEach((el) => {
@@ -1941,7 +2339,7 @@ form.addEventListener("submit", async (e) => {
     const data = await fetchJson("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, user_id: USER_ID }),
+      body: JSON.stringify({ content, user_id: getSessionUserId() }),
     });
     input.value = "";
     autosizeComposer();
@@ -2039,7 +2437,45 @@ if (catalogRefreshBtn) {
   });
 }
 
+if (sessionUserSelect) {
+  sessionUserSelect.addEventListener("change", () => {
+    const uid = sessionUserSelect.value;
+    if (!uid || uid === sessionUserId) return;
+    switchSessionUser(uid).catch((e) => showNotice(String(e.message || e)));
+  });
+}
+if (sessionNewGuestBtn) {
+  sessionNewGuestBtn.addEventListener("click", () => {
+    createProvisionalUser();
+  });
+}
+if (identityMintGrantBtn) {
+  identityMintGrantBtn.addEventListener("click", () => mintSelfGrant());
+}
+if (identityPromoteSelfBtn) {
+  identityPromoteSelfBtn.addEventListener("click", () => promoteSelfDraft());
+}
+if (identityPromoteUserBtn) {
+  identityPromoteUserBtn.addEventListener("click", () => promoteUserDraft());
+}
+
 autosizeComposer();
+updateBrandChrome();
+// Sync session + labels before first paint of messages.
+refreshLabelCache()
+  .then(() => {
+    updateBrandChrome();
+    // Align server session with localStorage preference on boot.
+    if (sessionUserId) {
+      return fetchJson("/api/session", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: sessionUserId }),
+      }).catch(() => null);
+    }
+    return null;
+  })
+  .catch(() => {});
 
 function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);

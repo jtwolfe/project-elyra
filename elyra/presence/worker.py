@@ -23,6 +23,7 @@ from typing import Any, Callable, Sequence
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
+from elyra.identity.orient_user import resolve_orient_user
 from elyra.llm.client import ChatClient
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.orient_slice import (
@@ -1005,7 +1006,6 @@ class PresenceWorker:
             str(wake_message_id) if wake_message_id is not None else None
         )
         why = _why_now(wake)
-        user_id = _user_id_from_wake(wake) or "operator"
 
         # Snapshot continuous + open-work for in-moment work_context (no lock
         # held during do-loop; toggle mid-moment takes effect next moment).
@@ -1018,12 +1018,16 @@ class PresenceWorker:
             # appear). Catalog is the held SkillCatalog snapshot — growth tools
             # reload it via ctx.extras["skills"] (install_skill); do not cache
             # formatted strings at moment open.
+            # USER inject: work-origin policy (K13/K19) — social speaker, else
+            # linked goal/task created_in_context (PR4), else empty — never
+            # blind "operator" fallback.
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
-            try:
-                user_digest = self._users.profile(user_id)
-            except ValueError:
-                user_digest = ""
+            _orient_uid, user_digest = resolve_orient_user(
+                wake,
+                users=self._users,
+                goals=self._ensure_goals(),
+            )
             loop = self.settings.loop
             catalog = self._ensure_skills().catalog()
             goals_list = self._ensure_goals().list_goals()
@@ -1461,7 +1465,7 @@ class PresenceWorker:
             )
 
     def _build_tool_context(self, wake: WakeItem, moment_id: str) -> ToolContext:
-        user_id = _user_id_from_wake(wake)
+        user_id = _user_id_from_wake(wake)  # may be None — do not force "operator"
         return ToolContext(
             paths=self.paths,
             sandbox=self._ensure_sandbox(),
@@ -1475,7 +1479,12 @@ class PresenceWorker:
             skills_used=[],
             enqueue_wake=self._tool_enqueue_wake,
             cancel_wait=self._tool_cancel_wait,
-            extras={"wake": wake},
+            extras={
+                "wake": wake,
+                "wake_kind": wake.kind,  # for identity promote gates
+                "identity": self._identity,
+                "users": self._users,
+            },
         )
 
     def _tool_enqueue_wake(

@@ -3,7 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Elyra</title>
+    <title>Elyra - Project Elyra</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
@@ -11,9 +17,9 @@
       <aside class="rail">
         <div class="brand">
           <div class="orb" aria-hidden="true"></div>
-          <div>
-            <div class="brand-name">Elyra</div>
-            <div class="brand-sub">Stretch 1 glass</div>
+          <div class="brand-text">
+            <div class="brand-name" id="brand-name">Elyra</div>
+            <div class="brand-sub" id="brand-sub">Project Elyra</div>
           </div>
         </div>
         <nav class="nav">
@@ -24,6 +30,18 @@
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
+        <div class="rail-session" title="Who is at the keyboard (message attribution)">
+          <label class="session-label" for="session-user-select">Session user</label>
+          <select id="session-user-select" class="session-select" aria-label="Session user">
+            <option value="operator">operator</option>
+          </select>
+          <button type="button" id="session-new-guest-btn" class="btn-secondary btn-sm session-new-btn">
+            New guest…
+          </button>
+          <p class="session-hint muted">
+            Who is typing in this session.
+          </p>
+        </div>
         <div class="rail-continuous continuous-control" title="Hybrid continuous work (autopilot)">
           <label class="toggle-label" for="continuous-toggle-rail">
             <input type="checkbox" id="continuous-toggle-rail" class="continuous-toggle" />
@@ -32,12 +50,15 @@
           </label>
           <div id="continuous-status-rail" class="continuous-meta muted">off</div>
         </div>
-        <div class="rail-foot">
-          <div id="pill-llama" class="pill pill-off">llama</div>
-          <div id="pill-sandbox" class="pill pill-off">sandbox</div>
-          <div id="pill-worker" class="pill pill-off">worker</div>
-          <div id="pill-phase" class="pill pill-off">phase</div>
-          <div id="pill-autopilot" class="pill pill-off" hidden>autopilot</div>
+        <div class="rail-foot" role="group" aria-label="System status">
+          <div class="rail-foot-label muted">System</div>
+          <div class="rail-pills">
+            <div id="pill-llama" class="pill pill-off">llama</div>
+            <div id="pill-sandbox" class="pill pill-off">sandbox</div>
+            <div id="pill-worker" class="pill pill-off">worker</div>
+            <div id="pill-phase" class="pill pill-off">phase</div>
+            <div id="pill-autopilot" class="pill pill-off" hidden>autopilot</div>
+          </div>
         </div>
       </aside>
 
@@ -49,7 +70,7 @@
             <div>
               <h1>Chat</h1>
               <p class="muted">
-                Markdown glass · attachments listed in your message until vision is wired.
+                Talk with Elyra. Attachments show in your message until vision is ready.
               </p>
             </div>
             <div id="chat-activity" class="chat-activity" hidden>
@@ -114,7 +135,7 @@
         <section id="panel-goals" class="panel">
           <header class="panel-head">
             <h1>Goals</h1>
-            <p class="muted">Durable ledger from <code>/api/goals</code>.</p>
+            <p class="muted">Open goals and progress.</p>
           </header>
           <div id="goals-list" class="list-panel">loading…</div>
         </section>
@@ -123,7 +144,7 @@
           <header class="panel-head">
             <h1>Moments</h1>
             <p class="muted">
-              Recent do-loops and beats. Reasoning is collapsed by default.
+              Recent work loops. Reasoning stays collapsed until you open it.
             </p>
           </header>
           <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
@@ -135,7 +156,7 @@
             <div>
               <h1>Tools &amp; skills</h1>
               <p class="muted">
-                Live catalog (disk rescan each refresh). Local packages are host-only, not in git.
+                Tools and skills on this host. Refresh reloads the catalog.
               </p>
             </div>
             <button type="button" id="catalog-refresh-btn" class="btn-secondary btn-sm">
@@ -158,16 +179,70 @@
         <section id="panel-identity" class="panel">
           <header class="panel-head">
             <h1>Identity</h1>
-            <p class="muted">Self digest + operator profile (read-only).</p>
+            <p class="muted">
+              Who Elyra is and who you’re talking as. Drafts come from the model—promote here when ready.
+            </p>
           </header>
-          <div class="split-lists">
-            <div>
-              <h2 class="subhead">Self</h2>
+          <div class="split-lists identity-split">
+            <div class="identity-col">
+              <div class="identity-col-head">
+                <h2 class="subhead">
+                  Self · <span id="identity-self-label">Elyra</span>
+                  <span id="identity-self-draft-badge" class="badge draft-badge" hidden>draft</span>
+                </h2>
+                <div class="identity-actions">
+                  <button type="button" id="identity-mint-grant-btn" class="btn-secondary btn-sm">
+                    Mint grant
+                  </button>
+                  <button
+                    type="button"
+                    id="identity-promote-self-btn"
+                    class="btn-secondary btn-sm"
+                    disabled
+                    title="No draft to promote"
+                  >
+                    Promote self
+                  </button>
+                </div>
+              </div>
+              <div id="identity-grant-token" class="identity-grant muted" hidden></div>
               <pre id="identity-self" class="code-block">loading…</pre>
+              <details id="identity-self-draft-fold" class="identity-draft-fold" hidden>
+                <summary>Draft body</summary>
+                <pre id="identity-self-draft" class="code-block">—</pre>
+              </details>
+              <h3 class="subhead subhead-sm">Versions</h3>
+              <div id="identity-self-versions" class="list-panel identity-versions">—</div>
+              <pre id="identity-self-version-body" class="code-block" hidden></pre>
             </div>
-            <div>
-              <h2 class="subhead">User · operator</h2>
+            <div class="identity-col">
+              <div class="identity-col-head">
+                <h2 class="subhead">
+                  User · <span id="identity-user-label">—</span>
+                  <span id="identity-user-draft-badge" class="badge draft-badge" hidden>draft</span>
+                </h2>
+                <div class="identity-actions">
+                  <button
+                    type="button"
+                    id="identity-promote-user-btn"
+                    class="btn-secondary btn-sm"
+                    disabled
+                    title="No draft to promote"
+                  >
+                    Promote user
+                  </button>
+                </div>
+              </div>
+              <div id="identity-user-chips" class="identity-user-chips" aria-label="Users"></div>
+              <div id="identity-user-meta" class="identity-meta muted">—</div>
               <pre id="identity-user" class="code-block">loading…</pre>
+              <details id="identity-user-draft-fold" class="identity-draft-fold" hidden>
+                <summary>Draft body</summary>
+                <pre id="identity-user-draft" class="code-block">—</pre>
+              </details>
+              <h3 class="subhead subhead-sm">Versions</h3>
+              <div id="identity-user-versions" class="list-panel identity-versions">—</div>
+              <pre id="identity-user-version-body" class="code-block" hidden></pre>
             </div>
           </div>
         </section>
@@ -175,7 +250,7 @@
         <section id="panel-status" class="panel">
           <header class="panel-head">
             <h1>Status</h1>
-            <p class="muted">Runtime snapshot from <code>/api/status</code>.</p>
+            <p class="muted">Provider, budget, and runtime health.</p>
           </header>
           <div id="hard-stop-banner" class="hard-stop-banner" hidden role="alert"></div>
           <div class="status-cards">
@@ -321,7 +396,10 @@
               secrets (API key), skills/local, and tools/local.
             </p>
           </div>
-          <pre id="status-json" class="code-block">loading…</pre>
+          <details class="status-raw-fold">
+            <summary>Raw status JSON</summary>
+            <pre id="status-json" class="code-block">loading…</pre>
+          </details>
         </section>
       </main>
     </div>

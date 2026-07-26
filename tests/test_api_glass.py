@@ -172,6 +172,24 @@ class _ApiHarness:
             except json.JSONDecodeError:
                 return exc.code, body
 
+    def put(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            self.base + path,
+            data=data,
+            method="PUT",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            try:
+                return exc.code, json.loads(body)
+            except json.JSONDecodeError:
+                return exc.code, body
+
 
 def test_get_goals_empty_then_create(paths):
     h = _ApiHarness(paths)
@@ -279,12 +297,23 @@ def test_get_identity_and_user(paths):
         # Seeded by ensure_data_dirs
         assert isinstance(body["self"]["digest"], str)
         assert body["self"]["digest"]  # non-empty seed
+        # PR5 richer shape
+        assert "meta" in body["self"]
+        assert "has_draft" in body["self"]
+        assert "versions" in body["self"]
+        assert isinstance(body["self"]["versions"], list)
+        assert body["self"].get("body") == body["self"]["digest"]
+        assert "display_name" in body["self"]
 
         code, user = h.get("/api/users/operator")
         assert code == 200
         assert user["user_id"] == "operator"
         assert isinstance(user["profile"], str)
         assert user["profile"]  # seeded operator profile
+        assert "meta" in user
+        assert "has_draft" in user
+        assert "versions" in user
+        assert user.get("body") == user["profile"]
     finally:
         h.close()
 
@@ -295,6 +324,199 @@ def test_get_user_invalid_id(paths):
         code, body = h.get("/api/users/..")
         assert code == 400
         assert body["ok"] is False
+    finally:
+        h.close()
+
+
+def test_list_users_and_create_provisional(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.get("/api/users")
+        assert code == 200
+        assert "users" in body
+        ids = {u["user_id"] for u in body["users"]}
+        assert "operator" in ids
+        op = next(u for u in body["users"] if u["user_id"] == "operator")
+        assert "goes_by" in op
+        assert "provisional" in op
+        assert "real_name_known" in op
+
+        code, created = h.post("/api/users", {"goes_by": "Sam"})
+        assert code == 201, created
+        assert created["ok"] is True
+        assert created["user_id"] == "sam"
+        assert created["goes_by"] == "Sam"
+        assert created["provisional"] is True
+
+        # Explicit id collision → 400 user_id_exists
+        code, dup = h.post("/api/users", {"goes_by": "Sam", "user_id": "sam"})
+        assert code == 400
+        assert dup["error"] == "user_id_exists"
+
+        # Collision on slug path gets suffix
+        code, coll = h.post("/api/users", {"goes_by": "Sam"})
+        assert code == 201, coll
+        assert coll["user_id"].startswith("sam_")
+        assert coll["user_id"] != "sam"
+
+        code, body = h.get("/api/users")
+        assert code == 200
+        ids = {u["user_id"] for u in body["users"]}
+        assert "sam" in ids
+        assert coll["user_id"] in ids
+    finally:
+        h.close()
+
+
+def test_session_get_and_put(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, sess = h.get("/api/session")
+        assert code == 200
+        assert sess["user_id"] == "operator"
+        assert "goes_by" in sess
+        assert "self_display_name" in sess
+        assert isinstance(sess["self_display_name"], str)
+
+        # Create guest then switch
+        code, created = h.post("/api/users", {"goes_by": "Jim"})
+        assert code == 201, created
+        uid = created["user_id"]
+
+        code, switched = h.put("/api/session", {"user_id": uid})
+        assert code == 200, switched
+        assert switched["ok"] is True
+        assert switched["user_id"] == uid
+        assert switched["goes_by"] == "Jim"
+
+        code, sess = h.get("/api/session")
+        assert code == 200
+        assert sess["user_id"] == uid
+
+        code, missing = h.put("/api/session", {"user_id": "no_such_user_xyz"})
+        assert code == 404
+        assert missing["error"] == "user_not_found"
+
+        code, bad = h.put("/api/session", {"user_id": "../etc"})
+        assert code == 400
+    finally:
+        h.close()
+
+
+def test_identity_grants_and_promote_self(paths):
+    h = _ApiHarness(paths)
+    try:
+        # Promote without draft / grant → denied
+        code, denied = h.post(
+            "/api/identity/promote",
+            {"reason": "operator adopt self draft now"},
+        )
+        assert code == 400
+        assert denied["error"] in ("self_grant_required", "draft_missing")
+
+        # Write a self draft via store
+        store = IdentityStore(paths)
+        store.ensure_layout()
+        wr = store.write_draft(
+            "# Self draft\n\nI am Elyra, carefully revised.\n",
+            reason="test draft",
+        )
+        assert wr.get("ok") is True
+
+        # Still need grant
+        code, denied2 = h.post(
+            "/api/identity/promote",
+            {"reason": "operator adopt self draft now"},
+        )
+        assert code == 400
+        assert denied2["error"] == "self_grant_required"
+
+        code, grant = h.post("/api/identity/grants", {"note": "test"})
+        assert code == 200, grant
+        assert grant["ok"] is True
+        token = grant["token"]
+        assert token.startswith("grant_")
+
+        # Resolve→gate→consume→promote (Glass path uses first active token)
+        code, promoted = h.post(
+            "/api/identity/promote",
+            {"reason": "operator adopt self draft now"},
+        )
+        assert code == 200, promoted
+        assert promoted["ok"] is True
+        assert promoted.get("actor") == "self"
+
+        # Draft cleared; current is new body
+        code, body = h.get("/api/identity")
+        assert code == 200
+        assert body["self"]["has_draft"] is False
+        assert "carefully revised" in body["self"]["digest"]
+        # Prior current archived
+        assert isinstance(body["self"]["versions"], list)
+        assert len(body["self"]["versions"]) >= 1
+
+        # Token consumed — second promote without new grant fails
+        store.write_draft(
+            "# Self draft 2\n\nAnother revision.\n",
+            reason="second",
+        )
+        code, again = h.post(
+            "/api/identity/promote",
+            {"reason": "operator adopt again please"},
+        )
+        assert code == 400
+        assert again["error"] == "self_grant_required"
+
+        # Explicit grant_token path
+        code, grant2 = h.post("/api/identity/grants", {})
+        assert code == 200
+        code, with_tok = h.post(
+            "/api/identity/promote",
+            {
+                "reason": "operator adopt with explicit token",
+                "grant_token": grant2["token"],
+            },
+        )
+        assert code == 200, with_tok
+        assert with_tok["ok"] is True
+    finally:
+        h.close()
+
+
+def test_user_promote_from_glass_panel(paths):
+    h = _ApiHarness(paths)
+    try:
+        users = UsersStore(paths)
+        created = users.create_user("Alex", user_id="alex", provisional=True)
+        assert created.get("ok") is True
+
+        wr = users.write_draft(
+            "alex",
+            "# Alex\n\nPrefers short notes.\n",
+            reason="profile update",
+        )
+        assert wr.get("ok") is True
+
+        code, promoted = h.post(
+            "/api/users/alex/promote",
+            {"reason": "glass panel promote"},
+        )
+        assert code == 200, promoted
+        assert promoted["ok"] is True
+
+        code, user = h.get("/api/users/alex")
+        assert code == 200
+        assert user["has_draft"] is False
+        assert "Prefers short notes" in user["profile"]
+        assert len(user["versions"]) >= 1
+
+        # No draft → draft_missing
+        code, nodraft = h.post(
+            "/api/users/alex/promote",
+            {"reason": "no draft left"},
+        )
+        assert code == 400
+        assert nodraft["error"] == "draft_missing"
     finally:
         h.close()
 

@@ -3,8 +3,9 @@
 Scope: REST JSON + SPA fallthrough for operator glass.
 In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users),
+  multi-user session + identity panel (grants, promote, list/create users),
   provider/model/credential mutators, live usage + hard-stop override.
-Out of scope: promote/verify admin, multi-user glass, write identity.
+Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol.
 """
 
 from __future__ import annotations
@@ -23,7 +24,16 @@ _LOG = logging.getLogger(__name__)
 
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
-from elyra.identity import IdentityStore
+from elyra.identity import (
+    IdentityStore,
+    PromoteContext,
+    consume_grant,
+    evaluate_promote_gate,
+    first_active_token,
+    load_active_token_set,
+    mint_grant,
+)
+from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
 from elyra.llm.auth import VALID_SOURCES
 from elyra.llm.queue import LlamaServerGate
 from elyra.messages import list_messages
@@ -40,6 +50,10 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 
 # Path params: single safe segment (matches users/moment id style).
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# Local dogfood session (not auth) — under data/runtime/.
+_GLASS_SESSION_REL = Path("runtime") / "glass_session.json"
+_DEFAULT_SESSION_USER = "operator"
 
 
 def _route_payload(result: dict[str, Any], *, message: Any | None = None) -> dict[str, Any]:
@@ -87,6 +101,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     users: UsersStore
     tools: ToolRegistry | None
     skills: SkillCatalog | None
+    # Glass multi-user session (shared across requests; bound at server start).
+    glass_session: dict[str, Any]
+    glass_session_lock: threading.RLock
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -192,36 +209,38 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/identity":
-            digest = self.identity.self_digest()
-            self._json(
-                200,
-                {
-                    "self": {
-                        "path": str(self.identity.self_path),
-                        "digest": digest,
-                    }
-                },
+            include_draft = (qs.get("include_draft") or ["0"])[0] in (
+                "1",
+                "true",
+                "yes",
             )
+            self._json(200, self._identity_self_payload(include_draft=include_draft))
+            return
+
+        if path == "/api/users":
+            self._json(200, {"users": self._list_users_summary()})
+            return
+
+        if path == "/api/session":
+            self._json(200, self._session_payload())
             return
 
         if path.startswith("/api/users/"):
-            uid = _safe_segment(unquote(path[len("/api/users/") :]))
+            rest = unquote(path[len("/api/users/") :])
+            # Promote is POST only; GET is single-segment user id.
+            if "/" in rest:
+                self._json(404, {"error": "not found"})
+                return
+            uid = _safe_segment(rest)
             if uid is None:
                 self._json(400, {"ok": False, "error": "invalid user id"})
                 return
             try:
-                profile = self.users.profile(uid)
+                payload = self._identity_user_payload(uid)
             except ValueError:
                 self._json(400, {"ok": False, "error": "invalid user id"})
                 return
-            self._json(
-                200,
-                {
-                    "user_id": uid,
-                    "profile": profile,
-                    "path": str(self.users.profile_path(uid)),
-                },
-            )
+            self._json(200, payload)
             return
 
         if path == "/api/tools":
@@ -292,6 +311,27 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_reset(body)
             return
 
+        if path == "/api/users":
+            self._post_users(body)
+            return
+
+        if path == "/api/identity/grants":
+            self._post_identity_grants(body)
+            return
+
+        if path == "/api/identity/promote":
+            self._post_identity_promote(body)
+            return
+
+        if path.startswith("/api/users/") and path.endswith("/promote"):
+            mid = path[len("/api/users/") : -len("/promote")]
+            uid = _safe_segment(unquote(mid))
+            if uid is None or "/" in mid:
+                self._json(400, {"ok": False, "error": "invalid user id"})
+                return
+            self._post_user_promote(uid, body)
+            return
+
         self._json(404, {"error": "not found"})
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -324,6 +364,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/provider/api-key":
             self._put_api_key(body)
+            return
+
+        if path == "/api/session":
+            self._put_session(body)
             return
 
         self._json(404, {"error": "not found"})
@@ -365,6 +409,453 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(503, {"ok": False, "error": "resetting"})
             return True
         return False
+
+    # ── Glass session + identity panel helpers ───────────────────────────
+
+    def _session_path(self) -> Path:
+        return self.paths.data_dir / _GLASS_SESSION_REL
+
+    def _load_session_user_id(self) -> str:
+        """Return active glass session user_id (memory + optional file)."""
+        lock = getattr(self, "glass_session_lock", None)
+        sess = getattr(self, "glass_session", None)
+        if lock is None or sess is None:
+            return _DEFAULT_SESSION_USER
+        with lock:
+            uid = sess.get("user_id")
+            if isinstance(uid, str) and uid.strip():
+                return uid.strip()
+            # Cold start: try disk.
+            try:
+                raw = self._session_path().read_text(encoding="utf-8")
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    disk_uid = data.get("user_id")
+                    if isinstance(disk_uid, str) and disk_uid.strip():
+                        sess["user_id"] = disk_uid.strip()
+                        return sess["user_id"]
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+            sess["user_id"] = _DEFAULT_SESSION_USER
+            return _DEFAULT_SESSION_USER
+
+    def _save_session_user_id(self, user_id: str) -> None:
+        lock = getattr(self, "glass_session_lock", None)
+        sess = getattr(self, "glass_session", None)
+        if lock is None or sess is None:
+            return
+        with lock:
+            sess["user_id"] = user_id
+            path = self._session_path()
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                write_json_atomic(path, {"user_id": user_id})
+            except OSError as exc:
+                _LOG.warning("glass_session write failed: %s", exc)
+
+    def _session_payload(self) -> dict[str, Any]:
+        uid = self._load_session_user_id()
+        goes_by = uid
+        try:
+            goes_by = self.users.display_label(uid)
+        except ValueError:
+            goes_by = uid
+        return {
+            "user_id": uid,
+            "goes_by": goes_by,
+            "self_display_name": self.identity.display_name(),
+        }
+
+    def _versions_summary_from_get(self, got: dict[str, Any]) -> list[dict[str, Any]]:
+        versions = got.get("versions") or []
+        if not isinstance(versions, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for row in versions:
+            if not isinstance(row, dict):
+                continue
+            vid = row.get("version_id")
+            if not isinstance(vid, str):
+                continue
+            out.append(
+                {
+                    "version_id": vid,
+                    "promoted_at": row.get("promoted_at"),
+                    "sha256": row.get("sha256"),
+                    "bytes": row.get("bytes"),
+                }
+            )
+        return out
+
+    def _identity_self_payload(self, *, include_draft: bool = False) -> dict[str, Any]:
+        got = self.identity.get(which="current", list_versions=True)
+        digest = got.get("body") if got.get("ok") else self.identity.self_digest()
+        if not isinstance(digest, str):
+            digest = self.identity.self_digest()
+        live = self.identity.current_path()
+        if not live.is_file():
+            live = self.identity.self_path
+        has_draft = bool(got.get("has_draft")) if got.get("ok") else self.identity.has_draft()
+        meta = got.get("meta") if got.get("ok") else self.identity.get_meta()
+        self_block: dict[str, Any] = {
+            "path": str(live),
+            "digest": digest,
+            "body": digest,
+            "meta": meta if isinstance(meta, dict) else {},
+            "has_draft": has_draft,
+            "versions": self._versions_summary_from_get(got if got.get("ok") else {}),
+            "display_name": self.identity.display_name(),
+        }
+        # Glass identity panel needs draft preview for promote UX; always attach
+        # when present. Query ``?include_draft=1`` remains accepted (design).
+        if has_draft:
+            draft_path = self.identity.draft_path()
+            if draft_path.is_file():
+                self_block["draft_body"] = read_text_or_empty(draft_path)
+                self_block["draft_sha256"] = content_sha256(self_block["draft_body"])
+        elif include_draft:
+            self_block["draft_body"] = None
+        return {"self": self_block}
+
+    def _identity_user_payload(self, user_id: str) -> dict[str, Any]:
+        """Richer user identity for glass; raises ValueError on bad id."""
+        got = self.users.get(user_id, which="current", list_versions=True)
+        profile = got.get("body") if got.get("ok") else self.users.profile(user_id)
+        if not isinstance(profile, str):
+            profile = self.users.profile(user_id)
+        has_draft = (
+            bool(got.get("has_draft")) if got.get("ok") else self.users.has_draft(user_id)
+        )
+        meta = got.get("meta") if got.get("ok") else self.users.get_meta(user_id)
+        path = self.users.profile_path(user_id)
+        payload: dict[str, Any] = {
+            "ok": True,
+            "user_id": user_id,
+            "profile": profile,
+            "body": profile,
+            "path": str(path),
+            "meta": meta if isinstance(meta, dict) else {},
+            "has_draft": has_draft,
+            "versions": self._versions_summary_from_get(got if got.get("ok") else {}),
+            "goes_by": self.users.display_label(user_id),
+        }
+        if has_draft:
+            draft_path = self.users.draft_path(user_id)
+            if draft_path.is_file():
+                payload["draft_body"] = read_text_or_empty(draft_path)
+                payload["draft_sha256"] = content_sha256(payload["draft_body"])
+        return payload
+
+    def _list_users_summary(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for uid in self.users.list_user_ids():
+            try:
+                meta = self.users.get_meta(uid)
+            except ValueError:
+                continue
+            goes_by = ""
+            if isinstance(meta, dict):
+                gb = meta.get("goes_by") or meta.get("display_name")
+                if isinstance(gb, str) and gb.strip():
+                    goes_by = gb.strip()
+            if not goes_by:
+                goes_by = self.users.display_label(uid)
+            rows.append(
+                {
+                    "user_id": uid,
+                    "goes_by": goes_by,
+                    "provisional": bool(meta.get("provisional"))
+                    if isinstance(meta, dict)
+                    else False,
+                    "real_name_known": bool(meta.get("real_name_known"))
+                    if isinstance(meta, dict)
+                    else False,
+                }
+            )
+        return rows
+
+    def _draft_sha_self(self) -> str | None:
+        path = self.identity.draft_path()
+        if not path.is_file():
+            return None
+        body = read_text_or_empty(path)
+        if not body.strip():
+            return None
+        return content_sha256(body)
+
+    def _draft_sha_user(self, user_id: str) -> str | None:
+        path = self.users.draft_path(user_id)
+        if not path.is_file():
+            return None
+        body = read_text_or_empty(path)
+        if not body.strip():
+            return None
+        return content_sha256(body)
+
+    def _put_session(self, body: dict[str, Any]) -> None:
+        """PUT /api/session — ``{ user_id }`` switch active local profile."""
+        if self._reject_if_resetting():
+            return
+        user_id = body.get("user_id")
+        if not isinstance(user_id, str) or not user_id.strip():
+            self._json(400, {"ok": False, "error": "user_id required"})
+            return
+        uid = user_id.strip()
+        if _safe_segment(uid) is None:
+            self._json(400, {"ok": False, "error": "invalid_user_id"})
+            return
+        # Prefer known users; allow switch to any jail-valid id that exists on disk.
+        known = set(self.users.list_user_ids())
+        if uid not in known:
+            # Existence: current/legacy/meta under users root.
+            try:
+                live = self.users.profile(uid)
+                meta_path = self.users.meta_path(uid)
+            except ValueError:
+                self._json(400, {"ok": False, "error": "invalid_user_id"})
+                return
+            if not live and not meta_path.is_file():
+                self._json(404, {"ok": False, "error": "user_not_found", "user_id": uid})
+                return
+        self._save_session_user_id(uid)
+        payload = self._session_payload()
+        payload["ok"] = True
+        self._json(200, payload)
+
+    def _post_users(self, body: dict[str, Any]) -> None:
+        """POST /api/users — create provisional user (K18 mint)."""
+        if self._reject_if_resetting():
+            return
+        goes_by = body.get("goes_by")
+        if not isinstance(goes_by, str) or not goes_by.strip():
+            self._json(400, {"ok": False, "error": "missing_goes_by"})
+            return
+        user_id = body.get("user_id")
+        if user_id is not None and not isinstance(user_id, str):
+            self._json(400, {"ok": False, "error": "invalid_user_id"})
+            return
+        uid_arg = user_id.strip() if isinstance(user_id, str) and user_id.strip() else None
+        result = self.users.create_user(goes_by.strip(), user_id=uid_arg, provisional=True)
+        if not result.get("ok"):
+            err = str(result.get("error") or "create_failed")
+            code = 400
+            if err == "user_id_exists":
+                code = 400
+            self._json(code, result)
+            return
+        self._json(201, result)
+
+    def _post_identity_grants(self, body: dict[str, Any]) -> None:
+        """POST /api/identity/grants — mint one-time self-promote grant (K14)."""
+        if self._reject_if_resetting():
+            return
+        note = body.get("note")
+        if note is not None and not isinstance(note, str):
+            note = str(note)
+        expires_at = body.get("expires_at")
+        if expires_at is not None and not isinstance(expires_at, str):
+            expires_at = None
+        uses = body.get("uses", 1)
+        try:
+            uses_i = int(uses)
+        except (TypeError, ValueError):
+            uses_i = 1
+        result = mint_grant(
+            self.paths,
+            note=note if isinstance(note, str) else None,
+            expires_at=expires_at if isinstance(expires_at, str) else None,
+            uses=uses_i,
+        )
+        if not result.get("ok"):
+            self._json(400, result)
+            return
+        self._json(200, result)
+
+    def _post_identity_promote(self, body: dict[str, Any]) -> None:
+        """POST /api/identity/promote — Glass self promote (resolve→gate→consume→promote)."""
+        if self._reject_if_resetting():
+            return
+        reason = body.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            self._json(400, {"ok": False, "error": "missing_reason"})
+            return
+        reason = reason.strip()
+        expected = body.get("expected_draft_sha256")
+        if expected is not None and not isinstance(expected, str):
+            expected = None
+
+        grant_token = body.get("grant_token")
+        if isinstance(grant_token, str) and grant_token.strip():
+            resolved = grant_token.strip()
+        else:
+            # Glass resolve: first active file token (env only if body supplies it).
+            resolved = first_active_token(self.paths, include_env=False)
+
+        if not resolved:
+            self._json(400, {"ok": False, "error": "self_grant_required", "actor": "self"})
+            return
+
+        has_draft = self.identity.has_draft()
+        draft_sha = self._draft_sha_self()
+        operator_tokens = load_active_token_set(self.paths)
+
+        gate = evaluate_promote_gate(
+            PromoteContext(
+                actor="self",
+                target_user_id=None,
+                session_user_id=self._load_session_user_id(),
+                wake_kind=None,
+                moment_id="",
+                reason=reason,
+                grant_token=resolved,
+                has_draft=has_draft and draft_sha is not None,
+                draft_sha256=draft_sha,
+                expected_draft_sha256=expected,
+                identity_promote_user_ok=False,
+                identity_promote_any_user=False,
+                operator_grant_tokens=operator_tokens,
+                allow_self_promote_without_grant=False,
+            )
+        )
+        if not gate.allowed:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": gate.error_reason or "promote_denied",
+                    "detail": gate.detail,
+                    "actor": "self",
+                },
+            )
+            return
+
+        consumed = consume_grant(self.paths, resolved)
+        if not consumed.get("ok"):
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": str(consumed.get("error") or "grant_exhausted"),
+                    "actor": "self",
+                },
+            )
+            return
+
+        try:
+            result = self.identity.promote(
+                reason=reason,
+                expected_draft_sha256=expected,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("glass self promote failed after grant consume")
+            self._json(
+                500,
+                {
+                    "ok": False,
+                    "error": f"promote_failed:{type(exc).__name__}",
+                    "actor": "self",
+                    "grant_consumed": True,
+                },
+            )
+            return
+
+        if not result.get("ok"):
+            out = dict(result)
+            out["grant_consumed"] = True
+            self._json(400, out)
+            return
+        self._json(200, result)
+
+    def _post_user_promote(self, user_id: str, body: dict[str, Any]) -> None:
+        """POST /api/users/<id>/promote — Glass medium promote (admin panel)."""
+        if self._reject_if_resetting():
+            return
+        reason = body.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            self._json(400, {"ok": False, "error": "missing_reason"})
+            return
+        reason = reason.strip()
+        expected = body.get("expected_draft_sha256")
+        if expected is not None and not isinstance(expected, str):
+            expected = None
+
+        try:
+            known = user_id in set(self.users.list_user_ids())
+            if not known:
+                # Soft existence check via profile/meta
+                if not self.users.meta_path(user_id).is_file() and not self.users.profile(
+                    user_id
+                ):
+                    self._json(
+                        404,
+                        {"ok": False, "error": "user_not_found", "user_id": user_id},
+                    )
+                    return
+        except ValueError:
+            self._json(400, {"ok": False, "error": "invalid_user_id"})
+            return
+
+        has_draft = self.users.has_draft(user_id)
+        draft_sha = self._draft_sha_user(user_id)
+        session_uid = self._load_session_user_id()
+
+        # Glass panel: operator may promote any user (identity_promote_any_user)
+        # and without social wake (identity_promote_user_ok).
+        gate = evaluate_promote_gate(
+            PromoteContext(
+                actor="user",
+                target_user_id=user_id,
+                session_user_id=session_uid,
+                wake_kind=None,
+                moment_id="",
+                reason=reason,
+                grant_token=None,
+                has_draft=has_draft and draft_sha is not None,
+                draft_sha256=draft_sha,
+                expected_draft_sha256=expected,
+                identity_promote_user_ok=True,
+                identity_promote_any_user=True,
+                operator_grant_tokens=frozenset(),
+                allow_self_promote_without_grant=False,
+                target_user_exists=True,
+            )
+        )
+        if not gate.allowed:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": gate.error_reason or "promote_denied",
+                    "detail": gate.detail,
+                    "actor": "user",
+                    "user_id": user_id,
+                },
+            )
+            return
+
+        try:
+            result = self.users.promote(
+                user_id,
+                reason=reason,
+                expected_draft_sha256=expected,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("glass user promote failed for %s", user_id)
+            self._json(
+                500,
+                {
+                    "ok": False,
+                    "error": f"promote_failed:{type(exc).__name__}",
+                    "actor": "user",
+                    "user_id": user_id,
+                },
+            )
+            return
+
+        if not result.get("ok"):
+            self._json(400, result)
+            return
+        self._json(200, result)
 
     def _provider_response_fields(self) -> dict[str, Any]:
         """Non-secret provider + credential fields for mutator responses."""
@@ -828,6 +1319,26 @@ def start_api_server(
     if skills is ...:
         skills = _try_skill_catalog(paths)
 
+    # Default session user: operator if present, else first known, else "operator".
+    users_store = users or UsersStore(paths)
+    known_ids = users_store.list_user_ids()
+    default_uid = _DEFAULT_SESSION_USER
+    if default_uid not in known_ids and known_ids:
+        default_uid = known_ids[0]
+    # Prefer disk session if valid.
+    session_path = paths.data_dir / _GLASS_SESSION_REL
+    try:
+        raw = session_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            disk_uid = data.get("user_id")
+            if isinstance(disk_uid, str) and disk_uid.strip():
+                candidate = disk_uid.strip()
+                if candidate in known_ids or not known_ids:
+                    default_uid = candidate
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+
     handler = type(
         "BoundHandler",
         (ElyraApiHandler,),
@@ -842,9 +1353,11 @@ def start_api_server(
             "goals": goals or GoalsStore(paths),
             "moments": moments or MomentStore(paths),
             "identity": identity or IdentityStore(paths),
-            "users": users or UsersStore(paths),
+            "users": users_store,
             "tools": tools,
             "skills": skills,
+            "glass_session": {"user_id": default_uid},
+            "glass_session_lock": threading.RLock(),
         },
     )
     server = ThreadingHTTPServer((config.api_host, config.api_port), handler)

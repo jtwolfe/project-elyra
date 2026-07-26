@@ -132,6 +132,84 @@ def _compact_goal(goal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _context_from_tool_ctx(ctx: ToolContext) -> dict[str, Any] | None:
+    """Snapshot social provenance for create_goal/create_task (K6).
+
+    Returns None when ``ctx.user_id`` is null/blank (continuous / pure work) —
+    expected; do not invent operator. Snapshots goes_by via UsersStore
+    display_label when available.
+    """
+    uid = ctx.user_id
+    if not isinstance(uid, str) or not uid.strip():
+        return None
+    clean = uid.strip()
+    users = ctx.extras.get("users") if isinstance(ctx.extras, dict) else None
+    if users is not None and hasattr(users, "display_label"):
+        try:
+            goes_by = users.display_label(clean)
+        except Exception:  # noqa: BLE001 — fail soft to user_id
+            goes_by = clean
+    else:
+        goes_by = clean
+    if not isinstance(goes_by, str) or not goes_by.strip():
+        goes_by = clean
+    out: dict[str, Any] = {
+        "user_id": clean,
+        "goes_by": goes_by.strip(),
+        "source": "tool",
+    }
+    mid = ctx.moment_id
+    if isinstance(mid, str) and mid.strip():
+        out["moment_id"] = mid.strip()
+    return out
+
+
+def _resolve_created_in_context(
+    args: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any] | None:
+    """Prefer explicit args.created_in_context; else tool-ctx snapshot."""
+    if "created_in_context" in args:
+        raw = args.get("created_in_context")
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        uid = raw.get("user_id")
+        if not isinstance(uid, str) or not uid.strip():
+            return None
+        clean = uid.strip()
+        out: dict[str, Any] = {"user_id": clean}
+        goes_by = raw.get("goes_by")
+        if isinstance(goes_by, str) and goes_by.strip():
+            out["goes_by"] = goes_by.strip()
+        else:
+            # Fill goes_by from users when model omitted it.
+            users = ctx.extras.get("users") if isinstance(ctx.extras, dict) else None
+            if users is not None and hasattr(users, "display_label"):
+                try:
+                    label = users.display_label(clean)
+                except Exception:  # noqa: BLE001
+                    label = clean
+                if isinstance(label, str) and label.strip():
+                    out["goes_by"] = label.strip()
+                else:
+                    out["goes_by"] = clean
+            else:
+                out["goes_by"] = clean
+        for key in ("moment_id", "source"):
+            val = raw.get(key)
+            if isinstance(val, str) and val.strip():
+                out[key] = val.strip()
+        if "source" not in out:
+            out["source"] = "tool"
+        if "moment_id" not in out:
+            mid = ctx.moment_id
+            if isinstance(mid, str) and mid.strip():
+                out["moment_id"] = mid.strip()
+        return out
+    return _context_from_tool_ctx(ctx)
+
+
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
@@ -140,7 +218,8 @@ def _compact_goal(goal: dict[str, Any]) -> dict[str, Any]:
 def create_goal(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Create a goal; call mark_task_changed on success.
 
-    Args: title (required), acceptance?, status? (default open; not closed).
+    Args: title (required), acceptance?, status? (default open; not closed),
+    created_in_context? (else snapshotted from ctx.user_id when non-null).
     """
     store, err = _goals(ctx)
     if err is not None:
@@ -155,6 +234,9 @@ def create_goal(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         kwargs["acceptance"] = args["acceptance"]
     if "status" in args and args["status"] is not None:
         kwargs["status"] = args["status"]
+    cic = _resolve_created_in_context(args, ctx)
+    if cic is not None:
+        kwargs["created_in_context"] = cic
 
     try:
         goal = store.create_goal(title, **kwargs)
@@ -172,8 +254,10 @@ def create_goal(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 def create_task(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Create a task under a goal; mark_task_changed; ready → enqueue path.
 
-    Args: goal_id, title (required); status? (default pending); notes?.
+    Args: goal_id, title (required); status? (default pending); notes?;
+    created_in_context? (else snapshotted from ctx.user_id when non-null).
     Create-as-ready fires store on_task_ready and tool-layer enqueue_wake.
+    Does not inherit parent goal context automatically.
     """
     store, err = _goals(ctx)
     if err is not None:
@@ -192,6 +276,9 @@ def create_task(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         kwargs["status"] = args["status"]
     if "notes" in args:
         kwargs["notes"] = args["notes"]
+    cic = _resolve_created_in_context(args, ctx)
+    if cic is not None:
+        kwargs["created_in_context"] = cic
 
     try:
         task = store.create_task(goal_id, title, **kwargs)

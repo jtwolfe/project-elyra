@@ -231,12 +231,35 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("# keep me", encoding="utf-8")
 
-    identity = paths.data_dir / "identity" / "self.md"
-    identity.parent.mkdir(parents=True, exist_ok=True)
-    identity.write_text("# self keep", encoding="utf-8")
-    user_prof = paths.data_dir / "users" / "operator" / "profile.md"
-    user_prof.parent.mkdir(parents=True, exist_ok=True)
-    user_prof.write_text("# user keep", encoding="utf-8")
+    # New layout + legacy: reset must preserve identity/ and users/ entirely
+    # (current, draft, meta, versions, and legacy self/profile).
+    identity_root = paths.data_dir / "identity"
+    identity_root.mkdir(parents=True, exist_ok=True)
+    identity_current = identity_root / "current.md"
+    identity_current.write_text("# self keep", encoding="utf-8")
+    identity_legacy = identity_root / "self.md"
+    identity_legacy.write_text("# legacy self keep", encoding="utf-8")
+    identity_draft = identity_root / "draft.md"
+    identity_draft.write_text("# draft keep\n", encoding="utf-8")
+    identity_meta = identity_root / "meta.json"
+    identity_meta.write_text('{"actor":"self"}\n', encoding="utf-8")
+    identity_ver = identity_root / "versions" / "20260726T000000Z_abc123.md"
+    identity_ver.parent.mkdir(parents=True, exist_ok=True)
+    identity_ver.write_text("# archived self\n", encoding="utf-8")
+
+    user_root = paths.data_dir / "users" / "operator"
+    user_root.mkdir(parents=True, exist_ok=True)
+    user_current = user_root / "current.md"
+    user_current.write_text("# user keep", encoding="utf-8")
+    user_prof = user_root / "profile.md"
+    user_prof.write_text("# legacy profile keep", encoding="utf-8")
+    user_draft = user_root / "draft.md"
+    user_draft.write_text("# user draft keep\n", encoding="utf-8")
+    user_meta = user_root / "meta.json"
+    user_meta.write_text('{"actor":"user","user_id":"operator"}\n', encoding="utf-8")
+    user_ver = user_root / "versions" / "20260726T000000Z_def456.md"
+    user_ver.parent.mkdir(parents=True, exist_ok=True)
+    user_ver.write_text("# archived user\n", encoding="utf-8")
 
     cont = paths.data_dir / "runtime" / "continuous.json"
     cont.parent.mkdir(parents=True, exist_ok=True)
@@ -266,9 +289,19 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     assert not (paths.tools_dir / "drafts" / "mytool").exists()
     assert (paths.tools_dir / "drafts").is_dir()
 
-    # Preserved
-    assert identity.read_text(encoding="utf-8") == "# self keep"
-    assert user_prof.read_text(encoding="utf-8") == "# user keep"
+    # Preserved (identity + users entire trees, including draft/meta/versions)
+    assert identity_current.read_text(encoding="utf-8") == "# self keep"
+    assert identity_legacy.read_text(encoding="utf-8") == "# legacy self keep"
+    assert identity_draft.read_text(encoding="utf-8") == "# draft keep\n"
+    assert identity_meta.read_text(encoding="utf-8") == '{"actor":"self"}\n'
+    assert identity_ver.read_text(encoding="utf-8") == "# archived self\n"
+    assert user_current.read_text(encoding="utf-8") == "# user keep"
+    assert user_prof.read_text(encoding="utf-8") == "# legacy profile keep"
+    assert user_draft.read_text(encoding="utf-8") == "# user draft keep\n"
+    assert user_meta.read_text(encoding="utf-8") == (
+        '{"actor":"user","user_id":"operator"}\n'
+    )
+    assert user_ver.read_text(encoding="utf-8") == "# archived user\n"
     assert cont.read_text(encoding="utf-8").strip() == '{"enabled": true}'
     assert (skill / "SKILL.md").read_text(encoding="utf-8") == "# keep me"
     assert (local_tool / "TOOL.md").read_text(encoding="utf-8") == "# local keep"

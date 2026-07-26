@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "properties": {
+    "actor": {
+      "type": "string",
+      "enum": ["self", "user"]
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Required when actor=user"
+    },
+    "body": {
+      "type": "string",
+      "description": "Full markdown body for draft (replaces previous draft)"
+    },
+    "meta_patch": {
+      "type": "object",
+      "description": "Partial meta update stored as meta.draft_meta until promote merges",
+      "properties": {
+        "display_name": { "type": "string" },
+        "goes_by": { "type": "string" },
+        "full_name": { "type": "string" },
+        "force_full_name": {
+          "type": "boolean",
+          "description": "Required true to change full_name vs current meta (host-enforced)"
+        },
+        "real_name_known": { "type": "boolean" },
+        "provisional": { "type": "boolean" },
+        "record_name_nudge": {
+          "type": "boolean",
+          "description": "If true, update live name_nudge for this user (operational; not draft_meta)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why this draft exists (audit)"
+    }
+  },
+  "required": ["actor", "reason"],
+  "additionalProperties": false
+}

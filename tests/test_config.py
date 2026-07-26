@@ -60,10 +60,13 @@ def test_ensure_data_dirs_seeds_once_from_project_prompts(tmp_path):
     paths = resolve_paths(tmp_path)
     paths.ensure_data_dirs()
 
-    self_md = paths.data_dir / "identity" / "self.md"
-    op_md = paths.data_dir / "users" / "operator" / "profile.md"
+    # Prefer current.md layout (legacy self.md / profile.md not required on fresh).
+    self_md = paths.data_dir / "identity" / "current.md"
+    op_md = paths.data_dir / "users" / "operator" / "current.md"
     assert self_md.is_file()
     assert op_md.is_file()
+    assert (paths.data_dir / "identity" / "meta.json").is_file()
+    assert (paths.data_dir / "users" / "operator" / "meta.json").is_file()
     self_text = self_md.read_text(encoding="utf-8")
     assert "Elyra" in self_text
     assert "Self" in self_text or "self" in self_text.lower()
@@ -76,8 +79,8 @@ def test_ensure_data_dirs_never_overwrites_existing_digests(tmp_path):
     paths = resolve_paths(tmp_path)
     paths.ensure_data_dirs()
 
-    self_md = paths.data_dir / "identity" / "self.md"
-    op_md = paths.data_dir / "users" / "operator" / "profile.md"
+    self_md = paths.data_dir / "identity" / "current.md"
+    op_md = paths.data_dir / "users" / "operator" / "current.md"
     self_md.write_text("CUSTOM SELF\n", encoding="utf-8")
     op_md.write_text("CUSTOM OPERATOR\n", encoding="utf-8")
 
@@ -88,7 +91,7 @@ def test_ensure_data_dirs_never_overwrites_existing_digests(tmp_path):
 
 def test_ensure_data_dirs_raises_if_seed_dest_is_directory(tmp_path):
     paths = resolve_paths(tmp_path)
-    blocked = paths.data_dir / "identity" / "self.md"
+    blocked = paths.data_dir / "identity" / "current.md"
     blocked.mkdir(parents=True)
     with pytest.raises(FileExistsError, match="not a file"):
         paths.ensure_data_dirs()

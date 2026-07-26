@@ -152,6 +152,61 @@ def test_create_task_as_ready_fires_hook(tmp_path):
     assert calls == [(t["id"], g["id"])]
 
 
+def test_create_goal_with_created_in_context(store):
+    ctx = {
+        "user_id": "jim",
+        "goes_by": "Jim",
+        "moment_id": "m_abc",
+        "source": "tool",
+    }
+    g = store.create_goal("Ship with Jim", created_in_context=ctx)
+    assert g["created_in_context"] == ctx
+    loaded = store.get_goal(g["id"])
+    assert loaded is not None
+    assert loaded["created_in_context"]["user_id"] == "jim"
+    assert loaded["created_in_context"]["goes_by"] == "Jim"
+
+
+def test_create_goal_without_context_omits_field(store):
+    g = store.create_goal("Autonomous")
+    assert "created_in_context" not in g
+    loaded = store.get_goal(g["id"])
+    assert loaded is not None
+    assert "created_in_context" not in loaded
+
+
+def test_create_task_with_created_in_context_does_not_inherit(store):
+    g = store.create_goal(
+        "Parent",
+        created_in_context={"user_id": "jim", "goes_by": "Jim"},
+    )
+    t = store.create_task(g["id"], "Step", notes="n")
+    assert "created_in_context" not in t
+    t2 = store.create_task(
+        g["id"],
+        "Step2",
+        created_in_context={"user_id": "sam", "goes_by": "Sam", "source": "tool"},
+    )
+    assert t2["created_in_context"]["user_id"] == "sam"
+    # Parent goal context unchanged.
+    assert store.get_goal(g["id"])["created_in_context"]["user_id"] == "jim"
+
+
+def test_find_task_returns_goal_and_task(store):
+    g = store.create_goal(
+        "G",
+        created_in_context={"user_id": "jim", "goes_by": "Jim"},
+    )
+    t = store.create_task(g["id"], "T", status="ready")
+    found = store.find_task(t["id"])
+    assert found is not None
+    goal, task = found
+    assert goal["id"] == g["id"]
+    assert goal["created_in_context"]["user_id"] == "jim"
+    assert task["id"] == t["id"]
+    assert store.find_task("t_missing") is None
+
+
 def test_persistence_roundtrip(tmp_path):
     paths = resolve_paths(tmp_path)
     paths.ensure_data_dirs()
