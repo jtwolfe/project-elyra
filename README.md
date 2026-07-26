@@ -57,12 +57,14 @@ pip install -e '.[sandbox]'
 ./scripts/setup-microsandbox.sh --doctor-only   # KVM / import checks
 # hermetic host-stub (tests/CI): export ELYRA_SANDBOX=0
 
-# full stack (Grok credentials on gi path, or local model/ + llama)
+# full stack (Grok credentials on gi path)
 elyra start
 
-# UI + API only, stub LLM (no GPU)
-elyra start --no-llama
+# UI + API only, stub LLM (no remote calls / hermetic dogfood)
+elyra start --stub-llm
 ```
+
+> **Note:** `--no-llama` and `--context-tokens` were removed (use `--stub-llm` for hermetic UI). Full Grok-first README rewrite lands in a follow-up.
 
 Without `elyra[sandbox]`, chat still starts; guest `run` / `sandbox_*` / isolation-on `verify_tool` fail closed (`sandbox_unavailable:*`). Install the extra so create-tool does not look broken.
 
@@ -70,10 +72,9 @@ Open **http://127.0.0.1:8787/**
 
 | Flag | Effect |
 |------|--------|
-| `--no-llama` | Skip llama-server; stub chat |
-| `--stub-llm` | Stub client even if llama is up |
+| `--stub-llm` | StubChatClient only (hermetic UI; no remote LLM) |
+| `--provider xai\|local` | Product default `xai`; `local` fails closed (not implemented) |
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
-| `--context-tokens N` | llama `-c` KV ceiling (default 86000; lower if VRAM crashes) |
 
 Local model files (optional) live under `aurimago/project-elyra2/model`. Setup links them as `./model` when present:
 

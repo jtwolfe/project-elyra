@@ -344,6 +344,116 @@ def test_supervisor_local_stub_llm_uses_stub(tmp_path: Path):
         assert isinstance(sup._worker.client, StubChatClient)
         assert not isinstance(sup._worker.client, FailingChatClient)
         assert sup.state.llama_error == "stub_llm"
+        assert sup.provider_runtime is not None
+        assert sup.provider_runtime.stub_llm is True
+    finally:
+        sup.shutdown()
+
+
+def test_stub_llm_survives_apply_model_and_rebuild_local(tmp_path: Path):
+    """--stub-llm must stay Stub across model picker apply + rebuild (local)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    cfg = RuntimeConfig(
+        api_host="127.0.0.1",
+        api_port=port,
+        provider_name="local",
+        model="local",
+        model_label="local",
+    )
+    sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=True)
+    try:
+        sup.start()
+        pr = sup.provider_runtime
+        assert pr is not None
+        assert isinstance(pr.chat_client, StubChatClient)
+        can_open_before = pr.can_open_model_moment()
+
+        with patch(
+            "elyra.runtime.provider_runtime.HttpChatClient.for_local"
+        ) as mock_for_local:
+            with patch(
+                "elyra.runtime.provider_runtime.HttpChatClient.for_xai"
+            ) as mock_for_xai:
+                pr.apply_model("local")
+                pr.rebuild_chat_stack()
+                mock_for_local.assert_not_called()
+                mock_for_xai.assert_not_called()
+
+        assert isinstance(pr.chat_client, StubChatClient)
+        assert not isinstance(pr.chat_client, FailingChatClient)
+        assert sup._worker.client is pr.chat_client
+        assert isinstance(sup._worker.client, StubChatClient)
+        assert sup.state.llama_error == "stub_llm"
+        assert sup.state.llama_ready is False
+        assert pr.can_open_model_moment() is can_open_before
+        assert pr.stub_llm is True
+        assert pr.http_client is None
+    finally:
+        sup.shutdown()
+
+
+def test_stub_llm_survives_apply_model_and_rebuild_xai(tmp_path: Path):
+    """--stub-llm + valid auth must not escape to live HttpChatClient on apply/rebuild."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    auth = home / "auth.json"
+    _write_auth(auth, token="must-not-be-used-for-http")
+
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    cfg = RuntimeConfig(
+        api_host="127.0.0.1",
+        api_port=port,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5 Fast",
+        credential_source="grok_build",
+        grok_auth_path=str(auth),
+    )
+    sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=True)
+    try:
+        sup.start()
+        pr = sup.provider_runtime
+        assert pr is not None
+        assert isinstance(pr.chat_client, StubChatClient)
+        assert pr.stub_llm is True
+        assert pr.http_client is None
+
+        with patch(
+            "elyra.runtime.provider_runtime.HttpChatClient.for_xai"
+        ) as mock_for_xai:
+            with patch(
+                "elyra.runtime.provider_runtime.HttpChatClient.for_local"
+            ) as mock_for_local:
+                pr.apply_model("grok-4.3")
+                assert pr.model == "grok-4.3"
+                pr.rebuild_chat_stack()
+                mock_for_xai.assert_not_called()
+                mock_for_local.assert_not_called()
+
+        assert isinstance(pr.chat_client, StubChatClient)
+        assert not isinstance(pr.chat_client, HttpChatClient)
+        assert not isinstance(pr.chat_client, FailingChatClient)
+        assert isinstance(sup._worker.client, StubChatClient)
+        assert sup.state.llama_error == "stub_llm"
+        assert pr.http_client is None
     finally:
         sup.shutdown()
 

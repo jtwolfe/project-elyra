@@ -24,6 +24,7 @@ from elyra.llm.client import (
     ChatClient,
     FailingChatClient,
     HttpChatClient,
+    StubChatClient,
     UsageGatedChatClient,
 )
 from elyra.llm.config import LocalClientConfig, XaiClientConfig
@@ -73,6 +74,9 @@ class ProviderRuntime:
     grok_auth_path: Path | None = None
     request_timeout_s: float = 120.0
     state: RuntimeState | None = None
+    # Durable --stub-llm session flag: rebuild/apply_model must not install
+    # live HTTP or Failing(local) and erase hermetic Stub posture.
+    stub_llm: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def status_provider_fields(self) -> dict[str, Any]:
@@ -167,8 +171,12 @@ class ProviderRuntime:
         Builds the new stack off to the side, then swaps under lock so a failed
         rebuild leaves the previous client and credential fields intact until
         a clean Failing fallback is committed.
+
+        When ``stub_llm`` is set (``elyra start --stub-llm``), always reinstall
+        StubChatClient — never live HTTP and never local Failing.
         """
         with self._lock:
+            stub_llm = self.stub_llm
             provider = self.provider_name
             model = self.model
             source = self.credential_source
@@ -180,6 +188,10 @@ class ProviderRuntime:
             xai_config = self.xai_config
             local_config = self.local_config
             meter = self.meter
+
+        if stub_llm:
+            self._rebuild_stub(usage_settings=usage_settings, meter=meter)
+            return
 
         if provider == "local":
             self._rebuild_local(
@@ -263,6 +275,31 @@ class ProviderRuntime:
             self.refresh_models()
         except Exception:  # noqa: BLE001 — best-effort
             _LOG.debug("refresh_models after rebuild failed", exc_info=True)
+
+    def _rebuild_stub(
+        self,
+        *,
+        usage_settings: UsageSettings,
+        meter: UsageMeter | None,
+    ) -> None:
+        """Hermetic --stub-llm posture: Stub only; never HTTP / never local Failing."""
+        if meter is None and usage_settings.enabled:
+            meter = UsageMeter.load(self.data_dir, usage_settings)
+            with self._lock:
+                self.meter = meter
+        with self._lock:
+            provider = self.provider_name
+            self.http_client = None
+            self.chat_client = StubChatClient()
+            # Match cold-start stub: credential_ok True; posture via llama_error.
+            self.credential_ok = True
+            self.credential_detail = None
+            if provider == "local":
+                self.models_available = ["local"]
+            self._bind_worker_unlocked()
+            self._sync_state_unlocked()
+        if self.state is not None:
+            self.state.set_llama(pid=None, ready=False, error="stub_llm")
 
     def _rebuild_local(
         self,
@@ -358,7 +395,11 @@ class ProviderRuntime:
 
     def apply_model(self, model: str) -> None:
         """Validate, persist prefs, set_model on http_client if present,
-        else rebuild_chat_stack if credential_ok."""
+        else rebuild_chat_stack if credential_ok.
+
+        Under ``stub_llm``, only the model id / prefs update — the client stays
+        Stub (never live HTTP, never local Failing).
+        """
         mid = (model or "").strip()
         if not mid:
             raise ValueError("model must be a non-empty string")
@@ -366,6 +407,7 @@ class ProviderRuntime:
             available = list(self.models_available)
             http = self.http_client
             credential_ok = self.credential_ok
+            stub_llm = self.stub_llm
             data_dir = self.data_dir
             source = self.credential_source
         if available and mid not in available and mid != "local":
@@ -383,6 +425,10 @@ class ProviderRuntime:
             self._sync_state_unlocked()
             http = self.http_client
             credential_ok = self.credential_ok
+            stub_llm = self.stub_llm
+        if stub_llm:
+            # Durable hermetic posture: prefs updated; keep StubChatClient.
+            return
         if http is not None:
             http.set_model(mid)
         elif credential_ok:

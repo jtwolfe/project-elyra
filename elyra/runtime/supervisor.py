@@ -322,6 +322,7 @@ class ElyraSupervisor:
             grok_auth_path=grok_auth_path,
             request_timeout_s=cfg.request_timeout_s,
             state=self.state,
+            stub_llm=self._use_stub,
         )
         self.provider_runtime = pr
 

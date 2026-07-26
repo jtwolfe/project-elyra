@@ -660,6 +660,9 @@ function renderProviderPill(s) {
       );
     } else if (s.llama_error === "stub_llm") {
       setPill(pillLlama, "stub llm", "pill-off");
+    } else if (s.llama_error === "local_not_implemented") {
+      // PR2 interim (pre-PR3 chat_* rename): fail-closed local is not an error.
+      setPill(pillLlama, "local off", "pill-off");
     } else {
       setPill(
         pillLlama,
