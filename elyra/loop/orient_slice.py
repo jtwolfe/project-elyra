@@ -245,7 +245,12 @@ def format_goals_slice(
         gid = g.get("id") or "?"
         title = _truncate(str(g.get("title") or ""), _TITLE_MAX_CHARS)
         status = g.get("status") or "?"
-        lines = [f"Goal {gid} [{status}]: {title}"]
+        head = f"Goal {gid} [{status}]: {title}"
+        # Provenance annotation only when goes_by snapshot present (K6; budget-safe).
+        goes_by = _context_goes_by(g)
+        if goes_by:
+            head = f"{head} · {goes_by}"
+        lines = [head]
         acceptance = g.get("acceptance")
         if acceptance:
             acc = _truncate(str(acceptance), _ACCEPTANCE_MAX_CHARS)
@@ -299,6 +304,17 @@ def _truncate(text: str, max_chars: int) -> str:
     if max_chars <= 1:
         return text[:max_chars]
     return text[: max_chars - 1].rstrip() + "…"
+
+
+def _context_goes_by(entity: Mapping[str, Any]) -> str | None:
+    """Return created_in_context.goes_by when a non-empty string, else None."""
+    ctx = entity.get("created_in_context")
+    if not isinstance(ctx, Mapping):
+        return None
+    goes_by = ctx.get("goes_by")
+    if isinstance(goes_by, str) and goes_by.strip():
+        return goes_by.strip()
+    return None
 
 
 __all__ = [

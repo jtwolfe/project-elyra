@@ -163,11 +163,16 @@ class GoalsStore:
         *,
         acceptance: str | None = None,
         status: str = "open",
+        created_in_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a goal. Default status ``open``.
 
         ``status=closed`` is rejected — use ``update_goal`` so soft-close
         warning/metric apply. Allowed: open, review, cancelled.
+
+        ``created_in_context`` is optional provenance (user_id + optional
+        goes_by/moment_id/source). Absent/None when pure continuous work —
+        expected, not a bug (K6).
         """
         if status not in GOAL_CREATE_STATUSES:
             if status == "closed":
@@ -188,6 +193,8 @@ class GoalsStore:
             "updated_at": now,
             "tasks": [],
         }
+        if created_in_context is not None:
+            goal["created_in_context"] = dict(created_in_context)
         with self._lock:
             doc = self._load()
             doc.setdefault("goals", []).append(goal)
@@ -282,11 +289,16 @@ class GoalsStore:
         *,
         status: str = "pending",
         notes: str | None = None,
+        created_in_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a task under ``goal_id``. Default status ``pending``.
 
         If created directly as ``ready``, the ``on_task_ready`` hook fires
         (transition into ready from non-existence).
+
+        ``created_in_context`` is set when provided; does **not** inherit the
+        parent goal's context automatically — callers (ledger tools) set both
+        from the same ctx snapshot when appropriate (K6).
         """
         if status not in TASK_STATUSES:
             raise ValueError(f"invalid task status: {status!r}")
@@ -309,6 +321,8 @@ class GoalsStore:
                 "created_at": now,
                 "updated_at": now,
             }
+            if created_in_context is not None:
+                task["created_in_context"] = dict(created_in_context)
             tasks = goal.setdefault("tasks", [])
             if not isinstance(tasks, list):
                 goal["tasks"] = [task]
@@ -331,6 +345,22 @@ class GoalsStore:
                 return None
             _, task = found
             return dict(task)
+
+    def find_task(
+        self, task_id: str
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Return ``(goal, task)`` copies for ``task_id``, or None.
+
+        Used by work-origin USER resolve (K19) so task context can fall back
+        to the parent goal's ``created_in_context``.
+        """
+        with self._lock:
+            doc = self._load()
+            found = self._find_task(doc, task_id)
+            if found is None:
+                return None
+            goal, task = found
+            return dict(goal), dict(task)
 
     def update_task(
         self,

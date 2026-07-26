@@ -553,6 +553,89 @@ def test_resolve_orient_created_in_context_when_present(paths, users):
     assert digest
 
 
+def test_resolve_orient_task_ready_jim_linked_via_goals_store(paths, users):
+    """task_ready with Jim created_in_context on goal/task → Jim USER (K19)."""
+    from elyra.goals import GoalsStore
+
+    users.create_user("Jim", user_id="jim", provisional=False, real_name_known=True)
+    goals = GoalsStore(paths)
+    g = goals.create_goal(
+        "Help Jim ship",
+        created_in_context={
+            "user_id": "jim",
+            "goes_by": "Jim",
+            "source": "tool",
+        },
+    )
+    t = goals.create_task(
+        g["id"],
+        "Implement feature",
+        status="ready",
+        created_in_context={
+            "user_id": "jim",
+            "goes_by": "Jim",
+            "source": "tool",
+        },
+    )
+    wake = FakeWake("task_ready", {"task_id": t["id"], "goal_id": g["id"]})
+    uid, digest = resolve_orient_user(wake, users=users, goals=goals)
+    assert uid == "jim"
+    assert digest
+    assert "Jim" in digest or "jim" in digest.lower()
+
+
+def test_resolve_orient_task_ready_falls_back_to_goal_context(paths, users):
+    """Task without context still picks parent goal created_in_context."""
+    from elyra.goals import GoalsStore
+
+    users.create_user("Jim", user_id="jim")
+    goals = GoalsStore(paths)
+    g = goals.create_goal(
+        "Jim goal",
+        created_in_context={"user_id": "jim", "goes_by": "Jim"},
+    )
+    t = goals.create_task(g["id"], "No own context", status="ready")
+    assert "created_in_context" not in t
+    wake = FakeWake("task_ready", {"task_id": t["id"]})
+    uid, digest = resolve_orient_user(wake, users=users, goals=goals)
+    assert uid == "jim"
+    assert digest
+
+
+def test_resolve_orient_moment_continue_goal_context(paths, users):
+    from elyra.goals import GoalsStore
+
+    users.create_user("Jim", user_id="jim")
+    goals = GoalsStore(paths)
+    g = goals.create_goal(
+        "Continue Jim work",
+        created_in_context={"user_id": "jim", "goes_by": "Jim"},
+    )
+    wake = FakeWake(
+        "moment_continue",
+        {"goal_id": g["id"], "source_moment_id": "m0"},
+    )
+    uid, digest = resolve_orient_user(wake, users=users, goals=goals)
+    assert uid == "jim"
+    assert digest
+
+
+def test_resolve_orient_unlinked_continue_empty(paths, users):
+    """Unlinked moment_continue / autonomous → empty USER (not operator)."""
+    from elyra.goals import GoalsStore
+
+    users.create_user("Jim", user_id="jim")
+    goals = GoalsStore(paths)
+    goals.create_goal(
+        "Unrelated",
+        created_in_context={"user_id": "jim", "goes_by": "Jim"},
+    )
+    wake = FakeWake("moment_continue", {"source_moment_id": "m0"})
+    uid, digest = resolve_orient_user(wake, users=users, goals=goals)
+    assert uid is None
+    assert digest == ""
+
+
 # ---------------------------------------------------------------------------
 # tools: get / draft / promote
 # ---------------------------------------------------------------------------

@@ -54,12 +54,18 @@ def _ctx(
     *,
     enqueue_wake=None,
     mark_task_changed=None,
+    user_id: str | None = None,
+    moment_id: str = "",
+    extras: dict[str, Any] | None = None,
 ) -> ToolContext:
     return ToolContext(
         paths=paths,
         goals=store,
         enqueue_wake=enqueue_wake,
         mark_task_changed=mark_task_changed,
+        user_id=user_id,
+        moment_id=moment_id,
+        extras=extras or {},
     )
 
 
@@ -100,8 +106,16 @@ def test_openai_tools_include_ledger(registry: ToolRegistry) -> None:
     assert "goal_id" in tools["update_goal"]["function"]["parameters"]["properties"]
     assert "force" in tools["update_goal"]["function"]["parameters"]["properties"]
     assert "title" in tools["create_goal"]["function"]["parameters"]["properties"]
+    assert (
+        "created_in_context"
+        in tools["create_goal"]["function"]["parameters"]["properties"]
+    )
     assert "goal_id" in tools["create_task"]["function"]["parameters"]["properties"]
     assert "title" in tools["create_task"]["function"]["parameters"]["properties"]
+    assert (
+        "created_in_context"
+        in tools["create_task"]["function"]["parameters"]["properties"]
+    )
     assert "goal_id" in tools["get_goal"]["function"]["parameters"]["properties"]
     assert "task_id" in tools["get_task"]["function"]["parameters"]["properties"]
 
@@ -124,8 +138,103 @@ def test_create_goal_works_and_marks_changed(paths, store: GoalsStore) -> None:
     assert goal["status"] == "open"
     assert goal["acceptance"] == "list exists"
     assert goal["id"].startswith("g_")
+    # Continuous / null user_id → no provenance (K6).
+    assert "created_in_context" not in goal
     assert store.get_goal(goal["id"]) is not None
     assert changed == [True]
+
+
+class _LabelUsers:
+    def display_label(self, user_id: str) -> str:
+        return {"jim": "Jim", "sam": "Sam"}.get(user_id, user_id)
+
+
+def test_create_goal_social_populates_created_in_context(
+    paths, store: GoalsStore
+) -> None:
+    result = create_goal(
+        {"title": "Jim asked for this"},
+        _ctx(
+            paths,
+            store,
+            user_id="jim",
+            moment_id="m_social1",
+            extras={"users": _LabelUsers()},
+        ),
+    )
+    assert result.ok is True
+    goal = result.payload["goal"]
+    ctx = goal["created_in_context"]
+    assert ctx["user_id"] == "jim"
+    assert ctx["goes_by"] == "Jim"
+    assert ctx["moment_id"] == "m_social1"
+    assert ctx["source"] == "tool"
+    loaded = store.get_goal(goal["id"])
+    assert loaded is not None
+    assert loaded["created_in_context"]["user_id"] == "jim"
+
+
+def test_create_goal_continuous_null_user_id_no_context(
+    paths, store: GoalsStore
+) -> None:
+    result = create_goal(
+        {"title": "Self-drive work"},
+        _ctx(paths, store, user_id=None, moment_id="m_cont"),
+    )
+    assert result.ok is True
+    assert "created_in_context" not in result.payload["goal"]
+
+
+def test_create_goal_explicit_created_in_context(paths, store: GoalsStore) -> None:
+    result = create_goal(
+        {
+            "title": "Override",
+            "created_in_context": {"user_id": "sam", "goes_by": "Sam"},
+        },
+        _ctx(
+            paths,
+            store,
+            user_id="jim",
+            extras={"users": _LabelUsers()},
+        ),
+    )
+    assert result.ok is True
+    ctx = result.payload["goal"]["created_in_context"]
+    assert ctx["user_id"] == "sam"
+    assert ctx["goes_by"] == "Sam"
+
+
+def test_create_task_social_populates_created_in_context(
+    paths, store: GoalsStore
+) -> None:
+    g = store.create_goal("Parent")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Do it"},
+        _ctx(
+            paths,
+            store,
+            user_id="jim",
+            moment_id="m2",
+            extras={"users": _LabelUsers()},
+        ),
+    )
+    assert result.ok is True
+    task = result.payload["task"]
+    assert task["created_in_context"]["user_id"] == "jim"
+    assert task["created_in_context"]["goes_by"] == "Jim"
+    assert task["created_in_context"]["moment_id"] == "m2"
+
+
+def test_create_task_continuous_null_user_id_no_context(
+    paths, store: GoalsStore
+) -> None:
+    g = store.create_goal("Parent")
+    result = create_task(
+        {"goal_id": g["id"], "title": "Solo step"},
+        _ctx(paths, store, user_id=None),
+    )
+    assert result.ok is True
+    assert "created_in_context" not in result.payload["task"]
 
 
 def test_create_goal_via_registry(
