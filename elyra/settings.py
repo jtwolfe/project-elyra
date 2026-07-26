@@ -119,11 +119,13 @@ class UsageSettings:
     it is **not** multiplied into meter math until an external real-quota hook
     exists.
 
-    Day/hour hard-stop *flags* default **off** (settings surface only). Until
-    a later PR wires those flags into the meter, Phase 0 still hard-stops day
-    and hour from derived ceilings regardless of these booleans. Pace/burst/
-    account/credits fields are likewise settings-only until later PRs wire
-    meter and poller behavior.
+    Day/hour hard-stop flags default **off** (soft diagnostics only). The meter
+    enforces day/hour hard stop only when the corresponding flag is true.
+    Pace bands (green/yellow/red), burst cushion, and account hard stop
+    (``account_hard_stop_percent`` from an applied SuperGrok credits snapshot)
+    are enforced by ``UsageMeter``. Credits HTTP polling is separate (poller
+    injects ``CreditsSnapshot``); these settings only configure thresholds and
+    poller knobs.
 
     ``hard_stop_override`` is a *runtime* preference (usage.json), not a
     Settings ship default — always starts/persists default False unless the

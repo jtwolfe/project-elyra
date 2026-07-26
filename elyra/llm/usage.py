@@ -548,27 +548,39 @@ class UsageMeter:
     def set_hard_stop_override(self, active: bool) -> UsageSnapshot:
         """Persist hard_stop_override to usage.json (atomic). Default path: False.
 
-        Never silently defaults to True.
+        Never silently defaults to True. Memory rolls back if persist fails.
         """
         with self._lock:
-            self._hard_stop_override = bool(active)
-            self._refresh_windows_unlocked()
-            self._sync_hard_stop_fields_unlocked()
-            self._persist_unlocked()
-            return self._snapshot_unlocked()
+            prev = self._capture_durable_unlocked()
+            try:
+                self._hard_stop_override = bool(active)
+                self._refresh_windows_unlocked()
+                self._sync_hard_stop_fields_unlocked()
+                self._persist_unlocked()
+                return self._snapshot_unlocked()
+            except Exception:
+                self._restore_durable_unlocked(prev)
+                raise
 
     def apply_credits_snapshot(self, snap: CreditsSnapshot) -> UsageSnapshot:
         """Merge SuperGrok snapshot; first-adopt retains S; true roll zeros S.
 
         No HTTP — caller injects a constructed ``CreditsSnapshot``.
-        Unparseable period dates do not adopt or roll; status may still update.
+        Identity adopt/roll only on successful (ok) + parseable period.
+        Unparseable / non-ok polls do not wipe last-good account snapshot;
+        memory rolls back if persist fails.
         """
         with self._lock:
-            self._refresh_windows_unlocked()
-            self._apply_credits_snapshot_unlocked(snap)
-            self._sync_hard_stop_fields_unlocked()
-            self._persist_unlocked()
-            return self._snapshot_unlocked()
+            prev = self._capture_durable_unlocked()
+            try:
+                self._refresh_windows_unlocked()
+                self._apply_credits_snapshot_unlocked(snap)
+                self._sync_hard_stop_fields_unlocked()
+                self._persist_unlocked()
+                return self._snapshot_unlocked()
+            except Exception:
+                self._restore_durable_unlocked(prev)
+                raise
 
     def record(
         self,
@@ -581,47 +593,60 @@ class UsageMeter:
         Recording is never disabled by override. Missing usage records
         ``estimated_if_missing`` (default 0). Cached tokens accumulate
         informationally; never subtracted from billable S.
+        Memory rolls back if persist fails.
         """
         global _missing_usage_logged
         with self._lock:
-            self._refresh_windows_unlocked()
-            if usage is not None:
-                tokens = max(0, int(usage.billable_tokens))
-                cached = max(0, int(usage.cached_tokens))
-            else:
-                tokens = max(0, int(estimated_if_missing))
-                cached = 0
-                if not _missing_usage_logged:
-                    logger.debug(
-                        "usage.record: missing usage; recording estimated_if_missing=%s",
-                        tokens,
-                    )
-                    _missing_usage_logged = True
+            prev = self._capture_durable_unlocked()
+            try:
+                self._refresh_windows_unlocked()
+                if usage is not None:
+                    tokens = max(0, int(usage.billable_tokens))
+                    cached = max(0, int(usage.cached_tokens))
+                else:
+                    tokens = max(0, int(estimated_if_missing))
+                    cached = 0
+                    if not _missing_usage_logged:
+                        logger.debug(
+                            "usage.record: missing usage; "
+                            "recording estimated_if_missing=%s",
+                            tokens,
+                        )
+                        _missing_usage_logged = True
 
-            if tokens or cached:
-                if tokens:
-                    self._week_used += tokens
-                    self._day_used += tokens
-                    self._hour_used += tokens
-                if cached:
-                    self._week_cached += cached
-                self._last_record_at = _iso_z(self._clock())
+                if tokens or cached:
+                    if tokens:
+                        self._week_used += tokens
+                        self._day_used += tokens
+                        self._hour_used += tokens
+                    if cached:
+                        self._week_cached += cached
+                    self._last_record_at = _iso_z(self._clock())
 
-            self._sync_hard_stop_fields_unlocked()
-            self._persist_unlocked()
-            return self._snapshot_unlocked()
+                self._sync_hard_stop_fields_unlocked()
+                self._persist_unlocked()
+                return self._snapshot_unlocked()
+            except Exception:
+                self._restore_durable_unlocked(prev)
+                raise
 
     def refresh_windows(self) -> None:
         """Roll window counters when week/day/hour ids change (UTC).
 
         Week S zeros only when period_authority is iso (or true SuperGrok roll
         via apply_credits_snapshot). Day/hour counters always zero on id change.
+        Memory rolls back if persist fails after a roll.
         """
         with self._lock:
-            rolled = self._refresh_windows_unlocked()
-            if rolled:
-                self._sync_hard_stop_fields_unlocked()
-                self._persist_unlocked()
+            prev = self._capture_durable_unlocked()
+            try:
+                rolled = self._refresh_windows_unlocked()
+                if rolled:
+                    self._sync_hard_stop_fields_unlocked()
+                    self._persist_unlocked()
+            except Exception:
+                self._restore_durable_unlocked(prev)
+                raise
 
     def snapshot(self) -> UsageSnapshot:
         """refresh_windows + immutable snapshot including override_active.
@@ -649,13 +674,17 @@ class UsageMeter:
         return H, t
 
     def _account_usage_fraction_unlocked(self) -> float | None:
-        """Account used fraction A when snapshot ok and not stale; else None."""
-        if self._sg_status not in (None, "ok") and self._sg_status != "ok":
-            # only "ok" (or None with percent from ok apply) is usable
-            pass
+        """Account used fraction A when last-good snapshot ok and not stale.
+
+        Requires status ok, a usable percent, and an established period basis
+        (supergrok with period_start, or parseable bounds already stored).
+        """
         if (self._sg_status or "") != "ok":
             return None
         if self._sg_credit_usage_percent is None:
+            return None
+        # Account hard only once we have a period basis (adopted or stored).
+        if not self._period_start or parse_iso_datetime(self._period_start) is None:
             return None
         # Staleness: if fetched_at older than credits_stale_after_s → unavailable
         if self._sg_fetched_at:
@@ -703,12 +732,80 @@ class UsageMeter:
         self._week_stt_calls = 0
         self._week_tts_calls = 0
 
+    def _capture_durable_unlocked(self) -> dict[str, Any]:
+        """Snapshot in-memory durable fields for rollback if persist fails."""
+        return {
+            "week_id": self._week_id,
+            "day_id": self._day_id,
+            "hour_id": self._hour_id,
+            "period_id": self._period_id,
+            "period_authority": self._period_authority,
+            "period_start": self._period_start,
+            "period_end": self._period_end,
+            "week_used": self._week_used,
+            "day_used": self._day_used,
+            "hour_used": self._hour_used,
+            "week_cached": self._week_cached,
+            "week_stt_calls": self._week_stt_calls,
+            "week_tts_calls": self._week_tts_calls,
+            "last_record_at": self._last_record_at,
+            "last_hard_stop": self._last_hard_stop,
+            "last_hard_stop_reason": self._last_hard_stop_reason,
+            "hard_stop_override": self._hard_stop_override,
+            "sg_credit_usage_percent": self._sg_credit_usage_percent,
+            "sg_product_usage": (
+                dict(self._sg_product_usage)
+                if self._sg_product_usage is not None
+                else None
+            ),
+            "sg_fetched_at": self._sg_fetched_at,
+            "sg_status": self._sg_status,
+            "sg_period_type": self._sg_period_type,
+            "sg_is_unified": self._sg_is_unified,
+            "sg_detail": self._sg_detail,
+        }
+
+    def _restore_durable_unlocked(self, prev: dict[str, Any]) -> None:
+        """Restore durable fields after a failed persist (no partial commit)."""
+        self._week_id = prev["week_id"]
+        self._day_id = prev["day_id"]
+        self._hour_id = prev["hour_id"]
+        self._period_id = prev["period_id"]
+        self._period_authority = prev["period_authority"]
+        self._period_start = prev["period_start"]
+        self._period_end = prev["period_end"]
+        self._week_used = prev["week_used"]
+        self._day_used = prev["day_used"]
+        self._hour_used = prev["hour_used"]
+        self._week_cached = prev["week_cached"]
+        self._week_stt_calls = prev["week_stt_calls"]
+        self._week_tts_calls = prev["week_tts_calls"]
+        self._last_record_at = prev["last_record_at"]
+        self._last_hard_stop = prev["last_hard_stop"]
+        self._last_hard_stop_reason = prev["last_hard_stop_reason"]
+        self._hard_stop_override = prev["hard_stop_override"]
+        self._sg_credit_usage_percent = prev["sg_credit_usage_percent"]
+        pu = prev["sg_product_usage"]
+        self._sg_product_usage = dict(pu) if pu is not None else None
+        self._sg_fetched_at = prev["sg_fetched_at"]
+        self._sg_status = prev["sg_status"]
+        self._sg_period_type = prev["sg_period_type"]
+        self._sg_is_unified = prev["sg_is_unified"]
+        self._sg_detail = prev["sg_detail"]
+
     def _apply_credits_snapshot_unlocked(self, snap: CreditsSnapshot) -> None:
-        status = snap.status
-        if status is None and snap.ok is True:
-            status = "ok"
-        elif status is None and snap.ok is False:
-            status = "error"
+        """Merge injected credits snap under lock (caller handles persist/rollback).
+
+        Normative fail-soft:
+        - First adopt / true roll only when ``snapshot_is_ok`` **and** period
+          dates parse.
+        - Account A (percent / fetched_at / status used for hard stop) only
+          refreshes on ok + (parseable period **or** already-adopted SuperGrok
+          period basis). Unparseable / non-ok polls retain last-good A until
+          stale.
+        - Diagnostic ``detail`` may update on failed attempts without wiping A.
+        """
+        ok = snapshot_is_ok(snap)
 
         start = snap.period_start
         end = snap.period_end
@@ -722,7 +819,17 @@ class UsageMeter:
             and isinstance(end, str)
         )
 
-        if parseable:
+        def _nonempty_str(value: Any) -> bool:
+            return isinstance(value, str) and bool(value.strip())
+
+        # Snap tried to supply period bounds but they do not parse — never
+        # adopt/roll and never overwrite last-good A with this attempt.
+        attempted_bad_period = (not parseable) and (
+            _nonempty_str(start) or _nonempty_str(end)
+        )
+
+        # Identity changes: successful apply of a parseable billing period only.
+        if ok and parseable:
             new_id = snap.period_id or canonical_period_id(start, end)  # type: ignore[arg-type]
             provisional = is_provisional_iso_period(
                 self._period_id,
@@ -759,36 +866,51 @@ class UsageMeter:
                 # same period — refresh bounds if present
                 self._period_start = start
                 self._period_end = end
-        # Unparseable period: do not change period_id / authority.
 
-        # Always refresh cache fields from snap when provided.
-        if snap.credit_usage_percent is not None:
-            try:
-                self._sg_credit_usage_percent = float(snap.credit_usage_percent)
-            except (TypeError, ValueError):
-                pass
-        if snap.product_usage is not None:
-            coerced = coerce_product_usage(snap.product_usage)
-            if coerced is not None:
-                self._sg_product_usage = coerced
-        if snap.fetched_at is not None:
-            self._sg_fetched_at = str(snap.fetched_at)
-        if status is not None:
-            self._sg_status = str(status)
-        elif not parseable and status is None:
-            # leave prior status unless snap explicitly failed
-            if snap.ok is False:
-                self._sg_status = "error"
-        if snap.period_type is not None:
-            self._sg_period_type = str(snap.period_type)
-        if snap.is_unified is not None:
-            self._sg_is_unified = bool(snap.is_unified)
+        # Account / cache refresh when ok and:
+        # - period just validated (parseable), or
+        # - percent-only refresh after SuperGrok already adopted (no bad bounds).
+        already_adopted = (
+            self._period_authority == "supergrok"
+            and self._period_start is not None
+            and parse_iso_datetime(self._period_start) is not None
+        )
+        may_refresh_account = ok and not attempted_bad_period and (
+            parseable or already_adopted
+        )
+        if may_refresh_account:
+            if snap.credit_usage_percent is not None:
+                try:
+                    self._sg_credit_usage_percent = float(snap.credit_usage_percent)
+                except (TypeError, ValueError):
+                    pass
+            if snap.product_usage is not None:
+                coerced = coerce_product_usage(snap.product_usage)
+                if coerced is not None:
+                    self._sg_product_usage = coerced
+            if snap.fetched_at is not None:
+                self._sg_fetched_at = str(snap.fetched_at)
+            self._sg_status = "ok"
+            if snap.period_type is not None:
+                self._sg_period_type = str(snap.period_type)
+            if snap.is_unified is not None:
+                self._sg_is_unified = bool(snap.is_unified)
+            if snap.detail is not None:
+                self._sg_detail = str(snap.detail)
+            return
+
+        # Fail-soft path: non-ok, unparseable bounds, or no period basis.
+        # Do NOT mutate last-good percent, fetched_at, or status used for
+        # account hard. Optional attempt detail only.
         if snap.detail is not None:
             self._sg_detail = str(snap.detail)
-
-        # If dates unparseable but status claimed ok, mark error for period side
-        if not parseable and snapshot_is_ok(snap) and start is not None:
-            self._sg_status = "error"
+        elif attempted_bad_period:
+            self._sg_detail = "credits_apply_rejected:unparseable_period"
+        elif not ok:
+            status_label = snap.status or ("error" if snap.ok is False else "error")
+            self._sg_detail = f"credits_apply_rejected:{status_label}"
+        else:
+            self._sg_detail = "credits_apply_rejected:no_period_basis"
 
     def _hard_stop_level_unlocked(self) -> str | None:
         week_lim, day_lim, hour_lim = self._limits_unlocked()

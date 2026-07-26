@@ -371,16 +371,6 @@ def test_hard_stop_hour_then_day_then_week(tmp_path: Path):
     assert "hour" in m.hard_stop_reason()
 
     # Day stop takes precedence over hour when day is also exhausted
-    m2 = _meter(
-        tmp_path,
-        _settings(
-            weekly_allowed_tokens=1000,
-            day_allowed_tokens=50,
-            hour_allowed_tokens=100,
-        ),
-        clock=clock,
-    )
-    # Fresh meter file from m — clear by using new dir
     d2 = tmp_path / "d2"
     m2 = _meter(
         d2,
@@ -769,32 +759,30 @@ def test_pure_pace_spike_half_burst_still_green():
 
 
 def test_pure_pace_over_burst_yellow_and_red_by_pace():
-    """over > BurstMax → yellow/red by pace thresholds."""
+    """over > BurstMax → yellow/red by pace thresholds (strict).
+
+    For p=1.2: over = 0.2·(B/H)·t; need t > k/0.2 so over > BurstMax=k·(B/H).
+    With k=4, t=24 works: over=200 > BurstMax≈166.67, band yellow.
+    """
     B, H, k = 7000.0, 168.0, 4.0
     t = 24.0
-    schedule = linear_schedule(B, H, t)
+    yellow, red = 1.0, 1.5
     bmax = burst_max(B, H, k)
-    # Force over > BurstMax with moderate pace → yellow (1.0 ≤ p < 1.5)
-    # p = S*H/(B*t); want p ≈ 1.2 and over > bmax
-    S_yellow = schedule + bmax + 50
-    p_y = pace_ratio(S_yellow, B, H, t)
-    assert effective_overshoot(S_yellow, B, H, t) > bmax
-    assert 1.0 <= p_y < 1.5 or p_y >= 1.0  # may be >1.5 depending on numbers
-    # Explicit construction: target p=1.2
+
+    # Yellow: target p=1.2 with over > BurstMax
     S_y = 1.2 * (B * t) / H
-    if effective_overshoot(S_y, B, H, t) <= bmax:
-        # Increase S past burst while keeping p in [1, 1.5)
-        S_y = schedule + bmax + 1
     p_y = pace_ratio(S_y, B, H, t)
-    if p_y < 1.5:
-        assert compute_band(S_y, B, H, t, k, 1.0, 1.5) in ("green", "yellow")
-        if effective_overshoot(S_y, B, H, t) > bmax and p_y >= 1.0:
-            assert compute_band(S_y, B, H, t, k, 1.0, 1.5) == "yellow"
+    over_y = effective_overshoot(S_y, B, H, t)
+    assert p_y == pytest.approx(1.2)
+    assert yellow <= p_y < red
+    assert over_y > bmax
+    assert compute_band(S_y, B, H, t, k, yellow, red) == "yellow"
+
     # Red: p >= 1.5 and over > BurstMax
     S_red = 2.0 * (B * t) / H
     assert pace_ratio(S_red, B, H, t) == pytest.approx(2.0)
     assert effective_overshoot(S_red, B, H, t) > bmax
-    assert compute_band(S_red, B, H, t, k, 1.0, 1.5) == "red"
+    assert compute_band(S_red, B, H, t, k, yellow, red) == "red"
 
 
 def test_pure_hard_level_precedence_account_week_day_hour():
@@ -1308,4 +1296,185 @@ def test_credits_module_no_http_imports():
             assert "httpx" not in blob
             assert "requests" not in blob
             assert "client" not in blob.split(".")
+
+
+# ---------------------------------------------------------------------------
+# Fail-soft credits apply / persist rollback (review fixes)
+# ---------------------------------------------------------------------------
+
+
+def test_unparseable_poll_retains_account_hard(tmp_path: Path):
+    """Prior A≥A_hard + unparseable follow-up keeps account hard until stale."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    s = _settings(
+        weekly_allowed_tokens=1_000_000,
+        account_hard_stop_percent=95.0,
+    )
+    m = _meter(tmp_path, s, clock=clock)
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=96.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    assert m.snapshot().hard_stop == "account"
+    assert m.can_call() is False
+    prior_pct = m.snapshot().credit_usage_percent
+
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=1.0,  # would clear hard if applied
+            period_start="not-a-date",
+            period_end="also-bad",
+            fetched_at="2026-07-24T14:01:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    snap = m.snapshot()
+    assert snap.hard_stop == "account"
+    assert m.can_call() is False
+    assert snap.credit_usage_percent == prior_pct
+    assert snap.credits_status == "ok"
+    assert snap.period_authority == "supergrok"
+
+
+def test_error_status_does_not_wipe_prior_good_A(tmp_path: Path):
+    """Non-ok poll must not clear last-good account percent / hard stop."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    s = _settings(weekly_allowed_tokens=1_000_000, account_hard_stop_percent=95.0)
+    m = _meter(tmp_path, s, clock=clock)
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=97.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+        )
+    )
+    assert m.snapshot().hard_stop == "account"
+
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=0.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:02:00Z",
+            status="error",
+            ok=False,
+        )
+    )
+    snap = m.snapshot()
+    assert snap.hard_stop == "account"
+    assert snap.credit_usage_percent == 97.0
+    assert snap.credits_status == "ok"
+    assert m.can_call() is False
+
+
+def test_ok_percent_without_dates_does_not_invent_account_hard(tmp_path: Path):
+    """ok+percent with no period dates must not engage account hard."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    s = _settings(weekly_allowed_tokens=1_000_000, account_hard_stop_percent=95.0)
+    m = _meter(tmp_path, s, clock=clock)
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=99.0,
+            period_start=None,
+            period_end=None,
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    snap = m.snapshot()
+    assert snap.period_authority == "iso"
+    assert snap.hard_stop is None
+    assert m.can_call() is True
+
+
+def test_error_status_with_parseable_dates_does_not_adopt(tmp_path: Path):
+    """status=error must not flip period_authority / period_id / zero S."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    m = _meter(tmp_path, _settings(weekly_allowed_tokens=5_000_000), clock=clock)
+    m.record(TokenUsage(total_tokens=500))
+    assert m.snapshot().period_authority == "iso"
+    old_id = m.snapshot().period_id
+
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=10.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="error",
+            ok=False,
+        )
+    )
+    snap = m.snapshot()
+    assert snap.period_authority == "iso"
+    assert snap.period_id == old_id
+    assert snap.week_used_tokens == 500
+    assert snap.hard_stop is None
+
+
+def test_true_roll_persist_failure_rolls_back_memory(tmp_path: Path, monkeypatch):
+    """True roll that fails atomic persist must restore in-memory S and period."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    m = _meter(tmp_path, _settings(weekly_allowed_tokens=5_000_000), clock=clock)
+    m.record(TokenUsage(total_tokens=5000))
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=10.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+        )
+    )
+    assert m.snapshot().week_used_tokens == 5000
+    assert m.snapshot().period_authority == "supergrok"
+    period_before = m.snapshot().period_id
+
+    def _boom(self):  # noqa: ANN001
+        raise OSError("disk full")
+
+    monkeypatch.setattr(UsageMeter, "_persist_unlocked", _boom)
+    with pytest.raises(OSError, match="disk full"):
+        m.apply_credits_snapshot(
+            CreditsSnapshot(
+                credit_usage_percent=1.0,
+                period_start="2026-07-28T00:00:00Z",
+                period_end="2026-08-04T00:00:00Z",
+                fetched_at="2026-07-28T00:01:00Z",
+                status="ok",
+            )
+        )
+    # Memory restored — not rolled
+    snap = m.snapshot()
+    assert snap.week_used_tokens == 5000
+    assert snap.period_id == period_before
+    assert snap.period_authority == "supergrok"
+
+
+def test_meter_yellow_band_still_can_call(tmp_path: Path):
+    """over>BurstMax with p in [yellow, red) → yellow soft, can_call true."""
+    B, k = 7000, 4.0
+    H = 168.0
+    t_hours = 24.0
+    week_start = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+    clock = _Clock(week_start + timedelta(hours=t_hours))
+    s = _settings(weekly_allowed_tokens=B, burst_hours=k)
+    m = _meter(tmp_path, s, clock=clock)
+    # p=1.2 → yellow (see pure test algebra)
+    S = int(round(1.2 * B * t_hours / H))
+    m.record(TokenUsage(total_tokens=S))
+    snap = m.snapshot()
+    assert snap.hard_stop is None
+    assert snap.pace_band == "yellow"
+    assert m.can_call() is True
 
