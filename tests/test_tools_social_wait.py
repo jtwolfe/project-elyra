@@ -92,10 +92,10 @@ def test_wait_user_returns_ends_moment_and_arm_wait(ctx: ToolContext) -> None:
     assert arm.prompt == "Ready to continue?"
     assert arm.choices == ["yes", "no"]
     assert arm.user_id == "operator"
-    assert arm.timeout_seconds == 120  # settings default
+    assert arm.timeout_seconds == 300  # settings default (multi-choice)
     assert arm.wait_id
     assert result.payload["wait_id"] == arm.wait_id
-    assert result.payload["timeout_seconds"] == 120
+    assert result.payload["timeout_seconds"] == 300
     assert result.payload["choices"] == ["yes", "no"]
     assert result.payload["armed"] is True
 
@@ -109,11 +109,34 @@ def test_wait_user_default_timeout_from_settings(paths, timers: TimerService) ->
         moment_id="m",
         user_id="operator",
     )
-    result = wait_user({"prompt": "Pick"}, ctx)
+    result = wait_user({"prompt": "Pick", "choices": ["a", "b"]}, ctx)
     assert result.ok is True
     assert result.arm_wait is not None
     assert result.arm_wait.timeout_seconds == 45
     assert result.payload["timeout_seconds"] == 45
+
+
+def test_wait_user_free_text_uses_free_text_timeout(
+    paths, timers: TimerService
+) -> None:
+    settings = Settings(
+        wait=WaitSettings(
+            default_timeout_seconds=60,
+            free_text_timeout_seconds=480,
+        )
+    )
+    ctx = ToolContext(
+        paths=paths,
+        timers=timers,
+        settings=settings,
+        moment_id="m",
+        user_id="operator",
+    )
+    result = wait_user({"prompt": "Tell me more"}, ctx)
+    assert result.ok is True
+    assert result.arm_wait is not None
+    assert result.arm_wait.timeout_seconds == 480
+    assert result.arm_wait.choices == []
 
 
 def test_wait_user_default_timeout_without_settings(paths, timers: TimerService) -> None:
@@ -121,7 +144,7 @@ def test_wait_user_default_timeout_without_settings(paths, timers: TimerService)
     result = wait_user({"prompt": "?"}, ctx)
     assert result.ok is True
     assert result.arm_wait is not None
-    assert result.arm_wait.timeout_seconds == 120
+    assert result.arm_wait.timeout_seconds == 300
 
 
 def test_wait_user_explicit_timeout(ctx: ToolContext) -> None:

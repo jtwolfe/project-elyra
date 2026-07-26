@@ -19,8 +19,9 @@ from elyra.presence.timers import TimerService, parse_utc
 from elyra.speak import SpeakTransport
 from elyra.tools.types import ToolContext, ToolResult, WaitArm
 
-# Fallback when ctx.settings is unset (matches WaitSettings.default_timeout_seconds).
-_DEFAULT_WAIT_TIMEOUT_S = 120
+# Fallback when ctx.settings is unset (matches WaitSettings defaults).
+_DEFAULT_WAIT_TIMEOUT_S = 300
+_DEFAULT_FREE_TEXT_TIMEOUT_S = 300
 
 
 def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -72,7 +73,9 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     Args (schema):
       - ``prompt`` (required str) — question / wait prompt shown to the user
       - ``choices`` (optional list[str]) — multi-choice options; empty = free text
-      - ``timeout_seconds`` (optional int) — default from settings.wait (120)
+      - ``timeout_seconds`` (optional int) — default from settings.wait
+        (300 multi-choice / 300 free-text when omitted; prefer longer for
+        open-ended questions)
       - ``user_id`` (optional) — defaults to ctx.user_id / operator
 
     Success → ``ok=True``, ``ends_moment=True``, ``stop_reason="wait"``,
@@ -115,7 +118,10 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             counts_as_speak=False,
         )
 
-    timeout_seconds, timeout_err = _parse_timeout_seconds(args, ctx)
+    free_text = not choices
+    timeout_seconds, timeout_err = _parse_timeout_seconds(
+        args, ctx, free_text=free_text
+    )
     if timeout_err is not None:
         return ToolResult(
             ok=False,
@@ -329,11 +335,18 @@ def _parse_choices(raw: Any) -> tuple[list[str], str | None]:
 
 
 def _parse_timeout_seconds(
-    args: dict[str, Any], ctx: ToolContext
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    free_text: bool = False,
 ) -> tuple[int, str | None]:
-    """Resolve timeout_seconds from args or settings (default 120)."""
+    """Resolve timeout_seconds from args or settings.
+
+    Free-text waits (no choices) use ``free_text_timeout_seconds`` when the
+    model omits an explicit value so open-ended replies get a longer floor.
+    """
     if "timeout_seconds" not in args or args.get("timeout_seconds") is None:
-        return _default_timeout_seconds(ctx), None
+        return _default_timeout_seconds(ctx, free_text=free_text), None
     raw = args["timeout_seconds"]
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return 0, "invalid_timeout"
@@ -345,13 +358,16 @@ def _parse_timeout_seconds(
     return value, None
 
 
-def _default_timeout_seconds(ctx: ToolContext) -> int:
+def _default_timeout_seconds(ctx: ToolContext, *, free_text: bool = False) -> int:
     if ctx.settings is not None:
         try:
-            return int(ctx.settings.wait.default_timeout_seconds)
+            wait = ctx.settings.wait
+            if free_text:
+                return int(wait.free_text_timeout_seconds)
+            return int(wait.default_timeout_seconds)
         except (AttributeError, TypeError, ValueError):
             pass
-    return _DEFAULT_WAIT_TIMEOUT_S
+    return _DEFAULT_FREE_TEXT_TIMEOUT_S if free_text else _DEFAULT_WAIT_TIMEOUT_S
 
 
 def _resolve_wake_at(args: dict[str, Any]) -> tuple[str | None, str | None]:

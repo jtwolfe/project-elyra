@@ -21,12 +21,13 @@ def test_identity_self_digest_after_seed(tmp_path):
     assert text
     assert "Elyra" in text
     assert store.self_path.is_file()
-    # New installs get enriched seed with v2 marker (no migrate needed).
-    assert SELF_V2_MARKER in text
-    assert "## Drive" in text
-    assert "## Walls" in text
-    # self ≠ user walls present
-    assert "User prefs never go into self" in text
+    # New installs get the short narrative seed (entity-of-language framing).
+    assert "entity of language in memory" in text
+    assert "not a fused persona" in text
+    assert "elyra-self-short-narrative" in text
+    # Continuity / agency motives present without teaching-essay sections.
+    assert "continuity" in text.lower()
+    assert "consciousness" in text.lower()
 
 
 def test_seed_v1_hash_is_stable():

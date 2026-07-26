@@ -10,9 +10,12 @@ Arm a durable wait and stop the moment (`ends_moment`, `stop_reason=wait`).
 
 - Required: `prompt` — question or prompt for the user.
 - Optional: `choices` — multi-choice options (omit or empty for free text).
-- Optional: `timeout_seconds` — wait timeout (default from settings, 120s).
+- Optional: `timeout_seconds` — wait timeout. Host default is **300s** (5 minutes). Free-text waits (empty `choices`) also default to **300s** when omitted. Prefer longer for open-ended discussion or custom typed answers.
 - Optional: `user_id` — who to wait on (defaults to active wake user / operator).
 
-On success the tool result includes `arm_wait` for the host; later tool calls
-in the same assistant batch are not run (skills should order speak then wait).
-Does not count as speak — call `speak` first if the user needs a visible message.
+## Guidance
+
+- Multi-choice is good for collaborative forks (adopt / revise / hold).
+- Free-text / "I'll type" style: leave `choices` empty and use a long timeout — do not pass short 30–120s values for thoughtful replies.
+- On success the tool result includes `arm_wait` for the host; later tool calls in the same assistant batch are not run (skills should order speak then wait).
+- Does not count as speak — call `speak` first if the user needs a visible message.

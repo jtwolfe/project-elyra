@@ -67,15 +67,15 @@
               ></div>
             </div>
           </header>
-          <div id="wait-bar" class="wait-bar" hidden>
-            <div class="wait-prompt" id="wait-prompt"></div>
-            <div class="wait-choices" id="wait-choices"></div>
-          </div>
           <div class="chat-stage">
             <div id="messages" class="messages" aria-live="polite"></div>
             <button type="button" id="jump-latest" class="jump-latest" hidden>
               ↓ Latest
             </button>
+          </div>
+          <div id="wait-bar" class="wait-bar wait-bar-composer" hidden>
+            <div class="wait-prompt" id="wait-prompt"></div>
+            <div class="wait-choices" id="wait-choices"></div>
           </div>
           <div id="attach-tray" class="attach-tray" hidden></div>
           <form id="chat-form" class="composer composer-rich">
@@ -280,6 +280,36 @@
                 <p id="continuous-detail" class="muted">—</p>
               </div>
             </div>
+            <div class="card continuous-card status-card" id="dev-speed-card">
+              <div class="card-head">
+                <strong>Dev speed mode</strong>
+                <span id="dev-speed-badge" class="badge">on</span>
+              </div>
+              <p class="muted status-helper">
+                Mandatory pause between tool hops so glass is followable. Default ON (8s, clamp 5–15).
+              </p>
+              <div class="continuous-control">
+                <label class="toggle-label" for="dev-speed-toggle">
+                  <input type="checkbox" id="dev-speed-toggle" />
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">Dev speed (pace hops)</span>
+                </label>
+                <div id="dev-speed-meta" class="continuous-meta muted">8s between hops</div>
+              </div>
+              <div class="status-row" style="margin-top: 0.75rem">
+                <span class="status-label">Delay (s)</span>
+                <input
+                  type="number"
+                  id="dev-speed-delay"
+                  class="status-input"
+                  min="5"
+                  max="15"
+                  step="1"
+                  value="8"
+                  aria-label="Dev speed delay seconds"
+                />
+              </div>
+            </div>
           </div>
           <div class="reset-actions">
             <button type="button" id="reset-open-btn" class="btn-danger">
@@ -287,7 +317,7 @@
             </button>
             <p class="muted reset-hint">
               Clears moments, chat, goals, wakes/timers, sandbox, and tool drafts.
-              Preserves identity, users, continuous toggle, provider/usage prefs,
+              Preserves identity, users, continuous/dev-speed toggles, provider/usage prefs,
               secrets (API key), skills/local, and tools/local.
             </p>
           </div>
@@ -316,6 +346,7 @@
           <li class="will-clear">continuous streak counters (toggle preference kept)</li>
           <li class="will-keep">identity/self, users</li>
           <li class="will-keep">continuous.json enabled flag</li>
+          <li class="will-keep">dev_speed.json (pace hops toggle + delay)</li>
           <li class="will-keep">data/secrets/ (API key)</li>
           <li class="will-keep">data/runtime/provider.json (model / credential source prefs)</li>
           <li class="will-keep">data/runtime/usage.json (usage meter + hard-stop override flag)</li>

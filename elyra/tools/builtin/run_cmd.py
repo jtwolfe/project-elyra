@@ -90,7 +90,14 @@ def _guest_run(
     if _command_byte_len(command) > _GUEST_MAX_COMMAND_BYTES:
         return ToolResult(
             ok=False,
-            payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
+            payload={
+                "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                "limit_bytes": _GUEST_MAX_COMMAND_BYTES,
+                "hint": (
+                    "Shell/run payload exceeds guest max; write files via "
+                    "search_replace / FS tools instead of large shell heredocs."
+                ),
+            },
             error_reason="command_too_large",
         )
 

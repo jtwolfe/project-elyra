@@ -33,7 +33,8 @@ def test_default_settings_match_design():
     assert s.loop.orient_goals_max_tokens == 600
     # K12 / item 5: optional post-load tool_choice pin — default OFF
     assert s.loop.post_load_skill_tool_choice_required is False
-    assert s.wait.default_timeout_seconds == 120
+    assert s.wait.default_timeout_seconds == 300
+    assert s.wait.free_text_timeout_seconds == 300
     assert s.tools.verify_timeout_seconds == 120
     assert s.goals.close_gate == "soft"
     # Continuous remains product-default OFF

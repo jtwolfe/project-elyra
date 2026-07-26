@@ -1,10 +1,10 @@
 """Pure orient-slice formatters: skill catalog, soft bias, goals/tasks.
 
 Scope: turn store/catalog data into short strings for ``prompts/orient.md``.
-In scope: name+description catalog lines, wake-kind bias table, budgeted
-goals/tasks slice with protected wake ids.
-Out of scope: presence orchestration, continuous policy, bias-aware catalog
-ranking (YAGNI until catalog growth forces drop-by-bias).
+In scope: name+description catalog lines, wake-kind + ledger-aware soft bias,
+  budgeted goals/tasks slice with protected wake ids.
+Out of scope: presence orchestration, continuous policy, hard gates,
+  bias-aware catalog ranking, multi-line bias essays.
 """
 
 from __future__ import annotations
@@ -26,12 +26,20 @@ BIAS_MOMENT_CONTINUE = (
 )
 BIAS_BACKGROUND = "Prefer skill: rest unless orient shows ready work."
 BIAS_WAIT_TIMEOUT = (
-    "Prefer skill: talk if user owed a follow-up; else do-work/rest from ledger."
+    "Prefer skill: rest if nothing urgent; else do-work/plan-work from the "
+    "ledger; re-wait only with a clear new reason. Do not re-ask the same "
+    "question only because the timer fired — reason briefly, pick other work, "
+    "wait again, or go idle."
 )
+BIAS_PLAN_WORK = (
+    "Prefer skill: plan-work (open goal needs tasks before execution)."
+)
+BIAS_REST = "Prefer skill: rest (nothing honest open on the ledger)."
 
 _GOAL_STATUSES = frozenset({"open", "review"})
 _TASK_STATUSES_PRIMARY = frozenset({"ready", "in_progress", "blocked"})
 _TASK_STATUSES_OPTIONAL = frozenset({"pending"})
+_TASK_STATUSES_DO_WORK = frozenset({"ready", "in_progress"})
 
 _EMPTY_GOALS = "(no open goals)"
 
@@ -89,17 +97,76 @@ def format_skill_catalog(
 def format_skill_bias(
     wake_kind: str,
     payload: Mapping[str, Any] | None = None,
+    goals: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
-    """Soft one-line skill bias for the wake kind (not a hard gate).
+    """Soft one-line skill bias (not a hard gate).
 
-    Includes ``moment_continue`` early so the string is ready before that wake
-    kind is enqueued (dead path until continuous policy PRs).
+    Preference: social wake-kind always wins; else ledger shape when
+    ``goals`` is provided; else existing wake-kind table.
+
+    Parameters
+    ----------
+    wake_kind:
+        Wake kind string (e.g. ``user_message``, ``task_ready``).
+    payload:
+        Optional wake payload (timer linkage, task_id, …).
+    goals:
+        Optional goal dicts as returned by ``GoalsStore.list_goals()``
+        (nested ``tasks``). ``None`` = ledger-unaware (wake-kind table only).
+        Empty sequence = no goals on disk (treated as empty ledger).
     """
     kind = (wake_kind or "").strip()
     pl = payload or {}
 
+    # 1. Social always wins (glass presence first) — ignore ledger.
     if kind in ("user_message", "wait_reply"):
         return BIAS_TALK
+
+    # 2. Ledger-aware path only when caller supplied goals (incl. empty list).
+    #    When goals is not None the wake-kind table is NOT consulted.
+    if goals is not None:
+        has_ready_or_in_progress, has_open_or_review_goal = _summarize_ledger_shape(
+            goals
+        )
+        if has_ready_or_in_progress:
+            return BIAS_DO_WORK
+        if has_open_or_review_goal:
+            return BIAS_PLAN_WORK
+        return BIAS_REST
+
+    # 3. goals is None: existing wake-kind table (unit-compat / non-production).
+    return _wake_kind_bias_table(kind, pl)
+
+
+def _summarize_ledger_shape(
+    goals: Sequence[Mapping[str, Any]],
+) -> tuple[bool, bool]:
+    """Scan goal dicts for ready/in_progress tasks and open/review goals.
+
+    Uses mapping key access (match ``format_goals_slice`` / live ``list_goals()``).
+    Non-mappings are skipped; non-list ``tasks`` treated as empty.
+    """
+    has_ready_or_in_progress = False
+    has_open_or_review_goal = False
+    for g in goals:
+        if not isinstance(g, Mapping):
+            continue
+        if g.get("status") not in _GOAL_STATUSES:
+            continue
+        has_open_or_review_goal = True
+        tasks = g.get("tasks")
+        if not isinstance(tasks, (list, tuple)):
+            tasks = []
+        for t in tasks:
+            if not isinstance(t, Mapping):
+                continue
+            if t.get("status") in _TASK_STATUSES_DO_WORK:
+                has_ready_or_in_progress = True
+    return has_ready_or_in_progress, has_open_or_review_goal
+
+
+def _wake_kind_bias_table(kind: str, pl: Mapping[str, Any]) -> str:
+    """Wake-kind-only bias table used when ``goals is None``."""
     if kind == "task_ready":
         return BIAS_DO_WORK
     if kind == "timer":
@@ -238,6 +305,8 @@ __all__ = [
     "BIAS_BACKGROUND",
     "BIAS_DO_WORK",
     "BIAS_MOMENT_CONTINUE",
+    "BIAS_PLAN_WORK",
+    "BIAS_REST",
     "BIAS_TALK",
     "BIAS_TIMER_GENERIC",
     "BIAS_TIMER_LINKED",

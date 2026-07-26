@@ -46,7 +46,8 @@ Honest idle is success: if why-now shows nothing useful, **stop with no tools**.
 2. Do **not** invent busywork or empty ledger entries.
 3. If the wake was social by mistake → `load_skill` name `talk` → `speak`.
 4. If a ready task is clearly present → `load_skill` name `do-work` instead of resting.
-5. Otherwise stop with **no tools** (or only a quiet ledger note if the product explicitly expects heartbeat bookkeeping).
+5. On **wait_timeout** with no new user content: prefer rest (or other honest ledger work) over re-asking the same question. Re-wait only with a clear new reason.
+6. Otherwise stop with **no tools** (or only a quiet ledger note if the product explicitly expects heartbeat bookkeeping).
 
 ## Quality / completion
 
