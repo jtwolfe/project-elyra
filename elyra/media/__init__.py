@@ -1,7 +1,8 @@
 """Host media store: attachments, content-addressed blobs (KD1, KD14).
 
 Stretch 2 embedding fields are stubs only (KD12). Meal-time vision expand
-(KD6/KD20/KD25) lives in ``elyra.media.prompt``. STT / TTS land later.
+(KD6/KD20/KD25) lives in ``elyra.media.prompt``. STT host client (PR6);
+TTS / GC land in later stack PRs.
 """
 
 from elyra.media.project import (
@@ -27,6 +28,15 @@ from elyra.media.store import (
     sniff_mime_kind_source,
     validate_att_id,
 )
+from elyra.media.stt import (
+    DEFAULT_STT_MODEL,
+    SttError,
+    SttResult,
+    parse_stt_response,
+    stt_enabled,
+    stt_url,
+    transcribe,
+)
 from elyra.media.types import (
     ATTACHMENT_KINDS,
     ATTACHMENT_ORIGINS,
@@ -45,14 +55,15 @@ from elyra.media.upload import (
     FormFile,
     max_bytes_for_kind,
     parse_content_length,
-    parse_multipart_fields,
     parse_multipart_files,
+    parse_multipart_fields,
     stream_to_temp,
 )
 
 __all__ = [
     "ATTACHMENT_KINDS",
     "ATTACHMENT_ORIGINS",
+    "DEFAULT_STT_MODEL",
     "EMBEDDING_STATUSES",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_AUDIO_BYTES",
@@ -65,6 +76,8 @@ __all__ = [
     "Attachment",
     "FormFile",
     "MediaStore",
+    "SttError",
+    "SttResult",
     "bind_attachment_message",
     "clear_sandbox_media",
     "ensure_media_dirs",
@@ -76,6 +89,7 @@ __all__ = [
     "parse_content_length",
     "parse_multipart_fields",
     "parse_multipart_files",
+    "parse_stt_response",
     "project_attachment",
     "projected_path_for",
     "put_bytes",
@@ -85,5 +99,8 @@ __all__ = [
     "sniff_mime_kind_source",
     "stream_to_temp",
     "strip_meal_wire_fields",
+    "stt_enabled",
+    "stt_url",
+    "transcribe",
     "validate_att_id",
 ]

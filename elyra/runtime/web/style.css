@@ -886,6 +886,13 @@ body {
   align-items: end;
 }
 
+.composer-tools {
+  display: flex;
+  flex-direction: row;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .composer-hint {
   margin: 0;
   font-size: 0.75rem;
@@ -909,6 +916,29 @@ body {
 .icon-btn:hover {
   border-color: var(--accent-dim);
   background: var(--bg-soft);
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mic-btn.recording {
+  border-color: #c45c5c;
+  background: rgba(196, 92, 92, 0.18);
+  color: #f0b0b0;
+  box-shadow: 0 0 0 2px rgba(196, 92, 92, 0.25);
+}
+
+.mic-btn.transcribing {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.mic-icon {
+  display: inline-block;
+  font-size: 1.05rem;
+  line-height: 1;
 }
 
 .drop-overlay {

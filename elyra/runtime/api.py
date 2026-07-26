@@ -5,9 +5,10 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users),
   multi-user session + identity panel (grants, promote, list/create users),
   provider/model/credential mutators, live usage + hard-stop override,
-  media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23).
+  media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
+  STT proxy POST /api/stt (PR6 / KD4, KD9, KD18).
 Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
-  STT/TTS, vision expand, glass UI rewrite.
+  TTS, vision expand, glass UI rewrite.
 """
 
 from __future__ import annotations
@@ -36,15 +37,18 @@ from elyra.identity import (
     mint_grant,
 )
 from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
-from elyra.llm.auth import VALID_SOURCES
+from elyra.llm.auth import VALID_SOURCES, resolve_bearer
 from elyra.llm.queue import ChatRequestGate
 from elyra.media import (
     ATTACHMENT_ORIGINS,
+    DEFAULT_STT_MODEL,
     MAX_ATTACHMENTS_PER_MESSAGE,
+    MAX_AUDIO_BYTES,
     MAX_CONCURRENT_UPLOADS,
     MAX_JSON_BODY_BYTES,
     MAX_MEDIA_REQUEST_BYTES,
     MediaStore,
+    SttError,
     ensure_media_dirs,
     max_bytes_for_kind,
     parse_content_length,
@@ -52,6 +56,8 @@ from elyra.media import (
     parse_multipart_files,
     sniff_mime_kind_source,
     stream_to_temp,
+    stt_enabled,
+    transcribe,
     validate_att_id,
 )
 from elyra.messages import list_messages
@@ -348,6 +354,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/media":
             self._post_media()
+            return
+
+        if path == "/api/stt":
+            self._post_stt()
             return
 
         body = self._read_json()
@@ -1380,6 +1390,256 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 )
 
             self._json(200, {"ok": True, "attachments": attachments})
+        finally:
+            if tmp_path is not None:
+                tmp_path.unlink(missing_ok=True)
+            _UPLOAD_SLOTS.release()
+
+    def _post_stt(self) -> None:
+        """POST /api/stt — multipart audio → xAI STT → transcript (PR6 / KD4).
+
+        Size caps before body read (Content-Length ≤ 64 MiB request; audio part
+        ≤ 25 MiB). Host-only Bearer; never browser keys (KD18). Fail-closed when
+        provider ≠ xAI or credentials missing (KD9). Optional keep_audio stores
+        recording as attachment (origin user_recording / stt_source).
+        """
+        if not stt_enabled():
+            self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "stt disabled",
+                    "reason": "stt_disabled",
+                },
+            )
+            return
+
+        # xAI-only fail-closed (KD9).
+        provider = self.provider
+        if provider is None:
+            self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "provider unavailable",
+                    "reason": "provider_unavailable",
+                },
+            )
+            return
+        provider_name = str(getattr(provider, "provider_name", "") or "")
+        if provider_name != "xai":
+            self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "STT requires xAI provider",
+                    "reason": "provider_unsupported",
+                    "provider": provider_name or None,
+                },
+            )
+            return
+
+        if not _UPLOAD_SLOTS.acquire(blocking=False):
+            self._json(
+                503,
+                {
+                    "ok": False,
+                    "error": "upload_busy",
+                    "reason": "upload_busy",
+                },
+            )
+            return
+        tmp_path: Path | None = None
+        try:
+            length = parse_content_length(self.headers.get("Content-Length"))
+            if length is None:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "content_length_required",
+                        "reason": "content_length_required",
+                    },
+                )
+                return
+            # Overall request cap (multipart overhead + audio); product audio 25 MiB.
+            if length > MAX_MEDIA_REQUEST_BYTES:
+                self._json(
+                    413,
+                    {
+                        "ok": False,
+                        "error": "payload_too_large",
+                        "reason": "content_length",
+                        "max_bytes": MAX_MEDIA_REQUEST_BYTES,
+                    },
+                )
+                return
+            if length <= 0:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "empty_body",
+                        "reason": "empty_body",
+                    },
+                )
+                return
+
+            content_type = self.headers.get("Content-Type") or ""
+            if "multipart/" not in content_type.lower():
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "multipart required",
+                        "reason": "multipart_required",
+                    },
+                )
+                return
+
+            ensure_media_dirs(self.paths)
+            store = MediaStore(self.paths)
+            store.ensure_dirs()
+            try:
+                tmp_path = stream_to_temp(self.rfile, length, store.tmp_dir)
+            except OSError as exc:
+                _LOG.warning("stt.upload stream failed: %s", exc)
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "upload_read_failed",
+                        "reason": "upload_read_failed",
+                    },
+                )
+                return
+
+            body = tmp_path.read_bytes()
+            files = parse_multipart_files(body, content_type)
+            fields = parse_multipart_fields(body, content_type)
+            if not files:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "no files",
+                        "reason": "no_files",
+                    },
+                )
+                return
+            part = files[0]
+            if len(part.data) > MAX_AUDIO_BYTES:
+                self._json(
+                    413,
+                    {
+                        "ok": False,
+                        "error": "file_too_large",
+                        "reason": "file_too_large",
+                        "kind": "audio",
+                        "max_bytes": MAX_AUDIO_BYTES,
+                        "filename": part.filename,
+                    },
+                )
+                return
+
+            # Resolve host bearer (never expose to browser).
+            source = str(getattr(provider, "credential_source", "") or "api_key")
+            data_dir = getattr(provider, "data_dir", None) or self.paths.data_dir
+            grok_auth = getattr(provider, "grok_auth_path", None)
+            resolution = resolve_bearer(
+                source=source,
+                data_dir=Path(data_dir),
+                grok_auth_path=Path(grok_auth) if grok_auth else None,
+            )
+            if not resolution.ok or not resolution.token:
+                self._json(
+                    503,
+                    {
+                        "ok": False,
+                        "error": "credentials unavailable",
+                        "reason": "credential_unavailable",
+                        "detail": resolution.detail,
+                    },
+                )
+                return
+
+            base_url = str(
+                getattr(provider, "base_url", None) or "https://api.x.ai/v1"
+            )
+            language = (fields.get("language") or "").strip() or None
+            mime = part.content_type or "application/octet-stream"
+            try:
+                result = transcribe(
+                    part.data,
+                    filename=part.filename or "audio.bin",
+                    mime=mime,
+                    bearer_token=resolution.token,
+                    base_url=base_url,
+                    model=DEFAULT_STT_MODEL,
+                    language=language,
+                    timeout=float(getattr(provider, "request_timeout_s", 120.0) or 120.0),
+                )
+            except SttError as exc:
+                status = 502
+                if exc.http_status == 401:
+                    status = 502
+                elif exc.http_status == 413:
+                    status = 413
+                elif exc.http_status == 429:
+                    status = 429
+                elif exc.reason in ("stt_invalid_audio", "stt_empty_text"):
+                    status = 400
+                self._json(
+                    status,
+                    {
+                        "ok": False,
+                        "error": str(exc),
+                        "reason": exc.reason,
+                    },
+                )
+                return
+
+            keep_raw = (fields.get("keep_audio") or fields.get("keep") or "").strip().lower()
+            keep = keep_raw in ("1", "true", "yes", "on")
+            origin = (fields.get("origin") or "user_recording").strip()
+            if origin not in ATTACHMENT_ORIGINS:
+                origin = "user_recording"
+            if origin not in ("user_recording", "stt_source"):
+                origin = "user_recording"
+            uploader = (fields.get("user_id") or "operator").strip() or "operator"
+
+            out: dict[str, Any] = {
+                "ok": True,
+                "text": result.text,
+                "language": result.language,
+                "duration": result.duration_s,
+                "model": DEFAULT_STT_MODEL,
+            }
+            if keep:
+                try:
+                    att = store.put_bytes(
+                        part.data,
+                        filename=part.filename or "recording.webm",
+                        mime=mime,
+                        kind="audio",
+                        origin=origin,
+                        role_hint="source",
+                        uploader_user_id=uploader,
+                    )
+                except (TypeError, ValueError) as exc:
+                    self._json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": str(exc),
+                            "reason": "store_rejected",
+                        },
+                    )
+                    return
+                out["attachment_id"] = att.id
+                out["attachment"] = att.to_dict()
+
+            self._json(200, out)
         finally:
             if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)

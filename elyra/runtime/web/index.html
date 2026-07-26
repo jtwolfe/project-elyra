@@ -102,22 +102,34 @@
           <form id="chat-form" class="composer composer-rich">
             <div id="drop-overlay" class="drop-overlay" hidden>Drop files to attach</div>
             <div class="composer-main">
-              <button
-                type="button"
-                id="attach-btn"
-                class="icon-btn"
-                title="Attach images, audio, or files"
-                aria-label="Attach files"
-              >
-                +
-              </button>
-              <input
-                type="file"
-                id="attach-input"
-                multiple
-                hidden
-                accept="image/*,audio/*,video/*,.txt,.md,.json,.csv,.py,.pdf,.log,.mp3,.wav,.ogg,.m4a,.webm,.mp4,.mov"
-              />
+              <div class="composer-tools">
+                <button
+                  type="button"
+                  id="attach-btn"
+                  class="icon-btn"
+                  title="Attach images, audio, or files"
+                  aria-label="Attach files"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  id="mic-btn"
+                  class="icon-btn mic-btn"
+                  title="Record voice (speech-to-text)"
+                  aria-label="Record voice"
+                  aria-pressed="false"
+                >
+                  <span class="mic-icon" aria-hidden="true">🎙</span>
+                </button>
+                <input
+                  type="file"
+                  id="attach-input"
+                  multiple
+                  hidden
+                  accept="image/*,audio/*,video/*,.txt,.md,.json,.csv,.py,.pdf,.log,.mp3,.wav,.ogg,.m4a,.webm,.mp4,.mov"
+                />
+              </div>
               <textarea
                 id="chat-input"
                 rows="1"
@@ -127,7 +139,7 @@
               <button type="submit" id="send-btn">Send</button>
             </div>
             <p class="composer-hint muted">
-              Enter send · Shift+Enter newline · paste or drop images/audio/files · media-only OK
+              Enter send · Shift+Enter newline · mic for voice · paste or drop files · media-only OK
             </p>
           </form>
         </section>

@@ -7,6 +7,7 @@ const sendBtn = $("#send-btn");
 const attachBtn = $("#attach-btn");
 const attachInput = $("#attach-input");
 const attachTray = $("#attach-tray");
+const micBtn = $("#mic-btn");
 const dropOverlay = $("#drop-overlay");
 const jumpLatestBtn = $("#jump-latest");
 const chatActivity = $("#chat-activity");
@@ -181,10 +182,16 @@ let lastMessagesFp = "";
 /** True when chat viewport is near the bottom (auto-stick). */
 let chatStickToBottom = true;
 /**
- * Pending composer attachments (local File + preview).
- * On send: POST /api/media → attachment_ids on POST /api/messages (no inventory prose).
+ * Pending composer attachments (local File + preview, or pre-uploaded id from STT).
+ * On send: POST /api/media for local files → attachment_ids on POST /api/messages.
  */
 let pendingAttachments = [];
+
+/** MediaRecorder session for composer mic → POST /api/stt (PR6). */
+let micRecorder = null;
+let micChunks = [];
+let micStream = null;
+let micBusy = false;
 /** Soft client caps matching host (elyra/media/upload.py). */
 const MAX_PENDING_ATTACHMENTS = 8;
 const MAX_CLIENT_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -2362,21 +2369,129 @@ function addFilesAsAttachments(fileList) {
 
 /**
  * Upload pending tray files via multipart POST /api/media.
+ * Pre-uploaded ids (e.g. STT keep_audio) are returned as-is.
  * Returns attachment id list (durable store). Does not clear tray.
  */
 async function uploadPendingAttachments() {
   if (!pendingAttachments.length) return [];
+  const already = [];
+  const needUpload = [];
+  for (const att of pendingAttachments) {
+    if (att.id) {
+      already.push(att.id);
+    } else {
+      needUpload.push(att);
+    }
+  }
+  if (!needUpload.length) return already;
+
+  // Group by origin so recordings keep user_recording / stt_source.
+  const byOrigin = new Map();
+  for (const att of needUpload) {
+    const origin = att.origin || "user_upload";
+    if (!byOrigin.has(origin)) byOrigin.set(origin, []);
+    byOrigin.get(origin).push(att);
+  }
+  const uploadedIds = [];
+  for (const [origin, group] of byOrigin.entries()) {
+    const formData = new FormData();
+    formData.append("user_id", getSessionUserId());
+    formData.append("origin", origin);
+    for (const att of group) {
+      const blob = att.file;
+      if (!blob) {
+        throw new Error(`Missing file bytes for ${att.name || "attachment"}`);
+      }
+      formData.append("files", blob, att.name || "file");
+    }
+    const res = await fetch("/api/media", { method: "POST", body: formData });
+    const text = await res.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
+    if (!res.ok) {
+      const msg =
+        (data && (data.error || data.reason)) || text || res.statusText;
+      const err = new Error(`${res.status}: ${msg}`);
+      err.status = res.status;
+      err.body = data;
+      throw err;
+    }
+    const uploaded = Array.isArray(data.attachments) ? data.attachments : [];
+    if (!uploaded.length) {
+      throw new Error("Upload returned no attachments");
+    }
+    for (const a of uploaded) {
+      if (a && a.id) uploadedIds.push(a.id);
+    }
+  }
+  return already.concat(uploadedIds);
+}
+
+function setMicUi({ recording = false, transcribing = false } = {}) {
+  if (!micBtn) return;
+  micBtn.classList.toggle("recording", !!recording);
+  micBtn.classList.toggle("transcribing", !!transcribing);
+  micBtn.setAttribute("aria-pressed", recording ? "true" : "false");
+  micBtn.disabled = !!transcribing;
+  micBtn.title = recording
+    ? "Stop recording"
+    : transcribing
+      ? "Transcribing…"
+      : "Record voice (speech-to-text)";
+}
+
+function stopMicStream() {
+  if (micStream) {
+    try {
+      micStream.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
+    micStream = null;
+  }
+}
+
+function pickRecorderMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+      return t;
+    }
+  }
+  return "";
+}
+
+/**
+ * POST audio blob to host STT proxy; fill composer with transcript.
+ * keep_audio=1 stores recording as durable attachment and chips it in tray.
+ */
+async function transcribeRecordingBlob(blob, { keepAudio = true } = {}) {
+  const mime = blob.type || "audio/webm";
+  const ext = mime.includes("ogg")
+    ? "ogg"
+    : mime.includes("mp4") || mime.includes("m4a")
+      ? "m4a"
+      : mime.includes("wav")
+        ? "wav"
+        : "webm";
+  const filename = `recording.${ext}`;
   const formData = new FormData();
   formData.append("user_id", getSessionUserId());
-  formData.append("origin", "user_upload");
-  for (const att of pendingAttachments) {
-    const blob = att.file;
-    if (!blob) {
-      throw new Error(`Missing file bytes for ${att.name || "attachment"}`);
-    }
-    formData.append("files", blob, att.name || "file");
-  }
-  const res = await fetch("/api/media", { method: "POST", body: formData });
+  formData.append("keep_audio", keepAudio ? "1" : "0");
+  formData.append("origin", "user_recording");
+  formData.append("file", blob, filename);
+
+  const res = await fetch("/api/stt", { method: "POST", body: formData });
   const text = await res.text();
   let data;
   try {
@@ -2385,18 +2500,161 @@ async function uploadPendingAttachments() {
     data = { raw: text };
   }
   if (!res.ok) {
-    const msg =
-      (data && (data.error || data.reason)) || text || res.statusText;
-    const err = new Error(`${res.status}: ${msg}`);
+    const reason = (data && (data.reason || data.error)) || text || res.statusText;
+    const err = new Error(`${res.status}: ${reason}`);
     err.status = res.status;
     err.body = data;
     throw err;
   }
-  const uploaded = Array.isArray(data.attachments) ? data.attachments : [];
-  if (!uploaded.length) {
-    throw new Error("Upload returned no attachments");
+  return data;
+}
+
+function insertTranscriptIntoComposer(transcript) {
+  if (!input) return;
+  const t = String(transcript || "").trim();
+  if (!t) return;
+  const cur = input.value || "";
+  if (!cur.trim()) {
+    input.value = t;
+  } else if (cur.endsWith(" ") || cur.endsWith("\n")) {
+    input.value = cur + t;
+  } else {
+    input.value = `${cur} ${t}`;
   }
-  return uploaded.map((a) => a.id).filter(Boolean);
+  autosizeComposer();
+  input.focus();
+}
+
+async function finishMicRecording() {
+  const chunks = micChunks.slice();
+  micChunks = [];
+  micRecorder = null;
+  stopMicStream();
+  setMicUi({ recording: false, transcribing: true });
+  micBusy = true;
+  try {
+    if (!chunks.length) {
+      showNotice("No audio captured.");
+      return;
+    }
+    const blob = new Blob(chunks, {
+      type: (chunks[0] && chunks[0].type) || "audio/webm",
+    });
+    if (!blob.size) {
+      showNotice("Empty recording.");
+      return;
+    }
+    const clientMax = clientMaxBytesForKind("audio");
+    if (blob.size > clientMax) {
+      showNotice(
+        `Recording too large (${formatBytes(blob.size)}; max ${formatBytes(
+          clientMax
+        )}).`
+      );
+      return;
+    }
+    showNotice("Transcribing…");
+    const data = await transcribeRecordingBlob(blob, { keepAudio: true });
+    const transcript = (data && data.text) || "";
+    if (!transcript.trim()) {
+      showNotice("Empty transcript from speech-to-text.");
+      return;
+    }
+    insertTranscriptIntoComposer(transcript);
+    if (data.attachment_id) {
+      if (pendingAttachments.length >= MAX_PENDING_ATTACHMENTS) {
+        showNotice(
+          `Transcript ready; attachment tray full (max ${MAX_PENDING_ATTACHMENTS}).`
+        );
+      } else {
+        const meta = data.attachment || {};
+        pendingAttachments.push({
+          name: meta.filename || "recording.webm",
+          size: meta.byte_size || blob.size,
+          type: meta.mime || blob.type || "audio/webm",
+          kind: "audio",
+          previewUrl: null,
+          id: data.attachment_id,
+          origin: meta.origin || "user_recording",
+        });
+        renderAttachTray();
+      }
+    }
+    showNotice("Transcript ready — edit and send when ready.");
+  } catch (err) {
+    const body = err && err.body;
+    const reason = body && body.reason;
+    if (reason === "provider_unsupported") {
+      showNotice("Speech-to-text requires the xAI provider.");
+    } else if (reason === "credential_unavailable") {
+      showNotice("Speech-to-text: credentials unavailable (host).");
+    } else if (reason === "stt_disabled") {
+      showNotice("Speech-to-text is disabled.");
+    } else {
+      showNotice(String(err.message || err));
+    }
+  } finally {
+    micBusy = false;
+    setMicUi({ recording: false, transcribing: false });
+  }
+}
+
+async function toggleMicRecording() {
+  if (!micBtn || micBusy) return;
+  if (micRecorder && micRecorder.state === "recording") {
+    try {
+      micRecorder.stop();
+    } catch (err) {
+      showNotice(String(err.message || err));
+      stopMicStream();
+      micRecorder = null;
+      setMicUi({ recording: false, transcribing: false });
+    }
+    return;
+  }
+  if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices) {
+    showNotice("Microphone recording is not supported in this browser.");
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    showNotice(
+      `Microphone permission denied or unavailable (${err && err.message ? err.message : err}).`
+    );
+    return;
+  }
+  micChunks = [];
+  const mime = pickRecorderMime();
+  try {
+    micRecorder = mime
+      ? new MediaRecorder(micStream, { mimeType: mime })
+      : new MediaRecorder(micStream);
+  } catch (err) {
+    stopMicStream();
+    showNotice(`Could not start recorder: ${err.message || err}`);
+    return;
+  }
+  micRecorder.addEventListener("dataavailable", (ev) => {
+    if (ev.data && ev.data.size) micChunks.push(ev.data);
+  });
+  micRecorder.addEventListener("stop", () => {
+    finishMicRecording();
+  });
+  micRecorder.addEventListener("error", (ev) => {
+    showNotice(`Recorder error: ${(ev.error && ev.error.message) || "unknown"}`);
+    stopMicStream();
+    micRecorder = null;
+    setMicUi({ recording: false, transcribing: false });
+  });
+  try {
+    micRecorder.start();
+    setMicUi({ recording: true, transcribing: false });
+  } catch (err) {
+    stopMicStream();
+    micRecorder = null;
+    showNotice(`Could not start recording: ${err.message || err}`);
+  }
 }
 
 function clearAttachments() {
@@ -2611,6 +2869,12 @@ if (attachBtn && attachInput) {
   attachInput.addEventListener("change", () => {
     addFilesAsAttachments(attachInput.files);
     attachInput.value = "";
+  });
+}
+
+if (micBtn) {
+  micBtn.addEventListener("click", () => {
+    toggleMicRecording();
   });
 }
 
