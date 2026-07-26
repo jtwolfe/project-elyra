@@ -115,7 +115,7 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 
 ### Stretch 1 done-when regression
 
-`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests and create-tool gate modules. See [docs/stretch-1.md](docs/stretch-1.md) § Done when (all Stretch 1 criteria checked).
+`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests and create-tool gate modules (`test_create_tool_gates`; historical PR13 surface). See [docs/stretch-1.md](docs/stretch-1.md) § Done when (all Stretch 1 criteria checked).
 
 Out of scope (Stretch 2+ / later phases): hypergraph memory, Lance graph, multi-sandbox, subagents, full per-user chat glass, Phase 1 `grok_build` self-improve instrument.
 

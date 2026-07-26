@@ -266,7 +266,7 @@ def test_supervisor_async_warm_does_not_block(
 
     sup = ElyraSupervisor(
         paths=paths,
-        config=RuntimeConfig(api_host="127.0.0.1", api_port=0, start_llama_server=False),
+        config=RuntimeConfig(api_host="127.0.0.1", api_port=0),
         use_stub_llm=True,
         sandbox_lifecycle=life,
     )
@@ -317,7 +317,7 @@ def test_supervisor_shutdown_worker_before_sandbox(
 
     sup = ElyraSupervisor(
         paths=paths,
-        config=RuntimeConfig(api_host="127.0.0.1", api_port=0, start_llama_server=False),
+        config=RuntimeConfig(api_host="127.0.0.1", api_port=0),
         use_stub_llm=True,
         sandbox_lifecycle=life,
     )

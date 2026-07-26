@@ -122,37 +122,41 @@ def test_merge_no_usage_meter_flag(tmp_path: Path):
     assert s.usage.enabled is False
 
 
-def test_runtime_config_start_llama_derived():
+def test_runtime_config_no_process_launch_fields():
+    """RuntimeConfig no longer starts a local inference process (PR2)."""
     s = default_settings()
-    # default provider xai → no llama
     cfg = runtime_config_from_settings(s)
     assert cfg.provider_name == "xai"
-    assert cfg.start_llama_server is False
+    assert not hasattr(cfg, "start_llama_server")
+    assert hasattr(cfg, "local")
 
     s_local = merge_cli_overrides(load_settings(), {"provider": {"name": "local"}})
     cfg_local = runtime_config_from_settings(s_local)
-    assert cfg_local.start_llama_server is True
-
-    cfg_no = runtime_config_from_settings(s_local, no_llama=True)
-    assert cfg_no.start_llama_server is False
+    assert cfg_local.provider_name == "local"
+    assert not hasattr(cfg_local, "start_llama_server")
 
     cfg_stub = runtime_config_from_settings(s_local, stub_llm=True)
-    assert cfg_stub.start_llama_server is False
+    assert cfg_stub.provider_name == "local"
 
 
-def test_cli_no_llama_does_not_force_stub():
-    """Footgun fix: use_stub_llm = stub_llm only (not stub_llm or no_llama)."""
+def test_cli_no_llama_flag_removed_stub_only_forces_stub():
+    """--no-llama removed; only --stub-llm forces StubChatClient."""
     from elyra.cli import build_parser
 
-    args = build_parser().parse_args(["start", "--no-llama"])
-    assert args.no_llama is True
-    assert args.stub_llm is False
-    # CLI main uses: use_stub = bool(args.stub_llm) only
-    use_stub = bool(args.stub_llm)
-    assert use_stub is False
+    parser = build_parser()
+    # Removed flag must error
+    with pytest.raises(SystemExit):
+        parser.parse_args(["start", "--no-llama"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["start", "--context-tokens", "4096"])
 
-    args2 = build_parser().parse_args(["start", "--stub-llm"])
-    assert bool(args2.stub_llm) is True
+    args = parser.parse_args(["start", "--stub-llm"])
+    assert bool(args.stub_llm) is True
+    use_stub = bool(args.stub_llm)
+    assert use_stub is True
+
+    args_plain = parser.parse_args(["start"])
+    assert bool(args_plain.stub_llm) is False
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +188,6 @@ def _supervisor_xai(
     cfg = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=0,
-        start_llama_server=False,
         provider_name="xai",
         model="grok-4.5",
         model_label="Grok 4.5 Fast",
@@ -275,7 +278,8 @@ def test_supervisor_stub_llm_uses_stub_not_failing(tmp_path: Path):
         sup.shutdown()
 
 
-def test_supervisor_local_no_llama_uses_stub_not_failing(tmp_path: Path):
+def test_supervisor_local_uses_failing_not_stub(tmp_path: Path):
+    """KD2: provider=local without --stub-llm → FailingChatClient."""
     home = tmp_path / "home"
     home.mkdir()
     paths = resolve_paths(home)
@@ -290,7 +294,6 @@ def test_supervisor_local_no_llama_uses_stub_not_failing(tmp_path: Path):
     cfg = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=port,
-        start_llama_server=False,
         provider_name="local",
         model="local",
         model_label="local",
@@ -298,22 +301,63 @@ def test_supervisor_local_no_llama_uses_stub_not_failing(tmp_path: Path):
     sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=False)
     try:
         sup.start()
-        # llama not started / not ready → existing stub path (not Failing)
-        assert isinstance(sup._worker.client, StubChatClient)
+        assert isinstance(sup._worker.client, FailingChatClient)
+        assert not isinstance(sup._worker.client, StubChatClient)
         assert sup.provider_runtime is not None
         assert sup.provider_runtime.provider_name == "local"
+        assert sup.provider_runtime.can_open_model_moment() is False
+        assert sup.state.llama_ready is False
+        assert sup.state.llama_error == "local_not_implemented"
+        # rebuild must never dial for_local / open HTTP
+        with patch(
+            "elyra.runtime.provider_runtime.HttpChatClient.for_local"
+        ) as mock_for_local:
+            sup.provider_runtime.rebuild_chat_stack()
+            mock_for_local.assert_not_called()
+        assert isinstance(sup.provider_runtime.chat_client, FailingChatClient)
+    finally:
+        sup.shutdown()
+
+
+def test_supervisor_local_stub_llm_uses_stub(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    cfg = RuntimeConfig(
+        api_host="127.0.0.1",
+        api_port=port,
+        provider_name="local",
+        model="local",
+        model_label="local",
+    )
+    sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=True)
+    try:
+        sup.start()
+        assert isinstance(sup._worker.client, StubChatClient)
+        assert not isinstance(sup._worker.client, FailingChatClient)
+        assert sup.state.llama_error == "stub_llm"
     finally:
         sup.shutdown()
 
 
 def test_supervisor_does_not_start_llama_for_xai(tmp_path: Path):
+    """No llama process methods remain; xai start still works."""
     sup = _supervisor_xai(tmp_path, auth=False)
-    with patch.object(ElyraSupervisor, "_start_llama_server") as mock_start:
-        try:
-            sup.start()
-            mock_start.assert_not_called()
-        finally:
-            sup.shutdown()
+    assert not hasattr(ElyraSupervisor, "_start_llama_server")
+    assert not hasattr(sup, "_llama_proc")
+    try:
+        sup.start()
+        assert isinstance(sup._worker.client, FailingChatClient)
+    finally:
+        sup.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +383,6 @@ def test_rebuild_chat_stack_repairs_failing_to_gated(tmp_path: Path):
     cfg = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=port,
-        start_llama_server=False,
         provider_name="xai",
         grok_auth_path=str(home / "missing.json"),  # cold start fail
     )
@@ -393,7 +436,7 @@ def test_can_open_model_moment_respects_budget(tmp_path: Path):
         worker=None,
         usage_settings=usage,
         xai_config=None,
-        llama_config=None,
+        local_config=None,
         gate=None,
         prefs_path=paths.data_dir / "runtime" / "provider.json",
         data_dir=paths.data_dir,

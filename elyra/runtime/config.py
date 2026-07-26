@@ -5,7 +5,8 @@ Merge order (normative)::
     defaults  <  elyra.toml  <  data/runtime/provider.json  <  explicit CLI
 
 ``provider.json`` only supplies ``model`` and ``credential_source`` (non-secret).
-``start_llama_server`` is derived: provider==local and not stub and not --no-llama.
+No inference process is launched; ``local`` config is retained for future
+OpenAI-compat wiring only.
 """
 
 from __future__ import annotations
@@ -24,12 +25,8 @@ from elyra.settings import Settings, UsageSettings, load_settings, merge_cli_ove
 class RuntimeConfig:
     api_host: str = "127.0.0.1"
     api_port: int = 8787
-    # True only when provider=local and not --no-llama and not pure stub path.
-    start_llama_server: bool = False
-    llama: LocalClientConfig = field(default_factory=LocalClientConfig)
-    llama_health_timeout: float = 180.0
-    # KV ceiling; lower if VRAM crashes (see docs/inference.md).
-    context_tokens: int | None = None
+    # Future OpenAI-compat local endpoint shape (unused for HTTP this pass).
+    local: LocalClientConfig = field(default_factory=LocalClientConfig)
     # Provider / usage (Phase 0)
     provider_name: str = "xai"
     model: str = DEFAULT_XAI_MODEL
@@ -52,7 +49,6 @@ def load_merged_settings(
     no_usage_meter: bool = False,
     api_host: str | None = None,
     api_port: int | None = None,
-    context_tokens: int | None = None,
 ) -> Settings:
     """Load defaults < toml < provider.json < explicit CLI overrides.
 
@@ -91,8 +87,6 @@ def load_merged_settings(
         cli_map["api_host"] = api_host
     if api_port is not None:
         cli_map["api_port"] = api_port
-    if context_tokens is not None:
-        cli_map["context_tokens"] = context_tokens
     if cli_map:
         settings = merge_cli_overrides(settings, cli_map)
 
@@ -102,17 +96,18 @@ def load_merged_settings(
 def runtime_config_from_settings(
     settings: Settings,
     *,
-    no_llama: bool = False,
     stub_llm: bool = False,
 ) -> RuntimeConfig:
-    """Build RuntimeConfig; derive ``start_llama_server`` from provider + flags."""
+    """Build RuntimeConfig from merged settings.
+
+    ``stub_llm`` is accepted for CLI symmetry; client selection lives on the
+    supervisor (``use_stub_llm``). No inference process is started.
+    """
+    del stub_llm  # selection is supervisor-side; flag reserved for callers
     name = settings.provider.name
-    start_llama = (name == "local") and (not stub_llm) and (not no_llama)
     return RuntimeConfig(
         api_host=settings.api_host,
         api_port=settings.api_port,
-        start_llama_server=start_llama,
-        context_tokens=settings.context_tokens,
         provider_name=name,
         model=settings.provider.model,
         model_label=settings.provider.model_label,

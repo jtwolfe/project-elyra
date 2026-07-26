@@ -76,11 +76,11 @@ def test_xai_config_join_path_without_leading_slash():
     assert cfg.models_url == "https://api.x.ai/v1/models"
 
 
-def test_local_client_config_interim_url():
-    """PR1 interim: host/port still drive chat_url (base_url reshape is PR2)."""
-    cfg = LocalClientConfig(host="127.0.0.1", port=8080)
+def test_local_client_config_base_url():
+    """PR2 final: base_url + chat_path drive chat_url."""
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1")
     assert cfg.chat_url == "http://127.0.0.1:8080/v1/chat/completions"
-    assert cfg.health_url == "http://127.0.0.1:8080/health"
+    assert not hasattr(cfg, "health_url")
     assert cfg.model == "local"
 
 
@@ -90,7 +90,7 @@ def test_local_client_config_interim_url():
 
 
 def test_for_local_factory_profile_and_url():
-    cfg = LocalClientConfig(host="127.0.0.1", port=9999)
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:9999/v1")
     client = HttpChatClient.for_local(cfg)
     assert client.profile == "local"
     assert client.chat_url == "http://127.0.0.1:9999/v1/chat/completions"
@@ -116,7 +116,7 @@ def test_for_xai_requires_model_and_bearer():
 
 
 def test_bc_positional_local_config_is_local():
-    cfg = LocalClientConfig(host="10.0.0.1", port=1234)
+    cfg = LocalClientConfig(base_url="http://10.0.0.1:1234/v1")
     client = HttpChatClient(cfg)
     assert client.profile == "local"
     assert client.chat_url == "http://10.0.0.1:1234/v1/chat/completions"
@@ -241,7 +241,7 @@ def test_local_payload_openai_compat_model_no_reasoning():
         captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
         return _FakeHTTPResponse(_ok_chat_body())
 
-    cfg = LocalClientConfig(host="127.0.0.1", port=8080, use_reasoning=True)
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1")
     client = HttpChatClient.for_local(cfg)
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         client.chat_completion(
@@ -274,7 +274,7 @@ def test_local_payload_omits_top_k_when_none():
         captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
         return _FakeHTTPResponse(_ok_chat_body())
 
-    cfg = LocalClientConfig(host="127.0.0.1", port=8080, top_p=None, top_k=None)
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1", top_p=None, top_k=None)
     client = HttpChatClient.for_local(cfg)
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
@@ -300,8 +300,7 @@ def test_for_local_optional_bearer_when_api_key_set():
         return _FakeHTTPResponse(_ok_chat_body())
 
     cfg = LocalClientConfig(
-        host="127.0.0.1",
-        port=8080,
+        base_url="http://127.0.0.1:8080/v1",
         api_key="local-secret-key",
         model="ollama-model",
     )
@@ -323,7 +322,7 @@ def test_for_local_omits_authorization_when_api_key_none():
         captured["headers"] = {k.lower(): v for k, v in req.header_items()}
         return _FakeHTTPResponse(_ok_chat_body())
 
-    client = HttpChatClient.for_local(LocalClientConfig(host="127.0.0.1", port=8080))
+    client = HttpChatClient.for_local(LocalClientConfig(base_url="http://127.0.0.1:8080/v1"))
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
 
@@ -338,7 +337,7 @@ def test_for_local_omits_authorization_when_api_key_empty():
         captured["headers"] = {k.lower(): v for k, v in req.header_items()}
         return _FakeHTTPResponse(_ok_chat_body())
 
-    cfg = LocalClientConfig(host="127.0.0.1", port=8080, api_key="")
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1", api_key="")
     client = HttpChatClient.for_local(cfg)
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
@@ -378,8 +377,7 @@ def test_local_http_error_message_omits_api_key():
         )
 
     cfg = LocalClientConfig(
-        host="127.0.0.1",
-        port=8080,
+        base_url="http://127.0.0.1:8080/v1",
         api_key="local-super-secret-key",
     )
     client = HttpChatClient.for_local(cfg)
@@ -422,7 +420,7 @@ def test_result_from_response_parses_usage():
 
 
 def test_result_missing_usage_is_none():
-    client = HttpChatClient.for_local(LocalClientConfig(use_reasoning=False))
+    client = HttpChatClient.for_local(LocalClientConfig())
 
     def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
         return _FakeHTTPResponse(

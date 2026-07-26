@@ -95,8 +95,7 @@ class ContinuousSettings:
 class ProviderSettings:
     """LLM provider config (product default: xAI / Grok).
 
-    Settings surface only until supervisor/CLI wiring (later PR). Defaults
-    match Phase 0 product posture; runtime still starts local/llama until then.
+    ``local`` is reserved / unimplemented (fails closed at runtime).
     """
 
     name: str = "xai"  # xai | local
@@ -144,7 +143,6 @@ class Settings:
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"
     api_port: int = 8787
-    context_tokens: int | None = None
 
 
 def default_settings() -> Settings:
@@ -172,7 +170,7 @@ def merge_cli_overrides(
     """Apply CLI/runtime overrides on top of settings (wins over toml).
 
     Accepts nested section dicts (``{"loop": {"max_tool_hops": 10}}``) and
-    flat top-level keys (``api_host``, ``api_port``, ``context_tokens``).
+    flat top-level keys (``api_host``, ``api_port``).
     ``None`` values are ignored so unset CLI flags do not clobber config.
     """
     if not overrides:
@@ -208,7 +206,7 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
 
     # get_type_hints resolves postponed annotations (str -> real types).
     top_types = get_type_hints(Settings)
-    for key in ("api_host", "api_port", "context_tokens"):
+    for key in ("api_host", "api_port"):
         if key in data and data[key] is not None:
             kwargs[key] = _coerce_value(key, data[key], top_types[key])
 

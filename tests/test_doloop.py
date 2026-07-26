@@ -7,11 +7,7 @@ model/ + llama-server are available.
 from __future__ import annotations
 
 import json
-import socket
-import subprocess
 import time
-import urllib.error
-import urllib.request
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,9 +17,7 @@ import pytest
 
 from elyra.config import resolve_paths
 from elyra.llm.client import ChatCompletionResult, HttpChatClient, StubChatClient
-from elyra.llm.config import LocalClientConfig
 from elyra.llm.reasoning_hygiene import sanitize_completion
-from elyra.llm.server import build_server_command, validate_model_paths
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.continuous_policy import WORK_CONTINUE_HOST, work_continue_host_message
 from elyra.loop.doloop import (
@@ -2346,86 +2340,11 @@ def test_host_mark_spoke_exception_does_not_abort_loop(
 # ---------------------------------------------------------------------------
 
 
-def _model_available() -> bool:
-    return not validate_model_paths(resolve_paths())
-
-
-def _server_healthy(url: str, timeout: float = 2.0) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return 200 <= resp.status < 300
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return False
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
 @pytest.fixture(scope="module")
 def live_llama_server():
-    """Reuse :8080 or start llama-server; skip when model/ missing."""
-    if not _model_available():
-        problems = validate_model_paths(resolve_paths())
-        pytest.skip("model not available: " + "; ".join(problems))
-    paths = resolve_paths()
-    default_config = LocalClientConfig()
-    owned_proc: subprocess.Popen[bytes] | None = None
-    port = default_config.port
+    """Local Gemma/llama path removed (PR2); always skip live fixtures."""
+    pytest.skip("local Gemma/llama-server path removed — use hermetic fake HTTP")
 
-    if _server_healthy(default_config.health_url):
-        yield LocalClientConfig(host="127.0.0.1", port=port)
-        return
-
-    port = _free_port()
-    config = LocalClientConfig(host="127.0.0.1", port=port)
-    cmd = build_server_command(
-        paths,
-        config,
-        context_tokens=8192,
-        batch_size=512,
-        ubatch_size=512,
-    )
-    owned_proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(paths.home),
-    )
-    deadline = time.time() + 300
-    ready = False
-    try:
-        while time.time() < deadline:
-            if owned_proc.poll() is not None:
-                out = b""
-                if owned_proc.stdout:
-                    out = owned_proc.stdout.read() or b""
-                pytest.skip(
-                    f"llama-server exited early (code {owned_proc.returncode}): "
-                    f"{out[-1500:].decode('utf-8', errors='replace')}"
-                )
-            if _server_healthy(config.health_url, timeout=1.0):
-                ready = True
-                break
-            time.sleep(1.0)
-        if not ready:
-            owned_proc.terminate()
-            try:
-                owned_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                owned_proc.kill()
-            pytest.skip("llama-server did not become healthy within 300s")
-        yield config
-    finally:
-        if owned_proc is not None and owned_proc.poll() is None:
-            owned_proc.terminate()
-            try:
-                owned_proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                owned_proc.kill()
-                owned_proc.wait(timeout=10)
 
 
 @pytest.mark.llm

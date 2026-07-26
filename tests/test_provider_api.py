@@ -109,7 +109,7 @@ def _make_provider(
         worker=worker,
         usage_settings=usage,
         xai_config=None,
-        llama_config=None,
+        local_config=None,
         gate=None,
         prefs_path=data / "runtime" / "provider.json",
         data_dir=data,

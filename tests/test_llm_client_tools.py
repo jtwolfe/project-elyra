@@ -9,17 +9,12 @@ from __future__ import annotations
 import http.server
 import json
 import socket
-import subprocess
 import threading
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from elyra.config import resolve_paths
 from elyra.llm.client import (
     ChatCompletionResult,
     GatedChatClient,
@@ -30,7 +25,6 @@ from elyra.llm.client import (
 )
 from elyra.llm.config import LocalClientConfig
 from elyra.llm.queue import ChatRequestGate
-from elyra.llm.server import build_server_command, validate_model_paths
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "llm_tool_responses.json"
 
@@ -307,7 +301,7 @@ def fake_chat_server():
 def test_http_client_includes_tools_in_payload(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_list_dir"]
-    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(base_url=f"http://127.0.0.1:{fake_chat_server}/v1")
     client = HttpChatClient(config)
     tools = fx["tools_list_dir"]
     result = client.chat_completion(
@@ -333,7 +327,7 @@ def test_http_client_includes_tools_in_payload(fake_chat_server):
 def test_http_client_parses_malformed_args_from_response(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_malformed_args"]
-    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(base_url=f"http://127.0.0.1:{fake_chat_server}/v1")
     client = HttpChatClient(config)
     result = client.chat_completion([{"role": "user", "content": "x"}])
     assert len(result.tool_calls) == 1
@@ -344,7 +338,7 @@ def test_http_client_parses_malformed_args_from_response(fake_chat_server):
 def test_http_client_handles_args_already_object(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_args_object"]
-    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(base_url=f"http://127.0.0.1:{fake_chat_server}/v1")
     client = HttpChatClient(config)
     result = client.chat_completion([{"role": "user", "content": "x"}])
     assert result.tool_calls[0].arguments == {"text": "hello"}
@@ -354,7 +348,7 @@ def test_http_client_handles_args_already_object(fake_chat_server):
 def test_http_client_omits_tools_keys_when_none(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server, use_reasoning=False)
+    config = LocalClientConfig(base_url=f"http://127.0.0.1:{fake_chat_server}/v1")
     client = HttpChatClient(config)
     result = client.chat_completion(
         [{"role": "user", "content": "hi"}],
@@ -375,9 +369,7 @@ def test_http_client_omits_top_p_top_k_when_none(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
     config = LocalClientConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=False,
+        base_url=f"http://127.0.0.1:{fake_chat_server}/v1",
         top_p=None,
         top_k=None,
     )
@@ -400,7 +392,7 @@ def test_local_defaults_openai_compat_payload(fake_chat_server):
 
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
-    config = LocalClientConfig(host="127.0.0.1", port=fake_chat_server)
+    config = LocalClientConfig(base_url=f"http://127.0.0.1:{fake_chat_server}/v1")
     assert config.top_p is None
     assert config.top_k is None
     assert config.model == "local"
@@ -426,10 +418,7 @@ def test_local_payload_never_sends_reasoning_or_thinking_budget(fake_chat_server
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
     config = LocalClientConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=True,
-        default_reasoning_budget_tokens=4096,
+        base_url=f"http://127.0.0.1:{fake_chat_server}/v1",
     )
     client = HttpChatClient(config)
     client.chat_completion(
@@ -450,9 +439,7 @@ def test_http_client_includes_top_p_top_k_from_kwargs(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
     config = LocalClientConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=False,
+        base_url=f"http://127.0.0.1:{fake_chat_server}/v1",
         top_p=None,
         top_k=None,
     )
@@ -475,9 +462,7 @@ def test_http_client_falls_back_to_config_top_p_top_k(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
     config = LocalClientConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=False,
+        base_url=f"http://127.0.0.1:{fake_chat_server}/v1",
         top_p=0.9,
         top_k=40,
     )
@@ -497,9 +482,7 @@ def test_http_client_kwarg_overrides_config_top_p_top_k(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
     config = LocalClientConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
-        use_reasoning=False,
+        base_url=f"http://127.0.0.1:{fake_chat_server}/v1",
         top_p=0.9,
         top_k=40,
     )
@@ -521,8 +504,7 @@ def test_local_payload_includes_custom_model(fake_chat_server):
     fx = _fixtures()
     _RecordingHandler.response_payload = fx["openai_response_content_only"]
     config = LocalClientConfig(
-        host="127.0.0.1",
-        port=fake_chat_server,
+        base_url=f"http://127.0.0.1:{fake_chat_server}/v1",
         model="my-local-model",
     )
     client = HttpChatClient.for_local(config)
@@ -581,89 +563,11 @@ def test_gated_client_forwards_tools_kwargs():
 # ---------------------------------------------------------------------------
 
 
-def _model_available() -> bool:
-    paths = resolve_paths()
-    return not validate_model_paths(paths)
-
-
-def _server_healthy(url: str, timeout: float = 2.0) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return 200 <= resp.status < 300
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return False
-
-
 @pytest.fixture(scope="module")
 def live_llama_server():
-    """Use an already-running server on :8080, or start one for the module.
+    """Local Gemma/llama path removed (PR2); always skip live fixtures."""
+    pytest.skip("local Gemma/llama-server path removed — use hermetic fake HTTP")
 
-    Skips cleanly when model files are missing.
-    """
-    if not _model_available():
-        problems = validate_model_paths(resolve_paths())
-        pytest.skip("model not available: " + "; ".join(problems))
-    paths = resolve_paths()
-    default_config = LocalClientConfig()
-    health = default_config.health_url
-    owned_proc: subprocess.Popen[bytes] | None = None
-    port = default_config.port
-
-    if _server_healthy(health):
-        # Reuse existing server
-        yield LocalClientConfig(host="127.0.0.1", port=port)
-        return
-
-    # Start with a modest context to load faster / use less VRAM for tool smoke.
-    port = _free_port()
-    config = LocalClientConfig(host="127.0.0.1", port=port)
-    cmd = build_server_command(
-        paths,
-        config,
-        context_tokens=8192,
-        batch_size=512,
-        ubatch_size=512,
-    )
-    # Drop mmproj if it slows start; tools tests are text-only. Keep as built
-    # by build_server_command for fidelity with production argv.
-    owned_proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(paths.home),
-    )
-    deadline = time.time() + 300
-    ready = False
-    try:
-        while time.time() < deadline:
-            if owned_proc.poll() is not None:
-                out = b""
-                if owned_proc.stdout:
-                    out = owned_proc.stdout.read() or b""
-                pytest.skip(
-                    f"llama-server exited early (code {owned_proc.returncode}): "
-                    f"{out[-1500:].decode('utf-8', errors='replace')}"
-                )
-            if _server_healthy(config.health_url, timeout=1.0):
-                ready = True
-                break
-            time.sleep(1.0)
-        if not ready:
-            owned_proc.terminate()
-            try:
-                owned_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                owned_proc.kill()
-            pytest.skip("llama-server did not become healthy within 300s")
-        yield config
-    finally:
-        if owned_proc is not None and owned_proc.poll() is None:
-            owned_proc.terminate()
-            try:
-                owned_proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                owned_proc.kill()
-                owned_proc.wait(timeout=10)
 
 
 @pytest.mark.llm

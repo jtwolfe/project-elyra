@@ -57,7 +57,7 @@ def test_default_settings_match_design():
     assert s.usage.hour_allowed_tokens is None
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
-    assert s.context_tokens is None
+    assert not hasattr(s, "context_tokens")
 
 
 def test_load_settings_without_toml_returns_defaults(tmp_path):
@@ -123,25 +123,22 @@ generation_max_tokens = 1000
             "loop": {"max_tool_hops": 7},
             "api_host": "0.0.0.0",
             "api_port": 9000,
-            "context_tokens": 4096,
         },
     )
     assert merged.loop.max_tool_hops == 7
     assert merged.loop.generation_max_tokens == 1000  # from toml, not overridden
     assert merged.api_host == "0.0.0.0"
     assert merged.api_port == 9000
-    assert merged.context_tokens == 4096
 
 
 def test_merge_cli_ignores_none_values():
     base = Settings(loop=LoopSettings(max_tool_hops=99), api_host="keep.me")
     merged = merge_cli_overrides(
         base,
-        {"api_host": None, "context_tokens": None, "loop": {"max_tool_hops": None}},
+        {"api_host": None, "loop": {"max_tool_hops": None}},
     )
     assert merged.api_host == "keep.me"
     assert merged.loop.max_tool_hops == 99
-    assert merged.context_tokens is None
 
 
 def test_settings_as_dict_round_structure():

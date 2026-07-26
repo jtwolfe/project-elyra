@@ -23,9 +23,7 @@ from elyra.llm.auth import (
 from elyra.llm.client import (
     ChatClient,
     FailingChatClient,
-    GatedChatClient,
     HttpChatClient,
-    StubChatClient,
     UsageGatedChatClient,
 )
 from elyra.llm.config import LocalClientConfig, XaiClientConfig
@@ -57,7 +55,7 @@ class ProviderRuntime:
     worker: PresenceWorker | None  # for rebinding worker.client after rebuild
     usage_settings: UsageSettings
     xai_config: XaiClientConfig | None
-    llama_config: LocalClientConfig | None
+    local_config: LocalClientConfig | None
     gate: ChatRequestGate | None
     prefs_path: Path
     data_dir: Path
@@ -133,8 +131,7 @@ class ProviderRuntime:
         provider=xai: credential_ok and (meter.can_call() if meter present and
           usage enabled; if meter missing while usage enabled → False).
           meter.can_call() is True when under budget OR hard_stop_override ON.
-        provider=local: meter.can_call() if enabled else True (llama readiness
-          is separate; worker still needs a real client).
+        provider=local: FailingChatClient → False (local_not_implemented).
         Never opens moments that would only hit FailingChatClient noise.
         """
         with self._lock:
@@ -181,16 +178,13 @@ class ProviderRuntime:
             timeout_s = self.request_timeout_s
             usage_settings = self.usage_settings
             xai_config = self.xai_config
-            llama_config = self.llama_config
-            gate = self.gate
+            local_config = self.local_config
             meter = self.meter
 
         if provider == "local":
             self._rebuild_local(
-                model=model,
                 usage_settings=usage_settings,
-                llama_config=llama_config,
-                gate=gate,
+                local_config=local_config,
                 meter=meter,
             )
             return
@@ -273,47 +267,31 @@ class ProviderRuntime:
     def _rebuild_local(
         self,
         *,
-        model: str,
         usage_settings: UsageSettings,
-        llama_config: LocalClientConfig | None,
-        gate: ChatRequestGate | None,
+        local_config: LocalClientConfig | None,
         meter: UsageMeter | None,
     ) -> None:
-        cfg = llama_config or LocalClientConfig()
+        """Local provider is unimplemented — Failing only; never for_local HTTP."""
         if meter is None and usage_settings.enabled:
             meter = UsageMeter.load(self.data_dir, usage_settings)
             with self._lock:
                 self.meter = meter
-        try:
-            http = HttpChatClient.for_local(cfg)
-            if gate is not None:
-                gated: ChatClient = GatedChatClient(http, gate)
-            else:
-                gated = http
-            if usage_settings.enabled and meter is not None:
-                outer: ChatClient = UsageGatedChatClient(gated, meter)
-            else:
-                outer = gated
-        except Exception:
-            _LOG.exception("rebuild_chat_stack: failed to build local client")
-            with self._lock:
-                self.credential_ok = True  # local has no xai creds
-                self.credential_detail = "local_client_build_failed"
-                self.http_client = None
-                self.chat_client = StubChatClient()
-                self._bind_worker_unlocked()
-                self._sync_state_unlocked()
-            return
-
+        cfg = local_config or LocalClientConfig()
+        failing = FailingChatClient("local_not_implemented")
         with self._lock:
-            self.credential_ok = True
-            self.credential_detail = None
-            self.http_client = http
-            self.chat_client = outer
-            self.llama_config = cfg
+            self.credential_ok = True  # local has no xai creds
+            self.credential_detail = "local_not_implemented"
+            self.http_client = None
+            self.chat_client = failing
+            self.local_config = cfg
             self.models_available = ["local"]
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
+        if self.state is not None:
+            # Keep historical status field names until PR3.
+            self.state.set_llama(
+                pid=None, ready=False, error="local_not_implemented"
+            )
 
     def _bind_worker_unlocked(self) -> None:
         worker = self.worker

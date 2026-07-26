@@ -1484,6 +1484,8 @@ class PresenceWorker:
                 "wake_kind": wake.kind,  # for identity promote gates
                 "identity": self._identity,
                 "users": self._users,
+                # install_skill / growth tools reload the held catalog
+                "skills": self._ensure_skills(),
             },
         )
 

@@ -1,8 +1,8 @@
 """Elyra operator CLI — single-command application start.
 
 Config merge: defaults < elyra.toml < data/runtime/provider.json < explicit CLI.
-``--no-llama`` only skips llama-server; it does **not** force StubChatClient
-(use ``--stub-llm`` for that).
+Hermetic UI path is ``--stub-llm`` only. ``provider=local`` fails closed
+(no local inference process this pass).
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import logging
 import sys
 
 from elyra.config import resolve_paths
-from elyra.llm.constants import CONTEXT_WINDOW_TOKENS
 from elyra.runtime.config import load_merged_settings, runtime_config_from_settings
 from elyra.runtime.provider_runtime import (
     credential_detail_message,
@@ -27,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     start = sub.add_parser(
         "start",
-        help="Start API, Web UI, presence worker (and llama-server when provider=local)",
+        help="Start API, Web UI, presence worker (xAI Grok by default)",
     )
     start.add_argument(
         "--provider",
@@ -52,26 +51,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable hierarchical usage meter (debug)",
     )
     start.add_argument(
-        "--no-llama",
-        action="store_true",
-        help=(
-            "Skip llama-server only (does not force stub LLM). "
-            "When provider=xai, llama is already not started."
-        ),
-    )
-    start.add_argument(
         "--stub-llm",
         action="store_true",
-        help="Use StubChatClient (only flag that forces stub)",
+        help="Use StubChatClient (only hermetic UI path; never remote calls)",
     )
     start.add_argument("--api-host", default="127.0.0.1")
     start.add_argument("--api-port", type=int, default=8787)
-    start.add_argument(
-        "--context-tokens",
-        type=int,
-        default=None,
-        help=f"llama-server -c (default {CONTEXT_WINDOW_TOKENS}; lower if VRAM crashes)",
-    )
     return parser
 
 
@@ -98,11 +83,18 @@ def _print_startup_posture(sup: ElyraSupervisor) -> None:
     meter = pr.meter if pr is not None else None
     usage_line = format_usage_posture(meter, enabled=config.usage.enabled)
     print(f"Usage:       {usage_line}")
-    if state.provider_name == "local":
-        llama = "on" if config.start_llama_server else "off"
-        print(f"llama:       {llama}")
-    if config.context_tokens:
-        print(f"context -c:  {config.context_tokens}")
+    # Chat posture (status still uses llama_* field names until PR3).
+    if state.llama_error == "stub_llm":
+        chat = "stub"
+    elif state.llama_error == "local_not_implemented":
+        chat = "local_not_implemented"
+    elif state.llama_ready:
+        chat = "ready"
+    elif state.provider_name == "xai" and state.credential_ok:
+        chat = "ready"
+    else:
+        chat = "off"
+    print(f"chat:        {chat}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -129,22 +121,13 @@ def main(argv: list[str] | None = None) -> int:
         # api_host/port keep argparse defaults (explicit CLI surface).
         api_host=args.api_host,
         api_port=args.api_port,
-        context_tokens=args.context_tokens,
     )
 
-    # --no-llama does NOT force stub (Phase 0 footgun fix).
     use_stub = bool(args.stub_llm)
     config = runtime_config_from_settings(
         settings,
-        no_llama=bool(args.no_llama),
         stub_llm=use_stub,
     )
-
-    if args.no_llama and config.provider_name == "xai":
-        print(
-            "note: --no-llama ignored (provider=xai does not start llama)",
-            file=sys.stderr,
-        )
 
     sup = ElyraSupervisor(
         paths=paths,

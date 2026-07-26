@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Stage live-eval runner — product path (presence + API + real Gemma).
+"""Stage live-eval runner — scenarios loader + (fail-closed) operator runner.
 
-Scope: fixed scenarios, isolated ELYRA_HOME per attempt, POST message, poll
-close/timeout, export tape/messages, fill scorecard via reasoning_hygiene.
-In scope: Stage 0 baseline + Stage 1 sampling ablation; reuse healthy llama
-or start one. Sampling knobs from scenarios.yaml applied to LocalClientConfig
-(KD13); CLI --temperature/--top-p/--top-k/--reasoning-budget/--cell for OFAT.
+Hermetic tests import ``Scenario`` / ``load_scenarios`` only (import-safe).
+Operator ``main()`` fails closed: Gemma/llama-server path removed; retarget to
+xAI dogfood / future OpenAI-compat eval is out of scope for this pass.
 
-Usage:
-  python scripts/live_eval/run_stage.py --stage 1 --all-scenarios --tries 3
-  python scripts/live_eval/run_stage.py --stage 1 --scenario S-mono --tries 3 \\
-      --temperature 0.4 --cell t0.4-trunc
-  python scripts/live_eval/run_stage.py --stage 2 --scenario S-social --tries 3 \\
-      --reasoning-budget 2048 --cell b2048
+Historical usage (no longer executable):
   python scripts/live_eval/run_stage.py --stage 0 --scenario S-social --try 1
 """
 
@@ -51,7 +44,6 @@ from elyra.llm.reasoning_hygiene import (  # noqa: E402
     is_channel_flood,
     strip_channel_markers,
 )
-from elyra.llm.server import build_server_command, validate_model_paths  # noqa: E402
 from elyra.presence.worker import PresenceWorker  # noqa: E402
 from elyra.runtime.api import start_api_server  # noqa: E402
 from elyra.runtime.config import RuntimeConfig  # noqa: E402
@@ -335,79 +327,15 @@ def ensure_llama(
     *,
     host: str = "127.0.0.1",
     port: int = 8080,
-    context_tokens: int | None = None,
     start_if_needed: bool = True,
     health_timeout: float = 300.0,
 ) -> LlamaHandle:
-    """Reuse healthy server or start one from project model/."""
-    paths = resolve_paths(_ROOT)
-    problems = validate_model_paths(paths)
-    if problems:
-        raise SystemExit("model not available: " + "; ".join(problems))
-
-    cfg = LocalClientConfig(host=host, port=port)
-    if _server_healthy(cfg.health_url):
-        _LOG.info("reusing healthy llama-server at %s:%s", host, port)
-        return LlamaHandle(config=cfg, proc=None, owned=False)
-
-    if not start_if_needed:
-        raise SystemExit(
-            f"llama-server not healthy at {cfg.health_url} "
-            f"(pass --start-llama or start it yourself)"
-        )
-
-    # If default port busy but unhealthy, pick a free port.
-    if port == 8080:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.3)
-                if s.connect_ex((host, port)) == 0:
-                    port = _free_port()
-                    cfg = LocalClientConfig(host=host, port=port)
-                    _LOG.warning("port 8080 busy/unhealthy — starting on %s", port)
-        except OSError:
-            pass
-
-    ctx = context_tokens or 86000
-    # Prefer slightly smaller ctx if operator sets LIVE_EVAL_CTX
-    env_ctx = os.environ.get("LIVE_EVAL_CTX", "").strip()
-    if env_ctx.isdigit():
-        ctx = int(env_ctx)
-
-    cmd = build_server_command(
-        paths,
-        cfg,
-        context_tokens=ctx,
+    """Fail-closed: local Gemma/llama-server path removed (KD9/KD13)."""
+    del host, port, start_if_needed, health_timeout
+    raise SystemExit(
+        "live_eval: Gemma/llama-server path removed — "
+        "use xAI dogfood or a future OpenAI-compat eval harness"
     )
-    _LOG.info("starting llama-server: %s …", " ".join(cmd[:6]))
-    log_path = _HERE / "logs" / "llama-server-live-eval.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_f = open(log_path, "ab")  # noqa: SIM115
-    proc = subprocess.Popen(
-        cmd,
-        stdout=log_f,
-        stderr=subprocess.STDOUT,
-        cwd=str(paths.home),
-    )
-    deadline = time.monotonic() + health_timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            log_f.close()
-            tail = ""
-            try:
-                tail = log_path.read_bytes()[-2000:].decode("utf-8", errors="replace")
-            except OSError:
-                pass
-            raise SystemExit(
-                f"llama-server exited early (code {proc.returncode}): {tail}"
-            )
-        if _server_healthy(cfg.health_url, timeout=1.0):
-            _LOG.info("llama-server ready on %s:%s", cfg.host, cfg.port)
-            return LlamaHandle(config=cfg, proc=proc, owned=True)
-        time.sleep(1.0)
-    proc.terminate()
-    log_f.close()
-    raise SystemExit(f"llama-server health timeout after {health_timeout}s")
 
 
 # ---------------------------------------------------------------------------
@@ -517,8 +445,7 @@ def start_product_stack(
     config = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=port,
-        start_llama_server=False,
-        llama=llama,
+        local=llama,
     )
     api_server, api_thread = start_api_server(
         config,
@@ -868,29 +795,17 @@ def client_config_from_stage(
 ) -> LocalClientConfig:
     """Apply stage sampling knobs onto a connection-bearing LocalClientConfig.
 
-    Local wire fields still driven by config fallback (KD13): ``temperature``,
-    ``top_p``, ``top_k``, ``model``. After OpenAI-compat local payload, local
-    HTTP never emits ``thinking_budget_tokens``; ``default_reasoning_budget_tokens``
-    is retained for constructor BC only (deleted with launch path later).
-    Server argv ``reasoning_budget`` / ``use_reasoning`` remain a separate path.
-    Harness overrides are for ablation only.
+    Retained for historical helpers; operator main fails closed before use.
     """
-    budget = stage_cfg.reasoning_budget_tokens
-    if budget is not None:
-        budget = int(budget)
     return LocalClientConfig(
-        host=base.host,
-        port=base.port,
+        base_url=base.base_url,
         chat_path=base.chat_path,
         model=base.model,
-        use_reasoning=base.use_reasoning,
-        reasoning_budget=base.reasoning_budget,
         connect_timeout=base.connect_timeout,
         read_timeout=base.read_timeout,
         temperature=float(stage_cfg.temperature),
         top_p=stage_cfg.top_p,
         top_k=int(stage_cfg.top_k) if stage_cfg.top_k is not None else None,
-        default_reasoning_budget_tokens=budget,
         api_key=base.api_key,
     )
 
@@ -1549,7 +1464,25 @@ def _apply_cli_knob_overrides(stage_cfg: StageConfig, args: argparse.Namespace) 
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    """Operator entry — fail-closed (Gemma/llama path removed).
+
+    ``--help`` still works via argparse. Scenario loaders remain import-safe
+    for hermetic ``tests/test_live_eval_scenarios.py``.
+    """
+    # Parse first so ``--help`` exits 0 without the fail-closed message.
+    build_parser().parse_args(argv)
+    print(
+        "live_eval run_stage: Gemma/llama-server path removed.\n"
+        "Use xAI dogfood (`elyra start`) or a future OpenAI-compat eval harness.\n"
+        "Scenario YAML still loads for hermetic tests "
+        "(tests/test_live_eval_scenarios.py).",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _legacy_main_body(args: argparse.Namespace) -> int:
+    """Historical body retained for reference; unreachable from main()."""
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
