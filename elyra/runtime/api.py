@@ -190,6 +190,11 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         path = parsed.path
         qs = parse_qs(parsed.query)
 
+        # GET /api/messages/{id}/tts — play saved text (PR7 / KD3).
+        if path.startswith("/api/messages/") and path.endswith("/tts"):
+            self._message_tts(path, qs=qs, body=None)
+            return
+
         if path == "/api/status":
             snap = self.state.snapshot()
             # PresenceWorker.status_snapshot: phase, hop_count, last_tool,
