@@ -868,8 +868,12 @@ def client_config_from_stage(
 ) -> LocalClientConfig:
     """Apply stage sampling knobs onto a connection-bearing LocalClientConfig.
 
-    Product path: do-loop never hardcodes sampling; HttpChatClient falls back
-    to these config fields (KD13). Harness overrides are for ablation only.
+    Local wire fields still driven by config fallback (KD13): ``temperature``,
+    ``top_p``, ``top_k``, ``model``. After OpenAI-compat local payload, local
+    HTTP never emits ``thinking_budget_tokens``; ``default_reasoning_budget_tokens``
+    is retained for constructor BC only (deleted with launch path later).
+    Server argv ``reasoning_budget`` / ``use_reasoning`` remain a separate path.
+    Harness overrides are for ablation only.
     """
     budget = stage_cfg.reasoning_budget_tokens
     if budget is not None:
@@ -1498,12 +1502,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         dest="reasoning_budget",
-        help="Override stage knobs reasoning_budget_tokens (e.g. 2048)",
+        help=(
+            "Override stage knobs default_reasoning_budget_tokens (constructor BC; "
+            "local OpenAI-compat wire no longer emits thinking_budget_tokens)"
+        ),
     )
     p.add_argument(
         "--omit-budget",
         action="store_true",
-        help="Force reasoning_budget_tokens=None (omit thinking_budget_tokens)",
+        help=(
+            "Force default_reasoning_budget_tokens=None on LocalClientConfig "
+            "(no wire effect on local OpenAI-compat payload)"
+        ),
     )
     p.add_argument("-v", "--verbose", action="store_true")
     return p

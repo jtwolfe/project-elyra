@@ -574,8 +574,6 @@ def test_gated_client_forwards_tools_kwargs():
     assert captured["top_p"] == 0.95
     assert captured["top_k"] == 64
     assert captured["reasoning_budget_tokens"] == 2048
-    assert captured["top_p"] == 0.95
-    assert captured["top_k"] == 64
 
 
 # ---------------------------------------------------------------------------

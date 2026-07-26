@@ -330,6 +330,22 @@ def test_for_local_omits_authorization_when_api_key_none():
     assert "authorization" not in captured["headers"]
 
 
+def test_for_local_omits_authorization_when_api_key_empty():
+    """Design Bearer rule: empty api_key omits Authorization (same as None)."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    cfg = LocalClientConfig(host="127.0.0.1", port=8080, api_key="")
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    assert "authorization" not in captured["headers"]
+
+
 def test_http_error_message_omits_bearer_token():
     def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
         raise urllib.error.HTTPError(
@@ -348,6 +364,31 @@ def test_http_error_message_omits_bearer_token():
     assert "401" in msg
     assert "super-secret-token" not in msg
     assert "Bearer" not in msg or "super-secret" not in msg
+
+
+def test_local_http_error_message_omits_api_key():
+    """Symmetric non-leak: local Bearer key never appears in HTTP error text."""
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        raise urllib.error.HTTPError(
+            url=req.full_url,
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=__import__("io").BytesIO(b'{"error":"bad token"}'),
+        )
+
+    cfg = LocalClientConfig(
+        host="127.0.0.1",
+        port=8080,
+        api_key="local-super-secret-key",
+    )
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with pytest.raises(RuntimeError) as ei:
+            client.chat_completion([{"role": "user", "content": "x"}])
+    msg = str(ei.value)
+    assert "401" in msg
+    assert "local-super-secret-key" not in msg
 
 
 # ---------------------------------------------------------------------------
