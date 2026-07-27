@@ -756,6 +756,73 @@ def test_stage_failed_refresh_marker_absent_next_does_not_skip(
     assert marker["content_hash"] == content_hash(pkg)
 
 
+def test_stage_mid_replace_failure_marker_absent_next_restages(
+    paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nth per-file replace failure after prior success: marker absent, next restages."""
+    import elyra.tools.guest_exec as guest_exec
+
+    pkg = _write_sandbox_python_pkg(tmp_path, "midfail_tool")
+    (pkg / "extra.txt").write_text("v1\n", encoding="utf-8")
+    dest = stage_package_for_guest(paths, pkg)
+    assert load_stage_marker(dest) is not None
+    ino = dest.stat().st_ino
+    # Byte change so restage is required.
+    (pkg / "extra.txt").write_text("v2\n", encoding="utf-8")
+
+    real_replace = guest_exec._safe_copy_file_replace
+    calls = {"n": 0}
+
+    def flaky(src: Path, dest_path: Path, *, token: str) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise OSError("simulated mid-replace failure")
+        return real_replace(src, dest_path, token=token)
+
+    monkeypatch.setattr(guest_exec, "_safe_copy_file_replace", flaky)
+    with pytest.raises(OSError, match="mid-replace"):
+        stage_package_for_guest(paths, pkg)
+    assert load_stage_marker(dest) is None
+    assert dest.stat().st_ino == ino
+    assert calls["n"] >= 2
+
+    monkeypatch.undo()
+    dest2 = stage_package_for_guest(paths, pkg)
+    assert dest2.stat().st_ino == ino
+    marker = load_stage_marker(dest2)
+    assert marker is not None
+    assert marker.get("incomplete") is False
+    assert (dest2 / "extra.txt").read_text(encoding="utf-8") == "v2\n"
+
+
+def test_stage_refuses_mutate_when_marker_unlink_fails(
+    paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If marker invalidate fails, do not refresh (tree stays intact + skippable)."""
+    import elyra.tools.guest_exec as guest_exec
+
+    pkg = _write_sandbox_python_pkg(tmp_path, "unlinkfail_tool")
+    dest = stage_package_for_guest(paths, pkg)
+    marker = load_stage_marker(dest)
+    assert marker is not None
+    probe = dest / "impl" / "main.py"
+    body_before = probe.read_text(encoding="utf-8")
+    mtime_before = probe.stat().st_mtime_ns
+
+    def boom_unlink(_dest: Path) -> None:
+        raise OSError("permission denied (simulated unlink)")
+
+    monkeypatch.setattr(guest_exec, "_unlink_stage_marker", boom_unlink)
+    with pytest.raises(OSError, match="permission denied"):
+        stage_package_for_guest(paths, pkg, force=True)
+
+    # Mutate never ran: complete marker + payload unchanged.
+    assert load_stage_marker(dest) is not None
+    assert load_stage_marker(dest)["content_hash"] == marker["content_hash"]
+    assert probe.read_text(encoding="utf-8") == body_before
+    assert probe.stat().st_mtime_ns == mtime_before
+
+
 def test_stage_inplace_prunes_stale_payload(paths, tmp_path: Path) -> None:
     """Stale modules (e.g. impl/old.py) and bytecode are pruned on refresh."""
     pkg = _write_sandbox_python_pkg(tmp_path, "prune_tool")
@@ -766,6 +833,13 @@ def test_stage_inplace_prunes_stale_payload(paths, tmp_path: Path) -> None:
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "old.cpython-312.pyc").write_bytes(b"\x00")
     (dest / "stray.pyc").write_bytes(b"\x00")
+    # Nested pollution marker must not survive refresh (keep-set is top-level only
+    # — we always prune markers during refresh).
+    nested_marker = dest / "impl" / STAGE_MARKER_NAME
+    nested_marker.write_text(
+        '{"schema_version":1,"incomplete":false,"content_hash":"nested"}',
+        encoding="utf-8",
+    )
     assert stale.is_file()
 
     # force refresh with same source (no old.py in source)
@@ -773,8 +847,13 @@ def test_stage_inplace_prunes_stale_payload(paths, tmp_path: Path) -> None:
     assert not (dest2 / "impl" / "old.py").exists()
     assert not (dest2 / "impl" / "__pycache__").exists()
     assert not (dest2 / "stray.pyc").exists()
+    assert not (dest2 / "impl" / STAGE_MARKER_NAME).exists()
     assert (dest2 / "impl" / "main.py").is_file()
-    assert load_stage_marker(dest2) is not None
+    # Top-level complete marker rewritten after success only.
+    top = load_stage_marker(dest2)
+    assert top is not None
+    assert top.get("incomplete") is False
+    assert top["content_hash"] == content_hash(pkg)
 
 
 def test_stage_inplace_no_temp_leftovers_after_success(paths, tmp_path: Path) -> None:

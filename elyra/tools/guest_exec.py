@@ -236,12 +236,21 @@ def write_complete_stage_marker(
 
 
 def _unlink_stage_marker(dest: Path) -> None:
-    """Invalidate any complete claim before mutate (missing marker ⇒ never skip)."""
+    """Invalidate any complete claim before mutate (missing marker ⇒ never skip).
+
+    Raises ``OSError`` if the marker cannot be removed. Callers must not mutate
+    the package tree while a complete marker may still claim the dest is good
+    (KD-G2: incomplete trees must never be skippable).
+    """
     marker = Path(dest) / STAGE_MARKER_NAME
     try:
         marker.unlink(missing_ok=True)
     except OSError as exc:
-        _LOG.debug("stage marker unlink failed %s: %s", marker, exc)
+        _LOG.warning("stage marker unlink failed %s: %s", marker, exc)
+        raise
+    # Fail closed: do not proceed if the complete claim is still on disk.
+    if marker.exists() or marker.is_symlink():
+        raise OSError(f"stage marker still present after unlink: {marker}")
 
 
 def _has_payload_files(dest: Path) -> bool:
@@ -394,22 +403,19 @@ def stage_package_for_guest(
         return dest.resolve()
 
     # Mutate path: invalidate complete claim BEFORE any restage when dest exists.
+    # Unlink must succeed — refuse mutate if a complete marker may remain (KD-G2).
     dest_is_real_dir = dest.is_dir() and not dest.is_symlink()
     if dest_is_real_dir:
         _unlink_stage_marker(dest)
-
-    if dest_is_real_dir:
         # Update: NEVER os.rename(dest, backup) — preserve top-level dentry.
-        try:
-            _in_place_refresh(
-                package_dir,
-                dest,
-                sandbox_root=host_root,
-                strip_verify_record=strip_verify_record,
-            )
-        except OSError:
-            # Marker already unlinked; leave absent so next call cannot skip.
-            raise
+        # On any failure the marker stays absent (already unlinked); caller /
+        # guest_dispatch maps OSError → stage_failed; next call cannot skip.
+        _in_place_refresh(
+            package_dir,
+            dest,
+            sandbox_root=host_root,
+            strip_verify_record=strip_verify_record,
+        )
         write_complete_stage_marker(
             dest,
             content_hash_value=src_hash,
@@ -1506,9 +1512,10 @@ def _prune_stale_stage_payload(
 ) -> None:
     """Delete dest entries not in the source payload (after in-place copy).
 
-    Keep-set: never prune ``.elyra_stage.json`` as an orphan (caller rewrites
-    after success; absent during refresh). Always prune ignore names/suffixes,
-    leftover ``*.elyra_tmp.*``, and source-deleted modules/dirs.
+    Always prunes stage markers (top-level and nested), ignore names, bytecode
+    suffixes, leftover ``*.elyra_tmp.*``, and source-deleted modules/dirs.
+    The complete marker is rewritten by the caller only after full success —
+    never keep a pre-refresh complete claim on disk during/after refresh.
     """
     dest = Path(dest)
     if not dest.is_dir() or dest.is_symlink():
@@ -1519,10 +1526,8 @@ def _prune_stale_stage_payload(
             rel = path.relative_to(dest).as_posix()
         except ValueError:
             continue
-        # Keep-set: stage marker (rewritten by caller after success).
-        if path.name == STAGE_MARKER_NAME:
-            continue
-        # Always prune stage ignore names / bytecode / refresh temps.
+        # Always prune stage ignore names (includes STAGE_MARKER_NAME at any
+        # depth), bytecode, and refresh temps.
         if (
             path.name in _STAGE_IGNORE_NAMES
             or path.suffix in _STAGE_IGNORE_SUFFIXES
@@ -1540,6 +1545,12 @@ def _prune_stale_stage_payload(
         if path.is_dir():
             if rel not in desired_dirs:
                 _safe_rmtree(path)
+            continue
+        # FIFO / device / socket / other non-file non-dir nodes: treat as stale.
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            _LOG.debug("prune could not remove special path %s", path)
 
 
 def _safe_copytree_into(
