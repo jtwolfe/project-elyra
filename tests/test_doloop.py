@@ -2209,6 +2209,157 @@ def test_reouter_count_zero_without_caller_rebuild(
 
 
 # ---------------------------------------------------------------------------
+# Moments tape: tool-beat content up to tool_result_max_chars (KD7 / PR3)
+# ---------------------------------------------------------------------------
+
+
+class _LongErrorRegistry:
+    """Registry double: long error body with a distinctive hint tail."""
+
+    def __init__(self, inner: ToolRegistry, *, body_chars: int = 1200) -> None:
+        self._inner = inner
+        # Unique marker near the end so tape must retain past the old 500 cap.
+        self.hint_tail = "HINT_TAIL_MARKER_past_500_chars_xyz"
+        self._blob = ("E" * body_chars) + self.hint_tail
+
+    def openai_tools(self) -> list[dict[str, Any]]:
+        return self._inner.openai_tools()
+
+    def execute(self, name: str, args: dict[str, Any] | None, ctx: ToolContext) -> ToolResult:
+        if name == "read_file":
+            return ToolResult(
+                ok=False,
+                error_reason="path_escape",
+                payload={
+                    "path": (args or {}).get("path", ""),
+                    "detail": self._blob,
+                    "hint": self.hint_tail,
+                },
+            )
+        return self._inner.execute(name, args, ctx)
+
+
+def test_moments_tape_stores_tool_content_beyond_500(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """KD7: tool beats store content[:tool_cap], not a hard-coded 500."""
+    mid = moments.open_moment(why_now="tape cap", moment_id="mtapecap")
+    ctx.moment_id = mid
+    long_reg = _LongErrorRegistry(registry, body_chars=1200)
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", {"path": "../escape"}, call_id="c_long"),
+            _text("done"),
+        ]
+    )
+    # Default tool_result_max_chars is 8000 — long body must survive on tape.
+    result = _run(client, ctx, long_reg, moments=moments, social_wake=False)  # type: ignore[arg-type]
+    assert result.stop_reason == "no_tools"
+    tool_beats = [
+        b
+        for b in moments.list_beats(mid)
+        if b.get("type") == "tool" and b.get("name") == "read_file"
+    ]
+    assert len(tool_beats) == 1
+    content = tool_beats[0].get("content") or ""
+    assert len(content) > 500, f"expected tape content >500, got {len(content)}"
+    assert long_reg.hint_tail in content
+    body = json.loads(content)
+    assert body.get("error_reason") == "path_escape"
+    assert body.get("hint") == long_reg.hint_tail
+
+
+def test_moments_tape_skip_identical_content_uses_tool_cap(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """Skip-identical obs beats also store content[:tool_cap], not 500."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    mid = moments.open_moment(why_now="skip tape cap", moment_id="mskipcap")
+    ctx.moment_id = mid
+    long_reg = _LongErrorRegistry(registry, body_chars=1200)
+    # 5 real fails (streak) + 1 skip.
+    client = StubChatClient.scripted(
+        [_tc("read_file", {"path": "../escape"}, call_id=f"c{i}") for i in range(1, 7)]
+        + [_text("I'll stop")]
+    )
+    result = _run(client, ctx, long_reg, moments=moments, social_wake=False)  # type: ignore[arg-type]
+    assert result.thrash_skips == 1
+    beats = moments.list_beats(mid)
+    skip_obs = [
+        b
+        for b in beats
+        if b.get("type") == "obs" and b.get("kind") == "tool_skip_identical"
+    ]
+    assert skip_obs
+    # Synthetic skip payload is short; real tool beats must still be long.
+    long_tools = [
+        b
+        for b in beats
+        if b.get("type") == "tool"
+        and b.get("name") == "read_file"
+        and b.get("error_reason") != "skipped_identical"
+    ]
+    assert long_tools
+    content = long_tools[0].get("content") or ""
+    assert len(content) > 500
+    assert long_reg.hint_tail in content
+    # Skip obs content is the synthetic skip JSON (already model-capped).
+    skip_content = skip_obs[0].get("content") or ""
+    assert "skipped_identical" in skip_content
+
+
+def test_secrets_set_tool_beat_omits_raw_secret(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """PR3 regression: secrets_set success/fail tape content never holds raw value."""
+    mid = moments.open_moment(why_now="secret tape", moment_id="msectape")
+    ctx.moment_id = mid
+    secret_ok = "RAW_SECRET_SUCCESS_value_never_on_tape_abc"
+    secret_fail = "RAW_SECRET_FAIL_value_never_on_tape_xyz"
+    client = StubChatClient.scripted(
+        [
+            # Success path stores secret but must not echo value on tape.
+            _tc(
+                "secrets_set",
+                {"name": "gh_token", "value": secret_ok, "grants": ["gh_api"]},
+                call_id="c_ok",
+            ),
+            # Failure path (reserved name) also must not leak value.
+            _tc(
+                "secrets_set",
+                {"name": "xai_api_key", "value": secret_fail},
+                call_id="c_fail",
+            ),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    blob = json.dumps(beats, ensure_ascii=False, default=str)
+    assert secret_ok not in blob
+    assert secret_fail not in blob
+    tool_beats = [b for b in beats if b.get("type") == "tool" and b.get("name") == "secrets_set"]
+    assert len(tool_beats) == 2
+    ok_beat = next(b for b in tool_beats if b.get("tool_call_id") == "c_ok")
+    fail_beat = next(b for b in tool_beats if b.get("tool_call_id") == "c_fail")
+    assert ok_beat.get("ok") is True
+    assert fail_beat.get("ok") is False
+    for b in tool_beats:
+        content = b.get("content") or ""
+        assert secret_ok not in content
+        assert secret_fail not in content
+        body = json.loads(content)
+        # Result payload must not re-surface the secret body.
+        assert body.get("value") in (None, "***") or secret_ok not in str(body.get("value"))
+        assert secret_ok not in json.dumps(body)
+        assert secret_fail not in json.dumps(body)
+
+
+# ---------------------------------------------------------------------------
 # Disk prompts via assemble_outer_meal
 # ---------------------------------------------------------------------------
 

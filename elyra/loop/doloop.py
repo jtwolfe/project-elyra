@@ -1237,7 +1237,7 @@ def _handle_tool_batch(
                 "ok": tr.ok,
                 "error_reason": tr.error_reason,
                 "ends_moment": tr.ends_moment,
-                "content": content[:500],
+                "content": content[:tool_cap],
             },
         )
         if skipped:
@@ -1252,7 +1252,7 @@ def _handle_tool_batch(
                     "streak": upd.streak,
                     "skip_count": state.thrash_skip_count,
                     "prior_error_reason": prior_error,
-                    "content": content[:500],
+                    "content": content[:tool_cap],
                 },
             )
             _LOG.info(
