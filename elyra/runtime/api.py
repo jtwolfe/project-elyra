@@ -6,7 +6,8 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   multi-user session + identity panel (grants, promote, list/create users),
   provider/model/credential mutators, live usage + hard-stop override,
   media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
-  STT proxy POST /api/stt (PR6 / KD4, KD9, KD18).
+  STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
+  named secrets store GET/PUT/DELETE + grants (PR5 / IK10).
 Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite.
 """
@@ -305,6 +306,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, self._session_payload())
             return
 
+        if path == "/api/secrets":
+            self._get_secrets()
+            return
+
         if path.startswith("/api/users/"):
             rest = unquote(path[len("/api/users/") :])
             # Promote is POST only; GET is single-segment user id.
@@ -492,6 +497,21 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._put_api_key(body)
             return
 
+        if path == "/api/secrets":
+            self._put_secret(body)
+            return
+
+        if path.startswith("/api/secrets/") and path.endswith("/grants"):
+            rest = unquote(path[len("/api/secrets/") : -len("/grants")])
+            if rest.endswith("/"):
+                rest = rest[:-1]
+            name = _safe_segment(rest)
+            if name is None or "/" in rest:
+                self._json(400, {"ok": False, "error": "invalid secret name"})
+                return
+            self._put_secret_grants(name, body)
+            return
+
         if path == "/api/session":
             self._put_session(body)
             return
@@ -504,6 +524,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/provider/api-key":
             self._delete_api_key()
+            return
+
+        if path.startswith("/api/secrets/"):
+            rest = unquote(path[len("/api/secrets/") :])
+            name = _safe_segment(rest)
+            if name is None or "/" in rest:
+                self._json(400, {"ok": False, "error": "invalid secret name"})
+                return
+            self._delete_secret(name)
             return
 
         self._json(404, {"error": "not found"})
@@ -1081,6 +1110,106 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 return
 
         self._json(200, self._provider_response_fields())
+
+    # ── Named secrets (PR5 / IK10) ───────────────────────────────────────
+
+    def _secrets_store(self):
+        """Lazy SecretsStore bound to this handler's data dir."""
+        from elyra.secrets.store import SecretsStore
+
+        return SecretsStore(self.paths.data_dir)
+
+    def _get_secrets(self) -> None:
+        """GET /api/secrets — redacted list (names + grants + timestamps only)."""
+        store = self._secrets_store()
+        rows = store.list_secrets()
+        self._json(200, {"ok": True, "secrets": rows})
+
+    def _put_secret(self, body: dict[str, Any]) -> None:
+        """PUT /api/secrets — write-only; never echo the value."""
+        if self._reject_if_resetting():
+            return
+        name = body.get("name")
+        value = body.get("value")
+        if not isinstance(name, str) or not name.strip():
+            self._json(400, {"ok": False, "error": "name required"})
+            return
+        if not isinstance(value, str) or not value.strip():
+            self._json(400, {"ok": False, "error": "value required"})
+            return
+        grants = body.get("grants")
+        store = self._secrets_store()
+        try:
+            meta = store.set_secret(
+                name.strip(),
+                value,
+                grants=grants if grants is not None else None,
+            )
+        except ValueError as exc:
+            reason = str(exc) or "set_failed"
+            self._json(400, {"ok": False, "error": reason})
+            return
+        # Write-only: public meta only — never value.
+        self._json(
+            200,
+            {
+                "ok": True,
+                "secret": {
+                    "name": meta.get("name"),
+                    "managed_by": meta.get("managed_by"),
+                    "grants": meta.get("grants") or [],
+                    "created_at": meta.get("created_at"),
+                    "updated_at": meta.get("updated_at"),
+                    "last_used_at": meta.get("last_used_at"),
+                },
+            },
+        )
+
+    def _delete_secret(self, name: str) -> None:
+        """DELETE /api/secrets/<name> — remove named secret; never echo value."""
+        if self._reject_if_resetting():
+            return
+        store = self._secrets_store()
+        try:
+            deleted = store.delete_secret(name)
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc) or "invalid_secret_name"})
+            return
+        if not deleted:
+            self._json(404, {"ok": False, "error": "secret_not_found"})
+            return
+        self._json(200, {"ok": True, "deleted": True, "name": name})
+
+    def _put_secret_grants(self, name: str, body: dict[str, Any]) -> None:
+        """PUT /api/secrets/<name>/grants — replace grants list."""
+        if self._reject_if_resetting():
+            return
+        grants = body.get("grants")
+        if grants is None:
+            self._json(400, {"ok": False, "error": "grants required"})
+            return
+        store = self._secrets_store()
+        try:
+            meta = store.set_grants(name, grants)
+        except ValueError as exc:
+            reason = str(exc) or "set_grants_failed"
+            code = 404 if reason == "secret_not_found" else 400
+            self._json(code, {"ok": False, "error": reason})
+            return
+        self._json(
+            200,
+            {
+                "ok": True,
+                "secret": {
+                    "name": meta.get("name"),
+                    "managed_by": meta.get("managed_by"),
+                    "grants": meta.get("grants") or [],
+                    "created_at": meta.get("created_at"),
+                    "updated_at": meta.get("updated_at"),
+                    "last_used_at": meta.get("last_used_at"),
+                },
+            },
+        )
 
     def _put_api_key(self, body: dict[str, Any]) -> None:
         """PUT /api/provider/api-key — write-only; never echo the key.

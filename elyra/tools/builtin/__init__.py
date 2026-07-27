@@ -9,4 +9,5 @@
 - package_vcs.py — get_tool, revert_tool (package archive/recovery)
 - identity.py — get_identity, draft_identity, promote_identity
 - search.py — web_search (optional elyra[search] / ddgs)
+- secrets_tools.py — secrets_list, secrets_set, secrets_delete
 """

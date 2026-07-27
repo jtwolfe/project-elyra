@@ -28,6 +28,7 @@
           <button type="button" class="nav-btn" data-panel="moments">Moments</button>
           <button type="button" class="nav-btn" data-panel="tools">Tools</button>
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
+          <button type="button" class="nav-btn" data-panel="secrets">Secrets</button>
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
         <div class="rail-session" title="Who is at the keyboard (message attribution)">
@@ -297,6 +298,64 @@
               <h3 class="subhead subhead-sm">Versions</h3>
               <div id="identity-user-versions" class="list-panel identity-versions">—</div>
               <pre id="identity-user-version-body" class="code-block" hidden></pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-secrets" class="panel">
+          <header class="panel-head">
+            <h1>Secrets</h1>
+            <p class="muted">
+              Named secrets for host tools (e.g. <code>gh_token</code>). Values are write-only —
+              never re-displayed after save. Grant tools that may inject each secret.
+            </p>
+          </header>
+          <div class="secrets-layout">
+            <div class="card secrets-set-card">
+              <div class="card-head"><strong>Set secret</strong></div>
+              <div class="secrets-form">
+                <label class="status-label" for="secrets-name-input">Name</label>
+                <input
+                  id="secrets-name-input"
+                  type="text"
+                  class="status-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="gh_token"
+                  aria-label="Secret name"
+                />
+                <label class="status-label" for="secrets-value-input">Value</label>
+                <div class="api-key-row">
+                  <input
+                    id="secrets-value-input"
+                    type="password"
+                    class="status-input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Paste secret (never re-displayed)"
+                    aria-label="Secret value"
+                  />
+                  <button type="button" id="secrets-save-btn" class="btn-secondary btn-sm">Save</button>
+                </div>
+                <label class="status-label" for="secrets-grants-input">Grants (tools, comma-separated)</label>
+                <input
+                  id="secrets-grants-input"
+                  type="text"
+                  class="status-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="gh_pr_create, gh_api, gh_auth_status"
+                  aria-label="Tool grants"
+                />
+                <span id="secrets-form-meta" class="muted status-helper">Values are never echoed.</span>
+              </div>
+            </div>
+            <div class="card secrets-list-card">
+              <div class="card-head">
+                <strong>Stored secrets</strong>
+                <span id="secrets-count-badge" class="badge">—</span>
+              </div>
+              <div id="secrets-list" class="list-panel secrets-list">loading…</div>
             </div>
           </div>
         </section>

@@ -1573,6 +1573,88 @@ body {
   min-width: 0;
 }
 
+/* Secrets panel (PR5) — write-only values, parallel to provider api-key */
+.secrets-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .secrets-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.secrets-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.15rem 0;
+}
+
+.secrets-form .status-label {
+  margin-top: 0.25rem;
+}
+
+.secrets-list {
+  max-height: min(60vh, 28rem);
+  overflow: auto;
+}
+
+.secrets-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 0.65rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.secrets-row:last-child {
+  border-bottom: none;
+}
+
+.secrets-row-main {
+  min-width: 0;
+  flex: 1 1 12rem;
+}
+
+.secrets-row-name {
+  font-family: var(--mono);
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.secrets-row-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+  word-break: break-word;
+}
+
+.secrets-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.secrets-grants-edit {
+  width: 100%;
+  margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.secrets-grants-edit .status-input {
+  flex: 1 1 10rem;
+}
+
 .btn-sm {
   padding: 0.35rem 0.65rem;
   font-size: 0.8rem;

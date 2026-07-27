@@ -66,11 +66,17 @@ class ElyraPaths:
 
         ensure_media(self)
 
-        # API key secret store (mode 0700). Values written by elyra.llm.auth.
+        # Secrets store (mode 0700): xai_api_key (llm.auth) + named values/ (PR5).
         secrets = self.data_dir / "secrets"
         secrets.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             os.chmod(secrets, 0o700)
+        except OSError:
+            pass
+        values = secrets / "values"
+        values.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(values, 0o700)
         except OSError:
             pass
 

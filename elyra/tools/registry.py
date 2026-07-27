@@ -178,6 +178,39 @@ class ToolRegistry:
                     error_reason="package_missing",
                 )
 
+        # Secrets inject (call-local only). Never merge into guest/host-stub env.
+        # Registry does not invent auth_unavailable when secrets are missing.
+        secret_env: dict[str, str] = {}
+        known_secret_values: list[str] = []
+        try:
+            from elyra.secrets.inject import (
+                redact_tool_result_payload,
+                resolve_for_tool,
+            )
+            from elyra.secrets.policy import TOOL_SECRET_REQUIREMENTS
+            from elyra.secrets.store import SecretsStore
+
+            tool_name = pkg.meta.name
+            secrets_store = None
+            if isinstance(ctx.extras, dict):
+                existing = ctx.extras.get("secrets")
+                if isinstance(existing, SecretsStore):
+                    secrets_store = existing
+            if secrets_store is None:
+                secrets_store = SecretsStore(self._paths.data_dir)
+            if tool_name in TOOL_SECRET_REQUIREMENTS:
+                secret_env = resolve_for_tool(tool_name, secrets_store)
+            try:
+                known_secret_values = secrets_store.known_values()
+            except Exception as exc:  # noqa: BLE001 — redaction best-effort
+                _LOG.debug("secrets known_values failed: %s", exc)
+            if isinstance(ctx.extras, dict):
+                ctx.extras["secret_env"] = secret_env
+        except Exception as exc:  # noqa: BLE001 — inject must not block tools
+            _LOG.warning("secrets inject setup failed: %s", exc)
+            if isinstance(ctx.extras, dict):
+                ctx.extras["secret_env"] = {}
+
         result = dispatch(
             pkg.runner,
             args,
@@ -185,6 +218,20 @@ class ToolRegistry:
             handler=pkg.handler,
             package_dir=pkg.package_dir,
         )
+
+        # Post-dispatch: scrub known secret values from model-visible payload.
+        if known_secret_values and isinstance(result.payload, dict):
+            try:
+                from elyra.secrets.inject import redact_tool_result_payload
+
+                redacted = redact_tool_result_payload(
+                    result.payload, known_secret_values
+                )
+                if redacted != result.payload:
+                    result = replace(result, payload=redacted)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("secrets result redaction failed: %s", exc)
+
         return self._enforce_control_policy(pkg, result)
 
     def _enforce_control_policy(

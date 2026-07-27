@@ -300,6 +300,34 @@ def tool_result_to_content(
     return truncate_tool_content(raw, max_chars)
 
 
+def _chain_function_arguments(tc: LlmToolCall) -> str:
+    """Serialize tool_call arguments for the multi-hop chain message.
+
+    For SECRET_WRITE_TOOLS (e.g. ``secrets_set``): always parse → redact secret
+    keys → ``json.dumps``. Never pass through unredacted ``arguments_raw``.
+    Other tools keep the existing ``arguments_raw`` preference.
+    """
+    from elyra.secrets.inject import redact_tool_call_arguments
+    from elyra.secrets.policy import SECRET_WRITE_TOOLS
+
+    if tc.name in SECRET_WRITE_TOOLS:
+        args: dict[str, Any]
+        if getattr(tc, "arguments_parse_ok", True) and isinstance(tc.arguments, dict):
+            args = tc.arguments
+        else:
+            raw = tc.arguments_raw or ""
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, TypeError, ValueError):
+                parsed = {}
+            args = parsed if isinstance(parsed, dict) else {}
+        redacted = redact_tool_call_arguments(tc.name, args)
+        return json.dumps(redacted, ensure_ascii=False)
+    if tc.arguments_raw:
+        return tc.arguments_raw
+    return json.dumps(tc.arguments, ensure_ascii=False)
+
+
 def assistant_message_from_result(
     result: ChatCompletionResult,
     *,
@@ -311,6 +339,8 @@ def assistant_message_from_result(
     ``reasoning_content`` is re-fed only when non-empty **and** not a channel
     flood — defense in depth so pure floods never re-enter the multi-hop chain
     even if sanitize is skipped or residual flood text remains.
+
+    PR5: SECRET_WRITE_TOOLS never prefer unredacted ``arguments_raw`` (IK9).
     """
     msg: dict[str, Any] = {
         "role": "assistant",
@@ -323,9 +353,7 @@ def assistant_message_from_result(
                 "type": "function",
                 "function": {
                     "name": tc.name,
-                    "arguments": tc.arguments_raw
-                    if tc.arguments_raw
-                    else json.dumps(tc.arguments, ensure_ascii=False),
+                    "arguments": _chain_function_arguments(tc),
                 },
             }
             for tc in result.tool_calls

@@ -179,8 +179,10 @@ let lastProviderModel = null;
 let lastCredentialSource = null;
 /** Last *server-confirmed* reasoning effort (never set by optimistic paint). */
 let lastReasoningEffort = "high";
-/** Active nav panel name (chat | goals | moments | tools | identity | status). */
+/** Active nav panel name (chat | goals | moments | tools | identity | secrets | status). */
 let activePanel = "chat";
+/** True while secrets PUT/DELETE is in flight. */
+let secretsInFlight = false;
 /** Currently open moment detail id (null when closed). */
 let selectedMomentId = null;
 /** Snapshot of open moment list fields used to decide detail re-fetch. */
@@ -2448,6 +2450,181 @@ if (providerApiKeyInput) {
     }
   });
 }
+
+// ── Secrets panel (PR5) — write-only values, never re-display ───────────
+const secretsListEl = $("#secrets-list");
+const secretsCountBadge = $("#secrets-count-badge");
+const secretsNameInput = $("#secrets-name-input");
+const secretsValueInput = $("#secrets-value-input");
+const secretsGrantsInput = $("#secrets-grants-input");
+const secretsSaveBtn = $("#secrets-save-btn");
+const secretsFormMeta = $("#secrets-form-meta");
+
+function parseGrantsCsv(raw) {
+  if (!raw || typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function refreshSecrets() {
+  if (!secretsListEl) return;
+  const data = await fetchJson("/api/secrets");
+  const secrets = (data && data.secrets) || [];
+  if (secretsCountBadge) secretsCountBadge.textContent = String(secrets.length);
+  if (!secrets.length) {
+    secretsListEl.textContent = "No named secrets yet.";
+    return;
+  }
+  secretsListEl.innerHTML = "";
+  for (const s of secrets) {
+    const row = document.createElement("div");
+    row.className = "secrets-row";
+    const main = document.createElement("div");
+    main.className = "secrets-row-main";
+    const nameEl = document.createElement("div");
+    nameEl.className = "secrets-row-name";
+    nameEl.textContent = s.name || "—";
+    const meta = document.createElement("div");
+    meta.className = "secrets-row-meta";
+    const grants = Array.isArray(s.grants) ? s.grants : [];
+    meta.textContent = [
+      s.managed_by ? `managed_by=${s.managed_by}` : null,
+      grants.length ? `grants: ${grants.join(", ")}` : "grants: (none)",
+      s.updated_at ? `updated ${s.updated_at}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    main.appendChild(nameEl);
+    main.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "secrets-row-actions";
+    const grantBtn = document.createElement("button");
+    grantBtn.type = "button";
+    grantBtn.className = "btn-secondary btn-sm";
+    grantBtn.textContent = "Edit grants";
+    grantBtn.addEventListener("click", () => {
+      const edit = row.querySelector(".secrets-grants-edit");
+      if (edit) {
+        edit.hidden = !edit.hidden;
+        return;
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "secrets-grants-edit";
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "status-input";
+      inp.value = grants.join(", ");
+      inp.placeholder = "tool_a, tool_b";
+      inp.setAttribute("aria-label", `Grants for ${s.name}`);
+      const saveG = document.createElement("button");
+      saveG.type = "button";
+      saveG.className = "btn-secondary btn-sm";
+      saveG.textContent = "Save grants";
+      saveG.addEventListener("click", async () => {
+        if (secretsInFlight) return;
+        secretsInFlight = true;
+        try {
+          await fetchJson(`/api/secrets/${encodeURIComponent(s.name)}/grants`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ grants: parseGrantsCsv(inp.value) }),
+          });
+          showNotice(`Grants updated for ${s.name}.`);
+          await refreshSecrets();
+        } catch (err) {
+          showNotice(`Grants failed: ${err && err.message ? err.message : err}`);
+        } finally {
+          secretsInFlight = false;
+        }
+      });
+      wrap.appendChild(inp);
+      wrap.appendChild(saveG);
+      row.appendChild(wrap);
+    });
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn-secondary btn-sm";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", async () => {
+      if (secretsInFlight) return;
+      if (!window.confirm(`Delete secret “${s.name}”? This cannot be undone.`)) return;
+      secretsInFlight = true;
+      try {
+        await fetchJson(`/api/secrets/${encodeURIComponent(s.name)}`, {
+          method: "DELETE",
+        });
+        showNotice(`Deleted secret ${s.name}.`);
+        await refreshSecrets();
+      } catch (err) {
+        showNotice(`Delete failed: ${err && err.message ? err.message : err}`);
+      } finally {
+        secretsInFlight = false;
+      }
+    });
+    actions.appendChild(grantBtn);
+    actions.appendChild(delBtn);
+    row.appendChild(main);
+    row.appendChild(actions);
+    secretsListEl.appendChild(row);
+  }
+}
+
+async function saveSecret() {
+  if (secretsInFlight || !secretsNameInput || !secretsValueInput) return;
+  const name = secretsNameInput.value.trim();
+  const value = secretsValueInput.value;
+  if (!name) {
+    showNotice("Secret name required.");
+    return;
+  }
+  if (!value || !value.trim()) {
+    showNotice("Secret value required.");
+    return;
+  }
+  const grants = parseGrantsCsv(secretsGrantsInput ? secretsGrantsInput.value : "");
+  secretsInFlight = true;
+  if (secretsSaveBtn) secretsSaveBtn.disabled = true;
+  try {
+    const body = { name, value };
+    if (grants.length) body.grants = grants;
+    const data = await fetchJson("/api/secrets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    // Write-only: clear the value field; never paint it back from the response.
+    secretsValueInput.value = "";
+    if (data && data.secret && data.secret.value) {
+      // Defense: if server ever echoed value, do not keep it in UI state.
+      delete data.secret.value;
+    }
+    if (secretsFormMeta) secretsFormMeta.textContent = `Saved ${name} (value not stored in UI).`;
+    showNotice(`Secret ${name} saved.`);
+    await refreshSecrets();
+  } catch (err) {
+    showNotice(`Save secret failed: ${err && err.message ? err.message : err}`);
+  } finally {
+    secretsInFlight = false;
+    if (secretsSaveBtn) secretsSaveBtn.disabled = false;
+  }
+}
+
+if (secretsSaveBtn) {
+  secretsSaveBtn.addEventListener("click", () => {
+    saveSecret();
+  });
+}
+if (secretsValueInput) {
+  secretsValueInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveSecret();
+    }
+  });
+}
 if (usageOverrideToggle) {
   usageOverrideToggle.addEventListener("change", () => {
     setHardStopOverride(usageOverrideToggle.checked);
@@ -3246,6 +3423,7 @@ function refreshActivePanel() {
   if (name === "moments") return refreshMoments();
   if (name === "tools") return refreshTools();
   if (name === "identity") return refreshIdentity();
+  if (name === "secrets") return refreshSecrets();
   // chat / status: covered by refreshMessages / refreshStatus
   return Promise.resolve();
 }
@@ -3264,6 +3442,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
     if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
     if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
+    if (name === "secrets") refreshSecrets().catch((e) => panelLoadError("Secrets", e));
   });
 });
 
@@ -3278,7 +3457,8 @@ async function tick() {
       activePanel === "goals" ||
       activePanel === "moments" ||
       activePanel === "tools" ||
-      activePanel === "identity"
+      activePanel === "identity" ||
+      activePanel === "secrets"
     ) {
       tasks.push(refreshActivePanel().catch(() => {}));
     }

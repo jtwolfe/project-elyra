@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Secret name (path-safe; not reserved like xai_api_key)"
+    },
+    "value": {
+      "type": "string",
+      "description": "Secret value (never echoed in result or chain)"
+    },
+    "grants": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional list of tool names allowed to inject this secret"
+    }
+  },
+  "required": ["name", "value"],
+  "additionalProperties": false
+}

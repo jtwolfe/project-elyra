@@ -763,6 +763,13 @@ def test_static_index_served(paths):
         assert 'type="password"' in html
         assert 'id="provider-api-key-save"' in html
         assert 'id="provider-api-key-clear"' in html
+        # PR5 secrets panel
+        assert 'data-panel="secrets"' in html
+        assert 'id="panel-secrets"' in html
+        assert 'id="secrets-name-input"' in html
+        assert 'id="secrets-value-input"' in html
+        assert 'id="secrets-save-btn"' in html
+        assert 'id="secrets-list"' in html
         # Reasoning effort control on Status provider card (PR3)
         assert 'id="provider-effort"' in html
         assert 'id="provider-effort-label"' in html
@@ -873,6 +880,10 @@ def test_static_app_js_active_panel_poll(paths):
         assert '"/api/usage"' in js or "'/api/usage'" in js
         assert '"/api/provider"' in js or "'/api/provider'" in js
         assert '"/api/provider/api-key"' in js or "'/api/provider/api-key'" in js
+        # PR5 secrets panel wiring
+        assert '"/api/secrets"' in js or "'/api/secrets'" in js
+        assert "refreshSecrets" in js
+        assert "saveSecret" in js
         assert 'method: "PUT"' in js
         assert 'method: "DELETE"' in js
         assert "xai ready" in js or "${provider} ready" in js
