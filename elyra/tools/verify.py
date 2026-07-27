@@ -6,13 +6,18 @@ write ``.verify.json`` only on pass with content_hash of draft tree.
 
 Trust boundary
 --------------
-- Isolation **on**: guest ``python3 -m pytest`` via warm lifecycle; requires
-  ``pyenv_ready`` (curated env includes pytest). Fail closed
+- Isolation **on**: for ``sandbox_python``, guest smoke-loads the declared
+  module under the **verify** stage tree (import + function callable) before
+  pytest (KD-G6). Then guest ``python3 -m pytest`` via warm lifecycle;
+  requires ``pyenv_ready`` (curated env includes pytest). Fail closed
   ``guest_pytest_unavailable`` when pyenv missing (KD22). Fail
   ``sandbox_unavailable`` when lifecycle/mount unusable. No host pytest
-  fallback when isolation is on.
+  fallback when isolation is on. Smoke fail reasons:
+  ``verify_guest_module_missing``, ``verify_guest_module_import_failed``,
+  ``verify_guest_function_not_found``.
 - Isolation **off** (``ELYRA_SANDBOX=0``): host ``sys.executable -m pytest``
   with process-level isolation only (scrubbed env, shell=False) for CI.
+  No guest visibility claim; host smoke-import is optional/not required.
 
 Fail-closed mitigations:
   - Host PATH is never merged into the host-stub child env.
@@ -62,6 +67,9 @@ _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
 
 # Guest pytest argv after python3.
 _GUEST_PYTEST_ARGV = ["-m", "pytest", "tests/", "-q", "--tb=short", "-p", "no:cacheprovider"]
+
+# Guest smoke-load of sandbox_python module (before pytest; isolation on).
+_GUEST_SMOKE_TIMEOUT_SECONDS = 30.0
 
 
 def draft_package_dir(paths: ElyraPaths, name: str) -> Path:
@@ -331,6 +339,179 @@ def run_staged_pytest(
     return (int(completed.returncode), log, False)
 
 
+def guest_verify_module_path(name: str, module_rel: str) -> str:
+    """Guest absolute path to a module file under the verify stage tree."""
+    rel = Path(module_rel).as_posix().lstrip("/")
+    return f"{guest_verify_stage_path(name)}/{rel}"
+
+
+def _guest_smoke_source(*, guest_script: str, func_name: str) -> str:
+    """Build ``python3 -c`` body: import staged module + require callable function.
+
+    Exit codes (KD-G6 / design §4):
+      0 — ok
+      2 — guest path missing
+      3 — function missing / not callable
+      other non-zero — import/exec failure
+    """
+    # Emit stderr on fail exits so guest_exec empty-stream crash heuristic
+    # does not rewrite intentional SystemExit(2/3) as sandbox_unavailable.
+    return f"""
+import importlib.util
+import sys
+from pathlib import Path
+
+script = Path({guest_script!r})
+if not script.is_file():
+    print("verify_guest_module_missing", file=sys.stderr)
+    raise SystemExit(2)
+spec = importlib.util.spec_from_file_location("_elyra_verify_smoke", script)
+if spec is None or spec.loader is None:
+    print("verify_guest_module_import_failed:no_spec", file=sys.stderr)
+    raise SystemExit(1)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+fn = getattr(module, {func_name!r}, None)
+if fn is None or not callable(fn):
+    print("verify_guest_function_not_found", file=sys.stderr)
+    raise SystemExit(3)
+""".strip()
+
+
+def _load_runner_json(package_dir: Path) -> dict[str, Any] | None:
+    """Load runner.json as a dict, or None on failure."""
+    runner_path = Path(package_dir) / "runner.json"
+    try:
+        with runner_path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def run_guest_module_smoke(
+    paths: ElyraPaths,
+    name: str,
+    stage_dir: Path,
+    *,
+    module: str,
+    function: str,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any] | None:
+    """Guest smoke-load of sandbox_python module under verify stage (KD-G6).
+
+    Proves the verify-staged draft is importable on the guest before pytest
+    and before writing a passed ``.verify.json``. Not a production stage-once
+    gate (that lives on ``stage_package_for_guest``).
+
+    Returns None on success; error dict (``ok=False``, ``error_reason``) on
+    failure. Distinct reasons:
+      - ``verify_guest_module_missing``
+      - ``verify_guest_module_import_failed``
+      - ``verify_guest_function_not_found``
+    """
+    from elyra.sandbox.registry import get_sandbox_lifecycle
+    from elyra.tools.guest_exec import (
+        GuestIsolationError,
+        GuestTimeoutError,
+        guest_exec_raw,
+        resolve_module_file,
+    )
+
+    del paths  # lifecycle bridge; stage is already guest-visible under host tree
+    life = get_sandbox_lifecycle()
+    if life is None:
+        return {
+            "ok": False,
+            "error_reason": "sandbox_unavailable:lifecycle_unregistered",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+        }
+    if getattr(life, "client_unusable", False):
+        return {
+            "ok": False,
+            "error_reason": "sandbox_unavailable:client_unusable",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+        }
+
+    mod_file = resolve_module_file(stage_dir, module)
+    if mod_file is None:
+        return {
+            "ok": False,
+            "error_reason": "verify_guest_module_missing",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "module": module,
+        }
+    rel = mod_file.relative_to(Path(stage_dir).resolve()).as_posix()
+    guest_script = guest_verify_module_path(name, rel)
+    func_name = (function or "run").strip() or "run"
+    smoke_src = _guest_smoke_source(guest_script=guest_script, func_name=func_name)
+    smoke_timeout = (
+        float(timeout_seconds)
+        if timeout_seconds is not None and timeout_seconds > 0
+        else float(_GUEST_SMOKE_TIMEOUT_SECONDS)
+    )
+    # Cap smoke at short budget even when verify timeout is large.
+    smoke_timeout = min(smoke_timeout, float(_GUEST_SMOKE_TIMEOUT_SECONDS))
+
+    try:
+        result = guest_exec_raw(
+            "python3",
+            ["-B", "-c", smoke_src],
+            cwd=guest_verify_stage_path(name),
+            timeout=smoke_timeout,
+            env=guest_env(),
+        )
+    except GuestTimeoutError:
+        return {
+            "ok": False,
+            "error_reason": "verify_guest_module_import_failed",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "log": _combine_log("", "[verify guest smoke timed out]", timed_out=True),
+            "timed_out": True,
+            "module": module,
+            "function": func_name,
+            "guest_script": guest_script,
+        }
+    except GuestIsolationError as exc:
+        return {
+            "ok": False,
+            "error_reason": f"sandbox_unavailable:{exc.message}",
+            "passed": False,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "anomaly": exc.anomaly,
+        }
+
+    exit_code = int(result.exit_code)
+    out = str(result.stdout_text or "")
+    err = str(result.stderr_text or "")
+    log = _combine_log(out, err, timed_out=False)
+    if exit_code == 0:
+        return None
+    if exit_code == 2:
+        reason = "verify_guest_module_missing"
+    elif exit_code == 3:
+        reason = "verify_guest_function_not_found"
+    else:
+        reason = "verify_guest_module_import_failed"
+    return {
+        "ok": False,
+        "error_reason": reason,
+        "passed": False,
+        "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+        "log": log,
+        "returncode": exit_code,
+        "module": module,
+        "function": func_name,
+        "guest_script": guest_script,
+    }
+
+
 def run_guest_pytest(
     paths: ElyraPaths,
     name: str,
@@ -485,11 +666,36 @@ def verify_draft_tool(
             "passed": False,
         }
 
-    # Snapshot tools/local before pytest so planted packages fail closed.
+    # Snapshot tools/local before smoke/pytest so planted packages fail closed.
     local_before = local_tool_package_names(paths)
 
     iso = isolation_enabled()
     if iso:
+        # KD-G6: guest smoke-load sandbox_python under .verify/ before pytest
+        # and before writing a passed .verify.json (verify-stage importability).
+        runner = _load_runner_json(stage)
+        kind = (
+            str((runner or {}).get("kind") or "").strip().lower()
+            if runner is not None
+            else ""
+        )
+        if kind == "sandbox_python" and runner is not None:
+            module = str(runner.get("module") or "").strip()
+            function = str(runner.get("function") or "run").strip() or "run"
+            if module:
+                smoke_err = run_guest_module_smoke(
+                    paths,
+                    name,
+                    stage,
+                    module=module,
+                    function=function,
+                    timeout_seconds=timeout,
+                )
+                if smoke_err is not None:
+                    smoke_err.setdefault("stage_dir", str(stage))
+                    smoke_err.setdefault("content_hash", content_hash(draft_dir))
+                    return smoke_err
+
         guest_result = run_guest_pytest(paths, name, timeout_seconds=timeout)
         if isinstance(guest_result, dict):
             guest_result.setdefault("stage_dir", str(stage))
@@ -566,10 +772,12 @@ __all__ = [
     "content_hash",
     "delete_verify_record",
     "draft_package_dir",
+    "guest_verify_module_path",
     "guest_verify_stage_path",
     "load_verify_record",
     "local_tool_package_names",
     "remove_planted_local_packages",
+    "run_guest_module_smoke",
     "run_guest_pytest",
     "run_staged_pytest",
     "scrubbed_verify_env",

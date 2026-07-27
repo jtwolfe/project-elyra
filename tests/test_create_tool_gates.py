@@ -431,6 +431,72 @@ def test_verify_fails_when_module_file_missing(ctx: ToolContext, paths) -> None:
     assert not (draft / VERIFY_RECORD_NAME).exists()
 
 
+def test_verify_guest_smoke_before_pytest_when_isolation_on(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """KD-G6: isolation-on smoke-loads module under .verify/ before pytest.
+
+    Broken guest path fails closed without writing passed .verify.json.
+    """
+    from elyra.sandbox import (
+        FakeSandboxClient,
+        SandboxLifecycleManager,
+        clear_sandbox_lifecycle,
+        set_sandbox_lifecycle,
+    )
+    from elyra.sandbox.paths import ENV_ELYRA_SANDBOX, PRIMARY_NAME
+    from elyra.sandbox.protocol import ExecResult
+    from elyra.sandbox.pyenv import ensure_pyenv_marker_for_tests
+    from elyra.tools.verify import guest_verify_module_path
+
+    clear_sandbox_lifecycle()
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths, client=client, skip_guest_readiness=True
+    )
+    set_sandbox_lifecycle(life)
+    try:
+        assert life.ensure(PRIMARY_NAME).ready
+        ensure_pyenv_marker_for_tests(paths)
+        sb_conn = life.get_connected(PRIMARY_NAME)
+        assert sb_conn is not None
+
+        smoke_calls = {"n": 0, "saw_pytest": False}
+
+        async def _guest_path_missing(cmd, args=None, **kwargs):
+            del cmd, kwargs
+            args = list(args or [])
+            if "-c" in args:
+                smoke_calls["n"] += 1
+                return ExecResult(exit_code=2, stderr_text="not on guest\n")
+            # Would be pytest — must not run when smoke fails.
+            smoke_calls["saw_pytest"] = True
+            return ExecResult(exit_code=0, stdout_text="1 passed\n")
+
+        sb_conn.exec = _guest_path_missing  # type: ignore[method-assign]
+
+        name = "guest_smoke_gate"
+        ctx = ToolContext(
+            paths=paths,
+            settings=default_settings(),
+            registry=ToolRegistry(paths),
+        )
+        assert _install_draft(ctx, name).ok
+        result = verify_tool({"name": name}, ctx)
+        assert result.ok is False
+        assert result.error_reason == "verify_guest_module_missing"
+        draft = drafts_dir(paths) / name
+        assert not (draft / VERIFY_RECORD_NAME).exists()
+        # Path helper uses verify stage tree, not production tools/<name>/
+        guest_path = guest_verify_module_path(name, "impl/main.py")
+        assert guest_path == f"/workspace/tools/.verify/{name}/impl/main.py"
+        assert smoke_calls["n"] == 1
+        assert smoke_calls["saw_pytest"] is False
+    finally:
+        clear_sandbox_lifecycle()
+
+
 def test_builtin_kind_rejected_at_verify_and_promote(ctx: ToolContext) -> None:
     name = "want_builtin"
     files = _minimal_draft_files(runner_kind="builtin")
