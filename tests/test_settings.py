@@ -43,7 +43,7 @@ def test_default_settings_match_design():
     assert s.provider.name == "xai"
     assert s.provider.model == "grok-4.5"
     assert s.provider.model == DEFAULT_XAI_MODEL
-    assert s.provider.model_label == "Grok 4.5 Fast"
+    assert s.provider.model_label == "Grok 4.5"
     assert s.provider.model_label == DEFAULT_XAI_MODEL_LABEL
     assert s.provider.base_url == "https://api.x.ai/v1"
     assert s.provider.credential_source == "grok_build"

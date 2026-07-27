@@ -13,7 +13,7 @@ import urllib.request
 from collections.abc import Sequence
 
 DEFAULT_XAI_MODEL = "grok-4.5"
-DEFAULT_XAI_MODEL_LABEL = "Grok 4.5 Fast"
+DEFAULT_XAI_MODEL_LABEL = "Grok 4.5"
 
 CURATED_XAI_MODELS: tuple[str, ...] = (
     "grok-4.5",
@@ -22,7 +22,7 @@ CURATED_XAI_MODELS: tuple[str, ...] = (
 )
 
 MODEL_LABELS: dict[str, str] = {
-    "grok-4.5": "Grok 4.5 Fast",
+    "grok-4.5": "Grok 4.5",
     "grok-4.3": "Grok 4.3",
     "grok-4.20-0309-non-reasoning": "Grok 4.20 (non-reasoning)",
 }

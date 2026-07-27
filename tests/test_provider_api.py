@@ -116,7 +116,7 @@ def _make_provider(
         data_dir=data,
         provider_name="xai",
         model=model,
-        model_label="Grok 4.5 Fast" if model == "grok-4.5" else model,
+        model_label="Grok 4.5" if model == "grok-4.5" else model,
         credential_source=credential_source,
         credential_ok=credential_ok,
         credential_detail=None if credential_ok else "missing_auth_json",
@@ -262,7 +262,7 @@ def test_status_live_usage_and_provider_fields(paths):
         assert code == 200
         assert body["provider"] == "xai"
         assert body["model"] == "grok-4.5"
-        assert body["model_label"] == "Grok 4.5 Fast"
+        assert body["model_label"] == "Grok 4.5"
         assert body["credential_source"] == "grok_build"
         assert body["credential_ok"] is False
         assert "models_available" in body

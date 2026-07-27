@@ -703,7 +703,7 @@ def test_failing_chat_client_does_not_echo_user_content():
 
 def test_label_for_model_and_defaults():
     assert DEFAULT_XAI_MODEL == "grok-4.5"
-    assert label_for_model("grok-4.5") == "Grok 4.5 Fast"
+    assert label_for_model("grok-4.5") == "Grok 4.5"
     assert label_for_model("unknown-id") == "unknown-id"
 
 
