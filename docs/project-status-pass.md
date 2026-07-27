@@ -101,8 +101,9 @@ Promote gi → main             ── OPERATOR SIGN-OFF
 ### Still truthful
 
 - [stretch-1.md](stretch-1.md), [engineering-principles.md](engineering-principles.md)
-- [tools-and-skills.md](tools-and-skills.md), [time-and-identity.md](time-and-identity.md) (updated with identity draft/promote)
+- [tools-and-skills.md](tools-and-skills.md), [time-and-identity.md](time-and-identity.md) (identity draft/promote + capability-growth catalog/dogfood)
 - Design docs for recent work: [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md), [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md)
+- Capability growth: [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) (package VCS, search, browser, secrets, git/gh, judgment skills — see tools-and-skills dogfood checklist)
 - Phase 0 / H-series designs (good history; implemented)
 
 ### Stale or misleading (cleanup candidates)

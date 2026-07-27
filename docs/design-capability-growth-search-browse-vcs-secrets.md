@@ -5,7 +5,7 @@
 | **Document** | Capability growth: search, browse, package VCS, secrets, workflow skills |
 | **Author** | Design (Grok) + research/refinement pass |
 | **Date** | 2026-07-27 |
-| **Status** | Draft (v2 — research + hardening + tree alignment) |
+| **Status** | Implemented via execute-plan PRs 1–9 on capability-growth branches (product design v2 frozen; operator catalog: [tools-and-skills.md](tools-and-skills.md)) |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` |
 | **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `docs/grok-improvement-plan/harness-sandbox-fitness.md`, `prompts/system.md` |

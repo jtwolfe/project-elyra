@@ -12,7 +12,9 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 2 | **[design-stretch-1-implementation.md](design-stretch-1-implementation.md)** | **Implementation design + PR plan** (historical; Stretch 1 shipped) |
 | 3 | **[engineering-principles.md](engineering-principles.md)** | **How we write code** — modules, tests, config, dogfood |
 | 4 | [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
-| 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, dogfood, create-tool safety |
+| 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, package VCS, search/browser/secrets/git·gh, dogfood checklist, create-tool safety |
+| 5a | [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) | **Capability growth product design** (search, browse, package VCS, secrets, workflow skills) |
+| 5b | [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) | **Capability growth execute-plan** (PR DAG, promote algorithm, acceptance) |
 | 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
 | 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` vs sliding ~24k; **ship knobs** (temp 0.6, top_p/k, budget, hygiene, RC re-feed, hop-0 speak pin) |
 | 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
@@ -55,13 +57,21 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 ./scripts/setup_venv.sh && source .venv/bin/activate
 pip install -e '.[sandbox]'   # optional but needed for guest isolation (default ON)
 ./scripts/setup-microsandbox.sh --doctor-only
-elyra start              # API + UI (+ llama or xai per provider settings)
-elyra start --no-llama   # stub LLM + UI
+
+# Optional capability-growth extras (fail closed if missing):
+#   pip install -e '.[search]'            # web_search (ddgs)
+#   pip install -e '.[browser]'           # Playwright browser_* tools
+#   playwright install chromium           # after browser extra
+#   pip install -e '.[search,browser]'    # both
+
+elyra start              # API + UI (xAI Grok product default)
+elyra start --stub-llm   # stub LLM + UI (hermetic)
 # hermetic host-stub: ELYRA_SANDBOX=0
 # http://127.0.0.1:8787/
 ```
 
-Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).
+Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
+Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
 
 ## Tests
 

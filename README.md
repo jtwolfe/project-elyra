@@ -61,6 +61,12 @@ pip install -e '.[sandbox]'
 ./scripts/setup-microsandbox.sh --doctor-only   # KVM / import checks
 # hermetic host-stub (tests/CI): export ELYRA_SANDBOX=0
 
+# optional capability-growth extras (fail closed if missing — chat still starts)
+pip install -e '.[search]'             # web_search
+pip install -e '.[browser]'            # browser_* Playwright tools
+playwright install chromium            # required after browser extra
+# or: pip install -e '.[search,browser]' && playwright install chromium
+
 # Grok (product default) — grok login, or XAI_API_KEY / paste key in glass Status
 elyra start
 
@@ -68,7 +74,8 @@ elyra start
 elyra start --stub-llm
 ```
 
-Without `elyra[sandbox]`, chat still starts; guest `run` / `sandbox_*` / isolation-on `verify_tool` fail closed (`sandbox_unavailable:*`). Install the extra so create-tool does not look broken.
+Without `elyra[sandbox]`, chat still starts; guest `run` / `sandbox_*` / isolation-on `verify_tool` fail closed (`sandbox_unavailable:*`). Install the extra so create-tool does not look broken.  
+Without `elyra[search]` / `elyra[browser]`, `web_search` and browser tools return clear `*_unavailable` errors (no supervisor crash). Full catalog + dogfood checklist: [docs/tools-and-skills.md](docs/tools-and-skills.md).
 
 Open **http://127.0.0.1:8787/**
 
@@ -117,7 +124,9 @@ Out of scope (Stretch 2+ / later phases): hypergraph memory, Lance graph, multi-
 | [docs/engineering-principles.md](docs/engineering-principles.md) | How we build |
 | [docs/overview.md](docs/overview.md) | Glossary |
 | [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote; work-origin USER |
-| [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, catalog, create-tool safety |
+| [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, package VCS, search/browser/secrets/git·gh, dogfood checklist |
+| [docs/design-capability-growth-search-browse-vcs-secrets.md](docs/design-capability-growth-search-browse-vcs-secrets.md) | Capability growth product design |
+| [docs/design-capability-growth-implementation-plan.md](docs/design-capability-growth-implementation-plan.md) | Capability growth PR plan / execute contract |
 | [docs/inference.md](docs/inference.md) | **Historical freeze — do not follow for setup** (older local-server path removed) |
 | [docs/live-eval.md](docs/live-eval.md) | **Historical freeze** — live qualitative protocol |
 | [docs/design-remove-gemma-local-stub.md](docs/design-remove-gemma-local-stub.md) | Remove local-server path; stub `provider=local` |

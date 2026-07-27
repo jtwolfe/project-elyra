@@ -5,7 +5,7 @@
 | **Document** | Engineer-ready implementation plan (execute-plan contract) |
 | **Author** | Systems architecture (Grok Build subagent) |
 | **Date** | 2026-07-27 |
-| **Status** | Draft (implementation plan) — revised post-review 2026-07-27 |
+| **Status** | Implemented (PRs 1–9) — operator docs in [tools-and-skills.md](tools-and-skills.md); revised post-review 2026-07-27 |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` @ `deba40b` (capability-growth design v2) |
 | **Source of truth** | `docs/design-capability-growth-search-browse-vcs-secrets.md` (product design v2) |
