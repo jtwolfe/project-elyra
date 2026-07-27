@@ -97,7 +97,7 @@ Pass = all boxes green for the week you care about. Live smoke is **operator-own
 [usage]
 enabled = true
 weekly_allowed_tokens = 5_000_000
-weekly_allowed_fraction = 0.50
+# weekly_allowed_fraction = 0.50  # policy/display only — does not scale hard budget B
 day_hard_stop_enabled = false
 hour_hard_stop_enabled = false
 account_hard_stop_percent = 95.0
