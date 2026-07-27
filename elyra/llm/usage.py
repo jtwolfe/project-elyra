@@ -534,6 +534,31 @@ class UsageMeter:
             self._refresh_windows_unlocked()
             return self._pace_band_unlocked()
 
+    def supergrok_for_status(self) -> dict[str, Any] | None:
+        """Nested SuperGrok object for Glass/API status (read-only).
+
+        Includes period bounds, product_usage (diagnostic), fetched_at, and
+        ``stale`` when the last-good fetch is older than credits_stale_after_s.
+        None when no snapshot cache and authority is still ISO-provisional.
+        """
+        with self._lock:
+            self._refresh_windows_unlocked()
+            base = self._supergrok_state_unlocked()
+            if base is None:
+                return None
+            stale = False
+            if self._sg_fetched_at:
+                fetched = parse_iso_datetime(self._sg_fetched_at)
+                if fetched is not None:
+                    age = (self._clock() - fetched).total_seconds()
+                    if age > float(self._settings.credits_stale_after_s):
+                        stale = True
+            out = dict(base)
+            out["period_id"] = self._period_id
+            out["period_authority"] = self._period_authority
+            out["stale"] = stale
+            return out
+
     def remaining(self) -> dict[str, int]:
         """Tokens remaining per window (clamped ≥ 0). Keys: week, day, hour."""
         with self._lock:

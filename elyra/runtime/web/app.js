@@ -82,10 +82,16 @@ const usageBadge = $("#usage-badge");
 const usageWeekPct = $("#usage-week-pct");
 const usageDayPct = $("#usage-day-pct");
 const usageHourPct = $("#usage-hour-pct");
+const usageSgPct = $("#usage-sg-pct");
 const usageWeekBar = $("#usage-week-bar");
 const usageDayBar = $("#usage-day-bar");
 const usageHourBar = $("#usage-hour-bar");
+const usageSgBar = $("#usage-sg-bar");
+const usagePaceBadge = $("#usage-pace-badge");
+const usageBurst = $("#usage-burst");
 const usageDetail = $("#usage-detail");
+const usageProductUsage = $("#usage-product-usage");
+const usageProductUsageBody = $("#usage-product-usage-body");
 const usageOverrideToggle = $("#usage-override-toggle");
 const usageOverrideMeta = $("#usage-override-meta");
 const devSpeedToggle = $("#dev-speed-toggle");
@@ -900,13 +906,21 @@ function formatPctRemaining(frac) {
   return `${pct}%`;
 }
 
-function setUsageBar(barEl, frac) {
+function setUsageBar(barEl, frac, { usedMode = false, unavailable = false } = {}) {
   if (!barEl) return;
-  const f = Math.max(0, Math.min(1, Number(frac) || 0));
-  barEl.style.width = `${Math.round(f * 100)}%`;
-  barEl.classList.remove("usage-bar-warn", "usage-bar-crit");
-  if (f <= 0.05) barEl.classList.add("usage-bar-crit");
-  else if (f <= 0.2) barEl.classList.add("usage-bar-warn");
+  barEl.classList.remove("usage-bar-warn", "usage-bar-crit", "usage-bar-na");
+  if (unavailable || frac == null || Number.isNaN(Number(frac))) {
+    barEl.style.width = "0%";
+    barEl.classList.add("usage-bar-na");
+    return;
+  }
+  const raw = Math.max(0, Math.min(1, Number(frac) || 0));
+  // usedMode: frac is used fraction (SuperGrok %); remaining mode for Elyra bars.
+  const fill = usedMode ? raw : raw;
+  const remaining = usedMode ? 1 - raw : raw;
+  barEl.style.width = `${Math.round(fill * 100)}%`;
+  if (remaining <= 0.05) barEl.classList.add("usage-bar-crit");
+  else if (remaining <= 0.2) barEl.classList.add("usage-bar-warn");
 }
 
 /**
@@ -1079,6 +1093,8 @@ function renderUsageCard(s) {
   const usage = (s && s.usage) || null;
   const enabled = Boolean(usage && usage.enabled);
   const overrideActive = Boolean(usage && usage.override_active);
+  // True hard stop only (account|week|day|hour). Soft day/hour alone never
+  // sets hard_stop when day/hour hard flags are off — do not invent stop badge.
   const hardStop = (usage && usage.hard_stop) || null;
 
   if (usageBadge) {
@@ -1097,6 +1113,7 @@ function renderUsageCard(s) {
       usageBadge.classList.add("badge-open");
       usageBadge.classList.remove("badge-bad");
     } else {
+      // Soft day/hour exhaustion does not set stop badge (pace shown separately).
       usageBadge.textContent = "ok";
       usageBadge.classList.add("badge-open");
       usageBadge.classList.remove("badge-bad");
@@ -1113,6 +1130,55 @@ function renderUsageCard(s) {
   setUsageBar(usageDayBar, day);
   setUsageBar(usageHourBar, hour);
 
+  // SuperGrok pool: credit_usage_percent used bar, or unavailable placeholder.
+  const sg = (usage && usage.supergrok) || null;
+  const sgPct =
+    usage && usage.credit_usage_percent != null
+      ? usage.credit_usage_percent
+      : sg && sg.credit_usage_percent != null
+        ? sg.credit_usage_percent
+        : null;
+  const sgStatus = (sg && sg.status) || (usage && usage.credits_status) || null;
+  const sgStale = Boolean(sg && sg.stale);
+  const sgAvailable =
+    sgPct != null &&
+    Number.isFinite(Number(sgPct)) &&
+    !sgStale &&
+    (sgStatus == null || sgStatus === "ok");
+  if (usageSgPct) {
+    if (sgAvailable) {
+      usageSgPct.textContent = `${Math.round(Number(sgPct))}% used`;
+    } else if (sgStale) {
+      usageSgPct.textContent = "— · stale";
+    } else if (sgStatus && sgStatus !== "ok") {
+      usageSgPct.textContent = `— · ${sgStatus}`;
+    } else {
+      usageSgPct.textContent = "— · poll …";
+    }
+  }
+  if (sgAvailable) {
+    setUsageBar(usageSgBar, Number(sgPct) / 100, { usedMode: true });
+  } else {
+    setUsageBar(usageSgBar, null, { unavailable: true });
+  }
+
+  // Pace badge + burst remaining (derived max(0, BurstMax − over)).
+  const paceBand = (usage && usage.pace_band) || "green";
+  if (usagePaceBadge) {
+    usagePaceBadge.textContent = enabled ? paceBand : "—";
+    usagePaceBadge.dataset.band = enabled ? paceBand : "green";
+  }
+  if (usageBurst) {
+    if (!usage || !enabled) {
+      usageBurst.textContent = "—";
+    } else {
+      const rem = usage.burst_remaining_tokens;
+      const max = usage.burst_max_tokens;
+      usageBurst.textContent =
+        rem != null && max != null ? `burst ${rem}/${max}` : "burst —";
+    }
+  }
+
   if (usageDetail) {
     if (!usage) {
       usageDetail.textContent = "Usage meter not bound.";
@@ -1122,21 +1188,48 @@ function renderUsageCard(s) {
       const parts = [];
       if (usage.week_used_tokens != null) {
         parts.push(
-          `week ${usage.week_used_tokens}/${usage.week_limit_tokens ?? "—"}`
+          `Elyra week ${usage.week_used_tokens}/${usage.week_limit_tokens ?? usage.elyra_week_budget_tokens ?? "—"}`
         );
       }
-      if (usage.day_used_tokens != null) {
+      if (usage.pace_ratio != null) {
+        parts.push(`pace ${Number(usage.pace_ratio).toFixed(2)}`);
+      }
+      if (usage.day_soft_exhausted) {
+        parts.push("day pace high (soft)");
+      }
+      if (usage.hour_soft_exhausted) {
+        parts.push("hour pace high (soft)");
+      }
+      if (usage.day_used_tokens != null && usage.day_hard_stop_enabled) {
         parts.push(
           `day ${usage.day_used_tokens}/${usage.day_limit_tokens ?? "—"}`
         );
       }
-      if (usage.hour_used_tokens != null) {
+      if (usage.hour_used_tokens != null && usage.hour_hard_stop_enabled) {
         parts.push(
           `hour ${usage.hour_used_tokens}/${usage.hour_limit_tokens ?? "—"}`
         );
       }
       if (usage.last_record_at) parts.push(`last ${usage.last_record_at}`);
       usageDetail.textContent = parts.length ? parts.join(" · ") : "no usage yet";
+    }
+  }
+
+  // product_usage collapsed under details (diagnostic only).
+  const productUsage = sg && sg.product_usage;
+  if (usageProductUsage && usageProductUsageBody) {
+    if (
+      productUsage &&
+      typeof productUsage === "object" &&
+      Object.keys(productUsage).length
+    ) {
+      usageProductUsage.hidden = false;
+      usageProductUsageBody.textContent = Object.entries(productUsage)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\n");
+    } else {
+      usageProductUsage.hidden = true;
+      usageProductUsageBody.textContent = "";
     }
   }
 

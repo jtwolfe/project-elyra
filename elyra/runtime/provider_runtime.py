@@ -36,7 +36,7 @@ from elyra.llm.models import (
 )
 from elyra.llm.provider_prefs import ProviderPrefs, provider_prefs_path, save_provider_prefs
 from elyra.llm.queue import ChatRequestGate
-from elyra.llm.usage import UsageMeter
+from elyra.llm.usage import UsageMeter, UsageSnapshot
 from elyra.settings import UsageSettings
 
 if TYPE_CHECKING:
@@ -45,6 +45,72 @@ if TYPE_CHECKING:
     from elyra.runtime.state import RuntimeState
 
 _LOG = logging.getLogger(__name__)
+
+
+def _usage_status_disabled_placeholder() -> dict[str, Any]:
+    """Stable shape when meter missing or usage.enabled is false."""
+    return {
+        "enabled": False,
+        "week_remaining_fraction": 1.0,
+        "day_remaining_fraction": 1.0,
+        "hour_remaining_fraction": 1.0,
+        "hard_stop": None,
+        "hard_stop_reason": None,
+        "override_active": False,
+        "pace_band": "green",
+        "pace_ratio": 0.0,
+        "burst_remaining_tokens": 0,
+        "burst_max_tokens": 0,
+        "period_id": "",
+        "period_authority": "iso",
+        "day_hard_stop_enabled": False,
+        "hour_hard_stop_enabled": False,
+        "day_soft_exhausted": False,
+        "hour_soft_exhausted": False,
+        "week_cached_tokens": 0,
+        "elyra_week_budget_tokens": 0,
+        "weekly_allowed_fraction": 0.5,
+        "credit_usage_percent": None,
+        "credits_status": None,
+        "throttle_advice": {
+            "band": "green",
+            "pace_ratio": 0.0,
+            "suggest_economy_model": False,
+            "delay_factor": 1.0,
+        },
+        "supergrok": None,
+    }
+
+
+def _supergrok_status_from_snap(
+    snap: UsageSnapshot, meter: UsageMeter
+) -> dict[str, Any] | None:
+    """Build nested supergrok status from meter cache + snapshot fields."""
+    if hasattr(meter, "supergrok_for_status"):
+        try:
+            block = meter.supergrok_for_status()
+            if block is not None:
+                return block
+        except Exception:  # noqa: BLE001 — fail-soft for status path
+            _LOG.debug("supergrok_for_status failed", exc_info=True)
+    # Fallback from snapshot-only fields (ISO / no poll yet).
+    if (
+        snap.credit_usage_percent is None
+        and snap.credits_status is None
+        and snap.period_authority != "supergrok"
+    ):
+        return None
+    return {
+        "credit_usage_percent": snap.credit_usage_percent,
+        "period_start": None,
+        "period_end": None,
+        "period_id": snap.period_id,
+        "period_authority": snap.period_authority,
+        "product_usage": None,
+        "fetched_at": None,
+        "status": snap.credits_status,
+        "stale": False,
+    }
 
 
 @dataclass
@@ -104,11 +170,16 @@ class ProviderRuntime:
 
         KD26: may only *signal* the credits poller — never billing HTTP and
         never await the poller. Returns immediately from last applied snapshot.
+
+        Expands UsageSnapshot design fields for Glass: pace/burst, soft day/hour
+        flags, SuperGrok object, throttle_advice. PATCH still only mutates
+        hard_stop_override.
         """
         with self._lock:
             meter = self.meter
             enabled = bool(self.usage_settings.enabled)
             poller = self.credits_poller
+            usage_settings = self.usage_settings
         # Non-blocking signal only (debounced inside poller).
         if poller is not None:
             try:
@@ -116,16 +187,13 @@ class ProviderRuntime:
             except Exception:  # noqa: BLE001
                 _LOG.debug("credits poller signal failed", exc_info=True)
         if meter is None or not enabled:
-            return {
-                "enabled": False,
-                "week_remaining_fraction": 1.0,
-                "day_remaining_fraction": 1.0,
-                "hour_remaining_fraction": 1.0,
-                "hard_stop": None,
-                "hard_stop_reason": None,
-                "override_active": False,
-            }
+            return _usage_status_disabled_placeholder()
         snap = meter.snapshot()
+        sg = _supergrok_status_from_snap(snap, meter)
+        band = snap.pace_band
+        suggest = bool(
+            usage_settings.auto_throttle_model and band in ("yellow", "red")
+        )
         return {
             "enabled": snap.enabled,
             "week_remaining_fraction": snap.week_remaining_fraction,
@@ -141,6 +209,29 @@ class ProviderRuntime:
             "day_limit_tokens": snap.day_limit_tokens,
             "hour_limit_tokens": snap.hour_limit_tokens,
             "last_record_at": snap.last_record_at,
+            # v2 pace / burst / period (primary Glass meters)
+            "pace_band": snap.pace_band,
+            "pace_ratio": snap.pace_ratio,
+            "burst_remaining_tokens": snap.burst_remaining_tokens,
+            "burst_max_tokens": snap.burst_max_tokens,
+            "period_id": snap.period_id,
+            "period_authority": snap.period_authority,
+            "day_hard_stop_enabled": snap.day_hard_stop_enabled,
+            "hour_hard_stop_enabled": snap.hour_hard_stop_enabled,
+            "day_soft_exhausted": snap.day_soft_exhausted,
+            "hour_soft_exhausted": snap.hour_soft_exhausted,
+            "week_cached_tokens": snap.week_cached_tokens,
+            "elyra_week_budget_tokens": snap.week_limit_tokens,
+            "weekly_allowed_fraction": float(usage_settings.weekly_allowed_fraction),
+            "credit_usage_percent": snap.credit_usage_percent,
+            "credits_status": snap.credits_status,
+            "throttle_advice": {
+                "band": band,
+                "pace_ratio": float(snap.pace_ratio),
+                "suggest_economy_model": suggest,
+                "delay_factor": 1.0,
+            },
+            "supergrok": sg,
         }
 
     def can_open_model_moment(self) -> bool:

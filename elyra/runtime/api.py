@@ -1130,6 +1130,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         """PATCH /api/usage — ``{ "hard_stop_override": bool }`` only.
 
         Does not reset counters or change credentials. Override default is OFF.
+        Response ``usage`` is the expanded status block (pace/burst/supergrok);
+        this handler still only mutates hard_stop_override.
         """
         if self._provider_unavailable():
             self._json(503, {"ok": False, "error": "provider unavailable"})

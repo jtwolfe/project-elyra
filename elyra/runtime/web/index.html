@@ -323,29 +323,46 @@
                 <span id="usage-badge" class="badge">—</span>
               </div>
               <div class="usage-meters" id="usage-meters">
-                <div class="usage-meter" data-window="week">
+                <div class="usage-meter usage-meter-primary" data-window="week">
                   <div class="usage-meter-head">
-                    <span>Week remaining</span>
+                    <span>Elyra week</span>
                     <span id="usage-week-pct" class="usage-pct">—</span>
                   </div>
                   <div class="usage-bar" aria-hidden="true"><div id="usage-week-bar" class="usage-bar-fill"></div></div>
                 </div>
-                <div class="usage-meter" data-window="day">
+                <div class="usage-meter usage-meter-primary" data-window="supergrok">
                   <div class="usage-meter-head">
-                    <span>Day remaining</span>
-                    <span id="usage-day-pct" class="usage-pct">—</span>
+                    <span>SuperGrok pool</span>
+                    <span id="usage-sg-pct" class="usage-pct">—</span>
                   </div>
-                  <div class="usage-bar" aria-hidden="true"><div id="usage-day-bar" class="usage-bar-fill"></div></div>
+                  <div class="usage-bar" aria-hidden="true"><div id="usage-sg-bar" class="usage-bar-fill"></div></div>
                 </div>
-                <div class="usage-meter" data-window="hour">
-                  <div class="usage-meter-head">
-                    <span>Hour remaining</span>
-                    <span id="usage-hour-pct" class="usage-pct">—</span>
+                <div class="usage-pace-row" id="usage-pace-row">
+                  <span id="usage-pace-badge" class="usage-pace-badge" data-band="green">—</span>
+                  <span id="usage-burst" class="usage-burst muted">—</span>
+                </div>
+                <div class="usage-meters usage-meters-soft" id="usage-meters-soft">
+                  <div class="usage-meter usage-meter-soft" data-window="day">
+                    <div class="usage-meter-head">
+                      <span>Day (soft)</span>
+                      <span id="usage-day-pct" class="usage-pct">—</span>
+                    </div>
+                    <div class="usage-bar" aria-hidden="true"><div id="usage-day-bar" class="usage-bar-fill"></div></div>
                   </div>
-                  <div class="usage-bar" aria-hidden="true"><div id="usage-hour-bar" class="usage-bar-fill"></div></div>
+                  <div class="usage-meter usage-meter-soft" data-window="hour">
+                    <div class="usage-meter-head">
+                      <span>Hour (soft)</span>
+                      <span id="usage-hour-pct" class="usage-pct">—</span>
+                    </div>
+                    <div class="usage-bar" aria-hidden="true"><div id="usage-hour-bar" class="usage-bar-fill"></div></div>
+                  </div>
                 </div>
               </div>
               <p id="usage-detail" class="muted status-helper">—</p>
+              <details id="usage-product-usage" class="usage-product-usage" hidden>
+                <summary class="muted">Product usage (diagnostic)</summary>
+                <pre id="usage-product-usage-body" class="usage-product-usage-body muted"></pre>
+              </details>
               <div class="usage-override continuous-control">
                 <label class="toggle-label" for="usage-override-toggle">
                   <input type="checkbox" id="usage-override-toggle" class="continuous-toggle" />

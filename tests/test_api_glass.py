@@ -763,8 +763,20 @@ def test_static_index_served(paths):
         assert 'id="usage-card"' in html
         assert 'id="usage-override-toggle"' in html
         assert "Hard-stop override" in html
+        # Override copy contract (design §hard_stop_override / PR6)
+        assert "When ON, model calls continue past budget limits. Usage is still recorded." in html
         assert "Usage budget" in html
         assert "Provider / model" in html
+        # Primary meters: Elyra week + SuperGrok pool; soft day/hour demoted
+        assert "Elyra week" in html
+        assert "SuperGrok pool" in html
+        assert 'id="usage-sg-bar"' in html
+        assert 'id="usage-sg-pct"' in html
+        assert 'id="usage-pace-badge"' in html
+        assert 'id="usage-burst"' in html
+        assert "Day (soft)" in html
+        assert "Hour (soft)" in html
+        assert 'id="usage-product-usage"' in html
         # Reset checklist preserves secrets / provider prefs / usage meter.
         assert "data/secrets/" in html
         assert "data/runtime/provider.json" in html
@@ -821,6 +833,24 @@ def test_static_app_js_active_panel_poll(paths):
         assert "providerApiKeyInput.value = \"\"" in js or "providerApiKeyInput.value = ''" in js
         assert "usageOverrideInFlight" in js
         assert "providerPatchInFlight" in js
+        # PR6: SuperGrok + pace/burst wiring (not just identifiers)
+        assert "usageSgBar" in js or "usage-sg-bar" in js
+        assert "usagePaceBadge" in js or "usage-pace-badge" in js
+        assert "pace_band" in js
+        assert "burst_remaining_tokens" in js
+        assert "burst_max_tokens" in js
+        assert "burst ${rem}/${max}" in js or "burst " in js
+        assert "day_soft_exhausted" in js
+        assert "day pace high (soft)" in js
+        assert "credit_usage_percent" in js
+        assert "poll …" in js or "poll" in js
+        # Soft day alone must not invent stop badge — only usage.hard_stop
+        assert "stop · ${hardStop}" in js or "stop ·" in js
+        assert "day_soft_exhausted" in js
+        # Badge path uses hard_stop, not soft flags for stop · day
+        assert "stop · day" not in js or "hardStop" in js
+        # Banner only when hard_stop is set (true hard levels)
+        assert "if (hardStop && !overrideActive)" in js or "hardStop && !overrideActive" in js
         # Chat polish + multimodal-ready composer
         assert "renderMarkdown" in js
         assert "pendingAttachments" in js
@@ -852,6 +882,9 @@ def test_static_app_js_active_panel_poll(paths):
         assert "overscroll-behavior: contain" in css
         assert "hard-stop-banner" in css
         assert "usage-bar-fill" in css
+        assert "usage-pace-badge" in css
+        assert "usage-meters-soft" in css
+        assert "usage-bar-na" in css
         assert "status-cards" in css
         # Chat polish surface
         assert "msg-body" in css
