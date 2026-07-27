@@ -54,7 +54,7 @@ browser_session_open
 5. **No eval / no arbitrary JS.** Use only the provided primitives.
 6. **Size caps.** Snapshots and get_text are truncated — work from structure, not full page dumps.
 7. **Session hygiene.** Explicit `browser_session_close` when finished early. Host also closes sessions on moment success finalize, moment error (`fail_in_flight`), and supervisor shutdown.
-8. **Speak vs continue.** On social wakes, `speak` progress/answers on glass; do not leave the user with only free-text. For pure task wakes, update ledger notes when blocked.
+8. **Speak vs continue.** On social wakes, prefer `speak` for progress/answers on glass (free-text never reaches them). For pure task wakes, update ledger notes when blocked.
 
 ## Tool map
 

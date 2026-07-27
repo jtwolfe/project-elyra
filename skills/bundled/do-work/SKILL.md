@@ -40,7 +40,7 @@ Pick the first that applies:
 4. On blocker: set task **`blocked`** (or clear notes) with a specific reason; optional `speak` if a human must unblock. Do not spin forever. Sandbox isolation failures (`sandbox_unavailable:*`, `guest_pytest_unavailable`) are blockers — block / speak / rest; do not thrash guest tools.
 5. Do **not** close the parent goal from here. Prefer `load_skill` name `review-work` before goal close.
 6. Use **exact** tool names (snake_case) and skill names (hyphenated) only.
-7. Results the user asked for must be **spoken on glass** (final `speak`), not left only in tool JSON or free-text.
+7. Results the user asked for: **prefer a final `speak` on glass**, not only tool JSON or free-text.
 
 ## Process
 

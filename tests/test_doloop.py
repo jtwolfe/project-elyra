@@ -22,6 +22,7 @@ from elyra.llm.reasoning_hygiene import sanitize_completion
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.continuous_policy import WORK_CONTINUE_HOST, work_continue_host_message
 from elyra.loop.doloop import (
+    ANSWER_SPEAK_HOST,
     NO_SPEAK_NUDGE,
     DoLoopResult,
     _is_host_inject,
@@ -840,6 +841,94 @@ def test_speak_counts_as_speak_skips_nudge(
     assert result.hop_count == 2  # speak hop + final no_tools hop
     obs = [b for b in moments.list_beats(mid) if b.get("kind") == "no_speak_nudge"]
     assert obs == []
+    # Short free-text after pure speak is not answer-speak either.
+    assert not any(b.get("kind") == "answer_speak_nudge" for b in moments.list_beats(mid))
+
+
+def test_full_answer_speak_then_free_text_wrap_up_no_answer_nudge(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """Dogfood false positive: complete answer speak + free-text wrap-up.
+
+    Soft Decide owns monologue; host must not inject and force a second speak.
+    Free-text still never auto-promotes onto glass.
+    """
+    mid = moments.open_moment(why_now="user question", moment_id="manswerspeak")
+    ctx.moment_id = mid
+    monologue = (
+        "Reply is on glass — happy to tour browse, identity, or github-workflow "
+        "whenever you want, or we can keep chatting."
+    )
+    client = StubChatClient.scripted(
+        [
+            _tc(
+                "speak",
+                {"text": "Oh these are nice. Full catalog reaction on glass."},
+                call_id="c1",
+            ),
+            _text(monologue),
+            _text("should not run"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=True)
+    assert result.stop_reason == "no_tools"
+    assert result.spoke is True
+    assert result.hop_count == 2
+    beats = moments.list_beats(mid)
+    assert not any(b.get("kind") == "answer_speak_nudge" for b in beats)
+    assert not any(b.get("kind") == "no_speak_nudge" for b in beats)
+    glass = list_messages(paths=paths)
+    assistant = [m for m in glass if m.get("role") == "assistant"]
+    assert len(assistant) == 1
+    assert "Oh these are nice" in (assistant[0].get("content") or "")
+    assert "happy to tour" not in (assistant[0].get("content") or "")
+
+
+def test_status_speak_tools_then_short_free_text_gets_answer_speak_nudge(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """After tools with no post-tool speak, short free-text still needs answer HOST."""
+    mid = moments.open_moment(why_now="calc", moment_id="manswershort")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("speak", {"text": "Calculating…"}, call_id="c1"),
+            _tc("list_dir", {"path": "."}, call_id="c2"),
+            _text("42"),
+            _tc("speak", {"text": "The answer is 42."}, call_id="c3"),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=True)
+    assert result.stop_reason == "no_tools"
+    assert result.spoke is True
+    assert result.tools_ran is True
+    beats = moments.list_beats(mid)
+    kinds = [b.get("kind") for b in beats if b.get("type") == "obs"]
+    assert "answer_speak_nudge" in kinds
+    # After answer speak, short idle free-text does not re-nudge.
+    assert kinds.count("answer_speak_nudge") == 1
+
+
+def test_tools_then_answer_speak_then_short_idle_no_answer_nudge(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """list_dir → speak(answer) → short free-text idle must not re-nudge."""
+    mid = moments.open_moment(why_now="two hop", moment_id="manswerok")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _tc("speak", {"text": "Hi — sandbox has notes.txt"}, call_id="c2"),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=True)
+    assert result.stop_reason == "no_tools"
+    assert result.hop_count == 3
+    assert not any(
+        b.get("kind") == "answer_speak_nudge" for b in moments.list_beats(mid)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1648,7 +1737,7 @@ def test_skill_commit_does_not_touch_speak_transport(
     glass = list_messages(paths=paths)
     assert not any(host_line in (m.get("content") or "") for m in glass)
     assert not any(
-        "execute its next checklist step" in (m.get("content") or "")
+        "prefer the next playbook step" in (m.get("content") or "")
         for m in glass
     )
 

@@ -549,6 +549,55 @@ def test_get_tools_and_skills_catalog(paths):
         h.close()
 
 
+def test_get_tool_and_skill_detail_inspector(paths):
+    """GET /api/tools|skills/{name} — package docs + versions list (read-only)."""
+    h = _ApiHarness(paths)
+    try:
+        code, tools = h.get("/api/tools")
+        assert code == 200
+        if tools.get("error") == "tools catalog unavailable" or not tools.get("tools"):
+            return
+        tname = next(
+            (t["name"] for t in tools["tools"] if t.get("name") in ("speak", "read_file")),
+            tools["tools"][0]["name"],
+        )
+        code, detail = h.get(f"/api/tools/{tname}?list_versions=1")
+        assert code == 200, detail
+        assert detail.get("ok") is True
+        assert detail.get("name") == tname
+        assert detail.get("kind") == "tool"
+        assert "package" in detail
+        assert isinstance(detail.get("versions"), list)
+        # Bundled: empty versions; package preview present when TOOL.md exists
+        pkg = detail["package"]
+        assert "files_present" in pkg or "top_level" in pkg
+
+        code, missing = h.get("/api/tools/definitely_not_a_tool_xyz")
+        assert code in (400, 404)
+        assert missing.get("ok") is False
+
+        code, skills = h.get("/api/skills")
+        assert code == 200
+        if skills.get("error") == "skills catalog unavailable" or not skills.get("skills"):
+            return
+        sname = next(
+            (s["name"] for s in skills["skills"] if s.get("name") in ("talk", "do-work")),
+            skills["skills"][0]["name"],
+        )
+        code, sdetail = h.get(f"/api/skills/{sname}?list_versions=1")
+        assert code == 200, sdetail
+        assert sdetail.get("ok") is True
+        assert sdetail.get("name") == sname
+        assert sdetail.get("kind") == "skill"
+        # Full playbook preferred when catalog can load body
+        assert sdetail.get("skill_md") or (sdetail.get("package") or {}).get(
+            "skill_md_preview"
+        )
+        assert isinstance(sdetail.get("versions"), list)
+    finally:
+        h.close()
+
+
 def test_get_tools_rescans_after_local_delete(paths):
     """GET /api/tools reloads so operator-deleted local packages leave the catalog."""
     import json

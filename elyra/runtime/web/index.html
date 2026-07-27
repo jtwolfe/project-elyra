@@ -211,7 +211,8 @@
             <div>
               <h1>Tools &amp; skills</h1>
               <p class="muted">
-                Tools and skills on this host. Refresh reloads the catalog.
+                Catalog on this host. Select a package to inspect docs, package files, and
+                package-VCS archives (local only). Refresh rescans disk.
               </p>
             </div>
             <button type="button" id="catalog-refresh-btn" class="btn-secondary btn-sm">
@@ -219,7 +220,7 @@
             </button>
           </header>
           <div class="catalog-meta muted" id="catalog-meta">—</div>
-          <div class="split-lists">
+          <div class="split-lists catalog-split">
             <div>
               <h2 class="subhead">Tools <span id="tools-count" class="count-pill">0</span></h2>
               <div id="tools-list" class="list-panel">loading…</div>
@@ -227,6 +228,47 @@
             <div>
               <h2 class="subhead">Skills <span id="skills-count" class="count-pill">0</span></h2>
               <div id="skills-list" class="list-panel">loading…</div>
+            </div>
+          </div>
+          <div id="catalog-inspector" class="detail-panel catalog-inspector" hidden>
+            <div class="catalog-inspector-head">
+              <div class="catalog-inspector-title-row">
+                <h2 id="catalog-inspector-title" class="catalog-inspector-title">—</h2>
+                <span id="catalog-inspector-badges" class="catalog-inspector-badges"></span>
+                <button
+                  type="button"
+                  id="catalog-inspector-close"
+                  class="link-btn catalog-inspector-close"
+                >
+                  close
+                </button>
+              </div>
+              <p id="catalog-inspector-desc" class="muted catalog-inspector-desc">—</p>
+              <p id="catalog-inspector-meta" class="muted catalog-inspector-meta">—</p>
+            </div>
+            <div class="catalog-inspector-body">
+              <div class="catalog-inspector-main">
+                <h3 class="subhead subhead-sm">Package docs</h3>
+                <pre id="catalog-inspector-doc" class="code-block catalog-doc">Select a tool or skill.</pre>
+                <details id="catalog-inspector-schema-fold" class="catalog-fold" hidden>
+                  <summary>schema.json</summary>
+                  <pre id="catalog-inspector-schema" class="code-block">—</pre>
+                </details>
+                <details id="catalog-inspector-runner-fold" class="catalog-fold" hidden>
+                  <summary>runner.json</summary>
+                  <pre id="catalog-inspector-runner" class="code-block">—</pre>
+                </details>
+              </div>
+              <div class="catalog-inspector-vcs">
+                <h3 class="subhead subhead-sm">Package VCS</h3>
+                <p id="catalog-inspector-vcs-hint" class="muted status-helper">
+                  Local packages archive prior trees on re-promote. Bundled packages have no versions.
+                </p>
+                <div id="catalog-inspector-versions" class="list-panel identity-versions catalog-versions">
+                  —
+                </div>
+                <pre id="catalog-inspector-version-doc" class="code-block" hidden></pre>
+              </div>
             </div>
           </div>
         </section>

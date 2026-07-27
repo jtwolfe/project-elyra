@@ -33,6 +33,21 @@ const momentsList = $("#moments-list");
 const momentDetail = $("#moment-detail");
 const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
+const catalogInspector = $("#catalog-inspector");
+const catalogInspectorTitle = $("#catalog-inspector-title");
+const catalogInspectorBadges = $("#catalog-inspector-badges");
+const catalogInspectorDesc = $("#catalog-inspector-desc");
+const catalogInspectorMeta = $("#catalog-inspector-meta");
+const catalogInspectorDoc = $("#catalog-inspector-doc");
+const catalogInspectorSchemaFold = $("#catalog-inspector-schema-fold");
+const catalogInspectorSchema = $("#catalog-inspector-schema");
+const catalogInspectorRunnerFold = $("#catalog-inspector-runner-fold");
+const catalogInspectorRunner = $("#catalog-inspector-runner");
+const catalogInspectorVcsHint = $("#catalog-inspector-vcs-hint");
+const catalogInspectorVersions = $("#catalog-inspector-versions");
+const catalogInspectorVersionDoc = $("#catalog-inspector-version-doc");
+/** @type {{ kind: "tool" | "skill", name: string } | null} */
+let catalogSelection = null;
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
 const identitySelfLabel = $("#identity-self-label");
@@ -1841,12 +1856,18 @@ function renderBeats(beats) {
   return wrap;
 }
 
+function setMomentDetailOpen(on) {
+  const panel = document.getElementById("panel-moments");
+  if (panel) panel.classList.toggle("moment-detail-open", !!on);
+}
+
 function closeMomentDetail() {
   momentDetailLoadGen += 1;
   selectedMomentId = null;
   selectedMomentSnapshot = null;
   momentDetail.hidden = true;
   momentDetail.innerHTML = "";
+  setMomentDetailOpen(false);
   // Clear selected highlight without full re-fetch.
   momentsList
     .querySelectorAll(".card-selected")
@@ -1904,6 +1925,7 @@ async function loadMomentDetail(id, opts = {}) {
   selectedMomentId = id;
   // Do not commit selectedMomentSnapshot until a successful GET.
   momentDetail.hidden = false;
+  setMomentDetailOpen(true);
   const savedUi = soft ? captureMomentDetailUi() : null;
   if (!soft) {
     // Hard open: drop prior moment's last-good so soft keep/skip cannot apply
@@ -1996,30 +2018,222 @@ async function refreshMoments() {
   }
 }
 
-function renderCatalog(el, items, emptyLabel) {
+function renderCatalog(el, items, emptyLabel, kind) {
   el.innerHTML = "";
   if (!items.length) {
     el.innerHTML = `<p class="muted empty">${emptyLabel}</p>`;
     return;
   }
   for (const t of items) {
-    const card = document.createElement("article");
-    card.className = "card";
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn catalog-card";
+    card.dataset.catalogKind = kind;
+    card.dataset.catalogName = t.name || "";
+    const selected =
+      catalogSelection &&
+      catalogSelection.kind === kind &&
+      catalogSelection.name === t.name;
+    if (selected) card.classList.add("card-selected");
     const source = t.source || t.kind || "";
-    const kind = t.kind && t.source ? t.kind : "";
+    const toolKind = t.kind && t.source ? t.kind : "";
     card.innerHTML = `
       <div class="card-head">
         <strong>${escapeHtml(t.name)}</strong>
         <span class="badge">${escapeHtml(source)}</span>
       </div>
       ${
-        kind
-          ? `<div class="meta">${escapeHtml(kind)}</div>`
+        toolKind
+          ? `<div class="meta">${escapeHtml(toolKind)}</div>`
           : ""
       }
       <p class="muted">${escapeHtml(t.description || "")}</p>`;
+    card.addEventListener("click", () => {
+      selectCatalogItem(kind, t.name).catch((e) =>
+        panelLoadError("Catalog", e)
+      );
+    });
     el.appendChild(card);
   }
+}
+
+function clearCatalogSelectionHighlight() {
+  document
+    .querySelectorAll("#tools-list .card-btn, #skills-list .card-btn")
+    .forEach((el) => el.classList.remove("card-selected"));
+}
+
+function markCatalogSelectionHighlight() {
+  clearCatalogSelectionHighlight();
+  if (!catalogSelection) return;
+  const list = catalogSelection.kind === "tool" ? toolsList : skillsList;
+  if (!list) return;
+  const btn = [...list.querySelectorAll(".card-btn")].find(
+    (el) => el.dataset.catalogName === catalogSelection.name
+  );
+  if (btn) btn.classList.add("card-selected");
+}
+
+function setCatalogInspecting(on) {
+  const panel = document.getElementById("panel-tools");
+  if (panel) panel.classList.toggle("catalog-inspecting", !!on);
+}
+
+function hideCatalogInspector() {
+  setCatalogInspecting(false);
+  catalogSelection = null;
+  clearCatalogSelectionHighlight();
+  if (catalogInspector) catalogInspector.hidden = true;
+  if (catalogInspectorVersionDoc) {
+    catalogInspectorVersionDoc.hidden = true;
+    catalogInspectorVersionDoc.textContent = "";
+  }
+  if (catalogInspectorSchemaFold) catalogInspectorSchemaFold.hidden = true;
+  if (catalogInspectorRunnerFold) catalogInspectorRunnerFold.hidden = true;
+}
+
+function packageDocFromDetail(kind, detail) {
+  const pkg = detail.package || {};
+  if (kind === "skill") {
+    return (
+      detail.skill_md ||
+      pkg.skill_md_preview ||
+      detail.skill_md_preview ||
+      "(no SKILL.md)"
+    );
+  }
+  return pkg.tool_md_preview || detail.tool_md_preview || "(no TOOL.md)";
+}
+
+function renderCatalogInspector(kind, detail) {
+  if (!catalogInspector) return;
+  catalogInspector.hidden = false;
+  const name = detail.name || "—";
+  const source =
+    detail.source || detail.catalog_source || detail.package?.source || "—";
+  const which = detail.which || "current";
+  if (catalogInspectorTitle) catalogInspectorTitle.textContent = name;
+  if (catalogInspectorBadges) {
+    const bits = [kind, source, which].filter(Boolean);
+    catalogInspectorBadges.innerHTML = bits
+      .map((b) => `<span class="badge">${escapeHtml(String(b))}</span>`)
+      .join("");
+  }
+  if (catalogInspectorDesc) {
+    catalogInspectorDesc.textContent =
+      detail.description || detail.package?.description || "—";
+  }
+  const pkg = detail.package || {};
+  const files = pkg.files_present
+    ? Object.entries(pkg.files_present)
+        .map(([k, v]) => `${k}${v ? "✓" : "✗"}`)
+        .join(" · ")
+    : "";
+  const top = Array.isArray(pkg.top_level) ? pkg.top_level.join(", ") : "";
+  const metaParts = [];
+  if (detail.tool_kind) metaParts.push(`kind ${detail.tool_kind}`);
+  if (pkg.complete === true) metaParts.push("package complete");
+  if (pkg.complete === false) metaParts.push("package incomplete");
+  if (files) metaParts.push(files);
+  if (top) metaParts.push(`files: ${top}`);
+  if (detail.version_id) metaParts.push(`viewing ${detail.version_id}`);
+  if (catalogInspectorMeta) {
+    catalogInspectorMeta.textContent = metaParts.length
+      ? metaParts.join(" · ")
+      : "—";
+  }
+  if (catalogInspectorDoc) {
+    catalogInspectorDoc.textContent = packageDocFromDetail(kind, detail);
+  }
+  if (catalogInspectorSchemaFold && catalogInspectorSchema) {
+    if (detail.schema_preview) {
+      catalogInspectorSchemaFold.hidden = false;
+      catalogInspectorSchema.textContent = detail.schema_preview;
+    } else {
+      catalogInspectorSchemaFold.hidden = true;
+      catalogInspectorSchema.textContent = "—";
+    }
+  }
+  if (catalogInspectorRunnerFold && catalogInspectorRunner) {
+    if (detail.runner && typeof detail.runner === "object") {
+      catalogInspectorRunnerFold.hidden = false;
+      catalogInspectorRunner.textContent = JSON.stringify(detail.runner, null, 2);
+    } else {
+      catalogInspectorRunnerFold.hidden = true;
+      catalogInspectorRunner.textContent = "—";
+    }
+  }
+  const versions = Array.isArray(detail.versions) ? detail.versions : [];
+  if (catalogInspectorVcsHint) {
+    if (source === "bundled" || (source !== "local" && !versions.length)) {
+      catalogInspectorVcsHint.textContent =
+        "Bundled packages are immutable — no package-VCS archives. Local re-promotes archive the prior tree.";
+    } else if (!versions.length) {
+      catalogInspectorVcsHint.textContent =
+        "No archives yet. Re-promoting a local package will archive the previous tree here.";
+    } else {
+      catalogInspectorVcsHint.textContent = `${versions.length} archive(s). Click to preview that tree’s docs (read-only). Revert stays model/tool path.`;
+    }
+  }
+  if (catalogInspectorVersionDoc) {
+    catalogInspectorVersionDoc.hidden = true;
+    catalogInspectorVersionDoc.textContent = "";
+  }
+  renderVersionList(catalogInspectorVersions, versions, (vid) => {
+    loadCatalogVersion(kind, name, vid).catch((e) =>
+      panelLoadError("Package VCS", e)
+    );
+  });
+  // Prefer archived_at in version rows (package VCS uses archived_at, not promoted_at)
+  if (catalogInspectorVersions && versions.length) {
+    const rows = catalogInspectorVersions.querySelectorAll(".version-row");
+    versions.forEach((v, i) => {
+      const row = rows[i];
+      if (!row) return;
+      const vid = v.version_id || "";
+      const when = v.archived_at || v.promoted_at || "";
+      const reason = v.reason ? ` · ${v.reason}` : "";
+      row.textContent = when ? `${vid} · ${when}${reason}` : `${vid}${reason}`;
+    });
+  }
+}
+
+async function loadCatalogVersion(kind, name, versionId) {
+  const base = kind === "tool" ? "/api/tools/" : "/api/skills/";
+  const q = new URLSearchParams({
+    which: "version",
+    version_id: versionId,
+    list_versions: "0",
+  });
+  const detail = await fetchJson(`${base}${encodeURIComponent(name)}?${q}`);
+  if (!detail || detail.ok === false) {
+    throw new Error(detail?.error || "version not found");
+  }
+  if (catalogInspectorVersionDoc) {
+    catalogInspectorVersionDoc.hidden = false;
+    catalogInspectorVersionDoc.textContent =
+      `// version ${versionId}\n\n` + packageDocFromDetail(kind, detail);
+  }
+  if (catalogInspectorMeta) {
+    catalogInspectorMeta.textContent = `viewing archive ${versionId} (read-only)`;
+  }
+}
+
+async function selectCatalogItem(kind, name) {
+  if (!name) return;
+  catalogSelection = { kind, name };
+  markCatalogSelectionHighlight();
+  const base = kind === "tool" ? "/api/tools/" : "/api/skills/";
+  const q = new URLSearchParams({ which: "current", list_versions: "1" });
+  const detail = await fetchJson(`${base}${encodeURIComponent(name)}?${q}`);
+  if (!detail || detail.ok === false) {
+    hideCatalogInspector();
+    catalogSelection = null;
+    clearCatalogSelectionHighlight();
+    throw new Error(detail?.error || `${kind} not found`);
+  }
+  setCatalogInspecting(true);
+  renderCatalogInspector(kind, detail);
 }
 
 async function refreshTools() {
@@ -2029,14 +2243,30 @@ async function refreshTools() {
   ]);
   const toolItems = tools.tools || [];
   const skillItems = skills.skills || [];
-  renderCatalog(toolsList, toolItems, "No tools.");
-  renderCatalog(skillsList, skillItems, "No skills.");
+  renderCatalog(toolsList, toolItems, "No tools.", "tool");
+  renderCatalog(skillsList, skillItems, "No skills.", "skill");
+  markCatalogSelectionHighlight();
   if (toolsCountEl) toolsCountEl.textContent = String(toolItems.length);
   if (skillsCountEl) skillsCountEl.textContent = String(skillItems.length);
   if (catalogMeta) {
     const localTools = toolItems.filter((t) => t.source === "local").length;
     const localSkills = skillItems.filter((s) => s.source === "local").length;
-    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · rescanned from disk`;
+    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · select a package to inspect · rescanned from disk`;
+  }
+  // Refresh open inspector if still selected
+  if (catalogSelection) {
+    const stillThere =
+      catalogSelection.kind === "tool"
+        ? toolItems.some((t) => t.name === catalogSelection.name)
+        : skillItems.some((s) => s.name === catalogSelection.name);
+    if (stillThere) {
+      selectCatalogItem(catalogSelection.kind, catalogSelection.name).catch(
+        () => hideCatalogInspector()
+      );
+    } else {
+      catalogSelection = null;
+      hideCatalogInspector();
+    }
   }
 }
 
@@ -3362,6 +3592,13 @@ if (messagesEl) {
 if (jumpLatestBtn) {
   jumpLatestBtn.addEventListener("click", () => {
     scrollMessagesToBottom({ smooth: true });
+  });
+}
+
+const catalogInspectorClose = $("#catalog-inspector-close");
+if (catalogInspectorClose) {
+  catalogInspectorClose.addEventListener("click", () => {
+    hideCatalogInspector();
   });
 }
 

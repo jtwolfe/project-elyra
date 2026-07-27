@@ -1042,6 +1042,166 @@ body {
   flex-shrink: 0;
 }
 
+/* Tools & skills inspector (package docs + package VCS)
+   Closed: catalog lists fill the panel. Open: lists shrink, inspector takes the rest. */
+.catalog-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+/* Lists fill their columns (do not use moments' list-panel-auto 42% cap). */
+#panel-tools .catalog-split .list-panel {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
+}
+
+/* Inspecting: list region only as tall as content, capped — no half-screen black void */
+#panel-tools.catalog-inspecting .catalog-split {
+  flex: 0 1 auto;
+  max-height: min(36vh, 40%);
+  min-height: 8rem;
+}
+
+#panel-tools.catalog-inspecting .catalog-split .list-panel {
+  flex: 0 1 auto;
+  max-height: min(32vh, 100%);
+  overflow: auto;
+}
+
+.catalog-inspector {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  flex: 1 1 auto;
+}
+
+.catalog-inspector[hidden] {
+  display: none !important;
+  flex: 0;
+  min-height: 0;
+}
+
+.catalog-inspector-head {
+  padding: 0.85rem 1.5rem 0.5rem;
+  border-bottom: 1px solid rgba(212, 175, 119, 0.2);
+  flex-shrink: 0;
+}
+
+.catalog-inspector-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+}
+
+.catalog-inspector-title {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.catalog-inspector-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.catalog-inspector-close {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.catalog-inspector-desc {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+}
+
+.catalog-inspector-meta {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+}
+
+.catalog-inspector-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(12rem, 0.85fr);
+  gap: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+@media (max-width: 900px) {
+  .catalog-inspector-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.catalog-inspector-main,
+.catalog-inspector-vcs {
+  min-width: 0;
+  padding: 0.5rem 1.25rem 1.25rem;
+  box-sizing: border-box;
+}
+
+.catalog-inspector-vcs {
+  border-left: 1px solid var(--border);
+}
+
+@media (max-width: 900px) {
+  .catalog-inspector-vcs {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}
+
+.catalog-doc {
+  max-height: min(48vh, 28rem);
+  overflow: auto;
+  margin: 0.35rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.catalog-fold {
+  margin-top: 0.65rem;
+}
+
+.catalog-fold summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.catalog-fold .code-block {
+  margin-top: 0.4rem;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+.catalog-versions {
+  max-height: min(36vh, 18rem);
+  overflow: auto;
+  padding: 0.35rem 0;
+  flex: none;
+}
+
+#tools-list .card-btn.card-selected,
+#skills-list .card-btn.card-selected {
+  border-color: var(--gold-primary);
+  box-shadow: 0 0 0 1px rgba(212, 175, 119, 0.35);
+}
+
 .count-pill {
   display: inline-block;
   margin-left: 0.35rem;
@@ -1151,10 +1311,16 @@ body {
   min-height: 0;
 }
 
-/* Moments list: capped share of viewport; detail gets the rest. */
+/* Moments list: fill panel when detail closed; share height when open. */
 .list-panel-auto {
-  flex: 0 1 42%;
-  max-height: 42%;
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
+}
+
+#panel-moments.moment-detail-open #moments-list {
+  flex: 0 1 36%;
+  max-height: min(40vh, 42%);
 }
 
 .detail-panel {
@@ -1166,8 +1332,9 @@ body {
 }
 
 .detail-panel[hidden] {
-  display: none;
+  display: none !important;
   flex: 0;
+  min-height: 0;
 }
 
 .card {
@@ -1579,6 +1746,11 @@ body {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
   gap: 1rem;
   align-items: start;
+  /* Match status/messages gutters — do not let cards kiss the panel chrome */
+  padding: 0.75rem 1.5rem 1.5rem;
+  box-sizing: border-box;
+  min-height: 0;
+  overflow: auto;
 }
 
 @media (max-width: 900px) {
@@ -1587,20 +1759,36 @@ body {
   }
 }
 
+.secrets-set-card,
+.secrets-list-card {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .secrets-form {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.15rem 0;
+  gap: 0.5rem;
+  padding: 0.35rem 0 0.1rem;
 }
 
 .secrets-form .status-label {
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
 }
 
-.secrets-list {
+.secrets-form .status-label:first-child {
+  margin-top: 0;
+}
+
+/* Nested under .card — do not reuse full-panel .list-panel side padding */
+.secrets-list-card .secrets-list,
+.secrets-list.list-panel {
   max-height: min(60vh, 28rem);
   overflow: auto;
+  flex: none;
+  padding: 0.15rem 0 0;
+  gap: 0;
+  min-height: 0;
 }
 
 .secrets-row {
@@ -1609,7 +1797,7 @@ body {
   gap: 0.5rem 0.75rem;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 0.65rem 0.55rem;
+  padding: 0.7rem 0.15rem;
   border-bottom: 1px solid var(--border);
 }
 

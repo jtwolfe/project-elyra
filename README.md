@@ -49,33 +49,107 @@ Usage / SuperGrok operator notes + dogfood checklist: [docs/grok-improvement-pla
 
 **Status JSON (API/glass):** inference posture fields are `chat_ready` / `chat_error` / `chat_busy` / `chat_operation` (replacing former `llama_*` keys). Clean break — no dual-write.
 
-## Quick start
+## Install
+
+Python **3.12+**. Core Elyra is mostly stdlib; optional features are **host venv extras** that fail closed if missing (the supervisor still starts).
+
+### Host vs guest (read this once)
+
+| Layer | Where it lives | What it powers |
+|-------|----------------|----------------|
+| **Host venv** (`.venv`) | Your machine’s Python env | Supervisor, glass, LLM client, **host builtins** (`web_search`, `browser_*`, secrets, git/gh wrappers) |
+| **Guest sandbox** | microVM + tree `sandboxes/sandbox0/` | Isolated `run` / create-tool **verify** when isolation is on |
+
+`web_search` and browser tools are **not** installed into the guest. They need host packages (`elyra[search]`, `elyra[browser]`). The guest is for sandboxed execution, not for pip-installing those backends.
+
+### 1. Base (always)
 
 ```bash
-# once
+# from repo root — creates .venv, upgrades pip, installs editable elyra + pytest
 ./scripts/setup_venv.sh
 source .venv/bin/activate
-
-# optional: warm microsandbox isolation (product default ON when ELYRA_SANDBOX unset)
-pip install -e '.[sandbox]'
-./scripts/setup-microsandbox.sh --doctor-only   # KVM / import checks
-# hermetic host-stub (tests/CI): export ELYRA_SANDBOX=0
-
-# optional capability-growth extras (fail closed if missing — chat still starts)
-pip install -e '.[search]'             # web_search
-pip install -e '.[browser]'            # browser_* Playwright tools
-playwright install chromium            # required after browser extra
-# or: pip install -e '.[search,browser]' && playwright install chromium
-
-# Grok (product default) — grok login, or XAI_API_KEY / paste key in glass Status
-elyra start
-
-# UI + API only, stub LLM (no remote calls / hermetic dogfood)
-elyra start --stub-llm
 ```
 
-Without `elyra[sandbox]`, chat still starts; guest `run` / `sandbox_*` / isolation-on `verify_tool` fail closed (`sandbox_unavailable:*`). Install the extra so create-tool does not look broken.  
-Without `elyra[search]` / `elyra[browser]`, `web_search` and browser tools return clear `*_unavailable` errors (no supervisor crash). Full catalog + dogfood checklist: [docs/tools-and-skills.md](docs/tools-and-skills.md).
+`setup_venv.sh` runs `pip install -e '.[dev]'`. Always activate the venv before `elyra`, `pytest`, or the microsandbox doctor (scripts that call bare `python3` need the venv on `PATH`).
+
+### 2. Full dogfood (recommended)
+
+One shot for isolation + search + browser + tests:
+
+```bash
+source .venv/bin/activate
+
+pip install -e '.[dev,sandbox,search,browser]'
+playwright install chromium              # browsers are separate from the pip package
+
+./scripts/setup-microsandbox.sh --doctor-only
+# optional deeper check: ./scripts/setup-microsandbox.sh --smoke
+```
+
+Linux isolation needs **KVM** (`/dev/kvm` readable/writable). Without it, install can succeed but guest warmup may fail — doctor will WARN.
+
+### 3. Install à la carte
+
+| Extra | Install | Enables | If missing |
+|-------|---------|---------|------------|
+| **dev** | `pip install -e '.[dev]'` | `pytest` | (included by `setup_venv.sh`) |
+| **sandbox** | `pip install -e '.[sandbox]'` | Warm microsandbox isolation (`microsandbox`) | Guest `run` / isolation-on `verify_tool` → `sandbox_unavailable:*` |
+| **search** | `pip install -e '.[search]'` | Host `web_search` via `ddgs` | `search_unavailable` (+ install hint) |
+| **browser** | `pip install -e '.[browser]'` **and** `playwright install chromium` | Host `browser_*` tools | Clear browser unavailable errors |
+
+Combine extras in one install: `pip install -e '.[sandbox,search,browser]'`.
+
+Helper for sandbox only:
+
+```bash
+./scripts/setup-microsandbox.sh --install-extra   # pip install -e '.[sandbox]'
+./scripts/setup-microsandbox.sh --doctor-only
+./scripts/setup-microsandbox.sh --ensure-tree     # seed sandboxes/sandbox0 if needed
+./scripts/setup-microsandbox.sh --smoke           # temporary create/exec/remove (not sandbox0)
+```
+
+Hermetic / CI host-stub (no guest isolation):
+
+```bash
+export ELYRA_SANDBOX=0
+```
+
+Product default when `ELYRA_SANDBOX` is **unset**: isolation **on** (needs `elyra[sandbox]` + working KVM for real guest work).
+
+### 4. Host OS tools (optional, not pip)
+
+| Tool | Used by | Notes |
+|------|---------|--------|
+| `git` | `git_*` tools | On `PATH` |
+| `gh` | `gh_*` tools | On `PATH`; auth via `gh auth login` when needed |
+| Grok / xAI | Product LLM | `grok login`, or `XAI_API_KEY`, or paste key in glass **Status** |
+
+### 5. Sanity checks
+
+```bash
+source .venv/bin/activate
+python -c "import elyra; print('elyra OK')"
+python -c "import microsandbox; print('sandbox extra OK')"   # after .[sandbox]
+python -c "import ddgs; print('search extra OK')"           # after .[search]
+python -c "import playwright; print('browser extra OK')"    # after .[browser]
+./scripts/setup-microsandbox.sh --doctor-only
+```
+
+Catalog, dogfood checklist, secrets/git notes: [docs/tools-and-skills.md](docs/tools-and-skills.md).
+
+## Run
+
+```bash
+source .venv/bin/activate
+
+# Product path (xAI Grok) — auth first if needed:
+#   grok login
+#   # or: export XAI_API_KEY=...
+elyra start
+
+# UI + API only, stub LLM (no remote calls / hermetic glass)
+elyra start --stub-llm
+```
 
 Open **http://127.0.0.1:8787/**
 

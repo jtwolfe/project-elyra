@@ -16,6 +16,7 @@ from elyra.loop.continue_policy import (
     should_stop_wall_clock,
 )
 from elyra.loop.doloop import (
+    ANSWER_SPEAK_HOST,
     NO_SPEAK_NUDGE,
     DoLoopResult,
     enforce_in_turn_budget,
@@ -24,6 +25,7 @@ from elyra.loop.doloop import (
 from elyra.loop.stop import STOP_REASONS, resolve_host_precheck_stop
 
 __all__ = [
+    "ANSWER_SPEAK_HOST",
     "NO_SPEAK_NUDGE",
     "STOP_REASONS",
     "DoLoopResult",

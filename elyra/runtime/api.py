@@ -3,13 +3,14 @@
 Scope: REST JSON + SPA fallthrough for operator glass.
 In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users),
+  tool/skill package inspector (GET detail + package VCS versions, read-only),
   multi-user session + identity panel (grants, promote, list/create users),
   provider/model/credential mutators, live usage + hard-stop override,
   media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
   STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
   named secrets store GET/PUT/DELETE + grants (PR5 / IK10).
 Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
-  TTS, vision expand, glass UI rewrite.
+  TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
 """
 
 from __future__ import annotations
@@ -353,6 +354,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, {"tools": catalog})
             return
 
+        if path.startswith("/api/tools/"):
+            self._get_tool_detail(path, qs)
+            return
+
         if path == "/api/skills":
             if self.skills is None:
                 self._json(200, {"skills": [], "error": "skills catalog unavailable"})
@@ -371,6 +376,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     row["source"] = meta.source
                 enriched.append(row)
             self._json(200, {"skills": enriched})
+            return
+
+        if path.startswith("/api/skills/"):
+            self._get_skill_detail(path, qs)
             return
 
         if path.startswith("/api/media/") or path == "/api/media":
@@ -1110,6 +1119,179 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 return
 
         self._json(200, self._provider_response_fields())
+
+    # ── Tools / skills package inspector (read-only glass) ───────────────
+
+    def _glass_tool_context(self):
+        """Minimal ToolContext for package_vcs get_* (no sandbox/speak)."""
+        from elyra.tools.types import ToolContext
+
+        return ToolContext(
+            paths=self.paths,
+            moment_id="glass",
+            user_id="operator",
+            registry=self.tools,
+        )
+
+    def _package_detail_query(self, qs: dict[str, list[str]]) -> dict[str, Any]:
+        """Parse which / version_id / list_versions for package inspect."""
+        which_raw = (qs.get("which") or ["current"])[0]
+        which = which_raw.strip() if isinstance(which_raw, str) else "current"
+        if which not in ("current", "draft", "version"):
+            which = "current"
+        list_raw = (qs.get("list_versions") or ["1"])[0]
+        list_versions = str(list_raw).strip().lower() not in ("0", "false", "no")
+        vid_raw = (qs.get("version_id") or [None])[0]
+        version_id = (
+            vid_raw.strip()
+            if isinstance(vid_raw, str) and vid_raw.strip()
+            else None
+        )
+        return {
+            "which": which,
+            "list_versions": list_versions,
+            "version_id": version_id,
+        }
+
+    def _get_tool_detail(self, path: str, qs: dict[str, list[str]]) -> None:
+        """GET /api/tools/{name} — package summary + optional package VCS versions."""
+        if self.tools is None:
+            self._json(503, {"ok": False, "error": "tools catalog unavailable"})
+            return
+        name = _safe_segment(unquote(path[len("/api/tools/") :]))
+        if name is None:
+            self._json(400, {"ok": False, "error": "invalid tool name"})
+            return
+        q = self._package_detail_query(qs)
+        args: dict[str, Any] = {
+            "name": name,
+            "which": q["which"],
+            "list_versions": q["list_versions"],
+        }
+        if q["version_id"] is not None:
+            args["version_id"] = q["version_id"]
+
+        from elyra.tools.builtin.package_vcs import get_tool
+
+        try:
+            result = get_tool(args, self._glass_tool_context())
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("GET /api/tools/%s failed: %s", name, exc)
+            self._json(500, {"ok": False, "error": "tool_detail_failed"})
+            return
+
+        if not result.ok:
+            code = 404 if result.error_reason in (
+                "package_not_found",
+                "draft_missing",
+                "version_not_found",
+            ) else 400
+            self._json(
+                code,
+                {
+                    "ok": False,
+                    "error": result.error_reason or "error",
+                    "name": name,
+                    "kind": "tool",
+                },
+            )
+            return
+
+        payload = dict(result.payload or {})
+        payload["ok"] = True
+        payload["kind"] = "tool"
+        # Live registry meta when present (callable catalog may lag draft-only).
+        try:
+            self.tools.reload()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("tools.reload on GET /api/tools/%s failed: %s", name, exc)
+        pkg = self.tools.get(name)
+        if pkg is not None:
+            payload.setdefault("description", pkg.meta.description)
+            payload.setdefault("tool_kind", pkg.meta.kind)
+            payload.setdefault("catalog_source", pkg.source)
+            # Optional schema/runner peeks (truncated) for inspector.
+            try:
+                schema_path = pkg.package_dir / "schema.json"
+                if schema_path.is_file():
+                    raw = schema_path.read_text(encoding="utf-8")
+                    if len(raw) > 4000:
+                        raw = raw[:4000] + "\n…(truncated)"
+                    payload["schema_preview"] = raw
+            except OSError:
+                pass
+            try:
+                runner_path = pkg.package_dir / "runner.json"
+                if runner_path.is_file():
+                    payload["runner"] = json.loads(
+                        runner_path.read_text(encoding="utf-8")
+                    )
+            except (OSError, json.JSONDecodeError):
+                pass
+        self._json(200, payload)
+
+    def _get_skill_detail(self, path: str, qs: dict[str, list[str]]) -> None:
+        """GET /api/skills/{name} — playbook body + optional package VCS versions."""
+        if self.skills is None:
+            self._json(503, {"ok": False, "error": "skills catalog unavailable"})
+            return
+        name = _safe_segment(unquote(path[len("/api/skills/") :]))
+        if name is None:
+            self._json(400, {"ok": False, "error": "invalid skill name"})
+            return
+        q = self._package_detail_query(qs)
+        args: dict[str, Any] = {
+            "name": name,
+            "which": q["which"],
+            "list_versions": q["list_versions"],
+        }
+        if q["version_id"] is not None:
+            args["version_id"] = q["version_id"]
+
+        from elyra.tools.builtin.package_vcs import get_skill
+
+        try:
+            result = get_skill(args, self._glass_tool_context())
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("GET /api/skills/%s failed: %s", name, exc)
+            self._json(500, {"ok": False, "error": "skill_detail_failed"})
+            return
+
+        if not result.ok:
+            code = 404 if result.error_reason in (
+                "package_not_found",
+                "draft_missing",
+                "version_not_found",
+            ) else 400
+            self._json(
+                code,
+                {
+                    "ok": False,
+                    "error": result.error_reason or "error",
+                    "name": name,
+                    "kind": "skill",
+                },
+            )
+            return
+
+        payload = dict(result.payload or {})
+        payload["ok"] = True
+        payload["kind"] = "skill"
+        # Prefer full SKILL.md for current catalog load (playbooks are the point).
+        if q["which"] == "current":
+            try:
+                self.skills.reload()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning(
+                    "skills.reload on GET /api/skills/%s failed: %s", name, exc
+                )
+            loaded = self.skills.load(name)
+            if loaded is not None:
+                payload.setdefault("description", loaded.description)
+                payload.setdefault("catalog_source", loaded.source)
+                if loaded.body:
+                    payload["skill_md"] = loaded.body
+        self._json(200, payload)
 
     # ── Named secrets (PR5 / IK10) ───────────────────────────────────────
 

@@ -198,13 +198,15 @@ If Step 1 needs goals at bias call site: update `PresenceWorker._run_moment` / `
 3. Operator live checklist (§1 success criteria item 6) with continuous **OFF**.
 4. Confirm glass **messages** list (not only activity pill) for answer-speak cases.
 
-### Step 6 — Optional follow-up (not in Stage B mandatory scope)
+### Step 6 — Soft answer-speak + narrow post-tool reminder (landed, then softened)
 
-If soft answer-speak still fails repeatedly in dogfood:
+Soft Decide (orient / talk) owns status vs answer judgment and monologue cases. A thin HOST may fire **only** for a post-tool glass gap:
 
-- Thin HOST in the **same family as no-speak** (not an MC engine): e.g. social + tools_ran + user-question shape + only early status speak → one HOST “speak the tool result.”
+- Pure predicate ``should_answer_speak_nudge`` in `skill_commit_policy.py`; inject once in free-text order: skill_commit → no_speak → **answer_speak** → work_continue → stop.
+- Fires when social + already spoke + tools ran + no speak *since* those tools + non-empty free-text.
+- HOST copy is choice-preserving (if user still needs a tool result on glass, speak; otherwise stop) — not “must answer-speak.”
+- **Does not** fire on free-text length after a complete social speak (false-positive dogfood: second meta speak).
 - Never auto-inject free-text onto glass.
-- Separate PR; evidence-gated.
 
 ---
 

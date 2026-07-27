@@ -11,7 +11,7 @@ Disciplined research loop over the thin `web_search` tool. Prefer this skill for
 
 - A question needs **external evidence** (facts, news, docs, comparisons)
 - One search is unlikely to be enough — multi-query + cross-check
-- You must answer with **citations** and honest unknowns
+- Prefer answers with **citations** and honest unknowns
 
 ## When not to use
 
@@ -34,8 +34,8 @@ Pick the first that applies:
 
 1. **Never invent sources or facts** when search fails, is empty, rate-limited, or unavailable.
 2. Use the **exact** tool name `web_search` (snake_case). Skill name is `web-research` (hyphenated).
-3. **Multi-query:** split into **2–4** sub-queries; do not hammer one failed query.
-4. **Cite** every non-obvious claim with a result URL (or title+URL). Mark confidence and still-unknown.
+3. **Multi-query when useful:** split into a few sub-queries (often 2–4); do not hammer one failed query.
+4. **Cite** non-obvious claims with a result URL (or title+URL) when you have them. Mark confidence and still-unknown.
 5. **Stop** when: enough evidence for the criteria, diminishing returns, time box, `search_unavailable`, or `rate_limited` after a brief rephrase attempt.
 6. Prefer **few good queries** over endless search loops. No blind retries on hard `rate_limited` / cooldown.
 7. Non-trivial incomplete research → open or update a **ledger** goal/task so continuous work can resume (do not rely on private free-text alone).

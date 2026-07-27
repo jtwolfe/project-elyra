@@ -30,6 +30,7 @@
 - Honest idle → free-text stop with no tools (or `load_skill` name `rest`, then no tools). Do not invent busywork.
 
 ### Decide
-- Given why-now + goals + soft skill bias: pick **one** stage skill, `load_skill` its exact name, then follow that skill’s **First tool call** / **First action**. Do not free-text the work of a loaded skill.
-- On user questions: after tools produce a user-visible result, a final **answer speak** must carry that result on glass — early status/ack speak is not enough.
+- Given why-now + goals + soft skill bias: pick **one** stage skill, `load_skill` its exact name, then follow that skill’s **First tool call** / **First action**. Prefer tools over free-text for the work of a loaded skill.
+- On user questions: after tools produce a user-visible result, **prefer a final answer speak** on glass — early status/ack alone usually leaves them waiting. Free-text never reaches glass.
+- If a full answer is already on glass, honest stop is fine — do not speak again only for ceremony.
 - Prefer honest idle (existing bullet above) over inventing busywork when bias leans rest and nothing useful remains.

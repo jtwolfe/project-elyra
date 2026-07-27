@@ -48,10 +48,13 @@ from elyra.loop.continuous_policy import (
     work_continue_host_message,
 )
 from elyra.loop.skill_commit_policy import (
+    ANSWER_SPEAK_HOST,
+    answer_speak_host_message,
     format_playbook_active,
     is_commit_eligible_skill,
     post_load_skill_tool_choice,
     should_allow_no_speak,
+    should_answer_speak_nudge,
     should_skill_commit_nudge,
     skill_commit_host_message,
 )
@@ -156,11 +159,15 @@ class _LoopState:
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     continue_injects: int = 0
     no_speak_nudge_sent: bool = False
+    answer_speak_nudge_sent: bool = False
     work_continue_injects: int = 0
     pending_skill_commit: str | None = None
     skill_commit_sent: bool = False
     skill_commit_injects: int = 0
     tools_ran: bool = False
+    # True after a successful speak; cleared when a successful non-speak tool runs.
+    # Used by answer-speak: free-text after tools without a post-tool speak is a hole.
+    spoke_since_non_speak_tool: bool = True
     ledger_mutated: bool = False
     model_beats: int = 0
     channel_flood_beats: int = 0
@@ -652,11 +659,12 @@ def run_do_loop(
 
     Free-text inject order (K8 extended)::
 
-        skill_commit → no_speak (via should_allow_no_speak) → work_continue → stop
+        skill_commit → no_speak → answer_speak → work_continue → stop
 
     Skill-commit fires even on channel flood free-text and is independent of
     ``continuous_enabled``. Social no-speak no longer always wins first over
-    post-skill commit.
+    post-skill commit. Answer-speak is a narrow post-tool glass reminder only
+    (choice-preserving; soft Decide owns monologue / status-vs-answer judgment).
     """
     loop = _loop_settings(settings)
     cont = _continuous_settings(settings)
@@ -953,8 +961,8 @@ def _run_loop_body(
         )
 
         # Free-text inject order (K8 extended): skill_commit → no_speak →
-        # work_continue → stop. Skill-commit fires even on flood free-text and
-        # is independent of continuous_enabled.
+        # answer_speak → work_continue → stop. Skill-commit fires even on flood
+        # free-text and is independent of continuous_enabled.
 
         # 1. Post-load skill-commit HOST (once per moment when pending).
         commit = should_skill_commit_nudge(
@@ -998,6 +1006,35 @@ def _run_loop_body(
                     "type": "obs",
                     "kind": "no_speak_nudge",
                     "content": NO_SPEAK_NUDGE,
+                },
+            )
+            continue
+
+        # 2b. Soft channel reminder: tools ran without a post-tool speak, free-text
+        # only (once). Not monologue length — that is soft Decide (orient / talk).
+        answer = should_answer_speak_nudge(
+            social_wake=social_wake,
+            spoke=state.spoke,
+            answer_speak_nudge_sent=state.answer_speak_nudge_sent,
+            free_text_no_tools=True,
+            free_text_content=result.content or "",
+            tools_ran=state.tools_ran,
+            spoke_since_non_speak_tool=state.spoke_since_non_speak_tool,
+            hop_was_flood=hop_was_flood,
+            pending_skill_name=state.pending_skill_commit,
+            skill_commit_sent=state.skill_commit_sent,
+        )
+        if answer.inject:
+            host_line = answer_speak_host_message()
+            state.answer_speak_nudge_sent = True
+            state.chain_messages.append(_obs_user_message(host_line))
+            _append_beat(
+                moments,
+                moment_id,
+                {
+                    "type": "obs",
+                    "kind": "answer_speak_nudge",
+                    "content": host_line,
                 },
             )
             continue
@@ -1243,9 +1280,12 @@ def _handle_tool_batch(
         if tr.ok and not tr.counts_as_speak:
             # K15: tools_ran = successful non-speak only (not speak-tool name).
             state.tools_ran = True
+            # Answer-speak: glass is stale until a later speak carries the result.
+            state.spoke_since_non_speak_tool = False
 
         if tr.counts_as_speak and tr.ok:
             # Wired wrapper updates state.last_activity/spoke then host hook.
+            state.spoke_since_non_speak_tool = True
             if ctx.mark_spoke is not None:
                 ctx.mark_spoke()
             else:
@@ -1469,6 +1509,7 @@ def _finish(
 
 # Re-export meal helper for callers that build outer + run in one place.
 __all__ = [
+    "ANSWER_SPEAK_HOST",
     "NO_SPEAK_NUDGE",
     "DoLoopResult",
     "assistant_message_from_result",
