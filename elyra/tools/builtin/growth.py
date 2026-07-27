@@ -330,34 +330,28 @@ def promote_tool(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         )
 
     # Mid-process callable: reload registry so next hop can use the tool.
+    base_payload: dict[str, Any] = {
+        "name": name,
+        "local_dir": result.get("local_dir"),
+        "content_hash": result.get("content_hash"),
+    }
+    if result.get("archived_version_id") is not None:
+        base_payload["archived_version_id"] = result["archived_version_id"]
+
     if ctx.registry is not None:
         try:
             ctx.registry.reload()
         except Exception as exc:  # noqa: BLE001 — surface as soft warning in payload
             _LOG.warning("registry.reload after promote failed: %s", exc)
-            return ToolResult(
-                ok=True,
-                payload={
-                    "name": name,
-                    "local_dir": result.get("local_dir"),
-                    "content_hash": result.get("content_hash"),
-                    "reloaded": False,
-                    "reload_error": type(exc).__name__,
-                },
-            )
+            base_payload["reloaded"] = False
+            base_payload["reload_error"] = type(exc).__name__
+            return ToolResult(ok=True, payload=base_payload)
 
-    return ToolResult(
-        ok=True,
-        payload={
-            "name": name,
-            "local_dir": result.get("local_dir"),
-            "content_hash": result.get("content_hash"),
-            "reloaded": ctx.registry is not None,
-            "callable": (
-                ctx.registry.has(name) if ctx.registry is not None else False
-            ),
-        },
+    base_payload["reloaded"] = ctx.registry is not None
+    base_payload["callable"] = (
+        ctx.registry.has(name) if ctx.registry is not None else False
     )
+    return ToolResult(ok=True, payload=base_payload)
 
 
 def _bundled_skill_exists(name: str) -> bool:

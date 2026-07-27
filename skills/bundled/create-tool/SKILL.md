@@ -105,11 +105,16 @@ When a tool writes files for later use (plots, exports, intermediates):
 5. Smoke-check the promoted tool with a safe call (requires isolation ready when on).
 6. If usage is non-obvious, consider a companion skill via `create-skill`.
 
+Re-promoting an existing **local** package is allowed: the previous payload is
+archived under `tools/local/<name>/versions/` automatically. Use `get_tool`
+(`list_versions`) and `revert_tool` (reason required) to recover. Bundled
+names still refuse overwrite.
+
 ## Hard rules
 
 - Never skip verify.
 - Write only under `tools/drafts/<name>/` via `install_tool_draft` (sandbox FS tools cannot see host drafts; sandbox `tools/` ≠ drafts; do not thrash empty `list_dir` / host path fishing via `run` as a substitute).
-- Never overwrite bundled tools or existing promoted local tools.
+- Never overwrite **bundled** tools. Re-promote of local packages archives the previous version (recovery via `revert_tool`).
 - Never call a draft tool.
 - Prefer small, clear tools over large multi-purpose ones.
 - Prefer Grok Build over creating a new tool when the need is primarily complex implementation rather than a reusable primitive — **only when that instrument exists**; until then, block the ledger honestly or ask the operator rather than rewriting the host runtime.

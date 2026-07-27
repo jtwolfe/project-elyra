@@ -106,10 +106,12 @@ Runtime + skill must be **fail-closed**:
 3. Package complete before verify  
 4. Verify fails → stay draft  
 5. Promote only after green verify  
-6. Never overwrite bundled or existing promoted packages  
+6. Never overwrite **bundled** packages; re-promote of local packages archives the previous payload under `versions/` (recover with `get_tool` / `revert_tool`)  
 7. Never call draft tools  
 
 The `create-tool` skill body should be a strict checklist matching the above so Gemma cannot half-ship. Runtime enforces gates even if the skill is ignored.
+
+**Package VCS (tools):** each successful re-`promote_tool` archives the prior `tools/local/<name>/` payload into `versions/<version_id>/` (GC cap 50; excludes nested `versions/`). `get_tool` lists meta; `revert_tool` restores with a required reason.
 
 `create-skill` writes only skill packages (no new runners).
 
@@ -124,6 +126,7 @@ The `create-tool` skill body should be a strict checklist matching the above so 
 | Social | `speak`, wait/questions, `schedule_wake` |
 | Skills | `load_skill` (or host equivalent) |
 | Growth | `install_tool_draft`, `verify_tool`, `promote_tool`, `install_skill` |
+| Package VCS | `get_tool`, `revert_tool` (local package archive / recovery) |
 | Identity | `get_identity`, `draft_identity`, `promote_identity` |
 | Optional later | `search_tools`, `use_tool` |
 

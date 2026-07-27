@@ -6,5 +6,6 @@
 - ledger.py — create_goal, create_task, list_goals, get_goal, get_task, update_task, update_goal
 - skills_tools.py — load_skill
 - growth.py — install_tool_draft, verify_tool, promote_tool, install_skill
+- package_vcs.py — get_tool, revert_tool (package archive/recovery)
 - identity.py — get_identity, draft_identity, promote_identity
 """
