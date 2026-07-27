@@ -18,10 +18,12 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -470,6 +472,30 @@ def guest_module_path(name: str, module: str) -> str:
     return f"{GUEST_WORKSPACE_ROOT}/tools/{name}/{rel}"
 
 
+# Path must appear as the *missing-path operand*, not a bare traceback frame
+# (``File "guest_script", line N``). Quoted so a prefix of a longer sibling path
+# (e.g. main.py vs main.py.bak) cannot match.
+_MISSING_PATH_OPERAND_RE = re.compile(
+    r"(?:"
+    r"No such file or directory:\s*(?P<q1>['\"])(?P<p1>.*?)(?P=q1)"
+    r"|"
+    r"can't open file\s+(?P<q2>['\"])(?P<p2>.*?)(?P=q2)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _path_is_missing_operand(combined: str, path: str) -> bool:
+    """True when ``path`` is quoted as the missing-file operand in streams."""
+    for match in _MISSING_PATH_OPERAND_RE.finditer(combined):
+        operand = (
+            match.group("p1") if match.group("p1") is not None else match.group("p2")
+        )
+        if operand == path:
+            return True
+    return False
+
+
 def path_missing_signature(
     *,
     exit_code: int,
@@ -483,7 +509,9 @@ def path_missing_signature(
 
     1. ``exit_code != 0``, and
     2. stderr or stdout contains ``FileNotFoundError`` or errno-2 phrasing, and
-    3. the exact ``guest_script`` string appears as a substring.
+    3. the exact ``guest_script`` string is the **missing-path operand**
+       (e.g. ``No such file or directory: '…'`` / ``can't open file '…'``),
+       not merely a traceback ``File "…"`` frame.
 
     Tool-logic FileNotFound for other package data paths must **not** match
     (no force restage; maps to KD21 ``guest_nonzero_exit``).
@@ -494,14 +522,17 @@ def path_missing_signature(
     if not path:
         return False
     combined = f"{stderr or ''}\n{stdout or ''}"
-    if path not in combined:
+    if not _path_is_missing_operand(combined, path):
         return False
-    # FileNotFoundError and common errno-2 / missing-file phrasing.
+    # Confirm missing-file class (operand patterns already imply this; keep
+    # explicit so non-FNF text that quotes the path elsewhere cannot match).
     if "FileNotFoundError" in combined:
         return True
     if "[Errno 2]" in combined:
         return True
     if "No such file or directory" in combined:
+        return True
+    if "can't open file" in combined.lower():
         return True
     return False
 
@@ -556,6 +587,102 @@ def _any_path_missing_signature(
         ):
             return True
     return False
+
+
+_GUEST_MODULE_MISSING_HINT = "host stage ok; guest visibility failed"
+
+
+def _guest_module_missing_result(
+    *,
+    guest_path: str,
+    package_dir: Path,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+) -> ToolResult:
+    """Exhausted path-missing recovery → guest_module_missing (not KD21)."""
+    return ToolResult(
+        ok=False,
+        error_reason="guest_module_missing",
+        payload={
+            "guest_path": guest_path,
+            "content_hash": content_hash(package_dir),
+            "stage_retried": True,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "hint": _GUEST_MODULE_MISSING_HINT,
+            "exit_code": exit_code,
+            "stdout": _tail(stdout),
+            "stderr": _tail(stderr),
+        },
+    )
+
+
+def _exec_with_path_missing_recovery(
+    *,
+    paths: ElyraPaths,
+    package_dir: Path,
+    candidate_paths: list[str],
+    primary_guest_path: str,
+    run_exec: Callable[[], ExecResult],
+    map_result: Callable[[int, str, str], ToolResult],
+) -> ToolResult:
+    """Exec once; on path-missing signature force re-stage once and re-exec (KD-G3).
+
+    Budget: exactly one force + one extra exec. Intermediate FNF is internal only.
+    Exhausted → ``guest_module_missing``; other outcomes via ``map_result``.
+    """
+    stage_retried = False
+    for _attempt in range(2):
+        try:
+            result = run_exec()
+        except _GuestTimeout:
+            return ToolResult(
+                ok=False,
+                payload={
+                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                    "timed_out": True,
+                },
+                error_reason="guest_timeout",
+            )
+        except _IsolationFailure as exc:
+            return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
+
+        exit_code = int(result.exit_code)
+        stdout = str(result.stdout_text or "")
+        stderr = str(result.stderr_text or "")
+        missing = bool(candidate_paths) and _any_path_missing_signature(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            candidates=candidate_paths,
+        )
+        if missing and not stage_retried:
+            try:
+                stage_package_for_guest(paths, package_dir, force=True)
+            except OSError as exc:
+                _LOG.warning("force re-stage failed for %s: %s", package_dir.name, exc)
+                return ToolResult(
+                    ok=False,
+                    payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
+                    error_reason=f"stage_failed:{type(exc).__name__}",
+                )
+            stage_retried = True
+            continue
+        if missing:
+            _LOG.warning(
+                "guest_module_missing after retry name=%s path=%s",
+                package_dir.name,
+                primary_guest_path,
+            )
+            return _guest_module_missing_result(
+                guest_path=primary_guest_path,
+                package_dir=package_dir,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        return map_result(exit_code, stdout, stderr)
+    raise AssertionError("path-missing recovery loop exited without return")
 
 
 # ---------------------------------------------------------------------------
@@ -987,72 +1114,17 @@ def _guest_python(
     )
     env = {**guest_env(), "PYTHONDONTWRITEBYTECODE": "1"}
 
-    # KD-G3 reactive-only MVP: one force re-stage + one extra exec on exact
-    # guest_script path-missing; intermediate FNF is internal only.
-    stage_retried = False
-    result: ExecResult | None = None
-    for _attempt in range(2):
-        try:
-            result = _exec_with_one_reconnect(
-                life,
-                cmd="python3",
-                argv=["-B", "-c", runner_src],
-                cwd=GUEST_WORKSPACE_ROOT,
-                env=env,
-                timeout=timeout,
-            )
-        except _GuestTimeout:
-            return ToolResult(
-                ok=False,
-                payload={
-                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                    "timed_out": True,
-                },
-                error_reason="guest_timeout",
-            )
-        except _IsolationFailure as exc:
-            return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
-
-        exit_code = int(result.exit_code)
-        stdout = str(result.stdout_text or "")
-        stderr = str(result.stderr_text or "")
-        missing = path_missing_signature(
-            exit_code=exit_code,
-            stdout=stdout,
-            stderr=stderr,
-            guest_script=guest_script,
+    def _run() -> ExecResult:
+        return _exec_with_one_reconnect(
+            life,
+            cmd="python3",
+            argv=["-B", "-c", runner_src],
+            cwd=GUEST_WORKSPACE_ROOT,
+            env=env,
+            timeout=timeout,
         )
-        if missing and not stage_retried:
-            try:
-                stage_package_for_guest(paths, package_dir, force=True)
-            except OSError as exc:
-                _LOG.warning("force re-stage failed for %s: %s", package_dir.name, exc)
-                return ToolResult(
-                    ok=False,
-                    payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
-                    error_reason=f"stage_failed:{type(exc).__name__}",
-                )
-            stage_retried = True
-            continue
-        if missing:
-            _LOG.warning(
-                "guest_module_missing after retry name=%s path=%s",
-                package_dir.name,
-                guest_script,
-            )
-            return ToolResult(
-                ok=False,
-                error_reason="guest_module_missing",
-                payload={
-                    "guest_path": guest_script,
-                    "content_hash": content_hash(package_dir),
-                    "stage_retried": True,
-                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                    "exit_code": exit_code,
-                    "stdout": _tail(stdout),
-                    "stderr": _tail(stderr),
-                },
-            )
+
+    def _map(exit_code: int, stdout: str, stderr: str) -> ToolResult:
         return map_python_exec_result(
             exit_code=exit_code,
             stdout=stdout,
@@ -1061,14 +1133,15 @@ def _guest_python(
             isolation=True,
         )
 
-    # Unreachable: loop always returns; keep type-checkers happy.
-    assert result is not None
-    return map_python_exec_result(
-        exit_code=int(result.exit_code),
-        stdout=str(result.stdout_text or ""),
-        stderr=str(result.stderr_text or ""),
-        executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
-        isolation=True,
+    # KD-G3 reactive-only MVP: one force re-stage + one extra exec on exact
+    # guest_script path-missing; intermediate FNF is internal only.
+    return _exec_with_path_missing_recovery(
+        paths=paths,
+        package_dir=package_dir,
+        candidate_paths=[guest_script],
+        primary_guest_path=guest_script,
+        run_exec=_run,
+        map_result=_map,
     )
 
 
@@ -1114,73 +1187,17 @@ def _guest_shell(
         }
         guest_cwd = guest_tools_package_path(package_dir.name)
 
-        # KD-G3: same one-force budget for package-relative argv path missing.
-        stage_retried = False
-        result: ExecResult | None = None
-        for _attempt in range(2):
-            try:
-                result = _exec_with_one_reconnect(
-                    life,
-                    cmd=cmd,
-                    argv=cmd_args,
-                    cwd=guest_cwd,
-                    env=env,
-                    timeout=timeout,
-                )
-            except _GuestTimeout:
-                return ToolResult(
-                    ok=False,
-                    payload={
-                        "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                        "timed_out": True,
-                    },
-                    error_reason="guest_timeout",
-                )
-            except _IsolationFailure as exc:
-                return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
-
-            exit_code = int(result.exit_code)
-            stdout = str(result.stdout_text or "")
-            stderr = str(result.stderr_text or "")
-            missing = bool(path_candidates) and _any_path_missing_signature(
-                exit_code=exit_code,
-                stdout=stdout,
-                stderr=stderr,
-                candidates=path_candidates,
+        def _run() -> ExecResult:
+            return _exec_with_one_reconnect(
+                life,
+                cmd=cmd,
+                argv=cmd_args,
+                cwd=guest_cwd,
+                env=env,
+                timeout=timeout,
             )
-            if missing and not stage_retried:
-                try:
-                    stage_package_for_guest(paths, package_dir, force=True)
-                except OSError as exc:
-                    _LOG.warning(
-                        "force re-stage failed for %s: %s", package_dir.name, exc
-                    )
-                    return ToolResult(
-                        ok=False,
-                        payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
-                        error_reason=f"stage_failed:{type(exc).__name__}",
-                    )
-                stage_retried = True
-                continue
-            if missing:
-                _LOG.warning(
-                    "guest_module_missing after retry name=%s path=%s",
-                    package_dir.name,
-                    primary_guest_path,
-                )
-                return ToolResult(
-                    ok=False,
-                    error_reason="guest_module_missing",
-                    payload={
-                        "guest_path": primary_guest_path,
-                        "content_hash": content_hash(package_dir),
-                        "stage_retried": True,
-                        "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                        "exit_code": exit_code,
-                        "stdout": _tail(stdout),
-                        "stderr": _tail(stderr),
-                    },
-                )
+
+        def _map(exit_code: int, stdout: str, stderr: str) -> ToolResult:
             return map_shell_exec_result(
                 exit_code=exit_code,
                 stdout=stdout,
@@ -1189,13 +1206,14 @@ def _guest_shell(
                 isolation=True,
             )
 
-        assert result is not None
-        return map_shell_exec_result(
-            exit_code=int(result.exit_code),
-            stdout=str(result.stdout_text or ""),
-            stderr=str(result.stderr_text or ""),
-            executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
-            isolation=True,
+        # KD-G3: same one-force budget for package-relative argv path missing.
+        return _exec_with_path_missing_recovery(
+            paths=paths,
+            package_dir=package_dir,
+            candidate_paths=path_candidates,
+            primary_guest_path=primary_guest_path,
+            run_exec=_run,
+            map_result=_map,
         )
     finally:
         try:

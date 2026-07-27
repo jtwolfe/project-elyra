@@ -1143,6 +1143,16 @@ def _track_force_stages(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
     return calls
 
 
+def _tool_logic_fnf_stderr(guest_script: str, missing_data: str) -> str:
+    """Realistic CPython traceback: guest_script only as File frame; other path missing."""
+    return (
+        "Traceback (most recent call last):\n"
+        '  File "<string>", line 12, in <module>\n'
+        f'  File "{guest_script}", line 5, in run\n'
+        f"FileNotFoundError: [Errno 2] No such file or directory: {missing_data!r}\n"
+    )
+
+
 def test_path_missing_signature_exact_guest_script_only() -> None:
     gs = "/workspace/tools/calc/impl/main.py"
     other = "/workspace/tools/calc/data/other.json"
@@ -1164,6 +1174,24 @@ def test_path_missing_signature_exact_guest_script_only() -> None:
     assert not path_missing_signature(
         exit_code=1,
         stderr="ValueError: boom",
+        guest_script=gs,
+    )
+    # Blocker: traceback File frame for guest_script + FNF for other path → no match
+    assert not path_missing_signature(
+        exit_code=1,
+        stderr=_tool_logic_fnf_stderr(gs, other),
+        guest_script=gs,
+    )
+    # Prefix boundary: missing main.py.bak must not match guest_script main.py
+    assert not path_missing_signature(
+        exit_code=1,
+        stderr=_fnf_stderr_for(gs + ".bak"),
+        guest_script=gs,
+    )
+    # Shell form: can't open file 'guest_script'
+    assert path_missing_signature(
+        exit_code=2,
+        stderr=f"python3: can't open file '{gs}': [Errno 2] No such file or directory\n",
         guest_script=gs,
     )
 
@@ -1215,6 +1243,7 @@ def test_guest_fnf_both_fail_guest_module_missing(
     assert result.payload.get("stage_retried") is True
     assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
     assert result.payload.get("content_hash") == content_hash(pkg)
+    assert result.payload.get("hint") == "host stage ok; guest visibility failed"
     assert client.exec_calls == 2
     assert sum(1 for c in stage_calls if c["force"]) == 1
 
@@ -1244,6 +1273,40 @@ def test_guest_fnf_other_package_path_no_force(
     assert path_missing_signature(
         exit_code=1, stderr=_fnf_stderr_for(gs), guest_script=gs
     )
+
+
+def test_guest_fnf_tool_logic_traceback_frame_no_force(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Tool-logic FNF: File guest_script frame + other missing path → no force.
+
+    Real CPython always includes ``File "{guest_script}", line N`` when the
+    exception is raised inside the loaded module. That must not be treated as
+    guest_script path-missing (Issue 1 blocker).
+    """
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_python_pkg(tmp_path, "tool_logic_fnf")
+    gs = _guest_script_for_pkg(pkg)
+    other = f"/workspace/tools/{pkg.name}/data/missing.json"
+    stage_calls = _track_force_stages(monkeypatch)
+    stderr = _tool_logic_fnf_stderr(gs, other)
+    # Two identical tool-logic FNFs would previously force + mislabel as
+    # guest_module_missing; must stay single-exec guest_nonzero_exit.
+    _install_exec_sequence(
+        life,
+        client,
+        [
+            ExecResult(exit_code=1, stderr_text=stderr),
+            ExecResult(exit_code=1, stderr_text=stderr),
+        ],
+    )
+    runner = load_runner_json(pkg)
+    result = dispatch(runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg)
+    assert result.ok is False
+    assert result.error_reason == "guest_nonzero_exit"
+    assert client.exec_calls == 1
+    assert sum(1 for c in stage_calls if c["force"]) == 0
 
 
 def test_guest_serial_n_dispatch_fnf_only_call2_recovers(
