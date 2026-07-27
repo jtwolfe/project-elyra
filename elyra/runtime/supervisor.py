@@ -425,9 +425,10 @@ class ElyraSupervisor:
             self.shutdown()
 
     def shutdown(self) -> None:
-        """Ordered teardown: stop signal → worker join → sandbox stop → registry.
+        """Ordered teardown: stop signal → worker join → browser → sandbox → registry.
 
         Worker must join **before** sandbox stop (avoid mid-exec races).
+        Browser sessions closed after worker join (IK18) so in-flight tools finish.
         Sandbox shutdown is stop-only (no remove). Warm thread best-effort join.
         """
         self._stop.set()
@@ -446,6 +447,13 @@ class ElyraSupervisor:
         # 1. Presence worker join before sandbox stop.
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=5)
+        # 1b. Close any leftover Playwright browser sessions (IK18).
+        try:
+            from elyra.tools.browser_sessions import get_browser_session_manager
+
+            get_browser_session_manager().close_all()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("browser close_all on shutdown failed: %s", exc)
         # 2. Warm thread best-effort join (daemon; cancel via stop event).
         if self._sandbox_warm_thread is not None:
             self._sandbox_warm_thread.join(timeout=5)

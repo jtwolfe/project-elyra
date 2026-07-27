@@ -2,7 +2,8 @@
 
 Scope: ELYRA_HOME and conventional directories; seed copy on first run.
 In scope: home override, model/data/skills/tools/prompts paths, ensure_data_dirs
-(including ``data/secrets`` for API key store and ``data/runtime`` prefs).
+(including ``data/secrets`` for API key store, ``data/runtime`` prefs, and
+``data/browser`` for optional Playwright session data).
 Out of scope: feature flags, settings.toml, secret *values* (see ``elyra.llm.auth``).
 """
 
@@ -58,6 +59,7 @@ class ElyraPaths:
             "sandbox",
             "runtime",  # continuous.json + provider.json + usage.json
             "media",  # content-addressed attachments (KD1)
+            "browser",  # optional Playwright session user-data (v1 may use temp)
         ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
 

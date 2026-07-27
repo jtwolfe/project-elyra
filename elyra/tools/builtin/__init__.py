@@ -10,4 +10,5 @@
 - identity.py — get_identity, draft_identity, promote_identity
 - search.py — web_search (optional elyra[search] / ddgs)
 - secrets_tools.py — secrets_list, secrets_set, secrets_delete
+- browser.py — browser_session_open/close, goto, snapshot, click/type/fill, get_text, wait
 """

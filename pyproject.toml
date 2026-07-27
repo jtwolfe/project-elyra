@@ -16,6 +16,9 @@ dev = ["pytest>=8.0"]
 sandbox = ["microsandbox>=0.6.0"]
 # Optional native web search (web_search builtin). Fail-closed without this extra.
 search = ["ddgs>=9.0"]
+# Optional Playwright browser primitives (host builtins). Also run:
+#   playwright install chromium
+browser = ["playwright>=1.49"]
 
 [project.scripts]
 elyra = "elyra.cli:main"

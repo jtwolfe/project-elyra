@@ -25,6 +25,7 @@ def test_ensure_data_dirs_creates_runtime_layout(tmp_path):
         "runtime",
         "secrets",
         "media",
+        "browser",
     ):
         assert (paths.data_dir / name).is_dir()
     for sub in ("blobs", "meta", "tts", "by_message", "tmp"):

@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Session id from browser_session_open"
+    },
+    "ref": {
+      "type": "string",
+      "description": "Optional element ref from last snapshot; omit for full body text"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false
+}

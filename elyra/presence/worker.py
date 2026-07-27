@@ -1172,6 +1172,9 @@ class PresenceWorker:
             except (KeyError, ValueError) as exc:
                 _LOG.warning("close_moment failed: %s", exc)
 
+            # Browser sessions bound to this moment (Playwright) — best-effort.
+            self._close_browser_sessions_for_moment(moment_id)
+
             try:
                 self._queue.mark_done(wake.id)
             except KeyError:
@@ -1366,6 +1369,8 @@ class PresenceWorker:
                     _LOG.warning(
                         "fail_in_flight close_moment failed: %s", close_exc
                     )
+                # Dual path: error finalize must not orphan Chromium (IK18).
+                self._close_browser_sessions_for_moment(moment_id)
             if wake is not None:
                 try:
                     op = self._queue.status(wake.id)
@@ -1379,6 +1384,25 @@ class PresenceWorker:
             self._phase = self._phase_from_pending_waits_unlocked()
             self._busy = False
             self._active_moment_id = None
+
+    @staticmethod
+    def _close_browser_sessions_for_moment(moment_id: str) -> None:
+        """Best-effort close of Playwright sessions bound to ``moment_id``.
+
+        Never raises into the worker path (optional browser dep / teardown noise).
+        """
+        if not moment_id:
+            return
+        try:
+            from elyra.tools.browser_sessions import get_browser_session_manager
+
+            get_browser_session_manager().close_for_moment(moment_id)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning(
+                "browser close_for_moment failed moment_id=%s: %s",
+                moment_id,
+                exc,
+            )
 
     def _phase_from_pending_waits_unlocked(self) -> str:
         """``waiting`` iff durable pending wait exists; else ``idle``."""

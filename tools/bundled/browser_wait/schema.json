@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Session id from browser_session_open"
+    },
+    "seconds": {
+      "type": "number",
+      "description": "Seconds to wait (default 0.5, max 10)"
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false
+}
