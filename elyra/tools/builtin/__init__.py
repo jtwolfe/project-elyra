@@ -6,9 +6,9 @@
 - ledger.py — create_goal, create_task, list_goals, get_goal, get_task, update_task, update_goal
 - skills_tools.py — load_skill
 - growth.py — install_tool_draft, verify_tool, promote_tool, install_skill
-- package_vcs.py — get_tool, revert_tool (package archive/recovery)
 - identity.py — get_identity, draft_identity, promote_identity
+- package_vcs.py — get/revert tool+skill package VCS
 - search.py — web_search (optional elyra[search] / ddgs)
-- secrets_tools.py — secrets_list, secrets_set, secrets_delete
 - browser.py — browser_session_open/close, goto, snapshot, click/type/fill, get_text, wait
+- secrets_tools.py — secrets_list, secrets_set, secrets_delete
 """
