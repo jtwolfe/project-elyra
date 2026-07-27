@@ -526,6 +526,69 @@ def test_poller_api_key_unsupported_skips_further_http(tmp_path: Path):
     assert len(calls) == 1
 
 
+def test_poller_api_key_resolve_fail_does_not_terminalize(tmp_path: Path):
+    """Resolve not-ok must not set terminal unsupported; repair can retry HTTP."""
+    m = _meter(tmp_path)
+    fetch_calls: list[int] = []
+    resolve_n = {"n": 0}
+
+    def resolve(**_k):
+        resolve_n["n"] += 1
+        if resolve_n["n"] == 1:
+            return CredentialResolution(
+                ok=False,
+                source="api_key",
+                token=None,
+                detail="missing_api_key",
+                expires_at=None,
+                email=None,
+                api_key_configured=False,
+            )
+        return CredentialResolution(
+            ok=True,
+            source="api_key",
+            token="sk-repaired",
+            detail=None,
+            expires_at=None,
+            email=None,
+            api_key_configured=True,
+        )
+
+    def fetch(*_a, **_k):
+        fetch_calls.append(1)
+        return CreditsSnapshot(
+            status=STATUS_OK,
+            ok=True,
+            credit_usage_percent=5.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+        )
+
+    poller = CreditsPoller(
+        meter=m,
+        usage_settings=_settings(credits_poll_interval_s=30.0),
+        data_dir=tmp_path,
+        credential_source="api_key",
+        first_delay_s=0.0,
+        fetch_fn=fetch,
+        resolve_fn=resolve,
+    )
+    poller.start()
+    time.sleep(0.15)
+    assert fetch_calls == []  # first attempt: resolve fail, no HTTP
+    assert poller._api_key_unsupported is False  # noqa: SLF001 — intentional
+    # Bypass debounce and force another poll attempt after "repair".
+    with poller._meta_lock:  # noqa: SLF001
+        poller._last_attempt_mono = 0.0
+    poller.request_poll()
+    deadline = time.time() + 2.0
+    while time.time() < deadline and not fetch_calls:
+        time.sleep(0.02)
+    poller.stop()
+    assert fetch_calls == [1], "second poll after resolve repair must call fetch"
+
+
 def test_poller_auth_failed_does_not_raise(tmp_path: Path):
     m = _meter(tmp_path)
     poller = CreditsPoller(
@@ -547,15 +610,21 @@ def test_poller_auth_failed_does_not_raise(tmp_path: Path):
 
 
 def test_status_path_signals_only_never_awaits_http(tmp_path: Path):
-    """KD26: usage_status_block returns quickly while transport delayed."""
+    """KD26: usage_status_block returns quickly while transport is delayed 5s+.
+
+    Holds fetch on an Event (simulates ≥5s / unbounded network) until after
+    status returns — status must stay signal-only and sub-250ms.
+    """
     clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
     m = _meter(tmp_path, clock=clock)
-    delay = 0.5
     fetch_entered = threading.Event()
+    release_fetch = threading.Event()
 
     def slow_fetch(*_a, **_k):
         fetch_entered.set()
-        time.sleep(delay)
+        # Design bar: status stays responsive while transport is delayed 5s+.
+        # Event hold is stronger than a fixed sleep (unbounded stall).
+        assert release_fetch.wait(timeout=30.0), "status never released fetch"
         return CreditsSnapshot(
             status=STATUS_OK,
             ok=True,
@@ -599,11 +668,12 @@ def test_status_path_signals_only_never_awaits_http(tmp_path: Path):
     )
     poller.start()
     assert fetch_entered.wait(timeout=2.0)
-    # Mid-flight HTTP: status must not block on it.
+    # Mid-flight HTTP held open (≥ design 5s bar): status must not block.
     t0 = time.perf_counter()
     block = pr.usage_status_block()
     elapsed = time.perf_counter() - t0
-    poller.stop(join_timeout_s=2.0)
+    release_fetch.set()
+    poller.stop()
     assert elapsed < 0.25, f"status blocked {elapsed:.3f}s (expected signal-only)"
     assert block["enabled"] is True
     assert "week_used_tokens" in block
@@ -643,31 +713,91 @@ def test_status_signal_debounced(tmp_path: Path):
     assert after_signals == after_first
 
 
-def test_supervisor_skips_poller_when_disabled(tmp_path: Path):
-    """usage.enabled=false or credits_poll_enabled=false → no poller thread."""
-    # Unit-level: _start_credits_poller path via CreditsPoller construction
-    # is covered by noop tests; ensure ProviderRuntime field defaults None.
-    pr = ProviderRuntime(
-        meter=None,
-        http_client=None,
-        chat_client=MagicMock(),
-        worker=None,
-        usage_settings=_settings(enabled=False),
-        xai_config=None,
-        local_config=None,
-        gate=None,
-        prefs_path=tmp_path / "prefs.json",
-        data_dir=tmp_path,
-        provider_name="xai",
-        model="grok",
-        model_label="Grok",
-        credential_source="grok_build",
-        credential_ok=False,
-        credential_detail="x",
-        credential_expires_at=None,
-        credential_email=None,
-        api_key_configured=False,
+def test_supervisor_start_stop_credits_poller_flags(tmp_path: Path):
+    """``_start_credits_poller`` respects usage/poll flags; stop joins cleanly."""
+    from elyra.config import ElyraPaths
+    from elyra.runtime.config import RuntimeConfig
+    from elyra.runtime.supervisor import ElyraSupervisor
+
+    home = tmp_path / "home"
+    data = tmp_path / "data"
+    for p in (home, data):
+        p.mkdir(parents=True, exist_ok=True)
+    (data / "runtime").mkdir(parents=True, exist_ok=True)
+    paths = ElyraPaths(
+        home=home,
+        model_dir=home / "models",
+        data_dir=data,
+        skills_dir=home / "skills",
+        tools_dir=home / "tools",
+        prompts_dir=home / "prompts",
     )
+
+    def _pr(meter: UsageMeter | None, usage: UsageSettings) -> ProviderRuntime:
+        return ProviderRuntime(
+            meter=meter,
+            http_client=None,
+            chat_client=MagicMock(),
+            worker=None,
+            usage_settings=usage,
+            xai_config=None,
+            local_config=None,
+            gate=None,
+            prefs_path=data / "runtime" / "prefs.json",
+            data_dir=data,
+            provider_name="xai",
+            model="grok",
+            model_label="Grok",
+            credential_source="grok_build",
+            credential_ok=False,
+            credential_detail="x",
+            credential_expires_at=None,
+            credential_email=None,
+            api_key_configured=False,
+        )
+
+    # Disabled: usage.enabled=false → no poller.
+    usage_off = _settings(enabled=False, credits_poll_enabled=True)
+    sup = ElyraSupervisor(paths=paths, config=RuntimeConfig(usage=usage_off))
+    meter = _meter(data, usage_off)
+    pr = _pr(meter, usage_off)
+    sup.provider_runtime = pr
+    sup._start_credits_poller(meter=meter, pr=pr)  # noqa: SLF001
+    assert sup._credits_poller is None  # noqa: SLF001
     assert pr.credits_poller is None
-    block = pr.usage_status_block()
-    assert block["enabled"] is False
+
+    # Disabled: credits_poll_enabled=false → no poller.
+    usage_no_poll = _settings(enabled=True, credits_poll_enabled=False)
+    sup2 = ElyraSupervisor(paths=paths, config=RuntimeConfig(usage=usage_no_poll))
+    meter2 = _meter(data, usage_no_poll)
+    pr2 = _pr(meter2, usage_no_poll)
+    sup2.provider_runtime = pr2
+    sup2._start_credits_poller(meter=meter2, pr=pr2)  # noqa: SLF001
+    assert sup2._credits_poller is None  # noqa: SLF001
+
+    # Enabled: poller starts; shutdown stop clears handle.
+    fetch_calls: list[int] = []
+
+    def fetch(*_a, **_k):
+        fetch_calls.append(1)
+        return CreditsSnapshot(status=STATUS_ERROR, ok=False, detail="x")
+
+    usage_on = _settings(enabled=True, credits_poll_enabled=True, credits_poll_interval_s=3600.0)
+    sup3 = ElyraSupervisor(paths=paths, config=RuntimeConfig(usage=usage_on))
+    meter3 = _meter(data, usage_on)
+    pr3 = _pr(meter3, usage_on)
+    sup3.provider_runtime = pr3
+    # Inject controlled poller by patching after start path: call start helper
+    # then replace fetch via constructing poller like supervisor does — exercise
+    # the real _start_credits_poller with a resolve that has no token so no net.
+    sup3._start_credits_poller(meter=meter3, pr=pr3)  # noqa: SLF001
+    poller = sup3._credits_poller  # noqa: SLF001
+    assert poller is not None
+    assert pr3.credits_poller is poller
+    assert poller._thread is not None and poller._thread.is_alive()  # noqa: SLF001
+    # shutdown path used by serve_until_stopped
+    sup3._credits_poller = poller  # noqa: SLF001
+    poller.stop()
+    sup3._credits_poller = None  # noqa: SLF001
+    pr3.credits_poller = None
+    assert poller._thread is None  # noqa: SLF001

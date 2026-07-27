@@ -17,6 +17,7 @@ from elyra.llm.auth import resolve_bearer
 from elyra.llm.credits import (
     DEFAULT_BILLING_TIMEOUT_S,
     STATUS_AUTH_FAILED,
+    STATUS_ERROR,
     STATUS_OK,
     STATUS_UNSUPPORTED,
     CreditsSnapshot,
@@ -99,13 +100,19 @@ class CreditsPoller:
         )
         self._thread.start()
 
-    def stop(self, *, join_timeout_s: float = 2.0) -> None:
-        """Signal stop; best-effort join (daemon so process never hangs)."""
+    def stop(self, *, join_timeout_s: float | None = None) -> None:
+        """Signal stop; best-effort join (daemon so process never hangs).
+
+        Default join waits at least HTTP timeout + margin so an in-flight
+        ``urlopen`` can finish and skip apply (see ``_apply`` stop check).
+        """
+        if join_timeout_s is None:
+            join_timeout_s = max(2.0, float(self._http_timeout_s) + 1.0)
         self._stop.set()
         self._poll_requested.set()  # wake waiters
         t = self._thread
         if t is not None and t.is_alive():
-            t.join(timeout=join_timeout_s)
+            t.join(timeout=float(join_timeout_s))
         self._thread = None
 
     def request_poll(self) -> None:
@@ -161,13 +168,17 @@ class CreditsPoller:
                 return
         while not self._stop.is_set():
             settings = self._current_settings()
+            # Clear *before* poll so a status signal during HTTP/apply remains
+            # set for the next wait (would be lost if cleared after poll).
+            self._poll_requested.clear()
             if (
                 self._enabled
                 and settings.enabled
                 and settings.credits_poll_enabled
             ):
                 self._poll_once()
-            self._poll_requested.clear()
+            if self._stop.is_set():
+                return
             interval = max(30.0, float(settings.credits_poll_interval_s))
             # Wait interval or until status signals / stop.
             self._poll_requested.wait(timeout=interval)
@@ -226,15 +237,14 @@ class CreditsPoller:
 
         if not getattr(resolution, "ok", False) or not getattr(resolution, "token", None):
             detail = getattr(resolution, "detail", None) or "credential_unavailable"
+            # Fail-soft only — do NOT set _api_key_unsupported here. Terminal
+            # unsupported is reserved for real HTTP 401/403/404 from fetch so
+            # cold-start missing key / later repair can still try billing.
             snap = CreditsSnapshot(
-                status=STATUS_AUTH_FAILED if source != "api_key" else STATUS_UNSUPPORTED,
+                status=STATUS_AUTH_FAILED if source != "api_key" else STATUS_ERROR,
                 ok=False,
                 detail=str(detail),
             )
-            if source == "api_key":
-                with self._meta_lock:
-                    self._api_key_unsupported = True
-                    self._unsupported_for_source = source
             self._apply(snap)
             self._maybe_log_auth(snap)
             return
@@ -255,10 +265,15 @@ class CreditsPoller:
                 detail=f"fetch_raised:{type(exc).__name__}"[:200],
             )
 
+        # Terminal api_key unsupported only after a real fetch_billing result.
         if source == "api_key" and (snap.status or "") == STATUS_UNSUPPORTED:
             with self._meta_lock:
                 self._api_key_unsupported = True
                 self._unsupported_for_source = source
+
+        # Skip apply after stop so shutdown does not persist post-teardown.
+        if self._stop.is_set():
+            return
 
         self._apply(snap)
         self._maybe_log_auth(snap)
@@ -270,6 +285,8 @@ class CreditsPoller:
             )
 
     def _apply(self, snap: CreditsSnapshot) -> None:
+        if self._stop.is_set():
+            return
         try:
             # apply_credits_snapshot takes meter lock + may adopt/roll + persist.
             self._meter.apply_credits_snapshot(snap)

@@ -431,10 +431,11 @@ class ElyraSupervisor:
         self._stop.set()
         self._sandbox_stop.set()
         self._gate.shutdown()
-        # 0. Credits poller stop (daemon; best-effort join).
+        # 0. Credits poller stop (daemon; join covers HTTP timeout + margin).
         if self._credits_poller is not None:
             try:
-                self._credits_poller.stop(join_timeout_s=2.0)
+                # Default stop join = max(2, http_timeout+1); no shorter override.
+                self._credits_poller.stop()
             except Exception as exc:  # noqa: BLE001
                 _LOG.warning("credits poller stop failed: %s", exc)
             self._credits_poller = None
