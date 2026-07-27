@@ -1217,7 +1217,6 @@ function renderUsageCard(s) {
   setUsageBar(railUsageWeekBar, week);
 
   // SuperGrok pool: shared helper so Status + rail stay in lockstep (KD11).
-  const sg = (usage && usage.supergrok) || null;
   const sgView = supergrokMeterView(usage);
   if (usageSgPct) usageSgPct.textContent = sgView.label;
   if (railUsageSgPct) railUsageSgPct.textContent = sgView.label;
@@ -1289,8 +1288,8 @@ function renderUsageCard(s) {
     }
   }
 
-  // product_usage collapsed under details (diagnostic only).
-  const productUsage = sg && sg.product_usage;
+  // product_usage collapsed under details (diagnostic only; Status card only).
+  const productUsage = usage && usage.supergrok && usage.supergrok.product_usage;
   if (usageProductUsage && usageProductUsageBody) {
     if (
       productUsage &&
