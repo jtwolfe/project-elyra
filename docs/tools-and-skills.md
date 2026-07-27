@@ -115,7 +115,7 @@ create-tool → tools/drafts/ (not callable; host-only; not visible via sandbox 
 
 **Sandbox tree honesty:** product FS root is `{ELYRA_HOME}/sandboxes/sandbox0/` (guest `/workspace` when isolation is on). Sandbox `tools/` holds **staged runtime copies** (plus `.stage` / `.verify`) — not host `tools/drafts/`. Growth tools own drafts/promote on the host.
 
-**Guest package stage gate:** when isolation is on, `sandbox_python` / `sandbox_shell` packages stage into `sandboxes/sandbox0/tools/<name>/` for guest exec. Staging is **content-hash stage-once** (marker `.elyra_stage.json`): re-stage only when package bytes change; refresh is in-place (no top-level rename thrash on every call). Guest path-missing after one force retry surfaces as `guest_module_missing` (not bare `guest_nonzero_exit`). Soft skill manners prefer richer single calls when possible; legitimate multi-arg batches rely on this hard gate, not thrash policy. Design: [design-guest-package-stage-reliability.md](design-guest-package-stage-reliability.md).
+**Guest package stage gate:** when isolation is on, `sandbox_python` / `sandbox_shell` packages stage into `sandboxes/sandbox0/tools/<name>/` for guest exec. Staging is **content-hash stage-once** (marker `.elyra_stage.json`): re-stage only when package bytes change; refresh is in-place (no top-level rename thrash on every call). Guest path-missing after one force retry surfaces as `guest_module_missing` (not bare `guest_nonzero_exit`). Soft skill manners prefer richer single calls when possible; legitimate multi-call batches (different args) rely on this hard gate, not thrash policy. Design: [design-guest-package-stage-reliability.md](design-guest-package-stage-reliability.md).
 
 ### Lifecycle (skills)
 

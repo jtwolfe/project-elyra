@@ -41,7 +41,6 @@ Pick the first that applies:
 5. Do **not** close the parent goal from here. Prefer `load_skill` name `review-work` before goal close.
 6. Use **exact** tool names (snake_case) and skill names (hyphenated) only.
 7. Results the user asked for: **prefer a final `speak` on glass**, not only tool JSON or free-text.
-8. Prefer **one** tool call with richer args when a package can batch work (manners). Multi-arg calls of the same guest package with **different** args are legitimate — the hard stage gate keeps them reliable; thrash policy is not the fix. On `guest_module_missing`, surface once and pivot — do **not** re-spam the same call.
 
 ## Process
 
@@ -57,6 +56,14 @@ Pick the first that applies:
    - **Blocked:** missing info, tool/runtime failure, external dependency → status + reason; `speak` if the operator must act
    - **Need user:** `speak` then `wait_user` (speak first)
 7. When execution is done and review is next: `load_skill` name `review-work`.
+
+### Guest package call manners (soft)
+
+Manners only — not the integrity wall. Hard reliability for multi-call batches is the content-hash **stage gate**.
+
+- Prefer **one** tool call with richer args when a package can batch work.
+- Legitimate multi-call batches (different args in one hop) stay reliable via that hard stage gate; thrash policy is not the fix — do not treat multi-call batches as thrash.
+- On `guest_module_missing`: surface once and pivot — do **not** re-spam the same call.
 
 ## Quality / completion
 

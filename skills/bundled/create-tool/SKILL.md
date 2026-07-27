@@ -97,7 +97,7 @@ When a tool writes files for later use (plots, exports, intermediates):
 Manners only — not the integrity wall. Hard reliability for multi-call batches is the content-hash **stage gate** (stage-once + in-place refresh + one path-missing recovery).
 
 - Prefer **one** tool call with richer args over N identical package loads when the schema allows batching.
-- Legitimate multi-call batches (different args in one hop) must remain reliable via that hard stage gate; thrash policy is not the fix — do not treat multi-arg batches as thrash.
+- Legitimate multi-call batches (different args in one hop) must remain reliable via that hard stage gate; thrash policy is not the fix — do not treat multi-call batches as thrash.
 - On `guest_module_missing`: surface once (ledger note / speak if needed) and continue with an alternate approach — do **not** spam the same call.
 
 ## Process
