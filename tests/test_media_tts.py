@@ -167,6 +167,71 @@ def test_get_or_synthesize_cache_hit(paths):
     assert r2.audio == r1.audio
 
 
+def test_tts_on_remote_success_network_only_no_double_count(paths):
+    """synthesize network +1; get_or_synthesize cache hit +0; no double count."""
+    seen: list[str] = []
+
+    def http_post(url, headers, body, timeout):
+        return FAKE_MP3
+
+    synthesize(
+        "Hello",
+        voice_id="eve",
+        language="en",
+        bearer_token="tok",
+        http_post=http_post,
+        on_remote_success=seen.append,
+    )
+    assert seen == ["tts"]
+
+    # First get_or_synthesize → network via synthesize → +1
+    r1 = get_or_synthesize(
+        "Cached hello",
+        message_id="mid-media",
+        voice_id="eve",
+        language="en",
+        output_profile=TTS_DEFAULT_PROFILE,
+        bearer_token="tok",
+        paths=paths,
+        http_post=http_post,
+        on_remote_success=seen.append,
+    )
+    assert r1.cache_hit is False
+    assert seen == ["tts", "tts"]
+
+    # Cache hit → +0 (callback not invoked)
+    r2 = get_or_synthesize(
+        "Cached hello",
+        message_id="mid-media",
+        voice_id="eve",
+        language="en",
+        output_profile=TTS_DEFAULT_PROFILE,
+        bearer_token="tok",
+        paths=paths,
+        http_post=http_post,
+        on_remote_success=seen.append,
+    )
+    assert r2.cache_hit is True
+    assert seen == ["tts", "tts"]
+
+
+def test_synthesize_failure_skips_on_remote_success():
+    seen: list[str] = []
+
+    def empty_post(url, headers, body, timeout):
+        return b""
+
+    with pytest.raises(TtsError) as ei:
+        synthesize(
+            "Hi",
+            bearer_token="tok",
+            http_post=empty_post,
+            on_remote_success=seen.append,
+        )
+    assert ei.value.reason == "tts_empty_audio"
+    assert seen == []
+
+
 def test_cache_key_includes_voice_language_profile(paths):
     calls = {"n": 0}
 

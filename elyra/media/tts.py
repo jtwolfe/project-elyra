@@ -157,10 +157,14 @@ def synthesize(
     base_url: str = "https://api.x.ai/v1",
     timeout: float = 120.0,
     http_post: SynthesizeHttp | None = None,
+    on_remote_success: Callable[[str], None] | None = None,
 ) -> bytes:
     """POST ``/tts`` and return raw audio bytes.
 
     Refuses empty / oversize text. Never logs bearer token.
+
+    On network success (non-empty audio), optional ``on_remote_success`` is
+    invoked with ``\"tts\"`` for usage metering. Failures never call it.
     """
     body_text = validate_text_for_tts(text)
     voice = (voice_id or TTS_DEFAULT_VOICE).strip() or TTS_DEFAULT_VOICE
@@ -189,33 +193,38 @@ def synthesize(
     }
 
     if http_post is not None:
-        return http_post(url, headers, raw_body, timeout)
-
-    request = urllib.request.Request(
-        url,
-        data=raw_body,
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            audio = response.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:300]
-        # Never include Authorization values in the message.
-        raise TtsError(
-            f"tts_http_{exc.code}",
-            f"tts HTTP {exc.code}: {detail}",
-            http_status=exc.code,
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise TtsError(
-            "tts_connection_failed",
-            f"tts connection failed: {exc.reason}",
-        ) from exc
+        audio = http_post(url, headers, raw_body, timeout)
+    else:
+        request = urllib.request.Request(
+            url,
+            data=raw_body,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                audio = response.read()
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            # Never include Authorization values in the message.
+            raise TtsError(
+                f"tts_http_{exc.code}",
+                f"tts HTTP {exc.code}: {detail}",
+                http_status=exc.code,
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise TtsError(
+                "tts_connection_failed",
+                f"tts connection failed: {exc.reason}",
+            ) from exc
 
     if not audio:
         raise TtsError("tts_empty_audio", "tts response had no audio bytes")
+    if on_remote_success is not None:
+        try:
+            on_remote_success("tts")
+        except Exception:  # noqa: BLE001 — metering must not fail the call
+            _LOG.debug("tts.on_remote_success failed", exc_info=True)
     return audio
 
 
@@ -257,10 +266,13 @@ def get_or_synthesize(
     timeout: float = 120.0,
     paths: ElyraPaths | None = None,
     http_post: SynthesizeHttp | None = None,
+    on_remote_success: Callable[[str], None] | None = None,
 ) -> TtsCacheResult:
     """Return cached audio or synthesize + store under cache key.
 
     Cache key: ``(message_id, voice_id, language, output_profile)`` (KD3).
+    Cache hit (``read_cache``) → +0 media calls. Network path counts +1 only
+    via ``synthesize`` (do not double-count here).
     """
     voice = (voice_id or TTS_DEFAULT_VOICE).strip() or TTS_DEFAULT_VOICE
     lang = (language or TTS_DEFAULT_LANGUAGE).strip() or TTS_DEFAULT_LANGUAGE
@@ -303,6 +315,7 @@ def get_or_synthesize(
         base_url=base_url,
         timeout=timeout,
         http_post=http_post,
+        on_remote_success=on_remote_success,
     )
     try:
         write_cache(cpath, audio)

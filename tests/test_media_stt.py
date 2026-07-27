@@ -191,6 +191,46 @@ def test_transcribe_http_error_maps_reason():
     assert ei.value.http_status == 401
 
 
+def test_transcribe_on_remote_success_network_ok_only():
+    """Success → on_remote_success('stt'); HTTP failure → never called."""
+    audio = FIXTURE_WAV.read_bytes()
+    seen: list[str] = []
+
+    def ok_urlopen(req, timeout=0):  # noqa: ARG001
+        return _FakeResp(XAI_STT_FIXTURE)
+
+    result = transcribe(
+        audio,
+        filename="tiny.wav",
+        mime="audio/wav",
+        bearer_token="tok",
+        urlopen=ok_urlopen,
+        on_remote_success=seen.append,
+    )
+    assert result.text
+    assert seen == ["stt"]
+
+    def boom(req, timeout=0):  # noqa: ARG001
+        raise urllib.error.HTTPError(
+            url="https://api.x.ai/v1/stt",
+            code=429,
+            msg="rate",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(b"{}"),
+        )
+
+    with pytest.raises(SttError):
+        transcribe(
+            b"abc",
+            filename="a.wav",
+            mime="audio/wav",
+            bearer_token="tok",
+            urlopen=boom,
+            on_remote_success=seen.append,
+        )
+    assert seen == ["stt"]  # failure did not append
+
+
 def test_transcribe_rejects_empty_audio():
     with pytest.raises(SttError) as ei:
         transcribe(

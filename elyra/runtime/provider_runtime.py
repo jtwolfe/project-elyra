@@ -68,6 +68,8 @@ def _usage_status_disabled_placeholder() -> dict[str, Any]:
         "day_soft_exhausted": False,
         "hour_soft_exhausted": False,
         "week_cached_tokens": 0,
+        "week_stt_calls": 0,
+        "week_tts_calls": 0,
         "elyra_week_budget_tokens": 0,
         "weekly_allowed_fraction": 0.5,
         "credit_usage_percent": None,
@@ -221,6 +223,8 @@ class ProviderRuntime:
             "day_soft_exhausted": snap.day_soft_exhausted,
             "hour_soft_exhausted": snap.hour_soft_exhausted,
             "week_cached_tokens": snap.week_cached_tokens,
+            "week_stt_calls": int(getattr(snap, "week_stt_calls", 0) or 0),
+            "week_tts_calls": int(getattr(snap, "week_tts_calls", 0) or 0),
             "elyra_week_budget_tokens": snap.week_limit_tokens,
             "weekly_allowed_fraction": float(usage_settings.weekly_allowed_fraction),
             "credit_usage_percent": snap.credit_usage_percent,
@@ -233,6 +237,22 @@ class ProviderRuntime:
             },
             "supergrok": sg,
         }
+
+    def media_remote_success_cb(self) -> Any:
+        """Optional callback for media layer: ``kind in {stt,tts}`` → meter.
+
+        Binds ``meter.record_media_call`` without media importing usage
+        (cycle-free). Returns None when meter unbound.
+        """
+        with self._lock:
+            meter = self.meter
+        if meter is None:
+            return None
+
+        def _cb(kind: str) -> None:
+            meter.record_media_call(kind)
+
+        return _cb
 
     def can_open_model_moment(self) -> bool:
         """Pre-claim gate: safe to open a model-using moment.

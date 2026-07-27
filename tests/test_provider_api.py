@@ -291,6 +291,10 @@ def test_status_live_usage_and_provider_fields(paths):
         assert "weekly_allowed_fraction" in usage
         assert "period_id" in usage
         assert "period_authority" in usage
+        assert "week_stt_calls" in usage
+        assert "week_tts_calls" in usage
+        assert usage["week_stt_calls"] == 0
+        assert usage["week_tts_calls"] == 0
         assert "throttle_advice" in usage
         ta = usage["throttle_advice"]
         assert ta["band"] == usage["pace_band"]

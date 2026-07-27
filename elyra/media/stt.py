@@ -13,7 +13,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -176,12 +176,16 @@ def transcribe(
     language: str | None = None,
     timeout: float = DEFAULT_STT_TIMEOUT_S,
     urlopen: Any = None,
+    on_remote_success: Callable[[str], None] | None = None,
 ) -> SttResult:
     """POST multipart audio to xAI STT; return parsed transcript.
 
     ``urlopen`` is injectable for tests (defaults to ``urllib.request.urlopen``).
     Raises ``SttError`` with structured ``reason`` (stt_http_N, stt_empty_text, …).
     Never logs bearer token or full raw body.
+
+    On network success (HTTP 2xx + parse ok), optional ``on_remote_success`` is
+    invoked with ``\"stt\"`` for usage metering. Failures never call it.
     """
     if not isinstance(file_bytes, (bytes, bytearray)):
         raise SttError("stt_invalid_audio", "audio must be bytes")
@@ -253,4 +257,9 @@ def transcribe(
         len(result.text),
         result.duration_s,
     )
+    if on_remote_success is not None:
+        try:
+            on_remote_success("stt")
+        except Exception:  # noqa: BLE001 — metering must not fail the call
+            _LOG.debug("stt.on_remote_success failed", exc_info=True)
     return result

@@ -1619,6 +1619,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         # Optional injectable for tests (handler attribute or module-level mock).
         http_post = getattr(self, "tts_http_post", None)
+        on_remote = None
+        if provider is not None and hasattr(provider, "media_remote_success_cb"):
+            try:
+                on_remote = provider.media_remote_success_cb()
+            except Exception:  # noqa: BLE001
+                on_remote = None
 
         try:
             result = get_or_synthesize(
@@ -1632,6 +1638,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 timeout=timeout,
                 paths=self.paths,
                 http_post=http_post,
+                on_remote_success=on_remote,
             )
         except TtsError as exc:
             code = 400
@@ -1859,6 +1866,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             )
             language = (fields.get("language") or "").strip() or None
             mime = part.content_type or "application/octet-stream"
+            on_remote = None
+            if provider is not None and hasattr(provider, "media_remote_success_cb"):
+                try:
+                    on_remote = provider.media_remote_success_cb()
+                except Exception:  # noqa: BLE001
+                    on_remote = None
             try:
                 result = transcribe(
                     part.data,
@@ -1869,6 +1882,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     model=DEFAULT_STT_MODEL,
                     language=language,
                     timeout=float(getattr(provider, "request_timeout_s", 120.0) or 120.0),
+                    on_remote_success=on_remote,
                 )
             except SttError as exc:
                 status = 502

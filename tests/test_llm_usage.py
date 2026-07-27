@@ -1279,6 +1279,134 @@ def test_record_accumulates_week_cached(tmp_path: Path):
     assert snap.week_cached_tokens == 40
 
 
+# ---------------------------------------------------------------------------
+# STT/TTS remote call counters (PR7)
+# ---------------------------------------------------------------------------
+
+
+def test_record_media_call_stt_tts_no_tokens_in_s(tmp_path: Path):
+    """Network success +1; does not add tokens to week ledger S."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    m = _meter(tmp_path, clock=clock)
+    m.record(TokenUsage(total_tokens=50))
+    assert m.snapshot().week_used_tokens == 50
+
+    snap = m.record_media_call("stt")
+    assert snap.week_stt_calls == 1
+    assert snap.week_tts_calls == 0
+    assert snap.week_used_tokens == 50  # S unchanged
+
+    for _ in range(3):
+        m.record_media_call("tts")
+    snap = m.snapshot()
+    assert snap.week_stt_calls == 1
+    assert snap.week_tts_calls == 3
+    assert snap.week_used_tokens == 50
+
+
+def test_record_media_call_case_insensitive_and_invalid(tmp_path: Path):
+    m = _meter(tmp_path)
+    m.record_media_call("STT")
+    m.record_media_call(" Tts ")
+    assert m.snapshot().week_stt_calls == 1
+    assert m.snapshot().week_tts_calls == 1
+    with pytest.raises(ValueError):
+        m.record_media_call("vision")
+    with pytest.raises(ValueError):
+        m.record_media_call("")
+    assert m.snapshot().week_stt_calls == 1
+    assert m.snapshot().week_tts_calls == 1
+
+
+def test_record_media_call_persists_and_reloads(tmp_path: Path):
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    s = _settings()
+    m1 = _meter(tmp_path, s, clock=clock)
+    m1.record_media_call("stt")
+    m1.record_media_call("stt")
+    m1.record_media_call("tts")
+    path = tmp_path / "runtime" / "usage.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["week_stt_calls"] == 2
+    assert raw["week_tts_calls"] == 1
+
+    m2 = UsageMeter.load(tmp_path, s, clock=clock)
+    snap = m2.snapshot()
+    assert snap.week_stt_calls == 2
+    assert snap.week_tts_calls == 1
+
+
+def test_record_media_call_iso_week_roll_zeros(tmp_path: Path):
+    """ISO period roll zeros media counters; S also zeros under iso authority."""
+    s = _settings(weekly_allowed_tokens=10_000)
+    clock = _Clock(datetime(2026, 7, 26, 12, 0, tzinfo=UTC))  # W30
+    m = _meter(tmp_path, s, clock=clock)
+    m.record(TokenUsage(total_tokens=40))
+    m.record_media_call("stt")
+    m.record_media_call("tts")
+    m.record_media_call("tts")
+    assert m.snapshot().week_stt_calls == 1
+    assert m.snapshot().week_tts_calls == 2
+
+    clock.now = datetime(2026, 7, 27, 0, 0, tzinfo=UTC)  # W31
+    m.refresh_windows()
+    snap = m.snapshot()
+    assert snap.week_used_tokens == 0
+    assert snap.week_stt_calls == 0
+    assert snap.week_tts_calls == 0
+
+
+def test_record_media_call_supergrok_true_roll_zeros_media(tmp_path: Path):
+    """True SuperGrok period change zeros media counters; override preserved."""
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    m = _meter(tmp_path, clock=clock)
+    m.set_hard_stop_override(True)
+    m.record_media_call("stt")
+    m.record_media_call("tts")
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=10.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    assert m.snapshot().week_stt_calls == 1  # first adopt retains
+    assert m.snapshot().override_active is True
+
+    m.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=5.0,
+            period_start="2026-07-28T00:00:00Z",
+            period_end="2026-08-04T00:00:00Z",
+            fetched_at="2026-07-28T00:01:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    snap = m.snapshot()
+    assert snap.week_stt_calls == 0
+    assert snap.week_tts_calls == 0
+    assert snap.override_active is True
+
+
+def test_record_media_call_persist_fail_rolls_back(tmp_path: Path, monkeypatch):
+    """Exception during persist leaves in-memory media counters unchanged."""
+    m = _meter(tmp_path)
+    m.record_media_call("stt")
+    assert m.snapshot().week_stt_calls == 1
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(m, "_persist_unlocked", boom)
+    with pytest.raises(OSError):
+        m.record_media_call("stt")
+    assert m.snapshot().week_stt_calls == 1  # rolled back
+
+
 def test_credits_module_import_boundary():
     """PR4 may use stdlib urllib; must not import client/usage (or third-party HTTP)."""
     import ast

@@ -1218,6 +1218,13 @@ function renderUsageCard(s) {
           `hour ${usage.hour_used_tokens}/${usage.hour_limit_tokens ?? "—"}`
         );
       }
+      const sttCalls = usage.week_stt_calls;
+      const ttsCalls = usage.week_tts_calls;
+      if (sttCalls != null || ttsCalls != null) {
+        parts.push(
+          `stt ${sttCalls ?? 0} · tts ${ttsCalls ?? 0}`
+        );
+      }
       if (usage.last_record_at) parts.push(`last ${usage.last_record_at}`);
       usageDetail.textContent = parts.length ? parts.join(" · ") : "no usage yet";
     }

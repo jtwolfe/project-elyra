@@ -2,11 +2,12 @@
 
 Scope: TokenUsage / parse_token_usage, UsageMeter week ledger + pace/burst,
 period authority (iso | supergrok), atomic ``data/runtime/usage.json``,
-hard-stop override, apply_credits_snapshot (injected CreditsSnapshot only).
+hard-stop override, apply_credits_snapshot (injected CreditsSnapshot only),
+record_media_call (remote STT/TTS week call counters; no tokens in S).
 In scope: model A burst capacity, hard levels account>week>day>hour,
 threading lock, corrupt fail-soft (override false), v1→v2 migrate.
-Out of scope: UsageGatedChatClient, credits HTTP poller, record_media_call,
-session subtotals, Glass/auto throttle.
+Out of scope: UsageGatedChatClient, credits HTTP poller, session subtotals,
+Glass/auto throttle. Media helpers never imported here (callback bind upstream).
 
 **Import rule (normative):** this module must NEVER import ``elyra.llm.client``
 (cycle-free: client.py → usage.py only). credits.py is types-only (no HTTP).
@@ -149,6 +150,8 @@ class UsageSnapshot:
     day_soft_exhausted: bool = False
     hour_soft_exhausted: bool = False
     week_cached_tokens: int = 0
+    week_stt_calls: int = 0  # remote STT successes this period (not tokens)
+    week_tts_calls: int = 0  # remote TTS synthesize successes this period
     credit_usage_percent: float | None = None
     credits_status: str | None = None
 
@@ -655,6 +658,31 @@ class UsageMeter:
                 self._restore_durable_unlocked(prev)
                 raise
 
+    def record_media_call(self, kind: str) -> UsageSnapshot:
+        """Increment remote STT/TTS week call counter; does **not** add tokens to S.
+
+        ``kind`` must be ``\"stt\"`` or ``\"tts\"`` (case-insensitive). Network
+        success only — callers must not invoke on cache hits, rate limits, or
+        HTTP failures. Memory rolls back if persist fails.
+        """
+        normalized = (kind or "").strip().lower()
+        if normalized not in ("stt", "tts"):
+            raise ValueError(f"record_media_call kind must be 'stt' or 'tts', got {kind!r}")
+        with self._lock:
+            prev = self._capture_durable_unlocked()
+            try:
+                self._refresh_windows_unlocked()
+                if normalized == "stt":
+                    self._week_stt_calls += 1
+                else:
+                    self._week_tts_calls += 1
+                self._sync_hard_stop_fields_unlocked()
+                self._persist_unlocked()
+                return self._snapshot_unlocked()
+            except Exception:
+                self._restore_durable_unlocked(prev)
+                raise
+
     def refresh_windows(self) -> None:
         """Roll window counters when week/day/hour ids change (UTC).
 
@@ -1046,6 +1074,8 @@ class UsageMeter:
             day_soft_exhausted=self._day_used >= day_lim,
             hour_soft_exhausted=self._hour_used >= hour_lim,
             week_cached_tokens=int(self._week_cached),
+            week_stt_calls=int(self._week_stt_calls),
+            week_tts_calls=int(self._week_tts_calls),
             credit_usage_percent=self._sg_credit_usage_percent,
             credits_status=self._sg_status,
         )
