@@ -1106,6 +1106,13 @@ def _handle_tool_batch(
             if skip_dec.skip:
                 prior_error = state.thrash_last_error
                 # Synthetic model-visible result — never silent, never ends_moment.
+                # Harden args_echo: redact secret-write keys (bypasses registry
+                # post-dispatch redaction because this path never calls execute).
+                from elyra.secrets.inject import redact_tool_call_arguments
+
+                args_echo = redact_tool_call_arguments(
+                    tc.name, dict(args) if isinstance(args, dict) else {}
+                )
                 tr = ToolResult(
                     ok=False,
                     error_reason="skipped_identical",
@@ -1114,7 +1121,7 @@ def _handle_tool_batch(
                         "blocked_duplicate": True,
                         "prior_error_reason": prior_error,
                         "attempt": state.thrash_streak + 1,
-                        "args_echo": dict(args),
+                        "args_echo": args_echo,
                         "next_actions": [
                             "change tool or arguments",
                             "or free-text stop / thrash lesson",

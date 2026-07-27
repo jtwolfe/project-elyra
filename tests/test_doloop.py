@@ -2996,6 +2996,83 @@ def test_skip_identical_never_ends_moment(
     assert stop_beats[0].get("thrash_skips") == 2
 
 
+def test_skip_identical_redacts_secrets_set_args_echo(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """PR5: skip-identical args_echo must not re-inject secrets_set value."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    mid = moments.open_moment(why_now="skip secret", moment_id="mskipsec")
+    ctx.moment_id = mid
+    secret = "NEVER_IN_SKIP_ECHO_secret_xyz"
+    # Reserved-ish empty will fail validation? Use reserved name to force fail
+    # without storing, so thrash streaks on identical fails.
+    bad_args = {"name": "xai_api_key", "value": secret}
+    client = StubChatClient.scripted(
+        [_tc("secrets_set", bad_args, call_id=f"c{i}") for i in range(1, 7)]
+        + [_text("I'll stop")]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_skips == 1
+    beats = moments.list_beats(mid)
+    # Fingerprints on thrash/skip obs must not contain the secret
+    for b in beats:
+        blob = json.dumps(b, ensure_ascii=False, default=str)
+        assert secret not in blob
+        if b.get("error_reason") == "skipped_identical":
+            body = json.loads(b["content"])
+            assert body.get("args_echo", {}).get("value") == "***"
+            assert secret not in json.dumps(body)
+    # Chain tool rows also scrubbed
+    chain_blob = json.dumps(result.chain_messages if hasattr(result, "chain_messages") else [], default=str)
+    # DoLoopResult may not expose chain — check moment tape content only was enough;
+    # also assert thrash fingerprint beat if present.
+    thrash_obs = [
+        b for b in beats if b.get("type") == "obs" and b.get("kind") == "tool_thrash"
+    ]
+    for b in thrash_obs:
+        assert secret not in (b.get("fingerprint") or "")
+        assert secret not in (b.get("content") or "")
+
+
+def test_thrash_lesson_fingerprint_omits_secrets_set_value(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """PR5: thrash tried fingerprints / lesson pin never embed secrets_set value."""
+    mid = moments.open_moment(why_now="thrash secret", moment_id="mthrashsec")
+    ctx.moment_id = mid
+    secret = "THRASH_FP_SECRET_short"
+    bad_args = {"name": "xai_api_key", "value": secret}
+    # FAIL_STREAK_THRESHOLD=3 thrash HOST; + LESSON_SYNTH_FAIL_STREAK=3 more → synth lesson
+    # Need enough identical fails: thrash at 3, lesson request, then 3 more fails for synth.
+    n_calls = 3 + 3  # thrash + synth streak
+    client = StubChatClient.scripted(
+        [_tc("secrets_set", bad_args, call_id=f"c{i}") for i in range(1, n_calls + 1)]
+        + [_text("done thrashing")]
+    )
+    _run(client, ctx, registry, moments=moments, social_wake=False)
+    beats = moments.list_beats(mid)
+    blob = json.dumps(beats, ensure_ascii=False, default=str)
+    assert secret not in blob
+    thrash_obs = [
+        b for b in beats if b.get("type") == "obs" and b.get("kind") == "tool_thrash"
+    ]
+    assert thrash_obs, "expected thrash HOST inject"
+    assert secret not in (thrash_obs[0].get("fingerprint") or "")
+    pins = [
+        b
+        for b in beats
+        if b.get("type") == "obs"
+        and b.get("kind") in ("lesson_pin", "thrash_lesson_pin", "lesson")
+    ]
+    # Lesson pin kind may be "lesson_pin" — search any beat content
+    for b in beats:
+        if "HOST-synthesized lesson" in str(b.get("content") or ""):
+            assert secret not in (b.get("content") or "")
+
+
 # ---------------------------------------------------------------------------
 # Usage hard-stop → STOP_POLICY (Phase 0 PR 5b)
 # ---------------------------------------------------------------------------

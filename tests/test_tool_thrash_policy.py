@@ -63,6 +63,52 @@ def test_canonical_args_path_and_speak_normalize() -> None:
     assert t1 == t2
 
 
+def test_canonical_args_secret_write_keys_hashed_never_raw() -> None:
+    """PR5 K6: short secrets must not embed in thrash fingerprints."""
+    secret = "ghs_short_secret_tok"
+    raw = {
+        "name": "gh_token",
+        "value": secret,
+        "token": "also_secret",
+        "password": "pw",
+        "api_key": "k",
+        "secret": "s",
+        "grants": ["gh_api"],
+    }
+    s = canonical_args(raw)
+    assert secret not in s
+    assert "also_secret" not in s
+    body = json.loads(s)
+    assert body["name"] == "gh_token"  # non-secret key stays
+    assert body["grants"] == ["gh_api"]
+    for key in ("value", "token", "password", "api_key", "secret"):
+        assert isinstance(body[key], dict)
+        assert "sha256_16" in body[key]
+        assert body[key]["len"] == len(raw[key])
+    # Different secret → different fingerprint (streak breaks on value change)
+    raw2 = dict(raw)
+    raw2["value"] = secret + "x"
+    assert canonical_args(raw) != canonical_args(raw2)
+    # Same secret → stable
+    assert canonical_args(raw) == canonical_args(dict(raw))
+
+
+def test_tool_fingerprint_and_synthesize_lesson_omit_secret() -> None:
+    secret = "RAW_IN_FP_must_not_leak"
+    args = {"name": "gh_token", "value": secret}
+    fp = tool_fingerprint("secrets_set", args)
+    assert secret not in fp
+    assert fp.startswith("secrets_set|")
+    lesson = synthesize_lesson(
+        tried=[fp],
+        last_error="empty_secret_value",
+        tool_name="secrets_set",
+    )
+    assert secret not in lesson
+    assert "secrets_set" in lesson
+    assert fp in lesson  # redacted fingerprint may still be listed
+
+
 def test_tool_fingerprint_casefold_name() -> None:
     fp1 = tool_fingerprint("Read_File", {"path": "a"})
     fp2 = tool_fingerprint("read_file", {"path": "a"})
