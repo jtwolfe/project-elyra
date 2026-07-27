@@ -82,6 +82,7 @@ When a tool writes files for later use (plots, exports, intermediates):
 ### Runners (model-created)
 
 - `sandbox_python`: `runner.json` with `module` + optional `function` (default `run`); guest calls `fn(args)` with the model args dict. `module` may be a dotted import (`impl.web_search`) or a package-relative path (`impl/web_search.py`); the file must exist under the package or verify/promote fail with `invalid_runner:module_not_found`.
+- Keep `sandbox_python` modules **import side-effect free** (no network/FS work at import time). Verify smoke-loads and production both import the declared module the same way.
 - `sandbox_shell`: `runner.json` with `argv`; model args are **not** on argv — the runtime writes guest `tmp/elyra_tool_args_*.json` and sets env **`ELYRA_TOOL_ARGS`** to that path. Shell impls must read that file.
 - Invalid shape → `invalid_runner:*` on verify/promote. Do not use `builtin` for model drafts.
 
@@ -90,6 +91,14 @@ When a tool writes files for later use (plots, exports, intermediates):
 - Product default: isolation **on**. `verify_tool` needs guest **mount_ready** + **pyenv_ready** (curated env includes pytest). Failures: `sandbox_unavailable:*`, `guest_pytest_unavailable` — not “retry the same thrash.”
 - If the sandbox is unusable, **block the task / speak / rest** honestly. Do not thrash `read_file` or fish host paths with `run`.
 - Promoted smoke-check also needs isolation ready when isolation is on (guest exec). Host stub only when `ELYRA_SANDBOX=0` (tests/CI).
+
+### Guest package call manners (soft)
+
+Manners only — not the integrity wall. Hard reliability for multi-call batches is the content-hash **stage gate** (stage-once + in-place refresh + one path-missing recovery).
+
+- Prefer **one** tool call with richer args over N identical package loads when the schema allows batching.
+- Legitimate multi-call batches (different args in one hop) must remain reliable via that hard stage gate; thrash policy is not the fix — do not treat multi-arg batches as thrash.
+- On `guest_module_missing`: surface once (ledger note / speak if needed) and continue with an alternate approach — do **not** spam the same call.
 
 ## Process
 

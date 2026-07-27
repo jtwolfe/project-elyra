@@ -115,6 +115,8 @@ create-tool → tools/drafts/ (not callable; host-only; not visible via sandbox 
 
 **Sandbox tree honesty:** product FS root is `{ELYRA_HOME}/sandboxes/sandbox0/` (guest `/workspace` when isolation is on). Sandbox `tools/` holds **staged runtime copies** (plus `.stage` / `.verify`) — not host `tools/drafts/`. Growth tools own drafts/promote on the host.
 
+**Guest package stage gate:** when isolation is on, `sandbox_python` / `sandbox_shell` packages stage into `sandboxes/sandbox0/tools/<name>/` for guest exec. Staging is **content-hash stage-once** (marker `.elyra_stage.json`): re-stage only when package bytes change; refresh is in-place (no top-level rename thrash on every call). Guest path-missing after one force retry surfaces as `guest_module_missing` (not bare `guest_nonzero_exit`). Soft skill manners prefer richer single calls when possible; legitimate multi-arg batches rely on this hard gate, not thrash policy. Design: [design-guest-package-stage-reliability.md](design-guest-package-stage-reliability.md).
+
 ### Lifecycle (skills)
 
 ```text
@@ -424,6 +426,7 @@ Cumulative procedure for the full program (product design + implementation plan 
 | [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) | Execute-plan PR DAG, normative promote algorithm, security gates |
 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity draft/promote + multi-user prep (parallel version culture) |
 | [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md) | Sandbox runners, isolation, honesty |
+| [design-guest-package-stage-reliability.md](design-guest-package-stage-reliability.md) | Content-hash stage-once gate, in-place restage, `guest_module_missing` |
 | [stretch-1.md](stretch-1.md) | Runtime freeze for Stretch 1 shape |
 
 ---
