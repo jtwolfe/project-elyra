@@ -19,7 +19,7 @@ from elyra.config import resolve_paths
 from elyra.tools.builtin import search as search_mod
 from elyra.tools.builtin.search import web_search
 from elyra.tools.policy import resolve_bundled_tools_root
-from elyra.tools.registry import ToolRegistry
+from elyra.tools.registry import SOURCE_BUNDLED, SOURCE_LOCAL, ToolRegistry
 from elyra.tools.types import ToolContext
 
 
@@ -476,20 +476,95 @@ def test_no_raw_html_keys_in_payload(
 
 
 # ---------------------------------------------------------------------------
-# Bundled package registration
+# Bundled package registration (no local override)
 # ---------------------------------------------------------------------------
 
 
+def test_web_search_source_is_bundled_when_local_absent(home: Path) -> None:
+    """Without tools/local/web_search, registry uses host builtin ddgs path.
+
+    Local packages win over bundled in ToolRegistry; a leftover sandbox_python
+    DDG Lite package must not shadow this name. Assert source + runner wiring.
+    """
+    paths = resolve_paths(home)
+    local_pkg = paths.tools_dir / "local" / "web_search"
+    assert not local_pkg.exists()
+
+    registry = ToolRegistry(
+        paths,
+        bundled_root=resolve_bundled_tools_root(),
+    )
+    pkg = registry.get("web_search")
+    assert pkg is not None
+    assert pkg.source == SOURCE_BUNDLED
+    assert pkg.source != SOURCE_LOCAL
+    assert pkg.meta.name == "web_search"
+    assert pkg.runner.kind == "builtin"
+    assert pkg.runner.entry == "elyra.tools.builtin.search:web_search"
+    assert pkg.handler is not None
+    assert pkg.handler is web_search
+    # Package dir is under bundled root, not local/
+    assert "bundled" in pkg.package_dir.parts
+    assert pkg.package_dir.name == "web_search"
+
+
 def test_web_search_bundled_package_discovered(home: Path) -> None:
+    """Alias coverage: discovery still reports bundled web_search."""
     registry = ToolRegistry(
         resolve_paths(home),
         bundled_root=resolve_bundled_tools_root(),
     )
     pkg = registry.get("web_search")
     assert pkg is not None
-    assert pkg.source == "bundled"
+    assert pkg.source == SOURCE_BUNDLED
     assert pkg.handler is not None
     assert pkg.meta.name == "web_search"
+
+
+def test_local_web_search_would_override_bundled(home: Path) -> None:
+    """Edge: if a local web_search package exists, registry prefers local.
+
+    Documents the footgun that motivated removing the DDG Lite override.
+    """
+    import json
+
+    paths = resolve_paths(home)
+    local = paths.tools_dir / "local"
+    pkg_dir = local / "web_search"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    (pkg_dir / "TOOL.md").write_text(
+        "---\nname: web_search\ndescription: local shadow\nkind: read\n---\n\n# web_search\n",
+        encoding="utf-8",
+    )
+    (pkg_dir / "schema.json").write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Point at the real builtin so discovery still resolves a handler
+    (pkg_dir / "runner.json").write_text(
+        json.dumps(
+            {
+                "kind": "builtin",
+                "entry": "elyra.tools.builtin.search:web_search",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = ToolRegistry(
+        paths,
+        bundled_root=resolve_bundled_tools_root(),
+    )
+    pkg = registry.get("web_search")
+    assert pkg is not None
+    assert pkg.source == SOURCE_LOCAL
+    assert pkg.package_dir.resolve() == pkg_dir.resolve()
 
 
 def test_web_search_via_registry_unavailable(

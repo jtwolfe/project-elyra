@@ -205,6 +205,12 @@ The `create-tool` skill body is a strict checklist matching the above (plus **Pa
 ### Search (`web_search`)
 
 - Host builtin; backend via optional `elyra[search]` (`ddgs`).
+- Product path: bundled package `tools/bundled/web_search/` → runner
+  `elyra.tools.builtin.search:web_search`. **Do not** leave a
+  `tools/local/web_search` that shadows this name — local wins over bundled in
+  the registry and a prior sandbox_python DDG Lite override caused
+  `guest_nonzero_exit` / staging failures. Promote a local tool with a critical
+  bundled name only with explicit operator intent.
 - Structured results: `{title, url, snippet, …}` — no HTML dumps.
 - Fail-closed without extra: `search_unavailable` + install hint (`pip install -e '.[search]'`).
 - Empty / rate-limit / timeout surface honest `error_reason` or `warning` — **never invent** results.
@@ -380,6 +386,7 @@ Cumulative procedure for the full program (product design + implementation plan 
 
 ### Search + research
 
+- [ ] No `tools/local/web_search` under active `ELYRA_HOME` (registry source is **bundled**)
 - [ ] `web_search` returns structured results; empty/rate-limit are honest; model does not invent hits
 - [ ] Without `elyra[search]`: clear `search_unavailable` (no crash loop)
 - [ ] `web-research`: multi-query + cites + stop; can open a ledger goal
