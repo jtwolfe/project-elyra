@@ -87,6 +87,10 @@ const usageWeekBar = $("#usage-week-bar");
 const usageDayBar = $("#usage-day-bar");
 const usageHourBar = $("#usage-hour-bar");
 const usageSgBar = $("#usage-sg-bar");
+const railUsageWeekPct = $("#rail-usage-week-pct");
+const railUsageWeekBar = $("#rail-usage-week-bar");
+const railUsageSgPct = $("#rail-usage-sg-pct");
+const railUsageSgBar = $("#rail-usage-sg-bar");
 const usagePaceBadge = $("#usage-pace-badge");
 const usageBurst = $("#usage-burst");
 const usageDetail = $("#usage-detail");
@@ -927,6 +931,42 @@ function setUsageBar(barEl, frac, { usedMode = false, unavailable = false } = {}
 }
 
 /**
+ * SuperGrok pool meter view — shared by Status usage card and rail mini meter.
+ * Returns { available, usedFrac, label } with Status-parity availability/labels.
+ * KD11: never invent a simplified “ok” bar when stale / poll error.
+ */
+function supergrokMeterView(usage) {
+  const sg = (usage && usage.supergrok) || null;
+  const sgPct =
+    usage && usage.credit_usage_percent != null
+      ? usage.credit_usage_percent
+      : sg && sg.credit_usage_percent != null
+        ? sg.credit_usage_percent
+        : null;
+  const sgStatus = (sg && sg.status) || (usage && usage.credits_status) || null;
+  const sgStale = Boolean(sg && sg.stale);
+  const available =
+    sgPct != null &&
+    Number.isFinite(Number(sgPct)) &&
+    !sgStale &&
+    (sgStatus == null || sgStatus === "ok");
+  if (available) {
+    return {
+      available: true,
+      usedFrac: Number(sgPct) / 100,
+      label: `${Math.round(Number(sgPct))}% used`,
+    };
+  }
+  if (sgStale) {
+    return { available: false, usedFrac: null, label: "— · stale" };
+  }
+  if (sgStatus && sgStatus !== "ok") {
+    return { available: false, usedFrac: null, label: `— · ${sgStatus}` };
+  }
+  return { available: false, usedFrac: null, label: "— · poll …" };
+}
+
+/**
  * Pure usage card badge label from status usage block.
  * Stop text only from hard_stop — soft day/hour flags never invent a stop badge.
  */
@@ -1054,7 +1094,7 @@ function fillModelSelect(models, current) {
   if (pick) providerModelSelect.value = pick;
 }
 
-/** Visual only — does NOT touch lastReasoningEffort. Shared by Status + future rail. */
+/** Visual only — does NOT touch lastReasoningEffort. Shared by Status + rail. */
 function paintEffortUI(effort) {
   const e = ["low", "medium", "high"].includes(effort) ? effort : "high";
   document.querySelectorAll(".effort-btn[data-effort]").forEach((btn) => {
@@ -1073,7 +1113,7 @@ function commitEffortFromStatus(effort) {
   paintEffortUI(e);
 }
 
-/** Active (non-Auto) effort buttons across Status (+ rail when present). */
+/** Active (non-Auto) effort buttons across Status + rail. */
 function effortActiveButtons() {
   return document.querySelectorAll(
     '.effort-btn[data-effort]:not([data-effort="auto"])'
@@ -1172,37 +1212,21 @@ function renderUsageCard(s) {
   setUsageBar(usageWeekBar, week);
   setUsageBar(usageDayBar, day);
   setUsageBar(usageHourBar, hour);
+  // Rail compact: Elyra week only (same source + formatPctRemaining as Status).
+  if (railUsageWeekPct) railUsageWeekPct.textContent = formatPctRemaining(week);
+  setUsageBar(railUsageWeekBar, week);
 
-  // SuperGrok pool: credit_usage_percent used bar, or unavailable placeholder.
+  // SuperGrok pool: shared helper so Status + rail stay in lockstep (KD11).
   const sg = (usage && usage.supergrok) || null;
-  const sgPct =
-    usage && usage.credit_usage_percent != null
-      ? usage.credit_usage_percent
-      : sg && sg.credit_usage_percent != null
-        ? sg.credit_usage_percent
-        : null;
-  const sgStatus = (sg && sg.status) || (usage && usage.credits_status) || null;
-  const sgStale = Boolean(sg && sg.stale);
-  const sgAvailable =
-    sgPct != null &&
-    Number.isFinite(Number(sgPct)) &&
-    !sgStale &&
-    (sgStatus == null || sgStatus === "ok");
-  if (usageSgPct) {
-    if (sgAvailable) {
-      usageSgPct.textContent = `${Math.round(Number(sgPct))}% used`;
-    } else if (sgStale) {
-      usageSgPct.textContent = "— · stale";
-    } else if (sgStatus && sgStatus !== "ok") {
-      usageSgPct.textContent = `— · ${sgStatus}`;
-    } else {
-      usageSgPct.textContent = "— · poll …";
-    }
-  }
-  if (sgAvailable) {
-    setUsageBar(usageSgBar, Number(sgPct) / 100, { usedMode: true });
+  const sgView = supergrokMeterView(usage);
+  if (usageSgPct) usageSgPct.textContent = sgView.label;
+  if (railUsageSgPct) railUsageSgPct.textContent = sgView.label;
+  if (sgView.available) {
+    setUsageBar(usageSgBar, sgView.usedFrac, { usedMode: true });
+    setUsageBar(railUsageSgBar, sgView.usedFrac, { usedMode: true });
   } else {
     setUsageBar(usageSgBar, null, { unavailable: true });
+    setUsageBar(railUsageSgBar, null, { unavailable: true });
   }
 
   // Pace badge + burst remaining (derived max(0, BurstMax − over)).
@@ -2393,7 +2417,7 @@ if (providerCredentialSelect) {
     patchProvider({ credential_source });
   });
 }
-// Effort segmented control (Status + future rail share .effort-btn).
+// Effort segmented control (Status + rail share .effort-btn).
 document.querySelectorAll(".effort-btn[data-effort]").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (btn.disabled || btn.getAttribute("data-effort") === "auto") return;

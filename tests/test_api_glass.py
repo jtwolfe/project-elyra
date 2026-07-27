@@ -781,6 +781,35 @@ def test_static_index_served(paths):
             r'\bdisabled\b[^>]*data-effort="auto"',
             html,
         )
+        # PR4: left rail effort twin + compact usage meters
+        assert 'id="rail-effort"' in html
+        assert 'class="rail-effort"' in html or "rail-effort" in html
+        assert "effort-group-compact" in html
+        # Rail Auto is also disabled (both Status + rail stubs)
+        rail_auto = re.search(
+            r'id="rail-effort"[\s\S]*?data-effort="auto"[^>]*>',
+            html,
+        )
+        assert rail_auto is not None, "rail-effort Auto button not found"
+        assert "disabled" in rail_auto.group(0)
+        assert "aria-disabled" in rail_auto.group(0)
+        assert 'id="rail-usage-week-pct"' in html
+        assert 'id="rail-usage-week-bar"' in html
+        assert 'id="rail-usage-sg-pct"' in html
+        assert 'id="rail-usage-sg-bar"' in html
+        assert 'class="rail-usage"' in html or "rail-usage" in html
+        # Rail section must not include hard-stop override / day-hour soft / pace
+        # Slice from rail-usage open through rail-foot open (compact meters only).
+        rail_start = html.find('class="rail-usage"')
+        rail_foot = html.find('class="rail-foot"', rail_start if rail_start >= 0 else 0)
+        assert rail_start >= 0 and rail_foot > rail_start, "rail-usage before rail-foot not found"
+        rail_usage_html = html[rail_start:rail_foot]
+        assert "usage-override" not in rail_usage_html
+        assert "Hard-stop override" not in rail_usage_html
+        assert "Day (soft)" not in rail_usage_html
+        assert "Hour (soft)" not in rail_usage_html
+        assert "usage-pace" not in rail_usage_html
+        assert "usage-burst" not in rail_usage_html
         assert 'id="usage-card"' in html
         assert 'id="usage-override-toggle"' in html
         assert "Hard-stop override" in html
@@ -902,6 +931,36 @@ def test_static_app_js_active_panel_poll(paths):
         assert "day pace high (soft)" in js
         assert "credit_usage_percent" in js
         assert "poll …" in js or "poll" in js
+        # PR4: shared SuperGrok meter view + rail wiring (not identifier-only)
+        assert "function supergrokMeterView" in js
+        sg_fn = re.search(
+            r"function supergrokMeterView\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert sg_fn is not None, "supergrokMeterView body not found"
+        sg_body = sg_fn.group(1)
+        assert "credit_usage_percent" in sg_body
+        assert "stale" in sg_body
+        assert "% used" in sg_body
+        assert "poll …" in sg_body or "poll" in sg_body
+        # renderUsageCard must call the shared helper (Status + rail parity)
+        assert "supergrokMeterView(usage)" in js
+        assert "railUsageWeekPct" in js or "rail-usage-week-pct" in js
+        assert "railUsageWeekBar" in js or "rail-usage-week-bar" in js
+        assert "railUsageSgPct" in js or "rail-usage-sg-pct" in js
+        assert "railUsageSgBar" in js or "rail-usage-sg-bar" in js
+        # Week rail uses same remaining fraction + formatPctRemaining
+        assert "formatPctRemaining(week)" in js
+        assert "setUsageBar(railUsageWeekBar" in js or (
+            "railUsageWeekBar" in js and "setUsageBar" in js
+        )
+        # SuperGrok rail + Status both driven from sgView
+        assert "sgView.label" in js
+        assert "sgView.usedFrac" in js or "sgView.available" in js
+        assert "setUsageBar(railUsageSgBar" in js or (
+            "railUsageSgBar" in js and "usedMode: true" in js
+        )
         # Soft day → no stop badge: pure helper + structural wiring
         assert "function usageBadgeLabel" in js
         assert "usageBadgeLabel(usage)" in js
@@ -962,12 +1021,17 @@ def test_static_app_js_active_panel_poll(paths):
         assert "usage-meters-soft" in css
         assert "usage-bar-na" in css
         assert "status-cards" in css
-        # PR3: effort segmented control styles (shared with future rail)
+        # PR3: effort segmented control styles (shared with rail)
         assert ".effort-group" in css
         assert ".effort-btn" in css
         assert "effort-btn-active" in css
         assert "effort-btn-auto" in css or ".effort-btn:disabled" in css
         assert "effort-group-compact" in css
+        # PR4: rail effort + compact usage meters (220px column preserved)
+        assert ".rail-effort" in css
+        assert ".rail-usage" in css
+        assert ".rail-usage-meter" in css
+        assert "grid-template-columns: 220px 1fr" in css
         # Chat polish surface
         assert "msg-body" in css
         assert "jump-latest" in css

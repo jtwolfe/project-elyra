@@ -50,6 +50,48 @@
           </label>
           <div id="continuous-status-rail" class="continuous-meta muted">off</div>
         </div>
+        <div class="rail-effort" role="group" aria-label="Reasoning effort">
+          <div class="rail-foot-label muted">Effort</div>
+          <div
+            class="effort-group effort-group-compact"
+            id="rail-effort"
+            role="radiogroup"
+            aria-label="Reasoning effort"
+          >
+            <button type="button" class="effort-btn" data-effort="low" aria-pressed="false">Low</button>
+            <button type="button" class="effort-btn" data-effort="medium" aria-pressed="false">Medium</button>
+            <button type="button" class="effort-btn" data-effort="high" aria-pressed="true">High</button>
+            <button
+              type="button"
+              class="effort-btn effort-btn-auto"
+              data-effort="auto"
+              disabled
+              aria-disabled="true"
+              title="Auto effort escalation — coming later"
+            >Auto</button>
+          </div>
+        </div>
+        <div class="rail-usage" role="group" aria-label="Usage budget">
+          <div class="rail-foot-label muted">Usage</div>
+          <div class="rail-usage-meter" data-window="week">
+            <div class="usage-meter-head">
+              <span>Elyra week</span>
+              <span id="rail-usage-week-pct" class="usage-pct">—</span>
+            </div>
+            <div class="usage-bar" aria-hidden="true">
+              <div id="rail-usage-week-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+          <div class="rail-usage-meter" data-window="supergrok">
+            <div class="usage-meter-head">
+              <span>SuperGrok pool</span>
+              <span id="rail-usage-sg-pct" class="usage-pct">—</span>
+            </div>
+            <div class="usage-bar" aria-hidden="true">
+              <div id="rail-usage-sg-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+        </div>
         <div class="rail-foot" role="group" aria-label="System status">
           <div class="rail-foot-label muted">System</div>
           <div class="rail-pills">
