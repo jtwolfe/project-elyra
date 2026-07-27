@@ -470,6 +470,94 @@ def guest_module_path(name: str, module: str) -> str:
     return f"{GUEST_WORKSPACE_ROOT}/tools/{name}/{rel}"
 
 
+def path_missing_signature(
+    *,
+    exit_code: int,
+    stdout: str = "",
+    stderr: str = "",
+    guest_script: str,
+) -> bool:
+    """True when guest failed because ``guest_script`` was not visible (KD-G3).
+
+    Classify **only** when:
+
+    1. ``exit_code != 0``, and
+    2. stderr or stdout contains ``FileNotFoundError`` or errno-2 phrasing, and
+    3. the exact ``guest_script`` string appears as a substring.
+
+    Tool-logic FileNotFound for other package data paths must **not** match
+    (no force restage; maps to KD21 ``guest_nonzero_exit``).
+    """
+    if exit_code == 0:
+        return False
+    path = (guest_script or "").strip()
+    if not path:
+        return False
+    combined = f"{stderr or ''}\n{stdout or ''}"
+    if path not in combined:
+        return False
+    # FileNotFoundError and common errno-2 / missing-file phrasing.
+    if "FileNotFoundError" in combined:
+        return True
+    if "[Errno 2]" in combined:
+        return True
+    if "No such file or directory" in combined:
+        return True
+    return False
+
+
+def _shell_guest_script_candidates(package_name: str, argv: list[str]) -> list[str]:
+    """Package-relative argv paths under the staged guest package (for KD-G3).
+
+    Returns guest absolute paths (and bare relative forms) that should trigger
+    reactive force restage when missing — not bare command names like ``python3``.
+    """
+    pkg = guest_tools_package_path(package_name)
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in argv:
+        a = str(raw).strip()
+        if not a or a.startswith("-"):
+            continue
+        is_absolute = a.startswith("/") or (len(a) >= 2 and a[1] == ":")
+        if ".." in Path(a).parts:
+            continue
+        rel = a.replace("\\", "/")
+        if is_absolute:
+            if rel == pkg or rel.startswith(pkg + "/"):
+                if rel not in seen:
+                    seen.add(rel)
+                    out.append(rel)
+            continue
+        looks_package_relative = "/" in rel or Path(rel).suffix != ""
+        if not looks_package_relative:
+            continue
+        abs_path = f"{pkg}/{rel.lstrip('/')}"
+        for candidate in (abs_path, rel):
+            if candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
+    return out
+
+
+def _any_path_missing_signature(
+    *,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+    candidates: list[str],
+) -> bool:
+    for path in candidates:
+        if path_missing_signature(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            guest_script=path,
+        ):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Return map (KD21)
 # ---------------------------------------------------------------------------
@@ -872,7 +960,6 @@ def _guest_python(
     package_dir: Path,
     timeout: float,
 ) -> ToolResult:
-    del paths
     module = (runner.module or "").strip()
     func_name = (runner.function or "run").strip() or "run"
     if not is_safe_module_rel(module):
@@ -899,27 +986,83 @@ def _guest_python(
         args=args if isinstance(args, dict) else {},
     )
     env = {**guest_env(), "PYTHONDONTWRITEBYTECODE": "1"}
-    try:
-        result = _exec_with_one_reconnect(
-            life,
-            cmd="python3",
-            argv=["-B", "-c", runner_src],
-            cwd=GUEST_WORKSPACE_ROOT,
-            env=env,
-            timeout=timeout,
-        )
-    except _GuestTimeout as exc:
-        return ToolResult(
-            ok=False,
-            payload={
-                "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                "timed_out": True,
-            },
-            error_reason="guest_timeout",
-        )
-    except _IsolationFailure as exc:
-        return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
 
+    # KD-G3 reactive-only MVP: one force re-stage + one extra exec on exact
+    # guest_script path-missing; intermediate FNF is internal only.
+    stage_retried = False
+    result: ExecResult | None = None
+    for _attempt in range(2):
+        try:
+            result = _exec_with_one_reconnect(
+                life,
+                cmd="python3",
+                argv=["-B", "-c", runner_src],
+                cwd=GUEST_WORKSPACE_ROOT,
+                env=env,
+                timeout=timeout,
+            )
+        except _GuestTimeout:
+            return ToolResult(
+                ok=False,
+                payload={
+                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                    "timed_out": True,
+                },
+                error_reason="guest_timeout",
+            )
+        except _IsolationFailure as exc:
+            return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
+
+        exit_code = int(result.exit_code)
+        stdout = str(result.stdout_text or "")
+        stderr = str(result.stderr_text or "")
+        missing = path_missing_signature(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            guest_script=guest_script,
+        )
+        if missing and not stage_retried:
+            try:
+                stage_package_for_guest(paths, package_dir, force=True)
+            except OSError as exc:
+                _LOG.warning("force re-stage failed for %s: %s", package_dir.name, exc)
+                return ToolResult(
+                    ok=False,
+                    payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
+                    error_reason=f"stage_failed:{type(exc).__name__}",
+                )
+            stage_retried = True
+            continue
+        if missing:
+            _LOG.warning(
+                "guest_module_missing after retry name=%s path=%s",
+                package_dir.name,
+                guest_script,
+            )
+            return ToolResult(
+                ok=False,
+                error_reason="guest_module_missing",
+                payload={
+                    "guest_path": guest_script,
+                    "content_hash": content_hash(package_dir),
+                    "stage_retried": True,
+                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                    "exit_code": exit_code,
+                    "stdout": _tail(stdout),
+                    "stderr": _tail(stderr),
+                },
+            )
+        return map_python_exec_result(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
+            isolation=True,
+        )
+
+    # Unreachable: loop always returns; keep type-checkers happy.
+    assert result is not None
     return map_python_exec_result(
         exit_code=int(result.exit_code),
         stdout=str(result.stdout_text or ""),
@@ -950,6 +1093,14 @@ def _guest_shell(
     token = uuid.uuid4().hex
     host_args_path = tmp_dir / f"elyra_tool_args_{token}.json"
     guest_args_path = f"{GUEST_WORKSPACE_ROOT}/tmp/elyra_tool_args_{token}.json"
+    path_candidates = _shell_guest_script_candidates(package_dir.name, argv_s)
+    # Prefer absolute guest path for guest_module_missing payload.
+    primary_guest_path = next(
+        (p for p in path_candidates if p.startswith(GUEST_WORKSPACE_ROOT)),
+        path_candidates[0]
+        if path_candidates
+        else guest_tools_package_path(package_dir.name),
+    )
 
     try:
         host_args_path.write_text(
@@ -962,27 +1113,83 @@ def _guest_shell(
             "PYTHONDONTWRITEBYTECODE": "1",
         }
         guest_cwd = guest_tools_package_path(package_dir.name)
-        try:
-            result = _exec_with_one_reconnect(
-                life,
-                cmd=cmd,
-                argv=cmd_args,
-                cwd=guest_cwd,
-                env=env,
-                timeout=timeout,
-            )
-        except _GuestTimeout:
-            return ToolResult(
-                ok=False,
-                payload={
-                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                    "timed_out": True,
-                },
-                error_reason="guest_timeout",
-            )
-        except _IsolationFailure as exc:
-            return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
 
+        # KD-G3: same one-force budget for package-relative argv path missing.
+        stage_retried = False
+        result: ExecResult | None = None
+        for _attempt in range(2):
+            try:
+                result = _exec_with_one_reconnect(
+                    life,
+                    cmd=cmd,
+                    argv=cmd_args,
+                    cwd=guest_cwd,
+                    env=env,
+                    timeout=timeout,
+                )
+            except _GuestTimeout:
+                return ToolResult(
+                    ok=False,
+                    payload={
+                        "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                        "timed_out": True,
+                    },
+                    error_reason="guest_timeout",
+                )
+            except _IsolationFailure as exc:
+                return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
+
+            exit_code = int(result.exit_code)
+            stdout = str(result.stdout_text or "")
+            stderr = str(result.stderr_text or "")
+            missing = bool(path_candidates) and _any_path_missing_signature(
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                candidates=path_candidates,
+            )
+            if missing and not stage_retried:
+                try:
+                    stage_package_for_guest(paths, package_dir, force=True)
+                except OSError as exc:
+                    _LOG.warning(
+                        "force re-stage failed for %s: %s", package_dir.name, exc
+                    )
+                    return ToolResult(
+                        ok=False,
+                        payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
+                        error_reason=f"stage_failed:{type(exc).__name__}",
+                    )
+                stage_retried = True
+                continue
+            if missing:
+                _LOG.warning(
+                    "guest_module_missing after retry name=%s path=%s",
+                    package_dir.name,
+                    primary_guest_path,
+                )
+                return ToolResult(
+                    ok=False,
+                    error_reason="guest_module_missing",
+                    payload={
+                        "guest_path": primary_guest_path,
+                        "content_hash": content_hash(package_dir),
+                        "stage_retried": True,
+                        "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                        "exit_code": exit_code,
+                        "stdout": _tail(stdout),
+                        "stderr": _tail(stderr),
+                    },
+                )
+            return map_shell_exec_result(
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
+                isolation=True,
+            )
+
+        assert result is not None
         return map_shell_exec_result(
             exit_code=int(result.exit_code),
             stdout=str(result.stdout_text or ""),
@@ -1617,6 +1824,7 @@ __all__ = [
     "load_stage_marker",
     "map_python_exec_result",
     "map_shell_exec_result",
+    "path_missing_signature",
     "resolve_module_file",
     "stage_package_for_guest",
     "write_complete_stage_marker",

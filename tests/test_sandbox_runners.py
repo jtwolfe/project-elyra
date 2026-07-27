@@ -21,11 +21,14 @@ from elyra.tools.guest_exec import (
     EXECUTOR_BACKEND_MICROSANDBOX,
     ENV_TOOL_ARGS,
     STAGE_MARKER_NAME,
+    guest_module_path,
     load_stage_marker,
     map_python_exec_result,
+    path_missing_signature,
     resolve_module_file,
     stage_package_for_guest,
 )
+import elyra.tools.guest_exec as guest_exec_mod
 from elyra.tools.package_hash import content_hash
 from elyra.tools.registry import ToolRegistry
 from elyra.tools.runner import (
@@ -1047,3 +1050,288 @@ def test_registry_passes_package_dir(
     assert captured.get("kind") == "sandbox_python"
     assert captured.get("package_dir") is not None
     assert Path(captured["package_dir"]).name == "reg_pkg"
+
+
+# ---------------------------------------------------------------------------
+# PR3: reactive path-missing recovery (KD-G3)
+# ---------------------------------------------------------------------------
+
+
+def _fnf_stderr_for(guest_script: str) -> str:
+    """Dogfood-shaped guest FileNotFoundError for the exact guest_script path."""
+    return (
+        "Traceback (most recent call last):\n"
+        '  File "<string>", line 8, in <module>\n'
+        f"FileNotFoundError: [Errno 2] No such file or directory: {guest_script!r}\n"
+    )
+
+
+def _ok_py_exec() -> ExecResult:
+    return ExecResult(
+        exit_code=0,
+        stdout_text=json.dumps({"ok": True, "upper": "HI"}),
+    )
+
+
+def _setup_fake_guest_life(paths) -> tuple[SandboxLifecycleManager, FakeSandboxClient]:
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths,
+        client=client,
+        client_unusable=False,
+        skip_guest_readiness=True,
+    )
+    set_sandbox_lifecycle(life)
+    assert life.ensure(PRIMARY_NAME).ready
+    return life, client
+
+
+def _guest_script_for_pkg(pkg: Path, module_rel: str = "impl/main.py") -> str:
+    return guest_module_path(pkg.name, module_rel)
+
+
+def _install_exec_sequence(
+    life: SandboxLifecycleManager,
+    client: FakeSandboxClient,
+    results: list[ExecResult],
+) -> list[int]:
+    """Replace connected.exec to return a sequence of results; return call counter box."""
+    sb = life.get_connected(PRIMARY_NAME)
+    assert sb is not None
+    counter = [0]
+
+    async def sequenced_exec(
+        cmd: str,
+        args: list[str] | None = None,
+        *,
+        cwd: str | None = None,
+        timeout: float | None = None,
+        env=None,
+    ) -> ExecResult:
+        client.event_log.append("exec")
+        client.exec_calls += 1
+        client.last_exec = {
+            "cmd": cmd,
+            "args": list(args or []),
+            "cwd": cwd,
+            "timeout": timeout,
+            "env": dict(env) if env is not None else None,
+        }
+        idx = counter[0]
+        counter[0] += 1
+        if idx < len(results):
+            return results[idx]
+        # Past sequence: repeat last (usually ok)
+        return results[-1] if results else _ok_py_exec()
+
+    sb.exec = sequenced_exec  # type: ignore[method-assign]
+    return counter
+
+
+def _track_force_stages(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Record stage_package_for_guest kwargs; force=True entries are recovery."""
+    calls: list[dict] = []
+    orig = guest_exec_mod.stage_package_for_guest
+
+    def tracking(paths, package_dir, **kwargs):
+        calls.append(
+            {"force": bool(kwargs.get("force")), "name": Path(package_dir).name}
+        )
+        return orig(paths, package_dir, **kwargs)
+
+    monkeypatch.setattr(guest_exec_mod, "stage_package_for_guest", tracking)
+    return calls
+
+
+def test_path_missing_signature_exact_guest_script_only() -> None:
+    gs = "/workspace/tools/calc/impl/main.py"
+    other = "/workspace/tools/calc/data/other.json"
+    assert path_missing_signature(
+        exit_code=1,
+        stderr=_fnf_stderr_for(gs),
+        guest_script=gs,
+    )
+    assert not path_missing_signature(
+        exit_code=1,
+        stderr=_fnf_stderr_for(other),
+        guest_script=gs,
+    )
+    assert not path_missing_signature(
+        exit_code=0,
+        stderr=_fnf_stderr_for(gs),
+        guest_script=gs,
+    )
+    assert not path_missing_signature(
+        exit_code=1,
+        stderr="ValueError: boom",
+        guest_script=gs,
+    )
+
+
+def test_guest_fnf_guest_script_force_then_ok(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """First exec FNF on guest_script → force re-stage → second exec ok."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_python_pkg(tmp_path, "recover_once")
+    gs = _guest_script_for_pkg(pkg)
+    stage_calls = _track_force_stages(monkeypatch)
+    _install_exec_sequence(
+        life,
+        client,
+        [
+            ExecResult(exit_code=1, stderr_text=_fnf_stderr_for(gs)),
+            _ok_py_exec(),
+        ],
+    )
+    runner = load_runner_json(pkg)
+    result = dispatch(runner, {"text": "hi"}, ToolContext(paths=paths), package_dir=pkg)
+    assert result.ok is True, result
+    assert result.payload.get("upper") == "HI"
+    assert result.error_reason is None
+    assert client.exec_calls == 2
+    force_calls = [c for c in stage_calls if c["force"]]
+    assert len(force_calls) == 1
+    assert force_calls[0]["name"] == "recover_once"
+
+
+def test_guest_fnf_both_fail_guest_module_missing(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both execs FNF on guest_script → guest_module_missing (not guest_nonzero_exit)."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_python_pkg(tmp_path, "always_miss")
+    gs = _guest_script_for_pkg(pkg)
+    stage_calls = _track_force_stages(monkeypatch)
+    fnf = ExecResult(exit_code=1, stderr_text=_fnf_stderr_for(gs))
+    _install_exec_sequence(life, client, [fnf, fnf])
+    runner = load_runner_json(pkg)
+    result = dispatch(runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg)
+    assert result.ok is False
+    assert result.error_reason == "guest_module_missing"
+    assert result.payload.get("guest_path") == gs
+    assert result.payload.get("stage_retried") is True
+    assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
+    assert result.payload.get("content_hash") == content_hash(pkg)
+    assert client.exec_calls == 2
+    assert sum(1 for c in stage_calls if c["force"]) == 1
+
+
+def test_guest_fnf_other_package_path_no_force(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """FNF on a different package path → no force; KD21 guest_nonzero_exit."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_python_pkg(tmp_path, "other_fnf")
+    gs = _guest_script_for_pkg(pkg)
+    other = f"/workspace/tools/{pkg.name}/data/missing.json"
+    stage_calls = _track_force_stages(monkeypatch)
+    _install_exec_sequence(
+        life,
+        client,
+        [ExecResult(exit_code=1, stderr_text=_fnf_stderr_for(other))],
+    )
+    runner = load_runner_json(pkg)
+    result = dispatch(runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg)
+    assert result.ok is False
+    assert result.error_reason == "guest_nonzero_exit"
+    assert client.exec_calls == 1
+    assert sum(1 for c in stage_calls if c["force"]) == 0
+    # Sanity: guest_script itself would have classified
+    assert path_missing_signature(
+        exit_code=1, stderr=_fnf_stderr_for(gs), guest_script=gs
+    )
+
+
+def test_guest_serial_n_dispatch_fnf_only_call2_recovers(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """N serial dispatches; FNF only on call 2 → recovers; 3..N ok without further force."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_python_pkg(tmp_path, "serial_batch")
+    gs = _guest_script_for_pkg(pkg)
+    stage_calls = _track_force_stages(monkeypatch)
+    n = 5
+    # Exec order: call1 ok; call2 FNF then ok; calls 3..N ok each.
+    sequence = [
+        _ok_py_exec(),  # call 1
+        ExecResult(exit_code=1, stderr_text=_fnf_stderr_for(gs)),  # call 2 first
+        _ok_py_exec(),  # call 2 retry
+    ] + [_ok_py_exec() for _ in range(n - 2)]
+    _install_exec_sequence(life, client, sequence)
+    runner = load_runner_json(pkg)
+    results = [
+        dispatch(
+            runner,
+            {"text": f"t{i}"},
+            ToolContext(paths=paths),
+            package_dir=pkg,
+        )
+        for i in range(n)
+    ]
+    assert all(r.ok for r in results), results
+    assert client.exec_calls == 1 + 2 + (n - 2)  # = n + 1
+    force_calls = [c for c in stage_calls if c["force"]]
+    assert len(force_calls) == 1
+    # Initial stages (force=False) happen once per dispatch if not skipped;
+    # after first stage, hash gate skips — only one force recovery.
+    non_force = [c for c in stage_calls if not c["force"]]
+    assert len(non_force) >= 1
+    assert len(non_force) <= n
+
+
+def test_guest_no_always_on_preflight_exec_count(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Healthy path: exactly one guest exec per dispatch (no preflight)."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_python_pkg(tmp_path, "no_preflight")
+    stage_calls = _track_force_stages(monkeypatch)
+    _install_exec_sequence(life, client, [_ok_py_exec()])
+    runner = load_runner_json(pkg)
+    result = dispatch(runner, {"text": "hi"}, ToolContext(paths=paths), package_dir=pkg)
+    assert result.ok is True
+    assert client.exec_calls == 1
+    assert sum(1 for c in stage_calls if c["force"]) == 0
+    # Second dispatch also one exec (hash skip, no preflight)
+    result2 = dispatch(
+        runner, {"text": "yo"}, ToolContext(paths=paths), package_dir=pkg
+    )
+    assert result2.ok is True
+    assert client.exec_calls == 2
+    assert sum(1 for c in stage_calls if c["force"]) == 0
+
+
+def test_guest_shell_fnf_package_argv_force_then_ok(
+    paths, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Shell minimum: missing package-relative argv path → one force → ok."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    life, client = _setup_fake_guest_life(paths)
+    pkg = _write_sandbox_shell_pkg(tmp_path, "shell_recover")
+    guest_cli = f"/workspace/tools/{pkg.name}/impl/cli.py"
+    stage_calls = _track_force_stages(monkeypatch)
+    _install_exec_sequence(
+        life,
+        client,
+        [
+            ExecResult(
+                exit_code=2,
+                stderr_text=(
+                    f"python3: can't open file '{guest_cli}': "
+                    f"[Errno 2] No such file or directory\n"
+                ),
+            ),
+            ExecResult(exit_code=0, stdout_text="done\n"),
+        ],
+    )
+    runner = load_runner_json(pkg)
+    result = dispatch(runner, {"msg": "x"}, ToolContext(paths=paths), package_dir=pkg)
+    assert result.ok is True, result
+    assert client.exec_calls == 2
+    assert sum(1 for c in stage_calls if c["force"]) == 1
