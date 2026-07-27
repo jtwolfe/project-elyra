@@ -7,6 +7,7 @@ and arg validation. Process-wide cooldown state is reset between tests.
 from __future__ import annotations
 
 import concurrent.futures
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -206,6 +207,8 @@ def test_empty_results_ok_with_warning(
         {"query": "ok", "max_results": -3},
         {"query": "ok", "max_results": "many"},
         {"query": "ok", "max_results": True},
+        {"query": "ok", "max_results": "--5"},
+        {"query": "ok", "max_results": "1.5"},
         {"query": "ok", "region": 1},
     ],
 )
@@ -305,21 +308,62 @@ def test_timeout_path(
 
     class _FakePool:
         def __init__(self, *a: Any, **k: Any) -> None:
-            pass
-
-        def __enter__(self) -> _FakePool:
-            return self
-
-        def __exit__(self, *a: Any) -> None:
-            return None
+            self.shutdown_calls: list[dict[str, Any]] = []
 
         def submit(self, *a: Any, **k: Any) -> _FakeFuture:
             return _FakeFuture()
 
-    monkeypatch.setattr(search_mod.concurrent.futures, "ThreadPoolExecutor", _FakePool)
+        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+            self.shutdown_calls.append(
+                {"wait": wait, "cancel_futures": cancel_futures}
+            )
+
+    fake_pools: list[_FakePool] = []
+
+    def _pool_factory(*a: Any, **k: Any) -> _FakePool:
+        pool = _FakePool()
+        fake_pools.append(pool)
+        return pool
+
+    monkeypatch.setattr(
+        search_mod.concurrent.futures, "ThreadPoolExecutor", _pool_factory
+    )
     result = web_search({"query": "slow"}, ctx)
     assert result.ok is False
     assert result.error_reason == "timeout"
+    assert fake_pools
+    assert fake_pools[0].shutdown_calls
+    assert fake_pools[0].shutdown_calls[0]["wait"] is False
+
+
+def test_timeout_returns_without_waiting_for_worker(
+    monkeypatch: pytest.MonkeyPatch, ctx: ToolContext
+) -> None:
+    """Regression: wall-clock timeout must not block on abandoned search thread.
+
+    Uses a real ThreadPoolExecutor + slow worker; handler must return near the
+    short timeout, not after the full sleep.
+    """
+    work_s = 2.0
+    timeout_s = 0.15
+
+    def _slow_search(**_kwargs: Any) -> list[Any]:
+        time.sleep(work_s)
+        return [{"title": "late", "href": "https://example.com/late", "body": "x"}]
+
+    _fake_ddgs_module(monkeypatch, results=[])
+    monkeypatch.setattr(search_mod, "_run_ddgs_search", _slow_search)
+    monkeypatch.setattr(search_mod, "_SEARCH_TIMEOUT_S", timeout_s)
+
+    t0 = time.monotonic()
+    result = web_search({"query": "slow-real"}, ctx)
+    elapsed = time.monotonic() - t0
+
+    assert result.ok is False
+    assert result.error_reason == "timeout"
+    # Must return near timeout, not after full worker sleep (slack for CI).
+    assert elapsed < work_s * 0.6, f"handler blocked ~{elapsed:.2f}s waiting on worker"
+    assert elapsed < timeout_s + 1.0
 
 
 def test_cooldown_after_consecutive_failures(
@@ -337,6 +381,74 @@ def test_cooldown_after_consecutive_failures(
     r = web_search({"query": "fail"}, ctx)
     assert r.ok is False
     assert r.error_reason == "rate_limited"
+
+
+def test_success_resets_failure_counter(
+    monkeypatch: pytest.MonkeyPatch, ctx: ToolContext
+) -> None:
+    """Fail twice (under threshold) → success clears counter → fail again
+    must not arm cooldown until threshold is re-hit."""
+    # Plan: fail, fail, succeed, fail, fail → still not cooldown; one more fail arms it.
+    outcomes: list[str] = ["fail", "fail", "ok", "fail", "fail", "fail"]
+    call_n = {"n": 0}
+
+    def _side_effect(*_a: Any, **_k: Any) -> list[Any]:
+        i = call_n["n"]
+        call_n["n"] += 1
+        if i >= len(outcomes) or outcomes[i] == "fail":
+            raise RuntimeError("transient backend error")
+        return [{"title": "ok", "href": "https://example.com/", "body": "x"}]
+
+    client = _fake_ddgs_module(monkeypatch, results=[])
+    client.text.side_effect = _side_effect
+
+    assert web_search({"query": "a"}, ctx).error_reason == "search_unavailable"
+    assert web_search({"query": "b"}, ctx).error_reason == "search_unavailable"
+    ok = web_search({"query": "c"}, ctx)
+    assert ok.ok is True
+    # Two more failures after reset — still under threshold of 3.
+    assert web_search({"query": "d"}, ctx).error_reason == "search_unavailable"
+    assert web_search({"query": "e"}, ctx).error_reason == "search_unavailable"
+    # Still not in cooldown — backend still reached.
+    assert web_search({"query": "f"}, ctx).error_reason == "search_unavailable"
+    cool = web_search({"query": "g"}, ctx)
+    assert cool.error_reason == "rate_limited"
+    # Backend was not invoked for the short-circuit call.
+    assert call_n["n"] == 6  # a–f only; g short-circuited
+
+
+def test_rate_limited_arms_cooldown_immediately(
+    monkeypatch: pytest.MonkeyPatch, ctx: ToolContext
+) -> None:
+    client = _fake_ddgs_module(
+        monkeypatch,
+        side_effect=RuntimeError("429 Too Many Requests"),
+    )
+    r1 = web_search({"query": "busy"}, ctx)
+    assert r1.error_reason == "rate_limited"
+    assert client.text.call_count == 1
+
+    r2 = web_search({"query": "busy-again"}, ctx)
+    assert r2.ok is False
+    assert r2.error_reason == "rate_limited"
+    # Short-circuited: no second backend call.
+    assert client.text.call_count == 1
+
+
+def test_generic_blocked_is_not_rate_limited(
+    monkeypatch: pytest.MonkeyPatch, ctx: ToolContext
+) -> None:
+    """Plain 'blocked' / 403 must not arm immediate rate-limit cooldown."""
+    _fake_ddgs_module(
+        monkeypatch,
+        side_effect=RuntimeError("content blocked by policy"),
+    )
+    r = web_search({"query": "policy"}, ctx)
+    assert r.ok is False
+    assert r.error_reason == "search_unavailable"
+    # Not in cooldown after a single non-rate failure.
+    r2 = web_search({"query": "policy2"}, ctx)
+    assert r2.error_reason == "search_unavailable"
 
 
 def test_no_raw_html_keys_in_payload(

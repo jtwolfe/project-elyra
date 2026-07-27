@@ -11,6 +11,7 @@ from __future__ import annotations
 import concurrent.futures
 import importlib.util
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -93,8 +94,15 @@ def _parse_max_results(raw: Any) -> tuple[int | None, str | None]:
         n = raw
     elif isinstance(raw, float) and raw.is_integer():
         n = int(raw)
-    elif isinstance(raw, str) and raw.strip().lstrip("-").isdigit():
-        n = int(raw.strip())
+    elif isinstance(raw, str):
+        s = raw.strip()
+        # Single optional leading '-' then digits only (reject "--5", "1.0", "").
+        if not s or not re.fullmatch(r"-?\d+", s):
+            return None, "invalid_args"
+        try:
+            n = int(s)
+        except ValueError:
+            return None, "invalid_args"
     else:
         return None, "invalid_args"
     if n < 1:
@@ -177,14 +185,13 @@ def _normalize_item(raw: Any, search_type: str) -> dict[str, Any] | None:
 
 
 def _looks_rate_limited(exc: BaseException) -> bool:
+    """True only for clear rate-limit signals (not generic 403 / "blocked")."""
     msg = f"{type(exc).__name__}: {exc}".lower()
     needles = (
         "rate limit",
         "ratelimit",
         "too many requests",
         "429",
-        "403 forbidden",
-        "blocked",
     )
     return any(n in msg for n in needles)
 
@@ -285,40 +292,51 @@ def web_search(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     elif isinstance(timelimit, str):
         timelimit = timelimit.strip()
 
+    # Explicit executor (not context manager): on timeout we must return without
+    # waiting for the abandoned worker (context __exit__ uses shutdown(wait=True)).
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(
-                _run_ddgs_search,
-                query=query,
-                search_type=search_type,
-                max_results=max_results,
-                region=region,
-                safesearch=safesearch,
-                timelimit=timelimit,
-            )
+        fut = pool.submit(
+            _run_ddgs_search,
+            query=query,
+            search_type=search_type,
+            max_results=max_results,
+            region=region,
+            safesearch=safesearch,
+            timelimit=timelimit,
+        )
+        try:
             raw_results = fut.result(timeout=_SEARCH_TIMEOUT_S)
-    except concurrent.futures.TimeoutError:
-        _note_failure()
-        _LOG.warning("web_search timeout query=%r type=%s", query, search_type)
-        return _err("timeout", hint=f"search exceeded {_SEARCH_TIMEOUT_S:.0f}s")
-    except Exception as exc:  # noqa: BLE001 — backend volatility; fail closed
-        rate = _looks_rate_limited(exc)
-        _note_failure(rate_limited=rate)
-        _LOG.warning(
-            "web_search backend error query=%r type=%s: %s",
-            query,
-            search_type,
-            exc,
-        )
-        if rate:
-            return _err(
-                "rate_limited",
-                hint="backend rate limited or blocked; retry later",
+        except concurrent.futures.TimeoutError:
+            _note_failure()
+            _LOG.warning("web_search timeout query=%r type=%s", query, search_type)
+            # Abandon the in-flight worker; do not wait for it.
+            pool.shutdown(wait=False, cancel_futures=True)
+            return _err("timeout", hint=f"search exceeded {_SEARCH_TIMEOUT_S:.0f}s")
+        except Exception as exc:  # noqa: BLE001 — backend volatility; fail closed
+            rate = _looks_rate_limited(exc)
+            _note_failure(rate_limited=rate)
+            _LOG.warning(
+                "web_search backend error query=%r type=%s: %s",
+                query,
+                search_type,
+                exc,
             )
-        return _err(
-            "search_unavailable",
-            hint=f"backend error: {type(exc).__name__}",
-        )
+            pool.shutdown(wait=False, cancel_futures=True)
+            if rate:
+                return _err(
+                    "rate_limited",
+                    hint="backend rate limited; retry later",
+                )
+            return _err(
+                "search_unavailable",
+                hint=f"backend error: {type(exc).__name__}",
+            )
+        else:
+            pool.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
 
     results: list[dict[str, Any]] = []
     for raw in raw_results:
