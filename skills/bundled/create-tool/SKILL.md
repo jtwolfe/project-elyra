@@ -105,10 +105,14 @@ When a tool writes files for later use (plots, exports, intermediates):
 5. Smoke-check the promoted tool with a safe call (requires isolation ready when on).
 6. If usage is non-obvious, consider a companion skill via `create-skill`.
 
+### Package VCS recovery
+
 Re-promoting an existing **local** package is allowed: the previous payload is
-archived under `tools/local/<name>/versions/` automatically. Use `get_tool`
-(`list_versions`) and `revert_tool` (reason required) to recover. Bundled
-names still refuse overwrite.
+archived under `tools/local/<name>/versions/<version_id>/` automatically. Use
+`get_tool` with `list_versions` (and `which=version` + `version_id` to inspect)
+then `revert_tool` (**reason required**, min length enforced) to restore.
+Bundled names still refuse overwrite — there is no recover-via-overwrite path
+for `tools/bundled/`. After revert, smoke-check the restored tool when safe.
 
 ## Hard rules
 

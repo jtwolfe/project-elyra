@@ -74,12 +74,14 @@ Reject skills that are:
 
 6. Immediately `load_skill` on the new name and verify that the body and catalog entry are correct and useful.
 
-### Updating an existing local skill
+### Package VCS recovery (local skills)
 
 Re-promote (or re-`install_skill`) archives the previous local package under
 `skills/local/<name>/versions/<version_id>/`. Recover with `get_skill`
-(`list_versions=true`) and `revert_skill` (reason required, min 8 chars).
-Bundled skill names cannot be overwritten.
+(`list_versions=true`, or `which=version` + `version_id`) and `revert_skill`
+(**reason required**, min 8 chars). Bundled skill names cannot be overwritten —
+there is no recover-via-overwrite path for `skills/bundled/`. After revert,
+`load_skill` to confirm the restored body.
 
 ## Format
 
