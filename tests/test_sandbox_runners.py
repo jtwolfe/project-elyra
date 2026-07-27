@@ -28,7 +28,12 @@ from elyra.tools.guest_exec import (
 )
 from elyra.tools.package_hash import content_hash
 from elyra.tools.registry import ToolRegistry
-from elyra.tools.runner import RunnerSpec, dispatch, load_runner_json, validate_runner_fields
+from elyra.tools.runner import (
+    RunnerSpec,
+    dispatch,
+    load_runner_json,
+    validate_runner_fields,
+)
 from elyra.tools.types import ToolContext, ToolResult
 from elyra.tools.verify import validate_draft_package
 
@@ -205,9 +210,7 @@ def test_validate_draft_package_shape_errors(tmp_path: Path) -> None:
     draft = tmp_path / "draft_tool"
     draft.mkdir()
     (draft / "TOOL.md").write_text("---\nname: draft_tool\n---\n", encoding="utf-8")
-    (draft / "schema.json").write_text(
-        json.dumps({"type": "object"}), encoding="utf-8"
-    )
+    (draft / "schema.json").write_text(json.dumps({"type": "object"}), encoding="utf-8")
     (draft / "tests").mkdir()
     (draft / "tests" / "test_ok.py").write_text("def test_ok():\n    assert True\n")
     (draft / "runner.json").write_text(
@@ -298,9 +301,7 @@ def test_validate_draft_package_module_not_found(tmp_path: Path) -> None:
     draft = tmp_path / "hollow"
     draft.mkdir()
     (draft / "TOOL.md").write_text("---\nname: hollow\n---\n", encoding="utf-8")
-    (draft / "schema.json").write_text(
-        json.dumps({"type": "object"}), encoding="utf-8"
-    )
+    (draft / "schema.json").write_text(json.dumps({"type": "object"}), encoding="utf-8")
     (draft / "tests").mkdir()
     (draft / "tests" / "test_ok.py").write_text("def test_ok():\n    assert True\n")
     (draft / "runner.json").write_text(
@@ -323,9 +324,7 @@ def test_validate_draft_package_module_not_found(tmp_path: Path) -> None:
 
 
 def test_dispatch_package_dir_missing() -> None:
-    runner = RunnerSpec(
-        kind="sandbox_python", module="impl/main.py", function="run"
-    )
+    runner = RunnerSpec(kind="sandbox_python", module="impl/main.py", function="run")
     ctx = ToolContext(paths=resolve_paths())
     result = dispatch(runner, {"text": "hi"}, ctx, package_dir=None)
     assert result.ok is False
@@ -357,9 +356,7 @@ def test_guest_fail_closed_when_client_unusable(
     set_sandbox_lifecycle(life)
     pkg = _write_sandbox_python_pkg(tmp_path, "unusable_tool")
     runner = load_runner_json(pkg)
-    result = dispatch(
-        runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg
-    )
+    result = dispatch(runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg)
     assert result.ok is False
     assert "sandbox_unavailable" in (result.error_reason or "")
     assert result.payload.get("isolation") is True
@@ -399,9 +396,7 @@ def test_host_stub_python_tool_level_not_ok(
     body = "def run(args):\n    return {'ok': False, 'reason': 'nope'}\n"
     pkg = _write_sandbox_python_pkg(tmp_path, "fail_tool", body=body)
     runner = load_runner_json(pkg)
-    result = dispatch(
-        runner, {}, ToolContext(paths=paths), package_dir=pkg
-    )
+    result = dispatch(runner, {}, ToolContext(paths=paths), package_dir=pkg)
     assert result.ok is False
     assert result.error_reason == "tool_returned_not_ok"
     assert result.payload.get("reason") == "nope"
@@ -694,9 +689,8 @@ def test_stage_force_restages_when_hash_matches(paths, tmp_path: Path) -> None:
     assert marker1 is not None
     h = content_hash(pkg)
     assert marker1["content_hash"] == h
-    # PR1 rename-swap: force creates a new top-level dest inode.
+    # PR2 in-place: force preserves top-level dest dentry/inode.
     ino1 = dest1.stat().st_ino
-    probe_ino = (dest1 / "impl" / "main.py").stat().st_ino
     # Sentinel staged_at so rewrite is observable without sleeping a second.
     sentinel = "1999-01-01T00:00:00Z"
     marker1["staged_at"] = sentinel
@@ -709,9 +703,99 @@ def test_stage_force_restages_when_hash_matches(paths, tmp_path: Path) -> None:
     marker2 = load_stage_marker(dest2)
     assert marker2 is not None
     assert marker2["content_hash"] == h
-    assert dest2.stat().st_ino != ino1
-    assert (dest2 / "impl" / "main.py").stat().st_ino != probe_ino
+    assert dest2.stat().st_ino == ino1
     assert marker2["staged_at"] != sentinel
+
+
+def test_stage_inplace_refresh_preserves_top_level_inode(paths, tmp_path: Path) -> None:
+    """Re-stage when dest exists keeps the top-level package directory identity."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "inode_tool")
+    dest1 = stage_package_for_guest(paths, pkg)
+    ino1 = dest1.stat().st_ino
+    # Byte change forces refresh (not skip).
+    main = pkg / "impl" / "main.py"
+    main.write_text(
+        main.read_text(encoding="utf-8") + "\n# refresh\n",
+        encoding="utf-8",
+    )
+    dest2 = stage_package_for_guest(paths, pkg)
+    assert dest2.resolve() == dest1.resolve()
+    assert dest2.stat().st_ino == ino1
+    assert "# refresh" in (dest2 / "impl" / "main.py").read_text(encoding="utf-8")
+    assert load_stage_marker(dest2) is not None
+
+
+def test_stage_failed_refresh_marker_absent_next_does_not_skip(
+    paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Partial/failed refresh leaves marker absent; next call re-stages."""
+    import elyra.tools.guest_exec as guest_exec
+
+    pkg = _write_sandbox_python_pkg(tmp_path, "partial_tool")
+    dest = stage_package_for_guest(paths, pkg)
+    assert load_stage_marker(dest) is not None
+    ino = dest.stat().st_ino
+
+    def boom(*_a: object, **_k: object) -> None:
+        raise OSError("simulated partial refresh failure")
+
+    monkeypatch.setattr(guest_exec, "_in_place_refresh", boom)
+    with pytest.raises(OSError, match="simulated partial"):
+        stage_package_for_guest(paths, pkg, force=True)
+    # Marker invalidated before mutate and never rewritten on failure.
+    assert load_stage_marker(dest) is None
+    assert dest.stat().st_ino == ino  # top-level dentry still present
+
+    monkeypatch.undo()
+    # Next call must not skip (no complete marker) and succeeds.
+    dest2 = stage_package_for_guest(paths, pkg)
+    assert dest2.stat().st_ino == ino
+    marker = load_stage_marker(dest2)
+    assert marker is not None
+    assert marker.get("incomplete") is False
+    assert marker["content_hash"] == content_hash(pkg)
+
+
+def test_stage_inplace_prunes_stale_payload(paths, tmp_path: Path) -> None:
+    """Stale modules (e.g. impl/old.py) and bytecode are pruned on refresh."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "prune_tool")
+    dest = stage_package_for_guest(paths, pkg)
+    stale = dest / "impl" / "old.py"
+    stale.write_text("# leftover from prior version\n", encoding="utf-8")
+    cache = dest / "impl" / "__pycache__"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "old.cpython-312.pyc").write_bytes(b"\x00")
+    (dest / "stray.pyc").write_bytes(b"\x00")
+    assert stale.is_file()
+
+    # force refresh with same source (no old.py in source)
+    dest2 = stage_package_for_guest(paths, pkg, force=True)
+    assert not (dest2 / "impl" / "old.py").exists()
+    assert not (dest2 / "impl" / "__pycache__").exists()
+    assert not (dest2 / "stray.pyc").exists()
+    assert (dest2 / "impl" / "main.py").is_file()
+    assert load_stage_marker(dest2) is not None
+
+
+def test_stage_inplace_no_temp_leftovers_after_success(paths, tmp_path: Path) -> None:
+    """Per-file replace leaves no *.elyra_tmp.* leftovers after success."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "tmpclean_tool")
+    dest = stage_package_for_guest(paths, pkg)
+    # Seed a leftover temp from a prior crash simulation.
+    leftover = dest / "impl" / "main.py.elyra_tmp.deadbeef"
+    leftover.write_text("truncated", encoding="utf-8")
+    # Also force a content update so refresh runs.
+    main = pkg / "impl" / "main.py"
+    main.write_text(
+        main.read_text(encoding="utf-8") + "\n# ok\n",
+        encoding="utf-8",
+    )
+    dest2 = stage_package_for_guest(paths, pkg)
+    temps = [p for p in dest2.rglob("*") if ".elyra_tmp." in p.name]
+    assert temps == []
+    body = (dest2 / "impl" / "main.py").read_text(encoding="utf-8")
+    assert "# ok" in body
+    assert "truncated" not in body
 
 
 def test_stage_pycache_excluded_from_dest(paths, tmp_path: Path) -> None:
@@ -729,7 +813,9 @@ def test_stage_pycache_excluded_from_dest(paths, tmp_path: Path) -> None:
     assert (dest / STAGE_MARKER_NAME).is_file()
     # Marker itself is not re-copied from a polluted source
     polluted = pkg / STAGE_MARKER_NAME
-    polluted.write_text('{"schema_version":1,"incomplete":true,"content_hash":"x"}', encoding="utf-8")
+    polluted.write_text(
+        '{"schema_version":1,"incomplete":true,"content_hash":"x"}', encoding="utf-8"
+    )
     dest2 = stage_package_for_guest(paths, pkg, force=True)
     marker = load_stage_marker(dest2)
     assert marker is not None
@@ -774,9 +860,7 @@ def test_fake_guest_python_stages_and_execs(
 
     pkg = _write_sandbox_python_pkg(tmp_path, "fake_py")
     runner = load_runner_json(pkg)
-    result = dispatch(
-        runner, {"text": "hi"}, ToolContext(paths=paths), package_dir=pkg
-    )
+    result = dispatch(runner, {"text": "hi"}, ToolContext(paths=paths), package_dir=pkg)
     assert result.ok is True
     assert result.payload.get("upper") == "HI"
     assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
@@ -852,9 +936,7 @@ def test_fake_guest_reconnect_on_mid_exec_death(
 
     pkg = _write_sandbox_python_pkg(tmp_path, "retry_tool")
     runner = load_runner_json(pkg)
-    result = dispatch(
-        runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg
-    )
+    result = dispatch(runner, {"text": "x"}, ToolContext(paths=paths), package_dir=pkg)
     # After one empty failure + reconnect, second exec succeeds
     assert result.ok is True
     assert result.payload.get("recovered") is True

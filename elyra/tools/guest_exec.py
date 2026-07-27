@@ -56,6 +56,7 @@ class _RunnerLike(Protocol):
     module: str | None
     function: str | None
 
+
 _LOG = logging.getLogger(__name__)
 
 # Package-runner timeouts (DESIGN: default 30s, cap 60s).
@@ -71,9 +72,7 @@ _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
 # Names/suffixes excluded from staged package trees.
 # Runtime stage marker is never copied from source; written after successful stage.
 STAGE_MARKER_NAME = ".elyra_stage.json"
-_STAGE_IGNORE_NAMES = frozenset(
-    {"__pycache__", ".stage", ".verify", STAGE_MARKER_NAME}
-)
+_STAGE_IGNORE_NAMES = frozenset({"__pycache__", ".stage", ".verify", STAGE_MARKER_NAME})
 _STAGE_IGNORE_SUFFIXES = frozenset({".pyc", ".pyo"})
 _STAGE_MARKER_SCHEMA_VERSION = 1
 
@@ -298,9 +297,7 @@ def host_stage_looks_complete(dest: Path, package_dir: Path) -> bool:
         argv0 = str(argv[0]).strip()
         if not argv0:
             return False
-        is_absolute = argv0.startswith("/") or (
-            len(argv0) >= 2 and argv0[1] == ":"
-        )
+        is_absolute = argv0.startswith("/") or (len(argv0) >= 2 and argv0[1] == ":")
         has_dotdot = ".." in Path(argv0).parts
         rel = argv0.replace("\\", "/")
         # Package-relative when no abs / .. and looks like a path (sep or
@@ -359,11 +356,13 @@ def stage_package_for_guest(
     dest still has ``.verify.json``, skip is refused so the strip contract is
     honored even if the content hash is unchanged.
 
-    Writes under ``tools/.stage/<name>.<pid>.<token>/`` then renames into place
-    (PR1 still rename-swaps on update; PR2 moves to in-place refresh).
+    When dest already exists as a real directory, refresh **in place** (no
+    top-level ``os.rename(dest, backup)``) so the package dentry is preserved.
+    First stage (no dest) still uses ``tools/.stage/<name>.<pid>.<token>/`` then
+    renames into place. Marker is unlinked before mutate and written complete
+    only after full success (KD-G2).
     Excludes ``__pycache__`` / ``.pyc`` / stage marker. Optionally strips
-    ``.verify.json``. Writes ``.elyra_stage.json`` only after full success.
-    Returns the host destination directory.
+    ``.verify.json``. Returns the host destination directory.
     """
     package_dir = Path(package_dir)
     if not package_dir.is_dir():
@@ -394,11 +393,33 @@ def stage_package_for_guest(
     ):
         return dest.resolve()
 
-    # Mutate path: invalidate complete claim before restage when dest exists.
+    # Mutate path: invalidate complete claim BEFORE any restage when dest exists.
+    dest_is_real_dir = dest.is_dir() and not dest.is_symlink()
+    if dest_is_real_dir:
+        _unlink_stage_marker(dest)
+
+    if dest_is_real_dir:
+        # Update: NEVER os.rename(dest, backup) — preserve top-level dentry.
+        try:
+            _in_place_refresh(
+                package_dir,
+                dest,
+                sandbox_root=host_root,
+                strip_verify_record=strip_verify_record,
+            )
+        except OSError:
+            # Marker already unlinked; leave absent so next call cannot skip.
+            raise
+        write_complete_stage_marker(
+            dest,
+            content_hash_value=src_hash,
+            package_name=name,
+        )
+        return dest.resolve()
+
+    # First stage (no dest), or replace non-dir dest (symlink/file).
     if dest.exists() or dest.is_symlink():
-        if dest.is_dir() and not dest.is_symlink():
-            _unlink_stage_marker(dest)
-        # else: symlink/file dest will be replaced by rename-swap below
+        _safe_rmtree(dest)
 
     stage_root = _ensure_real_subdir(host_root, "tools", ".stage")
     token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
@@ -415,25 +436,8 @@ def stage_package_for_guest(
             sandbox_root=host_root,
             strip_verify_record=strip_verify_record,
         )
-        # Swap into place: move old dest aside, rename work → dest, drop old.
-        backup: Path | None = None
-        if dest.exists() or dest.is_symlink():
-            backup = stage_root / f"{name}.old.{token}"
-            if backup.exists() or backup.is_symlink():
-                _safe_rmtree(backup)
-            os.rename(dest, backup)
-        try:
-            os.rename(work, dest)
-        except OSError:
-            if backup is not None and backup.exists():
-                try:
-                    os.rename(backup, dest)
-                except OSError:
-                    pass
-            raise
-        if backup is not None:
-            _safe_rmtree(backup)
-        # Complete marker only after full success (never on partial tree).
+        # dest did not exist (or was cleared); rename work into place.
+        os.rename(work, dest)
         write_complete_stage_marker(
             dest,
             content_hash_value=src_hash,
@@ -505,9 +509,7 @@ def map_python_exec_result(
         return ToolResult(
             ok=False,
             payload=base_streams,
-            error_reason=(
-                "guest_nonzero_exit" if isolation else "host_nonzero_exit"
-            ),
+            error_reason=("guest_nonzero_exit" if isolation else "host_nonzero_exit"),
         )
 
     stripped = (stdout or "").strip()
@@ -594,9 +596,7 @@ def map_shell_exec_result(
         return ToolResult(
             ok=False,
             payload=payload,
-            error_reason=(
-                "guest_nonzero_exit" if isolation else "host_nonzero_exit"
-            ),
+            error_reason=("guest_nonzero_exit" if isolation else "host_nonzero_exit"),
         )
     return ToolResult(ok=True, payload=payload)
 
@@ -634,11 +634,17 @@ def host_stub_dispatch(
 ) -> ToolResult:
     """Execute sandbox_* runners on the host (tests/CI only)."""
     package_dir = Path(package_dir)
-    timeout = clamp_tool_timeout(args.get("timeout") if isinstance(args, dict) else None)
+    timeout = clamp_tool_timeout(
+        args.get("timeout") if isinstance(args, dict) else None
+    )
     if runner.kind == "sandbox_python":
-        return _host_stub_python(runner, args, ctx, package_dir=package_dir, timeout=timeout)
+        return _host_stub_python(
+            runner, args, ctx, package_dir=package_dir, timeout=timeout
+        )
     if runner.kind == "sandbox_shell":
-        return _host_stub_shell(runner, args, ctx, package_dir=package_dir, timeout=timeout)
+        return _host_stub_shell(
+            runner, args, ctx, package_dir=package_dir, timeout=timeout
+        )
     return ToolResult(
         ok=False,
         payload={},
@@ -658,13 +664,9 @@ def _host_stub_python(
     module = (runner.module or "").strip()
     func_name = (runner.function or "run").strip() or "run"
     if not is_safe_module_rel(module):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:module"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:module")
     if not is_public_function_name(func_name):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:function"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:function")
     mod_path = resolve_module_file(package_dir, module)
     if mod_path is None:
         return ToolResult(
@@ -729,9 +731,7 @@ def _host_stub_shell(
 ) -> ToolResult:
     argv = list(runner.argv or [])
     if not argv or not str(argv[0]).strip():
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:argv"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:argv")
     argv = [str(a) for a in argv]
 
     paths = ctx.paths if ctx.paths is not None else resolve_paths()
@@ -818,7 +818,9 @@ def guest_dispatch(
     paths = ctx.paths if ctx.paths is not None else resolve_paths()
     package_dir = Path(package_dir)
     name = package_dir.name
-    timeout = clamp_tool_timeout(args.get("timeout") if isinstance(args, dict) else None)
+    timeout = clamp_tool_timeout(
+        args.get("timeout") if isinstance(args, dict) else None
+    )
 
     try:
         stage_package_for_guest(paths, package_dir)
@@ -868,13 +870,9 @@ def _guest_python(
     module = (runner.module or "").strip()
     func_name = (runner.function or "run").strip() or "run"
     if not is_safe_module_rel(module):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:module"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:module")
     if not is_public_function_name(func_name):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:function"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:function")
     # Prefer resolved file name (may add .py) so guest path matches staged bytes.
     mod_file = resolve_module_file(package_dir, module)
     if mod_file is None:
@@ -936,9 +934,7 @@ def _guest_shell(
 ) -> ToolResult:
     argv = list(runner.argv or [])
     if not argv or not str(argv[0]).strip():
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:argv"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:argv")
     argv_s = [str(a) for a in argv]
     cmd, cmd_args = argv_s[0], argv_s[1:]
 
@@ -1078,9 +1074,7 @@ def _exec_with_one_reconnect(
                 _force_ensure_reconnect(life)
             continue
         except _SandboxDeathDuringExec as exc:
-            last_iso = _IsolationFailure(
-                str(exc), anomaly="sandbox_unavailable"
-            )
+            last_iso = _IsolationFailure(str(exc), anomaly="sandbox_unavailable")
             if attempt == 0:
                 _force_ensure_reconnect(life)
             continue
@@ -1124,9 +1118,7 @@ def _exec_once(
                     timeout=bridge_timeout,
                 )
             except BridgeTimeoutError as exc:
-                raise _GuestTimeout(
-                    f"guest exec timeout ({timeout:.0f}s)"
-                ) from exc
+                raise _GuestTimeout(f"guest exec timeout ({timeout:.0f}s)") from exc
             except (BridgeShutdownError, BridgeReentrancyError) as exc:
                 raise _IsolationFailure(
                     f"bridge error: {type(exc).__name__}",
@@ -1142,9 +1134,7 @@ def _exec_once(
             stderr = str(getattr(result, "stderr_text", "") or "")
             # Mid-exec crash heuristic: empty streams + non-zero.
             if exit_code != 0 and not stdout.strip() and not stderr.strip():
-                raise _SandboxDeathDuringExec(
-                    "empty guest failure (possible crash)"
-                )
+                raise _SandboxDeathDuringExec("empty guest failure (possible crash)")
             return ExecResult(
                 exit_code=exit_code,
                 stdout_text=stdout,
@@ -1153,9 +1143,7 @@ def _exec_once(
     except (_IsolationFailure, _SandboxDeathDuringExec, _GuestTimeout):
         raise
     except EnsureLockTimeoutError as exc:
-        raise _IsolationFailure(
-            f"lock timeout: {exc}", anomaly="lock_timeout"
-        ) from exc
+        raise _IsolationFailure(f"lock timeout: {exc}", anomaly="lock_timeout") from exc
     except SandboxClientUnusableError as exc:
         raise _IsolationFailure(
             f"client unusable: {exc}", anomaly="client_unusable"
@@ -1386,6 +1374,174 @@ def _safe_copy_file(src: Path, dest: Path) -> None:
         raise OSError(f"stage produced unexpected symlink: {dest}")
 
 
+def _is_elyra_tmp_name(name: str) -> bool:
+    """True for per-file stage temps: ``<name>.elyra_tmp.<token>``."""
+    return ".elyra_tmp." in name
+
+
+def _safe_copy_file_replace(src: Path, dest: Path, *, token: str) -> None:
+    """Copy ``src`` onto ``dest`` via sibling temp + ``os.replace`` (atomic)."""
+    if src.is_symlink():
+        raise OSError(f"refusing to stage symlink source: {src}")
+    if not src.is_file():
+        raise OSError(f"stage source is not a regular file: {src}")
+    parent = dest.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise OSError(f"stage dest parent is not a real directory: {parent}")
+    if dest.is_symlink():
+        dest.unlink(missing_ok=True)
+    elif dest.exists() and dest.is_dir() and not dest.is_symlink():
+        _safe_rmtree(dest)
+
+    tmp = parent / f"{dest.name}.elyra_tmp.{token}"
+    try:
+        if tmp.exists() or tmp.is_symlink():
+            if tmp.is_dir() and not tmp.is_symlink():
+                _safe_rmtree(tmp)
+            else:
+                _safe_unlink(tmp)
+        shutil.copyfile(src, tmp, follow_symlinks=False)
+        try:
+            shutil.copystat(src, tmp, follow_symlinks=False)
+        except OSError:
+            pass
+        if tmp.is_symlink():
+            tmp.unlink(missing_ok=True)
+            raise OSError(f"stage produced unexpected symlink: {tmp}")
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            if tmp.exists() or tmp.is_symlink():
+                if tmp.is_dir() and not tmp.is_symlink():
+                    _safe_rmtree(tmp)
+                else:
+                    tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    if dest.is_symlink():
+        dest.unlink(missing_ok=True)
+        raise OSError(f"stage produced unexpected symlink: {dest}")
+
+
+def _stage_should_skip_source_entry(child: Path, *, strip_verify_record: bool) -> bool:
+    """True when a source entry is excluded from staged payload."""
+    if child.name in _STAGE_IGNORE_NAMES:
+        return True
+    if child.suffix in _STAGE_IGNORE_SUFFIXES:
+        return True
+    if strip_verify_record and child.name == VERIFY_RECORD_NAME:
+        return True
+    return False
+
+
+def _in_place_refresh(
+    src: Path,
+    dest: Path,
+    *,
+    sandbox_root: Path,
+    strip_verify_record: bool = False,
+) -> None:
+    """Refresh ``dest`` from ``src`` without renaming the top-level package dir.
+
+    Per-file: write to sibling ``*.elyra_tmp.<token>`` then ``os.replace``.
+    After copy, prune dest paths absent from the source payload (keep-set:
+    stage marker name only). Always prunes ``__pycache__`` / ``*.pyc`` /
+    leftover temps. ``sandbox_root`` is accepted for call-site parity with
+    ``_safe_copytree_into`` (escape checks live in callers that create dest).
+    """
+    del sandbox_root  # dest already under tools/; same contract as copytree
+    if src.is_symlink() or not src.is_dir():
+        raise OSError(f"stage source tree invalid: {src}")
+    if dest.is_symlink() or not dest.is_dir():
+        raise OSError(f"stage dest is not a real directory: {dest}")
+
+    token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    desired_files: set[str] = set()
+    desired_dirs: set[str] = set()
+
+    def walk_copy(src_dir: Path, rel_prefix: str) -> None:
+        for child in sorted(src_dir.iterdir(), key=lambda p: p.name):
+            if _stage_should_skip_source_entry(
+                child, strip_verify_record=strip_verify_record
+            ):
+                continue
+            if child.is_symlink():
+                raise OSError(f"refusing to stage symlink: {child}")
+            rel = f"{rel_prefix}/{child.name}" if rel_prefix else child.name
+            target = dest / rel
+            if child.is_dir():
+                desired_dirs.add(rel)
+                if target.is_symlink():
+                    target.unlink(missing_ok=True)
+                if target.exists() and (not target.is_dir() or target.is_symlink()):
+                    _safe_unlink(target)
+                if not target.exists():
+                    target.mkdir(mode=0o755)
+                walk_copy(child, rel)
+            elif child.is_file():
+                desired_files.add(rel)
+                parent = target.parent
+                if parent.is_symlink() or not parent.is_dir():
+                    raise OSError(
+                        f"stage dest parent is not a real directory: {parent}"
+                    )
+                _safe_copy_file_replace(child, target, token=token)
+            else:
+                raise OSError(f"refusing to stage special file: {child}")
+
+    walk_copy(src, "")
+    _prune_stale_stage_payload(
+        dest,
+        desired_files=desired_files,
+        desired_dirs=desired_dirs,
+    )
+
+
+def _prune_stale_stage_payload(
+    dest: Path,
+    *,
+    desired_files: set[str],
+    desired_dirs: set[str],
+) -> None:
+    """Delete dest entries not in the source payload (after in-place copy).
+
+    Keep-set: never prune ``.elyra_stage.json`` as an orphan (caller rewrites
+    after success; absent during refresh). Always prune ignore names/suffixes,
+    leftover ``*.elyra_tmp.*``, and source-deleted modules/dirs.
+    """
+    dest = Path(dest)
+    if not dest.is_dir() or dest.is_symlink():
+        return
+    # Bottom-up so files go before their parent dirs.
+    for path in sorted(dest.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        try:
+            rel = path.relative_to(dest).as_posix()
+        except ValueError:
+            continue
+        # Keep-set: stage marker (rewritten by caller after success).
+        if path.name == STAGE_MARKER_NAME:
+            continue
+        # Always prune stage ignore names / bytecode / refresh temps.
+        if (
+            path.name in _STAGE_IGNORE_NAMES
+            or path.suffix in _STAGE_IGNORE_SUFFIXES
+            or _is_elyra_tmp_name(path.name)
+        ):
+            if path.is_dir() and not path.is_symlink():
+                _safe_rmtree(path)
+            else:
+                _safe_unlink(path)
+            continue
+        if path.is_symlink() or path.is_file():
+            if rel not in desired_files:
+                _safe_unlink(path)
+            continue
+        if path.is_dir():
+            if rel not in desired_dirs:
+                _safe_rmtree(path)
+
+
 def _safe_copytree_into(
     src: Path,
     dest: Path,
@@ -1398,11 +1554,9 @@ def _safe_copytree_into(
     if dest.is_symlink() or not dest.is_dir():
         raise OSError(f"stage dest is not a real directory: {dest}")
     for child in sorted(src.iterdir(), key=lambda p: p.name):
-        if child.name in _STAGE_IGNORE_NAMES:
-            continue
-        if child.suffix in _STAGE_IGNORE_SUFFIXES:
-            continue
-        if strip_verify_record and child.name == VERIFY_RECORD_NAME:
+        if _stage_should_skip_source_entry(
+            child, strip_verify_record=strip_verify_record
+        ):
             continue
         if child.is_symlink():
             raise OSError(f"refusing to stage symlink: {child}")
@@ -1422,8 +1576,6 @@ def _safe_copytree_into(
                 strip_verify_record=strip_verify_record,
             )
         elif child.is_file():
-            if strip_verify_record and child.name == VERIFY_RECORD_NAME:
-                continue
             _safe_copy_file(child, target)
         else:
             raise OSError(f"refusing to stage special file: {child}")
