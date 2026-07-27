@@ -265,6 +265,8 @@ def test_status_live_usage_and_provider_fields(paths):
         assert body["model_label"] == "Grok 4.5"
         assert body["credential_source"] == "grok_build"
         assert body["credential_ok"] is False
+        # Default resolved effort (missing prefs → high)
+        assert body["reasoning_effort"] == "high"
         assert "models_available" in body
         assert "usage" in body
         usage = body["usage"]
@@ -531,6 +533,21 @@ def test_patch_provider_reasoning_effort_invalid(paths):
         h.close()
 
 
+@pytest.mark.parametrize("bad_effort", [None, 1, ""])
+def test_patch_provider_reasoning_effort_non_string_or_empty(paths, bad_effort):
+    """null / int / empty string → 400; runtime effort unchanged."""
+    pr = _make_provider(paths)
+    assert pr.reasoning_effort == "high"
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": bad_effort})
+        assert code == 400
+        assert body["error"] == "invalid_reasoning_effort"
+        assert pr.reasoning_effort == "high"
+    finally:
+        h.close()
+
+
 def test_patch_provider_model_only_preserves_effort(paths):
     """model-only PATCH must not drop persisted reasoning_effort."""
     from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
@@ -580,6 +597,60 @@ def test_patch_provider_effort_only_preserves_model(paths):
         )
         assert raw["model"] == "grok-4.5"
         assert raw["reasoning_effort"] == "low"
+    finally:
+        h.close()
+
+
+def test_patch_provider_credential_only_preserves_effort(paths):
+    """credential-only PATCH must not drop persisted reasoning_effort."""
+    from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
+
+    auth = paths.home / "auth.json"
+    _write_auth(auth)
+    write_stored_api_key(paths.data_dir, "sk-test-paste-key-not-real")
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    pr = _make_provider(
+        paths,
+        auth_path=auth,
+        credential_source="grok_build",
+        credential_ok=False,
+    )
+    pr.reasoning_effort = "low"
+    with patch.object(ProviderRuntime, "refresh_models", return_value=["grok-4.5"]):
+        pr.rebuild_chat_stack()
+    assert pr.credential_ok is True
+    # Rebuild re-passes runtime effort into for_xai
+    assert pr.http_client is not None
+    assert pr.http_client._reasoning_effort == "low"
+
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        with patch.object(ProviderRuntime, "refresh_models", return_value=["grok-4.5"]):
+            code, body = h.patch(
+                "/api/provider",
+                {"credential_source": "api_key"},
+            )
+        assert code == 200
+        assert body["ok"] is True
+        assert body["credential_source"] == "api_key"
+        assert body["reasoning_effort"] == "low"
+        assert pr.reasoning_effort == "low"
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["credential_source"] == "api_key"
+        assert raw["reasoning_effort"] == "low"
+        assert raw["model"] == "grok-4.5"
+        # Rebuild after credential switch retains client effort
+        assert pr.http_client is not None
+        assert pr.http_client._reasoning_effort == "low"
     finally:
         h.close()
 

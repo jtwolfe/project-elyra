@@ -1074,8 +1074,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if isinstance(effort, str):
                 effort = effort.strip()
             try:
+                # strict resolve raises ValueError for non-str / invalid / empty
                 provider.apply_reasoning_effort(effort)  # type: ignore[arg-type]
-            except (ValueError, TypeError):
+            except ValueError:
                 self._json(400, {"ok": False, "error": "invalid_reasoning_effort"})
                 return
 

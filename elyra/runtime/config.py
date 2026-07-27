@@ -12,6 +12,7 @@ OpenAI-compat wiring only.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ from elyra.llm.provider_prefs import (
     resolve_reasoning_effort,
 )
 from elyra.settings import Settings, UsageSettings, load_settings, merge_cli_overrides
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -123,6 +126,14 @@ def runtime_config_from_settings(
     if data_dir is not None:
         prefs = load_provider_prefs(Path(data_dir))
         effort = resolve_reasoning_effort(prefs.reasoning_effort)
+    else:
+        # Production CLI always passes data_dir; without it prefs are not
+        # consulted and effort defaults to high (test harness convenience).
+        _LOG.debug(
+            "runtime_config_from_settings: data_dir omitted; "
+            "reasoning_effort defaults to %s",
+            DEFAULT_REASONING_EFFORT,
+        )
     return RuntimeConfig(
         api_host=settings.api_host,
         api_port=settings.api_port,
