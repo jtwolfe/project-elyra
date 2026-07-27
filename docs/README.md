@@ -12,19 +12,24 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 2 | **[design-stretch-1-implementation.md](design-stretch-1-implementation.md)** | **Implementation design + PR plan** (historical; Stretch 1 shipped) |
 | 3 | **[engineering-principles.md](engineering-principles.md)** | **How we write code** — modules, tests, config, dogfood |
 | 4 | [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
-| 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, dogfood, create-tool safety |
+| 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, package VCS, search/browser/secrets/git·gh, dogfood checklist, create-tool safety |
+| 5a | [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) | **Capability growth product design** (search, browse, package VCS, secrets, workflow skills) |
+| 5b | [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) | **Capability growth execute-plan** (PR DAG, promote algorithm, acceptance) |
 | 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
 | 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` vs sliding ~24k; **ship knobs** (temp 0.6, top_p/k, budget, hygiene, RC re-feed, hop-0 speak pin) |
 | 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
 | 9 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phases (Phase 0–3); **refresh status if it lags code** |
+| 9a | [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | **Operator notes:** SuperGrok pool vs Elyra ledger, burst, override, dogfood checklist (full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md)) |
 | 10 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep (shipped on gi) |
 | 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
 | 12 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged sampling / hygiene (**superseded** by remove-gemma design; freeze body) |
 | 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
-| 14 | **[design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md)** | **Next stack:** delete llama.cpp/Gemma path; stub `provider=local` for OpenAI-compat / transformers later |
+| 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
+| 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
+| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs (e.g. stale timer/`task_ready` wake storms → moment bloat) |
 
 **Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `grok-improvement`** over stale phase README status lines.  
-**Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes once the remove-gemma stack lands — freeze bodies stay until that implementation pass rewrites them.  
+**Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes — freeze bodies stay until a docs modernization pass rewrites them.  
 **Archive:** longer research notes under [archive/](archive/) (not freeze). Phase 3 essay: [memory-atoms.pdf](memory-atoms.pdf).
 
 ## Stance (short)
@@ -53,13 +58,21 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 ./scripts/setup_venv.sh && source .venv/bin/activate
 pip install -e '.[sandbox]'   # optional but needed for guest isolation (default ON)
 ./scripts/setup-microsandbox.sh --doctor-only
-elyra start              # API + UI (+ llama or xai per provider settings)
-elyra start --no-llama   # stub LLM + UI
+
+# Optional capability-growth extras (fail closed if missing):
+#   pip install -e '.[search]'            # web_search (ddgs)
+#   pip install -e '.[browser]'           # Playwright browser_* tools
+#   playwright install chromium           # after browser extra
+#   pip install -e '.[search,browser]'    # both
+
+elyra start              # API + UI (xAI Grok product default)
+elyra start --stub-llm   # stub LLM + UI (hermetic)
 # hermetic host-stub: ELYRA_SANDBOX=0
 # http://127.0.0.1:8787/
 ```
 
-Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).
+Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
+Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
 
 ## Tests
 

@@ -1,17 +1,14 @@
 """Multi-hop do-loop tests (PR11).
 
-Scripted StubChatClient covers contracts; @pytest.mark.llm hits real model when
-model/ + llama-server are available.
+Scripted StubChatClient covers contracts; hermetic fake HTTP / stubs only.
+Optional live OpenAI-compat path is reserved via the registered ``llm`` marker
+(not wired in this module).
 """
 
 from __future__ import annotations
 
 import json
-import socket
-import subprocess
 import time
-import urllib.error
-import urllib.request
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,13 +17,12 @@ from typing import Any
 import pytest
 
 from elyra.config import resolve_paths
-from elyra.llm.client import ChatCompletionResult, HttpChatClient, StubChatClient
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.client import ChatCompletionResult, StubChatClient
 from elyra.llm.reasoning_hygiene import sanitize_completion
-from elyra.llm.server import build_server_command, validate_model_paths
 from elyra.loop.context import assemble_outer_meal
 from elyra.loop.continuous_policy import WORK_CONTINUE_HOST, work_continue_host_message
 from elyra.loop.doloop import (
+    ANSWER_SPEAK_HOST,
     NO_SPEAK_NUDGE,
     DoLoopResult,
     _is_host_inject,
@@ -845,6 +841,94 @@ def test_speak_counts_as_speak_skips_nudge(
     assert result.hop_count == 2  # speak hop + final no_tools hop
     obs = [b for b in moments.list_beats(mid) if b.get("kind") == "no_speak_nudge"]
     assert obs == []
+    # Short free-text after pure speak is not answer-speak either.
+    assert not any(b.get("kind") == "answer_speak_nudge" for b in moments.list_beats(mid))
+
+
+def test_full_answer_speak_then_free_text_wrap_up_no_answer_nudge(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """Dogfood false positive: complete answer speak + free-text wrap-up.
+
+    Soft Decide owns monologue; host must not inject and force a second speak.
+    Free-text still never auto-promotes onto glass.
+    """
+    mid = moments.open_moment(why_now="user question", moment_id="manswerspeak")
+    ctx.moment_id = mid
+    monologue = (
+        "Reply is on glass — happy to tour browse, identity, or github-workflow "
+        "whenever you want, or we can keep chatting."
+    )
+    client = StubChatClient.scripted(
+        [
+            _tc(
+                "speak",
+                {"text": "Oh these are nice. Full catalog reaction on glass."},
+                call_id="c1",
+            ),
+            _text(monologue),
+            _text("should not run"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=True)
+    assert result.stop_reason == "no_tools"
+    assert result.spoke is True
+    assert result.hop_count == 2
+    beats = moments.list_beats(mid)
+    assert not any(b.get("kind") == "answer_speak_nudge" for b in beats)
+    assert not any(b.get("kind") == "no_speak_nudge" for b in beats)
+    glass = list_messages(paths=paths)
+    assistant = [m for m in glass if m.get("role") == "assistant"]
+    assert len(assistant) == 1
+    assert "Oh these are nice" in (assistant[0].get("content") or "")
+    assert "happy to tour" not in (assistant[0].get("content") or "")
+
+
+def test_status_speak_tools_then_short_free_text_gets_answer_speak_nudge(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """After tools with no post-tool speak, short free-text still needs answer HOST."""
+    mid = moments.open_moment(why_now="calc", moment_id="manswershort")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("speak", {"text": "Calculating…"}, call_id="c1"),
+            _tc("list_dir", {"path": "."}, call_id="c2"),
+            _text("42"),
+            _tc("speak", {"text": "The answer is 42."}, call_id="c3"),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=True)
+    assert result.stop_reason == "no_tools"
+    assert result.spoke is True
+    assert result.tools_ran is True
+    beats = moments.list_beats(mid)
+    kinds = [b.get("kind") for b in beats if b.get("type") == "obs"]
+    assert "answer_speak_nudge" in kinds
+    # After answer speak, short idle free-text does not re-nudge.
+    assert kinds.count("answer_speak_nudge") == 1
+
+
+def test_tools_then_answer_speak_then_short_idle_no_answer_nudge(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """list_dir → speak(answer) → short free-text idle must not re-nudge."""
+    mid = moments.open_moment(why_now="two hop", moment_id="manswerok")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _tc("speak", {"text": "Hi — sandbox has notes.txt"}, call_id="c2"),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=True)
+    assert result.stop_reason == "no_tools"
+    assert result.hop_count == 3
+    assert not any(
+        b.get("kind") == "answer_speak_nudge" for b in moments.list_beats(mid)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1653,7 +1737,7 @@ def test_skill_commit_does_not_touch_speak_transport(
     glass = list_messages(paths=paths)
     assert not any(host_line in (m.get("content") or "") for m in glass)
     assert not any(
-        "execute its next checklist step" in (m.get("content") or "")
+        "prefer the next playbook step" in (m.get("content") or "")
         for m in glass
     )
 
@@ -2125,6 +2209,157 @@ def test_reouter_count_zero_without_caller_rebuild(
 
 
 # ---------------------------------------------------------------------------
+# Moments tape: tool-beat content up to tool_result_max_chars (KD7 / PR3)
+# ---------------------------------------------------------------------------
+
+
+class _LongErrorRegistry:
+    """Registry double: long error body with a distinctive hint tail."""
+
+    def __init__(self, inner: ToolRegistry, *, body_chars: int = 1200) -> None:
+        self._inner = inner
+        # Unique marker near the end so tape must retain past the old 500 cap.
+        self.hint_tail = "HINT_TAIL_MARKER_past_500_chars_xyz"
+        self._blob = ("E" * body_chars) + self.hint_tail
+
+    def openai_tools(self) -> list[dict[str, Any]]:
+        return self._inner.openai_tools()
+
+    def execute(self, name: str, args: dict[str, Any] | None, ctx: ToolContext) -> ToolResult:
+        if name == "read_file":
+            return ToolResult(
+                ok=False,
+                error_reason="path_escape",
+                payload={
+                    "path": (args or {}).get("path", ""),
+                    "detail": self._blob,
+                    "hint": self.hint_tail,
+                },
+            )
+        return self._inner.execute(name, args, ctx)
+
+
+def test_moments_tape_stores_tool_content_beyond_500(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """KD7: tool beats store content[:tool_cap], not a hard-coded 500."""
+    mid = moments.open_moment(why_now="tape cap", moment_id="mtapecap")
+    ctx.moment_id = mid
+    long_reg = _LongErrorRegistry(registry, body_chars=1200)
+    client = StubChatClient.scripted(
+        [
+            _tc("read_file", {"path": "../escape"}, call_id="c_long"),
+            _text("done"),
+        ]
+    )
+    # Default tool_result_max_chars is 8000 — long body must survive on tape.
+    result = _run(client, ctx, long_reg, moments=moments, social_wake=False)  # type: ignore[arg-type]
+    assert result.stop_reason == "no_tools"
+    tool_beats = [
+        b
+        for b in moments.list_beats(mid)
+        if b.get("type") == "tool" and b.get("name") == "read_file"
+    ]
+    assert len(tool_beats) == 1
+    content = tool_beats[0].get("content") or ""
+    assert len(content) > 500, f"expected tape content >500, got {len(content)}"
+    assert long_reg.hint_tail in content
+    body = json.loads(content)
+    assert body.get("error_reason") == "path_escape"
+    assert body.get("hint") == long_reg.hint_tail
+
+
+def test_moments_tape_skip_identical_content_uses_tool_cap(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """Skip-identical obs beats also store content[:tool_cap], not 500."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    mid = moments.open_moment(why_now="skip tape cap", moment_id="mskipcap")
+    ctx.moment_id = mid
+    long_reg = _LongErrorRegistry(registry, body_chars=1200)
+    # 5 real fails (streak) + 1 skip.
+    client = StubChatClient.scripted(
+        [_tc("read_file", {"path": "../escape"}, call_id=f"c{i}") for i in range(1, 7)]
+        + [_text("I'll stop")]
+    )
+    result = _run(client, ctx, long_reg, moments=moments, social_wake=False)  # type: ignore[arg-type]
+    assert result.thrash_skips == 1
+    beats = moments.list_beats(mid)
+    skip_obs = [
+        b
+        for b in beats
+        if b.get("type") == "obs" and b.get("kind") == "tool_skip_identical"
+    ]
+    assert skip_obs
+    # Synthetic skip payload is short; real tool beats must still be long.
+    long_tools = [
+        b
+        for b in beats
+        if b.get("type") == "tool"
+        and b.get("name") == "read_file"
+        and b.get("error_reason") != "skipped_identical"
+    ]
+    assert long_tools
+    content = long_tools[0].get("content") or ""
+    assert len(content) > 500
+    assert long_reg.hint_tail in content
+    # Skip obs content is the synthetic skip JSON (already model-capped).
+    skip_content = skip_obs[0].get("content") or ""
+    assert "skipped_identical" in skip_content
+
+
+def test_secrets_set_tool_beat_omits_raw_secret(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """PR3 regression: secrets_set success/fail tape content never holds raw value."""
+    mid = moments.open_moment(why_now="secret tape", moment_id="msectape")
+    ctx.moment_id = mid
+    secret_ok = "RAW_SECRET_SUCCESS_value_never_on_tape_abc"
+    secret_fail = "RAW_SECRET_FAIL_value_never_on_tape_xyz"
+    client = StubChatClient.scripted(
+        [
+            # Success path stores secret but must not echo value on tape.
+            _tc(
+                "secrets_set",
+                {"name": "gh_token", "value": secret_ok, "grants": ["gh_api"]},
+                call_id="c_ok",
+            ),
+            # Failure path (reserved name) also must not leak value.
+            _tc(
+                "secrets_set",
+                {"name": "xai_api_key", "value": secret_fail},
+                call_id="c_fail",
+            ),
+            _text("done"),
+        ]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.stop_reason == "no_tools"
+    beats = moments.list_beats(mid)
+    blob = json.dumps(beats, ensure_ascii=False, default=str)
+    assert secret_ok not in blob
+    assert secret_fail not in blob
+    tool_beats = [b for b in beats if b.get("type") == "tool" and b.get("name") == "secrets_set"]
+    assert len(tool_beats) == 2
+    ok_beat = next(b for b in tool_beats if b.get("tool_call_id") == "c_ok")
+    fail_beat = next(b for b in tool_beats if b.get("tool_call_id") == "c_fail")
+    assert ok_beat.get("ok") is True
+    assert fail_beat.get("ok") is False
+    for b in tool_beats:
+        content = b.get("content") or ""
+        assert secret_ok not in content
+        assert secret_fail not in content
+        body = json.loads(content)
+        # Result payload must not re-surface the secret body.
+        assert body.get("value") in (None, "***") or secret_ok not in str(body.get("value"))
+        assert secret_ok not in json.dumps(body)
+        assert secret_fail not in json.dumps(body)
+
+
+# ---------------------------------------------------------------------------
 # Disk prompts via assemble_outer_meal
 # ---------------------------------------------------------------------------
 
@@ -2339,209 +2574,6 @@ def test_host_mark_spoke_exception_does_not_abort_loop(
     assert result.spoke is True
     assert result.error is None
     assert ctx.mark_spoke is boom
-
-
-# ---------------------------------------------------------------------------
-# Real model (@pytest.mark.llm)
-# ---------------------------------------------------------------------------
-
-
-def _model_available() -> bool:
-    return not validate_model_paths(resolve_paths())
-
-
-def _server_healthy(url: str, timeout: float = 2.0) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return 200 <= resp.status < 300
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return False
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-@pytest.fixture(scope="module")
-def live_llama_server():
-    """Reuse :8080 or start llama-server; skip when model/ missing."""
-    if not _model_available():
-        problems = validate_model_paths(resolve_paths())
-        pytest.skip("model not available: " + "; ".join(problems))
-    paths = resolve_paths()
-    default_config = LlamaServerConfig()
-    owned_proc: subprocess.Popen[bytes] | None = None
-    port = default_config.port
-
-    if _server_healthy(default_config.health_url):
-        yield LlamaServerConfig(host="127.0.0.1", port=port)
-        return
-
-    port = _free_port()
-    config = LlamaServerConfig(host="127.0.0.1", port=port)
-    cmd = build_server_command(
-        paths,
-        config,
-        context_tokens=8192,
-        batch_size=512,
-        ubatch_size=512,
-    )
-    owned_proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=str(paths.home),
-    )
-    deadline = time.time() + 300
-    ready = False
-    try:
-        while time.time() < deadline:
-            if owned_proc.poll() is not None:
-                out = b""
-                if owned_proc.stdout:
-                    out = owned_proc.stdout.read() or b""
-                pytest.skip(
-                    f"llama-server exited early (code {owned_proc.returncode}): "
-                    f"{out[-1500:].decode('utf-8', errors='replace')}"
-                )
-            if _server_healthy(config.health_url, timeout=1.0):
-                ready = True
-                break
-            time.sleep(1.0)
-        if not ready:
-            owned_proc.terminate()
-            try:
-                owned_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                owned_proc.kill()
-            pytest.skip("llama-server did not become healthy within 300s")
-        yield config
-    finally:
-        if owned_proc is not None and owned_proc.poll() is None:
-            owned_proc.terminate()
-            try:
-                owned_proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                owned_proc.kill()
-                owned_proc.wait(timeout=10)
-
-
-@pytest.mark.llm
-def test_real_model_tool_call_through_doloop(
-    live_llama_server, tmp_path: Path
-) -> None:
-    """Real completions: model emits tool_calls; do-loop executes list_dir and/or speak.
-
-    Pins tool_choice to list_dir for the first hop reliability (Gemma peg quirks),
-    then allows free choice / no tools on subsequent hops.
-    """
-    home = tmp_path
-    paths = resolve_paths(home)
-    paths.ensure_data_dirs()
-    sandbox = Sandbox(paths)
-    (sandbox.root / "notes.txt").write_text("real-model note\n", encoding="utf-8")
-    registry = ToolRegistry(paths, bundled_root=resolve_bundled_tools_root())
-    speak = SpeakTransport(paths)
-    timers = TimerService(paths, WakeQueue(paths))
-    moments = MomentStore(paths)
-    mid = moments.open_moment(why_now="llm multi-hop", user_id="operator")
-    ctx = ToolContext(
-        paths=paths,
-        sandbox=sandbox,
-        settings=default_settings(),
-        moment_id=mid,
-        user_id="operator",
-        registry=registry,
-        speak=speak,
-        timers=timers,
-        skills_used=[],
-    )
-
-    http = HttpChatClient(live_llama_server)
-    # Narrow tool surface for the live model (list_dir + speak only).
-    tools = [
-        t
-        for t in registry.openai_tools()
-        if t.get("function", {}).get("name") in ("list_dir", "speak")
-    ]
-    assert len(tools) == 2
-
-    hop_n = {"n": 0}
-
-    class _FirstHopPinned:
-        """Proxy: first completion forces list_dir; later hops free / no pin."""
-
-        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
-            hop_n["n"] += 1
-            kw = dict(kwargs)
-            kw["tools"] = tools
-            if hop_n["n"] == 1:
-                kw["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": "list_dir"},
-                }
-            else:
-                # After tools returned, prefer speak if still going.
-                if hop_n["n"] == 2:
-                    kw["tool_choice"] = {
-                        "type": "function",
-                        "function": {"name": "speak"},
-                    }
-                else:
-                    kw.pop("tool_choice", None)
-            kw.setdefault("temperature", 0.1)
-            kw.setdefault("reasoning", False)
-            kw.setdefault("max_tokens", 256)
-            return http.chat_completion(messages, **kw)
-
-    def rebuild() -> list[dict[str, Any]]:
-        return assemble_outer_meal(
-            paths=paths,
-            glass_history=[],
-            wake_content="List the sandbox directory, then greet me via speak.",
-            why_now="llm multi-hop",
-            settings=default_settings(),
-        )
-
-    meal = rebuild()
-    assert meal[0]["content"] == load_prompt("system", paths=paths)
-
-    settings = _settings(max_tool_hops=6, generation_max_tokens=256)
-    result = run_do_loop(
-        client=_FirstHopPinned(),  # type: ignore[arg-type]
-        registry=registry,
-        ctx=ctx,
-        rebuild_outer=rebuild,
-        settings=settings,
-        moments=moments,
-        social_wake=True,
-        tools=tools,
-        max_tokens=256,
-    )
-
-    assert result.hop_count >= 1
-    assert result.stop_reason in (
-        "no_tools",
-        "wait",
-        "max_hops",
-        "wall_clock",
-        "time_continue_declined",
-    )
-    beats = moments.list_beats(mid)
-    tool_beats = [b for b in beats if b.get("type") == "tool"]
-    assert tool_beats, (
-        f"expected at least one tool beat from real model; "
-        f"stop={result.stop_reason} hops={result.hop_count} beats={beats!r}"
-    )
-    names = [b.get("name") for b in tool_beats]
-    assert "list_dir" in names, f"expected list_dir executed; got {names}"
-    # Prefer speak success when model followed path; not hard-required if model
-    # stopped after list_dir with nudge, but hop should have progressed.
-    if result.spoke:
-        glass = list_messages(paths=paths)
-        assert any(m.get("role") == "assistant" for m in glass)
 
 
 # ---------------------------------------------------------------------------
@@ -3202,6 +3234,83 @@ def test_skip_identical_never_ends_moment(
     assert len(stop_beats) == 1
     assert stop_beats[0].get("stop_reason") == "no_tools"
     assert stop_beats[0].get("thrash_skips") == 2
+
+
+def test_skip_identical_redacts_secrets_set_args_echo(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """PR5: skip-identical args_echo must not re-inject secrets_set value."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    mid = moments.open_moment(why_now="skip secret", moment_id="mskipsec")
+    ctx.moment_id = mid
+    secret = "NEVER_IN_SKIP_ECHO_secret_xyz"
+    # Reserved-ish empty will fail validation? Use reserved name to force fail
+    # without storing, so thrash streaks on identical fails.
+    bad_args = {"name": "xai_api_key", "value": secret}
+    client = StubChatClient.scripted(
+        [_tc("secrets_set", bad_args, call_id=f"c{i}") for i in range(1, 7)]
+        + [_text("I'll stop")]
+    )
+    result = _run(client, ctx, registry, moments=moments, social_wake=False)
+    assert result.thrash_skips == 1
+    beats = moments.list_beats(mid)
+    # Fingerprints on thrash/skip obs must not contain the secret
+    for b in beats:
+        blob = json.dumps(b, ensure_ascii=False, default=str)
+        assert secret not in blob
+        if b.get("error_reason") == "skipped_identical":
+            body = json.loads(b["content"])
+            assert body.get("args_echo", {}).get("value") == "***"
+            assert secret not in json.dumps(body)
+    # Chain tool rows also scrubbed
+    chain_blob = json.dumps(result.chain_messages if hasattr(result, "chain_messages") else [], default=str)
+    # DoLoopResult may not expose chain — check moment tape content only was enough;
+    # also assert thrash fingerprint beat if present.
+    thrash_obs = [
+        b for b in beats if b.get("type") == "obs" and b.get("kind") == "tool_thrash"
+    ]
+    for b in thrash_obs:
+        assert secret not in (b.get("fingerprint") or "")
+        assert secret not in (b.get("content") or "")
+
+
+def test_thrash_lesson_fingerprint_omits_secrets_set_value(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """PR5: thrash tried fingerprints / lesson pin never embed secrets_set value."""
+    mid = moments.open_moment(why_now="thrash secret", moment_id="mthrashsec")
+    ctx.moment_id = mid
+    secret = "THRASH_FP_SECRET_short"
+    bad_args = {"name": "xai_api_key", "value": secret}
+    # FAIL_STREAK_THRESHOLD=3 thrash HOST; + LESSON_SYNTH_FAIL_STREAK=3 more → synth lesson
+    # Need enough identical fails: thrash at 3, lesson request, then 3 more fails for synth.
+    n_calls = 3 + 3  # thrash + synth streak
+    client = StubChatClient.scripted(
+        [_tc("secrets_set", bad_args, call_id=f"c{i}") for i in range(1, n_calls + 1)]
+        + [_text("done thrashing")]
+    )
+    _run(client, ctx, registry, moments=moments, social_wake=False)
+    beats = moments.list_beats(mid)
+    blob = json.dumps(beats, ensure_ascii=False, default=str)
+    assert secret not in blob
+    thrash_obs = [
+        b for b in beats if b.get("type") == "obs" and b.get("kind") == "tool_thrash"
+    ]
+    assert thrash_obs, "expected thrash HOST inject"
+    assert secret not in (thrash_obs[0].get("fingerprint") or "")
+    pins = [
+        b
+        for b in beats
+        if b.get("type") == "obs"
+        and b.get("kind") in ("lesson_pin", "thrash_lesson_pin", "lesson")
+    ]
+    # Lesson pin kind may be "lesson_pin" — search any beat content
+    for b in beats:
+        if "HOST-synthesized lesson" in str(b.get("content") or ""):
+            assert secret not in (b.get("content") or "")
 
 
 # ---------------------------------------------------------------------------

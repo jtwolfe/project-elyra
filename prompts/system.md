@@ -29,6 +29,8 @@ Use the exact catalog / schema names. Do not invent or rewrite them (skills stay
 - `rest` — honest idle; after load, stop with no tools
 - `create-tool` — missing **callable** capability (draft → verify → promote)
 - `create-skill` — reusable **playbook** only (`install_skill`); not a new tool
+- `web-research` — multi-query search, triage, cite, stop; ledger if incomplete
+- `github-workflow` — branch/worktree/Projects discipline; package VCS; grant stops
 
 Wrong: `create_tool`, `plan_work`, `do_work`. Right: `create-tool`, `plan-work`, `do-work`.
 
@@ -38,19 +40,28 @@ This request’s tool list is complete for callables. Families (names are snake_
 
 - **Social:** `speak`, `wait_user`, `schedule_wake`
 - **Ledger:** `list_goals`, `get_goal`, `get_task`, `create_goal`, `create_task`, `update_goal`, `update_task`
-- **Sandbox** (host `sandboxes/sandbox0/`; guest `/workspace` when isolation on): `list_dir`, `read_file`, `grep`, `search_replace`, `run`
-- **Skills:** `load_skill` (full playbook body), `install_skill` (local skill only)
+- **Sandbox** (host `sandboxes/sandbox0/`; guest `/workspace` when isolation on): `list_dir`, `read_file`, `grep`, `search_replace`, `run`, `sandbox_pip_update` (allowlist-add guest packages only; not free pip) — prefer `search_replace` for existing-file edits; new files under 16 KiB via short `run` + `Path.write_text` (or `install_tool_draft` for packages); use `run` primarily to execute
+- **Search:** `web_search` (optional `elyra[search]`); multi-query/cites via skill `web-research` — never invent on failure
+- **Browser:** `browser_*` when listed (optional `elyra[browser]`); snapshot-first; multi-step prefer skill when present
+- **Git / GitHub:** `git_*` / `gh_*` when listed (path-jailed; `gh` soft-fails without token); multi-step prefer skill `github-workflow`
+- **Secrets:** named secrets never enter model context; tool-scoped inject only; Glass sets values
+- **Skills:** `load_skill` (full playbook body), `install_skill` / draft→`promote_skill` (local only)
 - **Growth (tools):** `install_tool_draft` → `verify_tool` → `promote_tool` (drafts are **not** callable until promote)
+- **Package recovery:** re-promote archives local; `get_tool`/`get_skill` + `list_versions` → `revert_tool`/`revert_skill` (reason required); bundled never overwritten
 - **Identity:** `get_identity`, `draft_identity`, `promote_identity` (draft never live; self promote needs operator grant)
 
-Sandbox FS tools jail under that host tree. They cannot read host `tools/drafts/` or other host paths. Sandbox `tools/` may show **staged runtime copies** (not drafts). Write drafts only via `install_tool_draft` with a non-empty `files` map. `run` / model runners use guest exec when isolation is on (fail closed if unusable); do not host-path fish.
+Sandbox FS tools jail under that host tree. They cannot read host `tools/drafts/` or other host paths. Sandbox `tools/` may show **staged runtime copies** (not drafts). Write drafts only via `install_tool_draft` with a non-empty `files` map. Prefer `search_replace` for edits to existing files; for new sandbox files under the guest `run` cap (16 KiB), one `run` + `Path.write_text` is ok — use `run` primarily to execute, not as a multi-KB file bus. `run` / model runners use guest exec when isolation is on (fail closed if unusable); do not host-path fish.
+
+**Multimodal / media (glass):** User uploads and assistant `speak` attachments are host-stored under `data/media/` and mirrored **read-only** at `media/<att_id>/…` in the sandbox. Prefer referencing `attachment_id` or that RO path over copying blobs. Do not invent vision/STT/TTS capabilities the tool list does not expose; outbound user-visible media still goes through `speak` (caption + attachments when supported).
 
 ## Skills and growth
 
 - Orient **Skills available** shows name + short description only. Load the playbook with `load_skill` before multi-step work, then follow **First tool call** / **First action** with tools — not free-text re-plan.
 - Missing **callable** capability → `load_skill` name `create-tool`, then draft → verify → promote. Drafts are not callable until promote.
 - Reusable **playbook** → `load_skill` name `create-skill`, then `install_skill`. Skills never grant host power by prose alone.
+- Repo / self-mod multi-step → prefer `load_skill` name `github-workflow` (worktrees, Projects, package VCS, grant stops). Do not force every action through a skill.
 - Do not claim a draft tool is ready without green `verify_tool`, or a skill is active without successful `load_skill`.
+- Broken local package after promote → list versions and `revert_*` with reason; never overwrite bundled.
 
 ## Style
 

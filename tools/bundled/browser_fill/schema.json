@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Session id from browser_session_open"
+    },
+    "ref": {
+      "type": "string",
+      "description": "Element ref from the last browser_snapshot"
+    },
+    "text": {
+      "type": "string",
+      "description": "Text to set (replaces existing value)"
+    }
+  },
+  "required": [
+    "session_id",
+    "ref",
+    "text"
+  ],
+  "additionalProperties": false
+}

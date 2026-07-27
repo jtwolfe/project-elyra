@@ -1,10 +1,10 @@
-"""Chat completion client for local llama-server and xAI Grok.
+"""Chat completion client for local OpenAI-compat endpoints and xAI Grok.
 
 Scope: POST chat/completions with optional OpenAI-style tools.
 In scope: HTTP client (for_local / for_xai factories), gated wrapper,
           usage gate, failing client, stub (incl. scripted tool_calls),
-          parse message.tool_calls (arguments string → dict),
-          reasoning_budget_tokens → wire thinking_budget_tokens adapter (local).
+          parse message.tool_calls (arguments string → dict).
+Local wire is OpenAI subset (model required; no reasoning / thinking_budget).
 Out of scope: do-loop / multi-hop tool execution (loop package); supervisor wiring.
 
 **Import rule:** this module may import ``elyra.llm.usage``; usage must NEVER
@@ -21,8 +21,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
+from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
+    resolve_reasoning_effort,
+    resolve_reasoning_effort_strict,
+)
+from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import (
     TokenUsage,
     UsageHardStopError,
@@ -344,25 +349,26 @@ class StubChatClient:
 
 
 class HttpChatClient:
-    """OpenAI-compatible chat HTTP client for local llama-server and xAI.
+    """OpenAI-compatible chat HTTP client for local endpoints and xAI.
 
     Prefer factories ``for_local`` / ``for_xai`` — avoid inconsistent
-    config + kwargs combos. Positional ``HttpChatClient(LlamaServerConfig)``
+    config + kwargs combos. Positional ``HttpChatClient(LocalClientConfig)``
     remains supported for local regression (same as ``for_local``).
     """
 
     def __init__(
         self,
-        config: LlamaServerConfig | XaiClientConfig | None = None,
+        config: LocalClientConfig | XaiClientConfig | None = None,
         *,
         profile: str | None = None,
         model: str | None = None,
         bearer_token: str | None = None,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> None:
         """Internal / BC constructor. Prefer ``for_local`` / ``for_xai``.
 
         ``profile`` in ``{'local','xai'}``. When omitted: ``XaiClientConfig``
-        → xai; otherwise local (``LlamaServerConfig`` or default).
+        → xai; otherwise local (``LocalClientConfig`` or default).
         """
         if profile is None:
             if isinstance(config, XaiClientConfig):
@@ -374,15 +380,16 @@ class HttpChatClient:
 
         self._profile = profile
         self._lock = threading.Lock()
+        self._reasoning_effort = resolve_reasoning_effort(reasoning_effort)
 
         if profile == "local":
             if config is None:
-                self._local_config: LlamaServerConfig | None = LlamaServerConfig()
-            elif isinstance(config, LlamaServerConfig):
+                self._local_config: LocalClientConfig | None = LocalClientConfig()
+            elif isinstance(config, LocalClientConfig):
                 self._local_config = config
             else:
                 raise TypeError(
-                    "local profile requires LlamaServerConfig or None; "
+                    "local profile requires LocalClientConfig or None; "
                     f"got {type(config).__name__}"
                 )
             self._xai_config: XaiClientConfig | None = None
@@ -407,7 +414,7 @@ class HttpChatClient:
             self._bearer_token = bearer_token
 
         # BC alias used by older tests/callers: ``client._config`` for local.
-        self._config: LlamaServerConfig | XaiClientConfig
+        self._config: LocalClientConfig | XaiClientConfig
         if profile == "local":
             assert self._local_config is not None
             self._config = self._local_config
@@ -416,9 +423,9 @@ class HttpChatClient:
             self._config = self._xai_config
 
     @classmethod
-    def for_local(cls, config: LlamaServerConfig | None = None) -> HttpChatClient:
-        """Build a local llama-server client (no Authorization, Gemma fields)."""
-        return cls(config if config is not None else LlamaServerConfig(), profile="local")
+    def for_local(cls, config: LocalClientConfig | None = None) -> HttpChatClient:
+        """Build a local OpenAI-compat client (optional Bearer when api_key set)."""
+        return cls(config if config is not None else LocalClientConfig(), profile="local")
 
     @classmethod
     def for_xai(
@@ -427,13 +434,15 @@ class HttpChatClient:
         *,
         model: str,
         bearer_token: str,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> HttpChatClient:
-        """Build an xAI client (Bearer + model; omit Gemma-only wire fields)."""
+        """Build an xAI client (Bearer + model; top-level reasoning_effort)."""
         return cls(
             config if config is not None else XaiClientConfig(),
             profile="xai",
             model=model,
             bearer_token=bearer_token,
+            reasoning_effort=reasoning_effort,
         )
 
     def set_model(self, model: str) -> None:
@@ -451,6 +460,14 @@ class HttpChatClient:
             if self._profile != "xai":
                 return
             self._bearer_token = token
+
+    def set_reasoning_effort(self, effort: str) -> None:
+        """Thread-safe; next chat_completion uses effort (xai only)."""
+        e = resolve_reasoning_effort_strict(effort)
+        with self._lock:
+            if self._profile != "xai":
+                return
+            self._reasoning_effort = e
 
     @property
     def profile(self) -> str:
@@ -473,17 +490,18 @@ class HttpChatClient:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
     ) -> ChatCompletionResult:
-        """Python: ``reasoning_budget_tokens``. Wire: ``thinking_budget_tokens``.
+        """POST OpenAI-compatible chat/completions.
 
-        Local (``use_reasoning`` true):
-        - always set ``reasoning`` bool
-        - if ``reasoning`` is True: include wire budget only when resolved
-          value is not None (kwarg → config.default_reasoning_budget_tokens)
-        - if ``reasoning`` is False: always include wire budget (resolved value
-          or 0) so private channel can be disabled (elyra2 API completeness)
+        Local: body includes ``model`` (from config); optional ``top_p`` /
+        ``top_k`` when resolved non-None; **never** ``reasoning`` or
+        ``thinking_budget_tokens``. Optional ``Authorization: Bearer`` when
+        ``config.api_key`` is set. Kwargs ``reasoning`` /
+        ``reasoning_budget_tokens`` are accepted for Protocol BC but ignored
+        on the wire.
 
-        xai: Authorization Bearer; body includes ``model``; omit ``top_k``,
-        ``thinking_budget_tokens``, and ``reasoning`` wire keys.
+        xai: Authorization Bearer; body includes ``model`` and top-level
+        ``reasoning_effort``; omit ``top_k``, ``thinking_budget_tokens``,
+        and ``reasoning`` wire keys.
 
         Never emit chat-body key ``reasoning_budget_tokens``.
         Never put Authorization values into exception messages.
@@ -498,26 +516,29 @@ class HttpChatClient:
                 cfg_local = self._local_config
                 model: str | None = None
                 bearer: str | None = None
+                reasoning_effort: str | None = None
             else:
                 assert self._xai_config is not None
                 cfg_xai = self._xai_config
                 model = self._model
                 bearer = self._bearer_token
+                reasoning_effort = self._reasoning_effort
 
         if profile == "local":
             payload = self._build_local_payload(
                 cfg_local,
                 messages,
                 max_tokens=max_tokens,
-                reasoning=reasoning,
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
-                reasoning_budget_tokens=reasoning_budget_tokens,
                 tools=tools,
                 tool_choice=tool_choice,
             )
             headers = {"Content-Type": "application/json"}
+            # Optional Bearer for self-hosted OpenAI-compat (never log key).
+            if cfg_local.api_key:
+                headers["Authorization"] = f"Bearer {cfg_local.api_key}"
         else:
             payload = self._build_xai_payload(
                 cfg_xai,
@@ -528,6 +549,7 @@ class HttpChatClient:
                 top_p=top_p,
                 tools=tools,
                 tool_choice=tool_choice,
+                reasoning_effort=reasoning_effort or DEFAULT_REASONING_EFFORT,
             )
             headers = {"Content-Type": "application/json"}
             if bearer:
@@ -557,26 +579,21 @@ class HttpChatClient:
 
     @staticmethod
     def _build_local_payload(
-        config: LlamaServerConfig,
+        config: LocalClientConfig,
         messages: list[dict[str, Any]],
         *,
         max_tokens: int,
-        reasoning: bool,
         temperature: float | None,
         top_p: float | None,
         top_k: int | None,
-        reasoning_budget_tokens: int | None,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
     ) -> dict[str, Any]:
+        # OpenAI-compat subset: model required; no reasoning / thinking_budget.
         resolved_top_p = top_p if top_p is not None else config.top_p
         resolved_top_k = top_k if top_k is not None else config.top_k
-        resolved_budget = (
-            reasoning_budget_tokens
-            if reasoning_budget_tokens is not None
-            else config.default_reasoning_budget_tokens
-        )
         payload: dict[str, Any] = {
+            "model": config.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": (
@@ -588,15 +605,7 @@ class HttpChatClient:
             payload["top_p"] = resolved_top_p
         if resolved_top_k is not None:
             payload["top_k"] = resolved_top_k
-        if config.use_reasoning:
-            payload["reasoning"] = bool(reasoning)
-            if reasoning:
-                if resolved_budget is not None:
-                    payload["thinking_budget_tokens"] = resolved_budget
-            else:
-                payload["thinking_budget_tokens"] = (
-                    resolved_budget if resolved_budget is not None else 0
-                )
+        # Intentionally never set reasoning / thinking_budget_tokens.
         if tools is not None:
             payload["tools"] = tools
         if tool_choice is not None:
@@ -614,9 +623,11 @@ class HttpChatClient:
         top_p: float | None,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> dict[str, Any]:
-        # xai: model required; omit top_k / thinking_budget_tokens / reasoning.
+        # xai: model + reasoning_effort required; omit top_k / thinking_budget / reasoning.
         resolved_top_p = top_p if top_p is not None else config.top_p
+        effort = resolve_reasoning_effort(reasoning_effort)
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -625,6 +636,7 @@ class HttpChatClient:
                 temperature if temperature is not None else config.temperature
             ),
             "stream": False,
+            "reasoning_effort": effort,
         }
         if resolved_top_p is not None:
             payload["top_p"] = resolved_top_p
@@ -637,7 +649,7 @@ class HttpChatClient:
 
 
 class GatedChatClient:
-    def __init__(self, inner: ChatClient, gate: LlamaServerGate) -> None:
+    def __init__(self, inner: ChatClient, gate: ChatRequestGate) -> None:
         self._inner = inner
         self._gate = gate
 
@@ -676,10 +688,13 @@ class UsageGatedChatClient:
     Lives in client.py (not usage.py) so usage never imports client.
 
     - refuse when ``!meter.can_call`` → raise ``UsageHardStopError``
-      (can_call is True when override_active even if over budget);
+      with ``level`` from the meter (``account`` | ``week`` | ``day`` | ``hour``);
+      ``can_call`` is True when override_active even if over budget;
+    - soft yellow/red pace bands never refuse (only true hard levels do);
     - on success → ``meter.record(result.usage)`` always (override does not
       skip record; failures do not record — durable state stays consistent);
     - when ``meter`` is None, pure pass-through.
+    - No auto model throttle, hop-delay, or session_id plumbing here.
     """
 
     def __init__(self, inner: ChatClient, meter: UsageMeter | None) -> None:
@@ -701,6 +716,7 @@ class UsageGatedChatClient:
     ) -> ChatCompletionResult:
         meter = self._meter
         if meter is not None and not meter.can_call():
+            # hard_stop already uses precedence account > week > day > hour.
             snap = meter.snapshot()
             level = snap.hard_stop or "week"
             reason = snap.hard_stop_reason or "usage hard stop"

@@ -4,32 +4,37 @@ Merge order (normative)::
 
     defaults  <  elyra.toml  <  data/runtime/provider.json  <  explicit CLI
 
-``provider.json`` only supplies ``model`` and ``credential_source`` (non-secret).
-``start_llama_server`` is derived: provider==local and not stub and not --no-llama.
+``provider.json`` supplies ``model``, ``credential_source``, and
+``reasoning_effort`` (non-secret). Effort is prefs-only (no toml/CLI this pass).
+No inference process is launched; ``local`` config is retained for future
+OpenAI-compat wiring only.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from elyra.llm.config import LlamaServerConfig
+from elyra.llm.config import LocalClientConfig
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL, label_for_model
-from elyra.llm.provider_prefs import load_provider_prefs
+from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
+    load_provider_prefs,
+    resolve_reasoning_effort,
+)
 from elyra.settings import Settings, UsageSettings, load_settings, merge_cli_overrides
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
 class RuntimeConfig:
     api_host: str = "127.0.0.1"
     api_port: int = 8787
-    # True only when provider=local and not --no-llama and not pure stub path.
-    start_llama_server: bool = False
-    llama: LlamaServerConfig = field(default_factory=LlamaServerConfig)
-    llama_health_timeout: float = 180.0
-    # KV ceiling; lower if VRAM crashes (see docs/inference.md).
-    context_tokens: int | None = None
+    # Future OpenAI-compat local endpoint shape (unused for HTTP this pass).
+    local: LocalClientConfig = field(default_factory=LocalClientConfig)
     # Provider / usage (Phase 0)
     provider_name: str = "xai"
     model: str = DEFAULT_XAI_MODEL
@@ -40,6 +45,8 @@ class RuntimeConfig:
     request_timeout_s: float = 120.0
     usage: UsageSettings = field(default_factory=UsageSettings)
     continuous_enabled: bool = False
+    # Resolved wire effort (low|medium|high); from provider.json prefs only.
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
 
 
 def load_merged_settings(
@@ -52,12 +59,14 @@ def load_merged_settings(
     no_usage_meter: bool = False,
     api_host: str | None = None,
     api_port: int | None = None,
-    context_tokens: int | None = None,
 ) -> Settings:
     """Load defaults < toml < provider.json < explicit CLI overrides.
 
     CLI kwargs that are ``None`` are ignored (do not clobber prefs/toml).
     ``no_usage_meter=True`` forces ``usage.enabled=False``.
+
+    Note: ``reasoning_effort`` is not on Settings (no toml/CLI); resolved
+    into ``RuntimeConfig`` via ``runtime_config_from_settings(data_dir=...)``.
     """
     settings = load_settings(home)
 
@@ -91,8 +100,6 @@ def load_merged_settings(
         cli_map["api_host"] = api_host
     if api_port is not None:
         cli_map["api_port"] = api_port
-    if context_tokens is not None:
-        cli_map["context_tokens"] = context_tokens
     if cli_map:
         settings = merge_cli_overrides(settings, cli_map)
 
@@ -102,17 +109,34 @@ def load_merged_settings(
 def runtime_config_from_settings(
     settings: Settings,
     *,
-    no_llama: bool = False,
     stub_llm: bool = False,
+    data_dir: Path | str | None = None,
 ) -> RuntimeConfig:
-    """Build RuntimeConfig; derive ``start_llama_server`` from provider + flags."""
+    """Build RuntimeConfig from merged settings.
+
+    ``stub_llm`` is accepted for CLI symmetry; client selection lives on the
+    supervisor (``use_stub_llm``). No inference process is started.
+
+    When ``data_dir`` is provided, ``reasoning_effort`` is resolved from
+    ``provider.json`` prefs (default high when missing/invalid).
+    """
+    del stub_llm  # selection is supervisor-side; flag reserved for callers
     name = settings.provider.name
-    start_llama = (name == "local") and (not stub_llm) and (not no_llama)
+    effort = DEFAULT_REASONING_EFFORT
+    if data_dir is not None:
+        prefs = load_provider_prefs(Path(data_dir))
+        effort = resolve_reasoning_effort(prefs.reasoning_effort)
+    else:
+        # Production CLI always passes data_dir; without it prefs are not
+        # consulted and effort defaults to high (test harness convenience).
+        _LOG.debug(
+            "runtime_config_from_settings: data_dir omitted; "
+            "reasoning_effort defaults to %s",
+            DEFAULT_REASONING_EFFORT,
+        )
     return RuntimeConfig(
         api_host=settings.api_host,
         api_port=settings.api_port,
-        start_llama_server=start_llama,
-        context_tokens=settings.context_tokens,
         provider_name=name,
         model=settings.provider.model,
         model_label=settings.provider.model_label,
@@ -122,4 +146,5 @@ def runtime_config_from_settings(
         request_timeout_s=settings.provider.request_timeout_s,
         usage=settings.usage,
         continuous_enabled=settings.continuous.enabled,
+        reasoning_effort=effort,
     )

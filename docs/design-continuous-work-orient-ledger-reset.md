@@ -640,7 +640,8 @@ Enqueue only if **all** pass:
 9. **Prefer *pending* `task_ready` only (no backstop):**  
    - If `pending_task_ready_count > 0` → set `skip_for_pending_task_ready=True`, **do not** enqueue `moment_continue`.  
    - **Never** call `enqueue_task_ready` / re-arm a still-ready ledger task from continuous finalize.  
-   - Rationale: `on_task_ready` fires only on **transition into** ready. After a `task_ready` moment is claimed and marked done, re-arming the same task would infinite-storm with no streak protection. Continuous must not invent wakes the ledger hook would not create (K16).
+   - Rationale: `on_task_ready` fires only on **transition into** ready. After a `task_ready` moment is claimed and marked done, re-arming the same task would infinite-storm with no streak protection. Continuous must not invent wakes the ledger hook would not create (K16).  
+   - **Deferred complement (not solved here):** wakes already queued can still fire after the task is `done` / the arc finished in-moment (model double-chained `schedule_wake` + ready transitions). See [known-bugs.md](known-bugs.md) **BUG-wake-01** — low urgency now; moment/timer history bloat later.
 10. **Open work (`require_open_work=True` only — user confirmed 2026-07-22):** `has_open_work` must be true at finalize (any goal `open|review`, or task `ready|in_progress|blocked`). **No outer `moment_continue` without open work.** No alternate continuous mode for empty ledger. If the model closes the last goal/tasks mid-moment, finalize does **not** re-enqueue.
 11. **Flood thrash:** apply the single flood formula (majority OR last_stop_hop_was_flood); on skip, set `last_skip_reason=flood` and start cooldown as if an enqueue attempt occurred (rate-limit thrash).
 

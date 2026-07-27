@@ -54,6 +54,7 @@ def resolve_user_input(
     from_wait_api: bool = False,
     phase: str,
     pending_wait: Mapping[str, Any] | None = None,
+    has_attachments: bool = False,
 ) -> dict[str, Any]:
     """Pure routing decision for operator chat / wait reply.
 
@@ -71,16 +72,18 @@ def resolve_user_input(
     - pending wait for user and (``from_wait_api`` or ``phase == waiting``)
       → wait_reply
     - else (idle) → user_message; cancel any stale pending wait for user
+
+    Empty/whitespace ``content`` is allowed when ``has_attachments`` is True
+    (media-only user send / interject; R1b). Wait reply still needs text or choice.
     """
     text = content.strip() if isinstance(content, str) else ""
     choice_s = choice.strip() if isinstance(choice, str) else (
         str(choice) if choice is not None else ""
     )
-    has_body = bool(text) or bool(choice_s)
 
     if phase == PHASE_IN_MOMENT:
-        if not text:
-            # Interject path needs free-text content (choice alone is wait UX).
+        if not text and not has_attachments:
+            # Interject needs free-text and/or attachments (choice alone is wait UX).
             return {
                 "routed": ROUTE_INTERJECT,
                 "ok": False,
@@ -99,7 +102,8 @@ def resolve_user_input(
     wid = wait_id_of(pending_wait) if matches else None
 
     if matches and (from_wait_api or phase == PHASE_WAITING):
-        if not has_body:
+        # Wait answer still requires text or choice (attachments alone are not a reply).
+        if not text and not choice_s:
             return {
                 "routed": ROUTE_WAIT_REPLY,
                 "ok": False,
@@ -115,7 +119,7 @@ def resolve_user_input(
         }
 
     # idle (or waiting without a matching wait for this user — defensive)
-    if not text:
+    if not text and not has_attachments:
         return {
             "routed": ROUTE_USER_MESSAGE,
             "ok": False,

@@ -1,6 +1,7 @@
-"""Tests for speak transport and speak tool (PR8a).
+"""Tests for speak transport and speak tool (PR8a + PR8 multimodal).
 
-Behaviour names: delivery to glass, failure reasons, counts_as_speak, registry.
+Behaviour names: delivery to glass, failure reasons, counts_as_speak, registry,
+sandbox path ingest, re-send by attachment_ids, empty-text+attachments reject.
 """
 
 from __future__ import annotations
@@ -11,11 +12,15 @@ from typing import Any
 import pytest
 
 from elyra.config import resolve_paths
+from elyra.media import MediaStore, get_attachment, put_bytes
 from elyra.messages import list_messages
+from elyra.sandbox import Sandbox
 from elyra.speak import SpeakDelivery, SpeakTransport
 from elyra.tools import ToolContext, ToolRegistry, ToolResult
 from elyra.tools.builtin.social import speak as speak_handler
 from elyra.tools.policy import resolve_bundled_tools_root
+
+FIXTURE_PNG = Path(__file__).parent / "fixtures" / "media" / "1x1.png"
 
 
 # ---------------------------------------------------------------------------
@@ -349,3 +354,324 @@ def test_only_speak_transport_writes_assistant_via_product_path(
     assert assistants[0]["content"] == "reply"
     # No orphan assistant without going through transport
     assert assistants[0]["id"] == d.message_id
+
+
+# ---------------------------------------------------------------------------
+# PR8 — speak attachments: sandbox path ingest + re-send by id
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sandbox(paths) -> Sandbox:
+    return Sandbox(paths)
+
+
+@pytest.fixture
+def ctx_sandbox(paths, transport: SpeakTransport, sandbox: Sandbox) -> ToolContext:
+    return ToolContext(
+        paths=paths,
+        speak=transport,
+        sandbox=sandbox,
+        moment_id="moment-1",
+        user_id="operator",
+    )
+
+
+def _write_sandbox_png(sandbox: Sandbox, rel: str = "tmp/plot.png") -> Path:
+    data = FIXTURE_PNG.read_bytes()
+    dest = sandbox.resolve(rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return dest
+
+
+def test_deliver_with_attachments_writes_inventory_and_binds(
+    transport: SpeakTransport, paths
+) -> None:
+    store = MediaStore(paths)
+    att = store.put_bytes(
+        FIXTURE_PNG.read_bytes(),
+        filename="shot.png",
+        origin="speak",
+    )
+    assert att.bound_message_id is None
+
+    result = transport.deliver(
+        "Here is a shot.",
+        user_id="operator",
+        moment_id="m-att",
+        attachments=[att],
+    )
+    assert result.ok is True
+    assert result.message_id
+    assert len(result.attachments) == 1
+    assert result.as_payload()["attachment_ids"] == [att.id]
+
+    rows = _assistant_rows(paths)
+    assert len(rows) == 1
+    assert rows[0]["content"] == "Here is a shot."
+    assert rows[0]["attachments"]
+    assert rows[0]["attachments"][0]["id"] == att.id
+    assert rows[0]["attachments"][0]["kind"] == "image"
+
+    bound = store.get(att.id)
+    assert bound is not None
+    assert bound.bound_message_id == result.message_id
+
+
+def test_deliver_empty_text_rejects_even_with_attachments(
+    transport: SpeakTransport, paths
+) -> None:
+    att = put_bytes(
+        b"x",
+        filename="note.txt",
+        origin="speak",
+        paths=paths,
+    )
+    result = transport.deliver("   ", attachments=[att])
+    assert result.ok is False
+    assert result.reason == "empty_text"
+    assert _assistant_rows(paths) == []
+    # Unbound meta left as-is (transport did not bind).
+    assert get_attachment(att.id, paths=paths).bound_message_id is None
+
+
+def test_speak_sandbox_path_ingest_projects_ro(
+    ctx_sandbox: ToolContext, paths, sandbox: Sandbox
+) -> None:
+    _write_sandbox_png(sandbox, "tmp/plot.png")
+    result = speak_handler(
+        {
+            "text": "Here is the plot from the run.",
+            "attachments": [{"path": "tmp/plot.png"}],
+        },
+        ctx_sandbox,
+    )
+    assert result.ok is True
+    assert result.counts_as_speak is True
+    assert result.payload["transport_ok"] is True
+    ids = result.payload.get("attachment_ids") or []
+    assert len(ids) == 1
+    aid = ids[0]
+    assert aid.startswith("att_")
+
+    att = get_attachment(aid, paths=paths)
+    assert att is not None
+    assert att.kind == "image"
+    assert att.mime == "image/png"
+    assert att.origin == "speak"
+    assert att.bound_message_id == result.payload["message_id"]
+    assert att.sandbox_relpath == f"media/{aid}/plot.png"
+
+    # RO projection under sandbox media/
+    mirror = sandbox.resolve(att.sandbox_relpath)
+    assert mirror.is_file()
+    assert mirror.read_bytes() == FIXTURE_PNG.read_bytes()
+
+    rows = _assistant_rows(paths)
+    assert len(rows) == 1
+    assert rows[0]["attachments"][0]["id"] == aid
+    assert rows[0]["content"] == "Here is the plot from the run."
+
+
+def test_speak_empty_text_with_attachments_rejects_without_ingest(
+    ctx_sandbox: ToolContext, paths, sandbox: Sandbox
+) -> None:
+    """KD8 / R1: caption required; do not orphan media on empty text."""
+    _write_sandbox_png(sandbox, "tmp/orphan.png")
+    result = speak_handler(
+        {"text": "", "attachments": [{"path": "tmp/orphan.png"}]},
+        ctx_sandbox,
+    )
+    assert result.ok is False
+    assert result.error_reason == "empty_text"
+    assert result.counts_as_speak is False
+    assert _assistant_rows(paths) == []
+    # No media meta written (empty text checked before ingest).
+    store = MediaStore(paths)
+    assert store.list_meta_ids() == []
+
+
+def test_speak_whitespace_text_with_attachment_ids_rejects(
+    ctx_sandbox: ToolContext, paths
+) -> None:
+    att = put_bytes(
+        FIXTURE_PNG.read_bytes(),
+        filename="a.png",
+        origin="tool",
+        paths=paths,
+    )
+    result = speak_handler(
+        {"text": "\n\t  ", "attachment_ids": [att.id]},
+        ctx_sandbox,
+    )
+    assert result.ok is False
+    assert result.error_reason == "empty_text"
+    assert _assistant_rows(paths) == []
+    # Original remains unbound (no re-send clone).
+    assert get_attachment(att.id, paths=paths).bound_message_id is None
+
+
+def test_speak_resend_by_attachment_id_new_att_same_sha(
+    ctx_sandbox: ToolContext, paths
+) -> None:
+    """KD16: re-send creates new att_id pointing at same sha."""
+    store = MediaStore(paths)
+    original = store.put_bytes(
+        FIXTURE_PNG.read_bytes(),
+        filename="prior.png",
+        origin="user_upload",
+    )
+    store.bind_message(original.id, "prior-msg-1")
+
+    result = speak_handler(
+        {
+            "text": "Here is that plot again.",
+            "attachment_ids": [original.id],
+        },
+        ctx_sandbox,
+    )
+    assert result.ok is True
+    new_ids = result.payload["attachment_ids"]
+    assert len(new_ids) == 1
+    new_id = new_ids[0]
+    assert new_id != original.id
+
+    cloned = get_attachment(new_id, paths=paths)
+    assert cloned is not None
+    assert cloned.sha256 == original.sha256
+    assert cloned.bound_message_id == result.payload["message_id"]
+    assert cloned.source_message_id == "prior-msg-1"
+    assert cloned.origin == "speak"
+    # Original binding unchanged
+    assert get_attachment(original.id, paths=paths).bound_message_id == "prior-msg-1"
+    # Same blob file on disk
+    assert store.blob_path(original.sha256).is_file()
+    assert store.read_bytes(new_id) == store.read_bytes(original.id)
+
+    rows = _assistant_rows(paths)
+    assert rows[0]["attachments"][0]["id"] == new_id
+
+
+def test_speak_unknown_attachment_id(ctx_sandbox: ToolContext, paths) -> None:
+    result = speak_handler(
+        {"text": "missing media", "attachment_ids": ["att_doesnotexist000"]},
+        ctx_sandbox,
+    )
+    assert result.ok is False
+    assert result.error_reason == "attachment_not_found"
+    assert result.counts_as_speak is False
+    assert _assistant_rows(paths) == []
+
+
+def test_speak_missing_sandbox_path(ctx_sandbox: ToolContext, paths) -> None:
+    result = speak_handler(
+        {
+            "text": "no file",
+            "attachments": [{"path": "tmp/does-not-exist.png"}],
+        },
+        ctx_sandbox,
+    )
+    assert result.ok is False
+    assert result.error_reason == "not_found"
+    assert _assistant_rows(paths) == []
+
+
+def test_speak_path_escape_rejected(ctx_sandbox: ToolContext, paths) -> None:
+    result = speak_handler(
+        {
+            "text": "escape",
+            "attachments": [{"path": "../outside.png"}],
+        },
+        ctx_sandbox,
+    )
+    assert result.ok is False
+    assert result.error_reason == "path_escape"
+    assert _assistant_rows(paths) == []
+
+
+def test_speak_combined_path_and_resend(
+    ctx_sandbox: ToolContext, paths, sandbox: Sandbox
+) -> None:
+    _write_sandbox_png(sandbox, "tmp/new.png")
+    prior = put_bytes(
+        b"prior-bytes-for-resend",
+        filename="old.txt",
+        origin="tool",
+        paths=paths,
+    )
+    result = speak_handler(
+        {
+            "text": "new and prior",
+            "attachments": [{"path": "tmp/new.png", "filename": "display.png"}],
+            "attachment_ids": [prior.id],
+        },
+        ctx_sandbox,
+    )
+    assert result.ok is True
+    ids = result.payload["attachment_ids"]
+    assert len(ids) == 2
+    # Path ingest first, then id clone
+    path_att = get_attachment(ids[0], paths=paths)
+    clone_att = get_attachment(ids[1], paths=paths)
+    assert path_att is not None and path_att.kind == "image"
+    assert path_att.filename == "display.png"
+    assert clone_att is not None and clone_att.sha256 == prior.sha256
+    assert clone_att.id != prior.id
+
+
+def test_speak_too_many_attachments(ctx_sandbox: ToolContext, paths) -> None:
+    ids = []
+    for i in range(9):
+        att = put_bytes(
+            f"blob-{i}".encode(),
+            filename=f"f{i}.txt",
+            origin="tool",
+            paths=paths,
+        )
+        ids.append(att.id)
+    result = speak_handler(
+        {"text": "too many", "attachment_ids": ids},
+        ctx_sandbox,
+    )
+    assert result.ok is False
+    assert result.error_reason == "too_many_attachments"
+    assert _assistant_rows(paths) == []
+
+
+def test_openai_tools_speak_schema_includes_attachment_fields(
+    registry: ToolRegistry,
+) -> None:
+    tools = registry.openai_tools()
+    speak_tool = next(t for t in tools if t["function"]["name"] == "speak")
+    props = speak_tool["function"]["parameters"]["properties"]
+    assert "attachment_ids" in props
+    assert "attachments" in props
+    assert "text" in speak_tool["function"]["parameters"]["required"]
+    assert props["attachments"]["items"]["required"] == ["path"]
+
+
+def test_registry_execute_speak_with_path(
+    registry: ToolRegistry, paths, sandbox: Sandbox
+) -> None:
+    _write_sandbox_png(sandbox, "tmp/reg.png")
+    ctx = ToolContext(
+        paths=paths,
+        speak=SpeakTransport(paths),
+        sandbox=sandbox,
+        user_id="operator",
+        moment_id="reg-att",
+    )
+    result = registry.execute(
+        "speak",
+        {
+            "text": "via registry with plot",
+            "attachments": [{"path": "tmp/reg.png"}],
+        },
+        ctx,
+    )
+    assert result.ok is True
+    assert result.counts_as_speak is True
+    assert result.payload.get("attachment_ids")
+    rows = _assistant_rows(paths)
+    assert rows[0]["attachments"]

@@ -1,0 +1,34 @@
+# Allowlisted distribution names for sandbox_pip_update (KD11).
+# One name per line (PEP 503 normalized compare). Model may ADD these to
+# requirements-curated.txt, or REMOVE them if not in REQUIRED_CURATED.
+# Required curated packages (pytest) need not appear here.
+# Operators extend this file; unknown names are always rejected fail-closed.
+# Prefer wheel-friendly pure-Python packages (guest often lacks build deps).
+
+# Already in default curated (optional — removable/re-pinnable)
+requests
+httpx
+beautifulsoup4
+pyyaml
+python-dateutil
+regex
+jinja2
+
+# Extra allowlisted packages (not in default curated; model may add)
+packaging
+markdown
+charset-normalizer
+idna
+urllib3
+sniffio
+anyio
+certifi
+soupsieve
+markupsafe
+tabulate
+tenacity
+toml
+tomli
+typing-extensions
+click
+rich

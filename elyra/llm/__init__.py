@@ -1,1 +1,1 @@
-"""LLM client and llama-server launch."""
+"""LLM clients and provider adapters."""

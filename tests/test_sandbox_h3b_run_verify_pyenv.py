@@ -162,8 +162,10 @@ def test_try_install_curated_pyenv_fake_guest(
     sb.default_exec = ExecResult(exit_code=0, stdout_text="Successfully installed\n")
     root = ensure_host_tree(PRIMARY_NAME, paths)
     assert pyenv_ready(root) is False
-    ok = try_install_curated_pyenv(life, paths=paths)
-    assert ok is True
+    result = try_install_curated_pyenv(life, paths=paths)
+    assert result.ok is True
+    assert result.error_reason is None
+    assert result.requirements_hash is not None
     assert pyenv_ready(root) is True
     assert client.last_exec is not None
     assert client.last_exec["cmd"] == "python3"
@@ -186,7 +188,11 @@ def test_try_install_skips_when_pip_fails(
     assert sb is not None
     sb.default_exec = ExecResult(exit_code=1, stderr_text="no network\n")
     root = ensure_host_tree(PRIMARY_NAME, paths)
-    assert try_install_curated_pyenv(life, paths=paths) is False
+    result = try_install_curated_pyenv(life, paths=paths)
+    assert result.ok is False
+    assert result.error_reason == "pip_failed"
+    assert result.exit_code == 1
+    assert "no network" in (result.stderr_tail or "")
     assert pyenv_ready(root) is False
 
 
@@ -282,6 +288,7 @@ def test_run_guest_nonzero_still_ok(
 def test_run_command_too_large_guest(
     paths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Guest pre-exec gate rejects commands over 16 KiB with soft FS hint."""
     monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
     client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
     life = SandboxLifecycleManager(
@@ -289,11 +296,43 @@ def test_run_command_too_large_guest(
     )
     set_sandbox_lifecycle(life)
     assert life.ensure(PRIMARY_NAME).ready
-    huge = "x" * (5 * 1024)
+    huge = "x" * (17 * 1024)
     ctx = ToolContext(paths=paths, sandbox=Sandbox(paths))
     result = run_cmd.run({"command": huge}, ctx)
     assert result.ok is False
     assert result.error_reason == "command_too_large"
+    assert result.payload.get("limit_bytes") == 16384
+    assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
+    hint = result.payload.get("hint") or ""
+    assert "search_replace" in hint
+    assert "Path.write_text" in hint
+    assert "install_tool_draft" in hint
+    # Must not have reached guest exec
+    assert client.last_exec is None
+
+
+def test_run_command_at_guest_cap_not_rejected(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Command of exactly 16 KiB is not rejected at the pre-exec size gate."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths, client=client, skip_guest_readiness=True
+    )
+    set_sandbox_lifecycle(life)
+    assert life.ensure(PRIMARY_NAME).ready
+    sb_conn = life.get_connected(PRIMARY_NAME)
+    assert sb_conn is not None
+    sb_conn.default_exec = ExecResult(exit_code=0, stdout_text="ok\n")
+    at_cap = "x" * (16 * 1024)
+    assert len(at_cap.encode("utf-8")) == run_cmd._GUEST_MAX_COMMAND_BYTES
+    ctx = ToolContext(paths=paths, sandbox=Sandbox(paths))
+    result = run_cmd.run({"command": at_cap}, ctx)
+    assert result.error_reason != "command_too_large"
+    assert result.ok is True
+    assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
+    assert client.last_exec is not None
 
 
 # ---------------------------------------------------------------------------
@@ -357,8 +396,23 @@ def test_verify_guest_pytest_with_fake(
     ensure_pyenv_marker_for_tests(paths)
     sb_conn = life.get_connected(PRIMARY_NAME)
     assert sb_conn is not None
-    # Guest pytest success
+    # Guest smoke (exit 0) then pytest success — both use default_exec
     sb_conn.default_exec = ExecResult(exit_code=0, stdout_text="1 passed\n")
+    exec_log: list[dict] = []
+    _orig_exec = sb_conn.exec
+
+    async def _tracking_exec(cmd, args=None, **kwargs):
+        result = await _orig_exec(cmd, args, **kwargs)
+        exec_log.append(
+            {
+                "cmd": cmd,
+                "args": list(args or []),
+                "cwd": kwargs.get("cwd"),
+            }
+        )
+        return result
+
+    sb_conn.exec = _tracking_exec  # type: ignore[method-assign]
 
     ctx = ToolContext(paths=paths)
     name = "guest_verify"
@@ -366,6 +420,19 @@ def test_verify_guest_pytest_with_fake(
     result = verify_tool({"name": name}, ctx)
     assert result.ok is True, result
     assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
+    # KD-G6: smoke (-c) then pytest (-m pytest), both under .verify/
+    assert len(exec_log) >= 2
+    smoke_call = exec_log[0]
+    assert smoke_call["cmd"] == "python3"
+    assert "-c" in smoke_call["args"]
+    assert smoke_call["cwd"] == f"/workspace/tools/.verify/{name}"
+    smoke_src = smoke_call["args"][smoke_call["args"].index("-c") + 1]
+    assert "_elyra_verify_smoke" in smoke_src
+    assert f"/workspace/tools/.verify/{name}/" in smoke_src
+    pytest_call = exec_log[-1]
+    assert pytest_call["cmd"] == "python3"
+    assert "-m" in pytest_call["args"] and "pytest" in pytest_call["args"]
+    assert pytest_call["cwd"] == f"/workspace/tools/.verify/{name}"
     assert client.last_exec is not None
     assert client.last_exec["cmd"] == "python3"
     args = client.last_exec.get("args") or []
@@ -376,6 +443,119 @@ def test_verify_guest_pytest_with_fake(
     draft = paths.tools_dir / "drafts" / name
     rec = load_verify_record(draft)
     assert rec is not None and rec["passed"] is True
+
+
+def test_verify_guest_smoke_module_missing_fail_closed(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 2 from guest smoke → verify_guest_module_missing; no .verify.json."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths, client=client, skip_guest_readiness=True
+    )
+    set_sandbox_lifecycle(life)
+    assert life.ensure(PRIMARY_NAME).ready
+    ensure_pyenv_marker_for_tests(paths)
+    sb_conn = life.get_connected(PRIMARY_NAME)
+    assert sb_conn is not None
+    calls = {"smoke": 0, "pytest": 0}
+
+    async def _smoke_missing(cmd, args=None, **kwargs):
+        del cmd, kwargs
+        args = list(args or [])
+        if "-c" in args:
+            calls["smoke"] += 1
+            return ExecResult(exit_code=2, stderr_text="missing on guest\n")
+        calls["pytest"] += 1
+        return ExecResult(exit_code=0, stdout_text="1 passed\n")
+
+    sb_conn.exec = _smoke_missing  # type: ignore[method-assign]
+
+    ctx = ToolContext(paths=paths)
+    name = "smoke_missing"
+    assert _install_draft(ctx, name).ok
+    result = verify_tool({"name": name}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "verify_guest_module_missing"
+    draft = paths.tools_dir / "drafts" / name
+    assert not (draft / VERIFY_RECORD_NAME).exists()
+    # Must not reach pytest when smoke fails
+    assert calls["smoke"] == 1
+    assert calls["pytest"] == 0
+
+
+def test_verify_guest_smoke_import_failed_fail_closed(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-2/3 exit from guest smoke → verify_guest_module_import_failed."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths, client=client, skip_guest_readiness=True
+    )
+    set_sandbox_lifecycle(life)
+    assert life.ensure(PRIMARY_NAME).ready
+    ensure_pyenv_marker_for_tests(paths)
+    sb_conn = life.get_connected(PRIMARY_NAME)
+    assert sb_conn is not None
+
+    async def _smoke_import_boom(cmd, args=None, **kwargs):
+        del cmd, kwargs
+        args = list(args or [])
+        if "-c" in args:
+            return ExecResult(
+                exit_code=1,
+                stderr_text="Traceback (most recent call last):\nImportError: boom\n",
+            )
+        return ExecResult(exit_code=0, stdout_text="1 passed\n")
+
+    sb_conn.exec = _smoke_import_boom  # type: ignore[method-assign]
+
+    ctx = ToolContext(paths=paths)
+    name = "smoke_import_fail"
+    assert _install_draft(ctx, name).ok
+    result = verify_tool({"name": name}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "verify_guest_module_import_failed"
+    assert "ImportError" in (result.payload.get("log") or "")
+    draft = paths.tools_dir / "drafts" / name
+    assert not (draft / VERIFY_RECORD_NAME).exists()
+
+
+def test_verify_guest_smoke_function_not_found_fail_closed(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 3 from guest smoke → verify_guest_function_not_found."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths, client=client, skip_guest_readiness=True
+    )
+    set_sandbox_lifecycle(life)
+    assert life.ensure(PRIMARY_NAME).ready
+    ensure_pyenv_marker_for_tests(paths)
+    sb_conn = life.get_connected(PRIMARY_NAME)
+    assert sb_conn is not None
+
+    async def _smoke_no_fn(cmd, args=None, **kwargs):
+        del cmd, kwargs
+        args = list(args or [])
+        if "-c" in args:
+            # Non-empty stderr required: empty non-zero is treated as sandbox death.
+            return ExecResult(exit_code=3, stderr_text="function missing\n")
+        return ExecResult(exit_code=0, stdout_text="1 passed\n")
+
+    sb_conn.exec = _smoke_no_fn  # type: ignore[method-assign]
+
+    ctx = ToolContext(paths=paths)
+    name = "smoke_no_fn"
+    assert _install_draft(ctx, name).ok
+    result = verify_tool({"name": name}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "verify_guest_function_not_found"
+    draft = paths.tools_dir / "drafts" / name
+    assert not (draft / VERIFY_RECORD_NAME).exists()
 
 
 def test_verify_guest_pytest_fail_closed_unusable(

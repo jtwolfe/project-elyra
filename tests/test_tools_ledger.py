@@ -461,6 +461,12 @@ def test_get_goal_not_found(paths, store: GoalsStore) -> None:
     result = get_goal({"goal_id": "g_missing"}, _ctx(paths, store))
     assert result.ok is False
     assert result.error_reason == "goal_not_found"
+    assert result.payload["ok"] is False
+    assert result.payload["goal_id"] == "g_missing"
+    assert result.payload.get("error_reason") == "goal_not_found"
+    hint = result.payload.get("hint") or ""
+    assert "list_goals" in hint
+    assert "invent" in hint.lower()
 
 
 def test_get_task_and_no_mark(paths, store: GoalsStore) -> None:
@@ -483,6 +489,12 @@ def test_get_task_not_found(paths, store: GoalsStore) -> None:
     result = get_task({"task_id": "t_missing"}, _ctx(paths, store))
     assert result.ok is False
     assert result.error_reason == "task_not_found"
+    assert result.payload["ok"] is False
+    assert result.payload["task_id"] == "t_missing"
+    assert result.payload.get("error_reason") == "task_not_found"
+    hint = result.payload.get("hint") or ""
+    assert "list_goals" in hint
+    assert "invent" in hint.lower()
 
 
 def test_read_tools_via_registry(
@@ -633,6 +645,12 @@ def test_update_task_not_found(paths, store: GoalsStore) -> None:
     )
     assert result.ok is False
     assert result.error_reason == "task_not_found"
+    assert result.payload["ok"] is False
+    assert result.payload["task_id"] == "t_missing"
+    assert result.payload.get("error_reason") == "task_not_found"
+    hint = result.payload.get("hint") or ""
+    assert "list_goals" in hint
+    assert "invent" in hint.lower()
 
 
 def test_update_task_missing_id(paths, store: GoalsStore) -> None:
@@ -896,6 +914,12 @@ def test_update_goal_not_found(paths, store: GoalsStore) -> None:
     )
     assert result.ok is False
     assert result.error_reason == "goal_not_found"
+    assert result.payload["ok"] is False
+    assert result.payload["goal_id"] == "g_missing"
+    assert result.payload.get("error_reason") == "goal_not_found"
+    hint = result.payload.get("hint") or ""
+    assert "list_goals" in hint
+    assert "invent" in hint.lower()
 
 
 def test_update_goal_missing_goals(paths) -> None:

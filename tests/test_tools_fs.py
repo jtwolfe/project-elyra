@@ -373,6 +373,27 @@ def test_search_replace_directory_is_directory(
     assert result.payload.get("path") == "d"
 
 
+def test_search_replace_media_readonly(
+    ctx: ToolContext, sandbox: Sandbox
+) -> None:
+    """PR2: search_replace under media/ maps to error_reason=media_readonly."""
+    dest = sandbox.root / "media" / "att_z" / "note.txt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("keep\n", encoding="utf-8")
+    result = files.search_replace(
+        {"path": "media/att_z/note.txt", "old": "keep", "new": "gone"},
+        ctx,
+    )
+    assert result.ok is False
+    assert result.error_reason == "media_readonly"
+    assert result.payload.get("path") == "media/att_z/note.txt"
+    assert dest.read_text(encoding="utf-8") == "keep\n"
+    # read_file still allowed under media/
+    read = files.read_file({"path": "media/att_z/note.txt"}, ctx)
+    assert read.ok is True
+    assert read.payload["content"] == "keep\n"
+
+
 def test_search_replace_via_registry(
     registry: ToolRegistry, home: Path, sandbox: Sandbox
 ) -> None:

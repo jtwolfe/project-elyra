@@ -23,28 +23,101 @@ from elyra.llm.auth import (
 from elyra.llm.client import (
     ChatClient,
     FailingChatClient,
-    GatedChatClient,
     HttpChatClient,
     StubChatClient,
     UsageGatedChatClient,
 )
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
 from elyra.llm.models import (
     CURATED_XAI_MODELS,
     label_for_model,
     list_remote_models,
     models_for_picker,
 )
-from elyra.llm.provider_prefs import ProviderPrefs, provider_prefs_path, save_provider_prefs
-from elyra.llm.queue import LlamaServerGate
-from elyra.llm.usage import UsageMeter
+from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
+    resolve_reasoning_effort,
+    resolve_reasoning_effort_strict,
+    update_provider_prefs,
+)
+from elyra.llm.queue import ChatRequestGate
+from elyra.llm.usage import UsageMeter, UsageSnapshot
 from elyra.settings import UsageSettings
 
 if TYPE_CHECKING:
     from elyra.presence.worker import PresenceWorker
+    from elyra.runtime.credits_poller import CreditsPoller
     from elyra.runtime.state import RuntimeState
 
 _LOG = logging.getLogger(__name__)
+
+
+def _usage_status_disabled_placeholder() -> dict[str, Any]:
+    """Stable shape when meter missing or usage.enabled is false."""
+    return {
+        "enabled": False,
+        "week_remaining_fraction": 1.0,
+        "day_remaining_fraction": 1.0,
+        "hour_remaining_fraction": 1.0,
+        "hard_stop": None,
+        "hard_stop_reason": None,
+        "override_active": False,
+        "pace_band": "green",
+        "pace_ratio": 0.0,
+        "burst_remaining_tokens": 0,
+        "burst_max_tokens": 0,
+        "period_id": "",
+        "period_authority": "iso",
+        "day_hard_stop_enabled": False,
+        "hour_hard_stop_enabled": False,
+        "day_soft_exhausted": False,
+        "hour_soft_exhausted": False,
+        "week_cached_tokens": 0,
+        "week_stt_calls": 0,
+        "week_tts_calls": 0,
+        "elyra_week_budget_tokens": 0,
+        "weekly_allowed_fraction": 0.5,
+        "credit_usage_percent": None,
+        "credits_status": None,
+        "throttle_advice": {
+            "band": "green",
+            "pace_ratio": 0.0,
+            "suggest_economy_model": False,
+            "delay_factor": 1.0,
+        },
+        "supergrok": None,
+    }
+
+
+def _supergrok_status_from_snap(
+    snap: UsageSnapshot, meter: UsageMeter
+) -> dict[str, Any] | None:
+    """Build nested supergrok status from meter cache + snapshot fields."""
+    if hasattr(meter, "supergrok_for_status"):
+        try:
+            block = meter.supergrok_for_status()
+            if block is not None:
+                return block
+        except Exception:  # noqa: BLE001 — fail-soft for status path
+            _LOG.debug("supergrok_for_status failed", exc_info=True)
+    # Fallback from snapshot-only fields (ISO / no poll yet).
+    if (
+        snap.credit_usage_percent is None
+        and snap.credits_status is None
+        and snap.period_authority != "supergrok"
+    ):
+        return None
+    return {
+        "credit_usage_percent": snap.credit_usage_percent,
+        "period_start": None,
+        "period_end": None,
+        "period_id": snap.period_id,
+        "period_authority": snap.period_authority,
+        "product_usage": None,
+        "fetched_at": None,
+        "status": snap.credits_status,
+        "stale": False,
+    }
 
 
 @dataclass
@@ -57,8 +130,8 @@ class ProviderRuntime:
     worker: PresenceWorker | None  # for rebinding worker.client after rebuild
     usage_settings: UsageSettings
     xai_config: XaiClientConfig | None
-    llama_config: LlamaServerConfig | None
-    gate: LlamaServerGate | None
+    local_config: LocalClientConfig | None
+    gate: ChatRequestGate | None
     prefs_path: Path
     data_dir: Path
     provider_name: str
@@ -75,6 +148,13 @@ class ProviderRuntime:
     grok_auth_path: Path | None = None
     request_timeout_s: float = 120.0
     state: RuntimeState | None = None
+    # Durable --stub-llm session flag: rebuild/apply_model must not install
+    # live HTTP or Failing(local) and erase hermetic Stub posture.
+    stub_llm: bool = False
+    # SuperGrok credits poller (supervisor-owned); status may only *signal*.
+    credits_poller: CreditsPoller | None = None
+    # Resolved wire effort (always low|medium|high; default high).
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def status_provider_fields(self) -> dict[str, Any]:
@@ -92,24 +172,38 @@ class ProviderRuntime:
                 "credential_email": self.credential_email,
                 "api_key_configured": self.api_key_configured,
                 "models_available": list(self.models_available),
+                "reasoning_effort": resolve_reasoning_effort(self.reasoning_effort),
             }
 
     def usage_status_block(self) -> dict[str, Any]:
-        """Live meter.snapshot() or disabled placeholder. Called every GET."""
+        """Live meter.snapshot() or disabled placeholder. Called every GET.
+
+        KD26: may only *signal* the credits poller — never billing HTTP and
+        never await the poller. Returns immediately from last applied snapshot.
+
+        Expands UsageSnapshot design fields for Glass: pace/burst, soft day/hour
+        flags, SuperGrok object, throttle_advice. PATCH still only mutates
+        hard_stop_override.
+        """
         with self._lock:
             meter = self.meter
             enabled = bool(self.usage_settings.enabled)
+            poller = self.credits_poller
+            usage_settings = self.usage_settings
+        # Non-blocking signal only (debounced inside poller).
+        if poller is not None:
+            try:
+                poller.request_poll()
+            except Exception:  # noqa: BLE001
+                _LOG.debug("credits poller signal failed", exc_info=True)
         if meter is None or not enabled:
-            return {
-                "enabled": False,
-                "week_remaining_fraction": 1.0,
-                "day_remaining_fraction": 1.0,
-                "hour_remaining_fraction": 1.0,
-                "hard_stop": None,
-                "hard_stop_reason": None,
-                "override_active": False,
-            }
+            return _usage_status_disabled_placeholder()
         snap = meter.snapshot()
+        sg = _supergrok_status_from_snap(snap, meter)
+        band = snap.pace_band
+        suggest = bool(
+            usage_settings.auto_throttle_model and band in ("yellow", "red")
+        )
         return {
             "enabled": snap.enabled,
             "week_remaining_fraction": snap.week_remaining_fraction,
@@ -125,16 +219,58 @@ class ProviderRuntime:
             "day_limit_tokens": snap.day_limit_tokens,
             "hour_limit_tokens": snap.hour_limit_tokens,
             "last_record_at": snap.last_record_at,
+            # v2 pace / burst / period (primary Glass meters)
+            "pace_band": snap.pace_band,
+            "pace_ratio": snap.pace_ratio,
+            "burst_remaining_tokens": snap.burst_remaining_tokens,
+            "burst_max_tokens": snap.burst_max_tokens,
+            "period_id": snap.period_id,
+            "period_authority": snap.period_authority,
+            "day_hard_stop_enabled": snap.day_hard_stop_enabled,
+            "hour_hard_stop_enabled": snap.hour_hard_stop_enabled,
+            "day_soft_exhausted": snap.day_soft_exhausted,
+            "hour_soft_exhausted": snap.hour_soft_exhausted,
+            "week_cached_tokens": snap.week_cached_tokens,
+            "week_stt_calls": int(getattr(snap, "week_stt_calls", 0) or 0),
+            "week_tts_calls": int(getattr(snap, "week_tts_calls", 0) or 0),
+            "elyra_week_budget_tokens": snap.week_limit_tokens,
+            "weekly_allowed_fraction": float(usage_settings.weekly_allowed_fraction),
+            "credit_usage_percent": snap.credit_usage_percent,
+            "credits_status": snap.credits_status,
+            "throttle_advice": {
+                "band": band,
+                "pace_ratio": float(snap.pace_ratio),
+                "suggest_economy_model": suggest,
+                "delay_factor": 1.0,
+            },
+            "supergrok": sg,
         }
+
+    def media_remote_success_cb(self) -> Any:
+        """Optional callback for media layer: ``kind in {stt,tts}`` → meter.
+
+        Binds ``meter.record_media_call`` without media importing usage
+        (cycle-free). Returns None when meter unbound.
+        """
+        with self._lock:
+            meter = self.meter
+        if meter is None:
+            return None
+
+        def _cb(kind: str) -> None:
+            meter.record_media_call(kind)
+
+        return _cb
 
     def can_open_model_moment(self) -> bool:
         """Pre-claim gate: safe to open a model-using moment.
 
         provider=xai: credential_ok and (meter.can_call() if meter present and
           usage enabled; if meter missing while usage enabled → False).
-          meter.can_call() is True when under budget OR hard_stop_override ON.
-        provider=local: meter.can_call() if enabled else True (llama readiness
-          is separate; worker still needs a real client).
+          meter.can_call() is True when under all hard ceilings (account/week/
+          optional day/hour) OR hard_stop_override ON. Soft yellow/red pace
+          bands never refuse. No auto model throttle or hop-delay here.
+        provider=local: FailingChatClient → False (local_not_implemented).
         Never opens moments that would only hit FailingChatClient noise.
         """
         with self._lock:
@@ -170,8 +306,12 @@ class ProviderRuntime:
         Builds the new stack off to the side, then swaps under lock so a failed
         rebuild leaves the previous client and credential fields intact until
         a clean Failing fallback is committed.
+
+        When ``stub_llm`` is set (``elyra start --stub-llm``), always reinstall
+        StubChatClient — never live HTTP and never local Failing.
         """
         with self._lock:
+            stub_llm = self.stub_llm
             provider = self.provider_name
             model = self.model
             source = self.credential_source
@@ -181,16 +321,18 @@ class ProviderRuntime:
             timeout_s = self.request_timeout_s
             usage_settings = self.usage_settings
             xai_config = self.xai_config
-            llama_config = self.llama_config
-            gate = self.gate
+            local_config = self.local_config
             meter = self.meter
+            reasoning_effort = resolve_reasoning_effort(self.reasoning_effort)
+
+        if stub_llm:
+            self._rebuild_stub(usage_settings=usage_settings, meter=meter)
+            return
 
         if provider == "local":
             self._rebuild_local(
-                model=model,
                 usage_settings=usage_settings,
-                llama_config=llama_config,
-                gate=gate,
+                local_config=local_config,
                 meter=meter,
             )
             return
@@ -215,6 +357,9 @@ class ProviderRuntime:
                 self.chat_client = failing
                 self._bind_worker_unlocked()
                 self._sync_state_unlocked()
+            if self.state is not None:
+                # Cred failures stay on credential_*; chat stack not ready (KD14).
+                self.state.set_chat_posture(ready=False, error=None)
             return
 
         # Ensure meter so repair keeps window state (even after cold-start fail).
@@ -232,6 +377,7 @@ class ProviderRuntime:
                 cfg,
                 model=model,
                 bearer_token=resolution.token,
+                reasoning_effort=reasoning_effort,
             )
             if usage_settings.enabled:
                 outer: ChatClient = UsageGatedChatClient(http, meter)
@@ -250,6 +396,8 @@ class ProviderRuntime:
                 self.chat_client = failing
                 self._bind_worker_unlocked()
                 self._sync_state_unlocked()
+            if self.state is not None:
+                self.state.set_chat_posture(ready=False, error=None)
             return
 
         with self._lock:
@@ -263,6 +411,8 @@ class ProviderRuntime:
             self.xai_config = cfg
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
+        if self.state is not None:
+            self.state.set_chat_posture(ready=True, error=None)
 
         # Best-effort models refresh (network); never undo a successful rebuild.
         try:
@@ -270,50 +420,56 @@ class ProviderRuntime:
         except Exception:  # noqa: BLE001 — best-effort
             _LOG.debug("refresh_models after rebuild failed", exc_info=True)
 
-    def _rebuild_local(
+    def _rebuild_stub(
         self,
         *,
-        model: str,
         usage_settings: UsageSettings,
-        llama_config: LlamaServerConfig | None,
-        gate: LlamaServerGate | None,
         meter: UsageMeter | None,
     ) -> None:
-        cfg = llama_config or LlamaServerConfig()
+        """Hermetic --stub-llm posture: Stub only; never HTTP / never local Failing."""
         if meter is None and usage_settings.enabled:
             meter = UsageMeter.load(self.data_dir, usage_settings)
             with self._lock:
                 self.meter = meter
-        try:
-            http = HttpChatClient.for_local(cfg)
-            if gate is not None:
-                gated: ChatClient = GatedChatClient(http, gate)
-            else:
-                gated = http
-            if usage_settings.enabled and meter is not None:
-                outer: ChatClient = UsageGatedChatClient(gated, meter)
-            else:
-                outer = gated
-        except Exception:
-            _LOG.exception("rebuild_chat_stack: failed to build local client")
-            with self._lock:
-                self.credential_ok = True  # local has no xai creds
-                self.credential_detail = "local_client_build_failed"
-                self.http_client = None
-                self.chat_client = StubChatClient()
-                self._bind_worker_unlocked()
-                self._sync_state_unlocked()
-            return
-
         with self._lock:
+            provider = self.provider_name
+            self.http_client = None
+            self.chat_client = StubChatClient()
+            # Match cold-start stub: credential_ok True; posture via chat_error.
             self.credential_ok = True
             self.credential_detail = None
-            self.http_client = http
-            self.chat_client = outer
-            self.llama_config = cfg
+            if provider == "local":
+                self.models_available = ["local"]
+            self._bind_worker_unlocked()
+            self._sync_state_unlocked()
+        if self.state is not None:
+            self.state.set_chat_posture(ready=False, error="stub_llm")
+
+    def _rebuild_local(
+        self,
+        *,
+        usage_settings: UsageSettings,
+        local_config: LocalClientConfig | None,
+        meter: UsageMeter | None,
+    ) -> None:
+        """Local provider is unimplemented — Failing only; never for_local HTTP."""
+        if meter is None and usage_settings.enabled:
+            meter = UsageMeter.load(self.data_dir, usage_settings)
+            with self._lock:
+                self.meter = meter
+        cfg = local_config or LocalClientConfig()
+        failing = FailingChatClient("local_not_implemented")
+        with self._lock:
+            self.credential_ok = True  # local has no xai creds
+            self.credential_detail = "local_not_implemented"
+            self.http_client = None
+            self.chat_client = failing
+            self.local_config = cfg
             self.models_available = ["local"]
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
+        if self.state is not None:
+            self.state.set_chat_posture(ready=False, error="local_not_implemented")
 
     def _bind_worker_unlocked(self) -> None:
         worker = self.worker
@@ -380,31 +536,34 @@ class ProviderRuntime:
 
     def apply_model(self, model: str) -> None:
         """Validate, persist prefs, set_model on http_client if present,
-        else rebuild_chat_stack if credential_ok."""
+        else rebuild_chat_stack if credential_ok.
+
+        Under ``stub_llm``, only the model id / prefs update — the client stays
+        Stub (never live HTTP, never local Failing).
+        """
         mid = (model or "").strip()
         if not mid:
             raise ValueError("model must be a non-empty string")
         with self._lock:
             available = list(self.models_available)
-            http = self.http_client
-            credential_ok = self.credential_ok
             data_dir = self.data_dir
-            source = self.credential_source
         if available and mid not in available and mid != "local":
             # Allow unknown when list is only curated fallback (operator override).
             # Strict unknown check is for API layer; rebuild still accepts wire ids.
             pass
         label = label_for_model(mid)
-        save_provider_prefs(
-            data_dir,
-            ProviderPrefs(model=mid, credential_source=source),
-        )
+        # Load-merge-save so credential_source / reasoning_effort are not clobbered.
+        update_provider_prefs(data_dir, model=mid)
         with self._lock:
             self.model = mid
             self.model_label = label
             self._sync_state_unlocked()
             http = self.http_client
             credential_ok = self.credential_ok
+            stub_llm = self.stub_llm
+        if stub_llm:
+            # Durable hermetic posture: prefs updated; keep StubChatClient.
+            return
         if http is not None:
             http.set_model(mid)
         elif credential_ok:
@@ -419,7 +578,6 @@ class ProviderRuntime:
             data_dir = self.data_dir
             grok_path = self.grok_auth_path
             prev_source = self.credential_source
-            model = self.model
         resolution = resolve_bearer(
             source=src,
             data_dir=data_dir,
@@ -428,10 +586,8 @@ class ProviderRuntime:
         if not resolution.ok:
             # Leave previous source/stack intact.
             return resolution
-        save_provider_prefs(
-            data_dir,
-            ProviderPrefs(model=model, credential_source=src),
-        )
+        # Load-merge-save so model / reasoning_effort are not clobbered.
+        update_provider_prefs(data_dir, credential_source=src)
         with self._lock:
             self.credential_source = src
             self._sync_state_unlocked()
@@ -439,6 +595,24 @@ class ProviderRuntime:
         if prev_source != src:
             _LOG.info("credential_source switched %s → %s", prev_source, src)
         return resolution
+
+    def apply_reasoning_effort(self, effort: str) -> None:
+        """Validate, persist prefs, set_reasoning_effort on http_client if present.
+
+        Does not rebuild the chat stack. Credential / bearer / meter unchanged.
+        Under stub_llm: prefs + runtime field update only.
+        """
+        e = resolve_reasoning_effort_strict(effort)
+        with self._lock:
+            data_dir = self.data_dir
+        # Load-merge-save so model / credential_source are not clobbered.
+        update_provider_prefs(data_dir, reasoning_effort=e)
+        with self._lock:
+            self.reasoning_effort = e
+            http = self.http_client
+        if http is not None:
+            http.set_reasoning_effort(e)
+        _LOG.info("reasoning_effort set to %s", e)
 
     def put_api_key(self, api_key: str) -> None:
         """write_stored_api_key (atomic); api_key_configured=True;

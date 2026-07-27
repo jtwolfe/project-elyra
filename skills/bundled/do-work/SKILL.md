@@ -29,18 +29,18 @@ After this playbook loads, your **next** completion must include a `tool_calls` 
 Pick the first that applies:
 
 1. `list_goals` or `get_task` / `get_goal` — pick the ready task and re-read acceptance when orient is thin
-2. Then sandbox tools (`read_file`, `list_dir`, `grep`, `search_replace`, `run`) and/or `update_task` to make progress
+2. Then sandbox tools (`read_file`, `list_dir`, `grep`, `search_replace`, `run`) and/or `update_task` to make progress. Prefer `search_replace` for **existing** files; for **new** files under 16 KiB use one `run` + `Path.write_text` (or `install_tool_draft` for packages); use `run` primarily to execute
 3. If a **capability is missing** (no tool for the job): `load_skill` with name **`create-tool`** — do not fake progress in free-text or thrash empty sandbox lists / host path fishing
 
 ## Hard rules
 
 1. **One primary task per moment** when possible; avoid thrashing across many tasks.
 2. Never claim done without **evidence** in the sandbox or honest ledger notes.
-3. Sandbox tools are jailed under the sandbox root — they do **not** see host `tools/bundled` or repo paths. Prefer ledger + allowed tools; drafts only via `install_tool_draft` (through create-tool).
+3. Sandbox tools are jailed under the sandbox root — they do **not** see host `tools/bundled` or repo paths. Prefer ledger + allowed tools; drafts only via `install_tool_draft` (through create-tool). For FS: `search_replace` for existing-file edits; new files under the guest run cap (16 KiB) via short `run` + `Path.write_text`; `run` primarily to execute — not multi-KB heredocs / `python -c` as a file bus.
 4. On blocker: set task **`blocked`** (or clear notes) with a specific reason; optional `speak` if a human must unblock. Do not spin forever. Sandbox isolation failures (`sandbox_unavailable:*`, `guest_pytest_unavailable`) are blockers — block / speak / rest; do not thrash guest tools.
 5. Do **not** close the parent goal from here. Prefer `load_skill` name `review-work` before goal close.
 6. Use **exact** tool names (snake_case) and skill names (hyphenated) only.
-7. Results the user asked for must be **spoken on glass** (final `speak`), not left only in tool JSON or free-text.
+7. Results the user asked for: **prefer a final `speak` on glass**, not only tool JSON or free-text.
 
 ## Process
 
@@ -49,11 +49,21 @@ Pick the first that applies:
 3. If the task needs a capability you do not have as a **callable tool**, `load_skill` name `create-tool` and follow that path — after a ledger note. Do not rewrite the host product via `run`.
 4. Use sandbox and ledger tools for small, checkable steps.
 5. Update the task as you go (`update_task`: notes, status, blocked reason).
+   On `task_not_found` / `goal_not_found`: `list_goals` → pick a real id →
+   continue; do **not** invent ids.
 6. Stop when one of:
    - **Accepted:** acceptance met → leave ready for review (or mark per ledger convention); do not silent-close the goal
    - **Blocked:** missing info, tool/runtime failure, external dependency → status + reason; `speak` if the operator must act
    - **Need user:** `speak` then `wait_user` (speak first)
 7. When execution is done and review is next: `load_skill` name `review-work`.
+
+### Guest package call manners (soft)
+
+Manners only — not the integrity wall. Hard reliability for multi-call batches is the content-hash **stage gate**.
+
+- Prefer **one** tool call with richer args when a package can batch work.
+- Legitimate multi-call batches (different args in one hop) stay reliable via that hard stage gate; thrash policy is not the fix — do not treat multi-call batches as thrash.
+- On `guest_module_missing`: surface once and pivot — do **not** re-spam the same call.
 
 ## Quality / completion
 

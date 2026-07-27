@@ -1,16 +1,15 @@
 """Sanitize provider completion text against channel-protocol marker floods.
 
-Scope: pure strip/detect for Gemma/llama-style ``<|channel>…`` leaks and
+Scope: pure strip/detect for channel-protocol ``<|channel>…`` leaks and
 related repetition tails. Applied at step completion ingress so dual-write
 inner monologue and cycle monologue fuel never re-enter protocol markers.
 
 Why this exists
 ---------------
-Live + hermetic evidence (project host, Gemma / llama-server): under product
-monologue knobs the model occasionally emits free-prose reasoning, then
-falls into a pure ``<|channel>thought`` repetition loop until ``length`` stop.
-That text was dual-written / re-fed via reasoning_content — a contamination
-loop, not a prompt typo.
+Live + hermetic evidence: under product monologue knobs a completion may
+emit free-prose reasoning, then fall into a pure ``<|channel>thought``
+repetition loop until ``length`` stop. That text was dual-written / re-fed
+via reasoning_content — a contamination loop, not a prompt typo.
 
 This module is **defense at the product boundary** (store + fuel), not a claim
 that generation is cured. Generation risk remains stochastic.

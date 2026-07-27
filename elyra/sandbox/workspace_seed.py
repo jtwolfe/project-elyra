@@ -24,10 +24,11 @@ NEW_ROOT_REL = Path("sandboxes") / PRIMARY_INSTANCE
 
 # Seed entries copied into run dirs / primary tree (dirs or files).
 SEED_ENTRIES = ("lib", "general", "fixtures", "README.md")
-# Always present under primary host root (RW in guest when isolation on).
-PRIMARY_ALWAYS_DIRS = ("lib", "general", "fixtures", "tmp", "tools")
-# RW dirs excluded from workspace_snapshot hash (mutable; not part of seed identity).
-_SNAPSHOT_EXCLUDE_TOP = frozenset({"tmp", "tools"})
+# Always present under primary host root (RW in guest when isolation on;
+# media is RO guest bind but still ensured empty on host — KD22).
+PRIMARY_ALWAYS_DIRS = ("lib", "general", "fixtures", "media", "tmp", "tools")
+# Dirs excluded from workspace_snapshot hash (mutable or projection churn).
+_SNAPSHOT_EXCLUDE_TOP = frozenset({"tmp", "tools", "media"})
 
 
 def host_primary_root(paths: ElyraPaths | None = None) -> Path:
@@ -101,11 +102,13 @@ def ensure_host_tree(
     return ensure_primary_sandbox_tree(paths, seed_source=seed_source)
 
 
-# Always refresh curated requirements so guest pip tracks repo pin changes
-# (e.g. dropping compile-heavy packages) without wiping operator lib extras.
+# Always refresh operator-reviewed allowlist so product trees track repo seed.
+# Do NOT always-refresh requirements-curated.txt: sandbox_pip_update mutates
+# the product curated file; re-seeding it on every ensure would wipe adds.
+# Curated still copies on first seed when missing (default copytree/child path).
 _ALWAYS_REFRESH_SEED_FILES = frozenset(
     {
-        "lib/requirements-curated.txt",
+        "lib/requirements-allowlist.txt",
     }
 )
 
@@ -164,6 +167,10 @@ def _apply_host_chmod_policy(root: Path) -> None:
                         child.chmod(0o755)
                     elif child.is_file():
                         child.chmod(0o644)
+        # media/: host projection dir 0o755; projected files set 0o444 at project time.
+        media = root / "media"
+        if media.is_dir():
+            media.chmod(0o755)
         tmp = root / "tmp"
         if tmp.is_dir():
             tmp.chmod(0o1777)
@@ -211,7 +218,8 @@ def workspace_snapshot_hash(
 ) -> str:
     """Hash sandbox workspace seed used for execution workspace_snapshot field.
 
-    Excludes ``tmp/`` and ``tools/`` so RW host content does not churn the audit hash.
+    Excludes ``tmp/``, ``tools/``, and ``media/`` so RW content and attachment
+    projection churn do not skew the audit hash (KD22).
     """
     root = workspace_root or primary_sandbox_root(paths)
     if not root.is_dir():

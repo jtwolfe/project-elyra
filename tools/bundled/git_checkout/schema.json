@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string"
+    },
+    "ref": {
+      "type": "string",
+      "description": "Branch or ref to checkout"
+    },
+    "branch": {
+      "type": "string",
+      "description": "Alias for ref"
+    },
+    "name": {
+      "type": "string",
+      "description": "Alias for ref"
+    },
+    "create": {
+      "type": "boolean",
+      "description": "Create branch (-b)"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo"
+  ],
+  "additionalProperties": false
+}

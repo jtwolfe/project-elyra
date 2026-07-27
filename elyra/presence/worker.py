@@ -74,6 +74,7 @@ from elyra.presence.user_input import (
 from elyra.runtime.reset import (
     clear_goals,
     clear_local_tools,
+    clear_media,
     clear_messages,
     clear_moments,
     clear_sandbox,
@@ -549,11 +550,18 @@ class PresenceWorker:
         user_id: str | None = "operator",
         reasoning: str = "",
         moment_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        meta: dict[str, Any] | None = None,
+        bind_attachment_ids: Sequence[str] | None = None,
     ) -> tuple[Message | None, dict[str, Any] | None]:
         """Append a chat message only when not resetting.
 
         Holds ``self._lock`` for the check + append so reset's final re-clear
         cannot interleave mid-write without also holding the lock.
+        Attachments/meta are persisted on the same lock as content (KD1).
+        When ``bind_attachment_ids`` is set, each id is validated (exists,
+        unbound or already bound to the new message id after append) and
+        ``bound_message_id`` is set under the same lock (PR3 / KD23).
         Returns ``(message, None)`` on success or ``(None, error_dict)``.
         """
         with self._lock:
@@ -563,14 +571,54 @@ class PresenceWorker:
                     "error": "resetting",
                     "reason": "resetting",
                 }
+            resolved_atts = attachments
+            bind_ids = list(bind_attachment_ids) if bind_attachment_ids else []
+            if bind_ids:
+                from elyra.media import MediaStore
+
+                store = MediaStore(self.paths)
+                metas: list[dict[str, Any]] = []
+                for aid in bind_ids:
+                    att = store.get(aid)
+                    if att is None:
+                        return None, {
+                            "ok": False,
+                            "error": "attachment_not_found",
+                            "reason": "attachment_not_found",
+                            "attachment_id": aid,
+                        }
+                    if (
+                        att.bound_message_id is not None
+                        and att.bound_message_id != ""
+                    ):
+                        # Only allow re-bind to same message (idempotent); new
+                        # message cannot steal another row's attachment.
+                        return None, {
+                            "ok": False,
+                            "error": "attachment_bound",
+                            "reason": "attachment_bound",
+                            "attachment_id": aid,
+                            "bound_message_id": att.bound_message_id,
+                        }
+                    metas.append(att.to_dict())
+                if resolved_atts is None:
+                    resolved_atts = metas
             msg = append_message(
                 role,
                 content,
                 user_id=user_id,
                 reasoning=reasoning,
                 moment_id=moment_id,
+                attachments=resolved_atts,
+                meta=meta,
                 paths=self.paths,
             )
+            if bind_ids:
+                from elyra.media import MediaStore
+
+                store = MediaStore(self.paths)
+                for aid in bind_ids:
+                    store.bind_message(aid, msg.id)
             return msg, None
 
     def create_goal_if_allowed(
@@ -736,6 +784,7 @@ class PresenceWorker:
         *,
         from_wait_api: bool = False,
         message_id: str | None = None,
+        has_attachments: bool = False,
     ) -> dict[str, Any]:
         """Route user input via the phase/wait state machine; apply side effects."""
         with self._lock:
@@ -753,6 +802,7 @@ class PresenceWorker:
                 from_wait_api=from_wait_api,
                 phase=self._phase,
                 pending_wait=pending,
+                has_attachments=has_attachments,
             )
             if not decision.get("ok"):
                 return dict(decision)
@@ -824,6 +874,30 @@ class PresenceWorker:
                 hop_count=live_hop,
                 last_tool=live_tool,
             )
+            loop = self.settings.loop
+            meal_budget = min(
+                int(loop.sliding_input_tokens),
+                int(loop.in_turn_max_tokens),
+            )
+            try:
+                from elyra.loop import context_meter
+
+                context_block = context_meter.status_block(
+                    meal_budget_tokens=meal_budget,
+                    model_window_tokens=int(loop.model_context_window_tokens),
+                )
+            except Exception:
+                context_block = {
+                    "meal_used_tokens": 0,
+                    "meal_budget_tokens": meal_budget,
+                    "model_window_tokens": int(
+                        getattr(loop, "model_context_window_tokens", 500_000)
+                    ),
+                    "meal_used_fraction": 0.0,
+                    "window_used_fraction": 0.0,
+                    "hop": None,
+                    "moment_id": None,
+                }
             return {
                 "phase": self._phase,
                 "active_moment_id": self._active_moment_id,
@@ -845,6 +919,7 @@ class PresenceWorker:
                     pending_moment_continues=pending_continues,
                 ),
                 "dev_speed": dev_speed_status_block(self._dev_speed),
+                "context": context_block,
             }
 
     # ------------------------------------------------------------------
@@ -878,6 +953,14 @@ class PresenceWorker:
                     self._fail_in_flight(wake, moment_id, exc)
                     self._stop.wait(timeout=self._poll)
         finally:
+            # Close Playwright on the owner thread (sync API is not cross-thread).
+            # Supervisor close_all is a safety net only after join.
+            try:
+                from elyra.tools.browser_sessions import get_browser_session_manager
+
+                get_browser_session_manager().close_all(force=True)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("browser close_all on worker stop failed: %s", exc)
             _LOG.info("presence worker stopped")
 
     def _startup_recover(self) -> None:
@@ -1021,6 +1104,9 @@ class PresenceWorker:
             # USER inject: work-origin policy (K13/K19) — social speaker, else
             # linked goal/task created_in_context (PR4), else empty — never
             # blind "operator" fallback.
+            # Multimodal (KD20/KD25): every rebuild re-runs assemble(retain_ids)
+            # → expand_meal_for_provider → strip_meal_wire_fields. Never stash
+            # expanded parts across hops; never expand after ids are stripped.
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
@@ -1037,7 +1123,7 @@ class PresenceWorker:
                 protect_goal_ids.add(str(payload["goal_id"]))
             if payload.get("task_id"):
                 protect_task_ids.add(str(payload["task_id"]))
-            return assemble_outer_meal(
+            meal = assemble_outer_meal(
                 glass_history=glass,
                 settings=self.settings,
                 paths=self.paths,
@@ -1057,7 +1143,23 @@ class PresenceWorker:
                 skill_bias=format_skill_bias(wake.kind, payload, goals_list),
                 wake_content=wake_content_s,
                 wake_message_id=wake_message_id_s,
+                retain_ids=True,
             )
+            from elyra.media import MediaStore
+            from elyra.media.prompt import (
+                expand_meal_for_provider,
+                index_glass,
+                strip_meal_wire_fields,
+            )
+
+            expanded = expand_meal_for_provider(
+                meal,
+                glass_by_id=index_glass(glass),
+                wake_message_id=wake_message_id_s,
+                media_store=MediaStore(self.paths),
+                provider=self.settings.provider.name,
+            )
+            return strip_meal_wire_fields(expanded)
 
         registry = self._ensure_registry()
         with self._lock:
@@ -1102,6 +1204,9 @@ class PresenceWorker:
                 )
             except (KeyError, ValueError) as exc:
                 _LOG.warning("close_moment failed: %s", exc)
+
+            # Browser sessions bound to this moment (Playwright) — best-effort.
+            self._close_browser_sessions_for_moment(moment_id)
 
             try:
                 self._queue.mark_done(wake.id)
@@ -1297,6 +1402,8 @@ class PresenceWorker:
                     _LOG.warning(
                         "fail_in_flight close_moment failed: %s", close_exc
                     )
+                # Dual path: error finalize must not orphan Chromium (IK18).
+                self._close_browser_sessions_for_moment(moment_id)
             if wake is not None:
                 try:
                     op = self._queue.status(wake.id)
@@ -1310,6 +1417,25 @@ class PresenceWorker:
             self._phase = self._phase_from_pending_waits_unlocked()
             self._busy = False
             self._active_moment_id = None
+
+    @staticmethod
+    def _close_browser_sessions_for_moment(moment_id: str) -> None:
+        """Best-effort close of Playwright sessions bound to ``moment_id``.
+
+        Never raises into the worker path (optional browser dep / teardown noise).
+        """
+        if not moment_id:
+            return
+        try:
+            from elyra.tools.browser_sessions import get_browser_session_manager
+
+            get_browser_session_manager().close_for_moment(moment_id)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning(
+                "browser close_for_moment failed moment_id=%s: %s",
+                moment_id,
+                exc,
+            )
 
     def _phase_from_pending_waits_unlocked(self) -> str:
         """``waiting`` iff durable pending wait exists; else ``idle``."""
@@ -1484,6 +1610,8 @@ class PresenceWorker:
                 "wake_kind": wake.kind,  # for identity promote gates
                 "identity": self._identity,
                 "users": self._users,
+                # install_skill / growth tools reload the held catalog
+                "skills": self._ensure_skills(),
             },
         )
 
@@ -1581,6 +1709,8 @@ class PresenceWorker:
 
         _step("moments", _moments)
         _step("messages", lambda: clear_messages(self.paths))
+        # KD13: full reset clears data/media with messages (no orphan blobs).
+        _step("media", lambda: clear_media(self.paths))
         _step("goals", lambda: clear_goals(self.paths))
 
         if flags.get("clear_sandbox", True):
@@ -1607,6 +1737,7 @@ class PresenceWorker:
             # Final re-clear closes TOCTOU: concurrent append/create that raced
             # phase-1 clears (or bypassed API gates) cannot survive ok:true.
             _step("messages", lambda: clear_messages(self.paths))
+            _step("media", lambda: clear_media(self.paths))
             _step("goals", lambda: clear_goals(self.paths))
 
             def _continuous_zero() -> None:

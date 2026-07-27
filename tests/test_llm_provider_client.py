@@ -10,6 +10,7 @@ import ast
 import json
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -23,7 +24,7 @@ from elyra.llm.client import (
     StubChatClient,
     UsageGatedChatClient,
 )
-from elyra.llm.config import LlamaServerConfig, XaiClientConfig
+from elyra.llm.config import LocalClientConfig, XaiClientConfig
 from elyra.llm.models import (
     CURATED_XAI_MODELS,
     DEFAULT_XAI_MODEL,
@@ -31,6 +32,7 @@ from elyra.llm.models import (
     list_remote_models,
     models_for_picker,
 )
+from elyra.llm.credits import CreditsSnapshot
 from elyra.llm.usage import (
     TokenUsage,
     UsageHardStopError,
@@ -38,6 +40,16 @@ from elyra.llm.usage import (
     parse_token_usage,
 )
 from elyra.settings import UsageSettings
+
+
+class _FixedClock:
+    """Injectable clock so account-hard snapshots are not treated as stale."""
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 # ---------------------------------------------------------------------------
@@ -76,9 +88,12 @@ def test_xai_config_join_path_without_leading_slash():
     assert cfg.models_url == "https://api.x.ai/v1/models"
 
 
-def test_llama_server_config_unchanged_local_url():
-    cfg = LlamaServerConfig(host="127.0.0.1", port=8080)
+def test_local_client_config_base_url():
+    """PR2 final: base_url + chat_path drive chat_url."""
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1")
     assert cfg.chat_url == "http://127.0.0.1:8080/v1/chat/completions"
+    assert not hasattr(cfg, "health_url")
+    assert cfg.model == "local"
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +102,7 @@ def test_llama_server_config_unchanged_local_url():
 
 
 def test_for_local_factory_profile_and_url():
-    cfg = LlamaServerConfig(host="127.0.0.1", port=9999)
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:9999/v1")
     client = HttpChatClient.for_local(cfg)
     assert client.profile == "local"
     assert client.chat_url == "http://127.0.0.1:9999/v1/chat/completions"
@@ -96,7 +111,7 @@ def test_for_local_factory_profile_and_url():
 def test_for_local_default_config():
     client = HttpChatClient.for_local()
     assert client.profile == "local"
-    assert client.chat_url == LlamaServerConfig().chat_url
+    assert client.chat_url == LocalClientConfig().chat_url
 
 
 def test_for_xai_factory_profile_and_exact_url():
@@ -112,8 +127,8 @@ def test_for_xai_requires_model_and_bearer():
         HttpChatClient(XaiClientConfig(), profile="xai", model="grok-4.5", bearer_token=None)  # type: ignore[arg-type]
 
 
-def test_bc_positional_llama_config_is_local():
-    cfg = LlamaServerConfig(host="10.0.0.1", port=1234)
+def test_bc_positional_local_config_is_local():
+    cfg = LocalClientConfig(base_url="http://10.0.0.1:1234/v1")
     client = HttpChatClient(cfg)
     assert client.profile == "local"
     assert client.chat_url == "http://10.0.0.1:1234/v1/chat/completions"
@@ -187,9 +202,12 @@ def test_xai_payload_includes_model_bearer_omits_gemma_fields():
     assert body["messages"][0]["content"] == "ping"
     assert body["max_tokens"] == 32
     assert body["stream"] is False
-    # Gemma-only / local-only wire fields must be absent.
+    # Explicit reasoning_effort always on xAI Completions body (default high).
+    assert body["reasoning_effort"] == "high"
+    # Local-only extension wire fields must be absent on xAI.
     assert "top_k" not in body
     assert "thinking_budget_tokens" not in body
+    # Nested/boolean "reasoning" key still omitted (distinct from reasoning_effort).
     assert "reasoning" not in body
     assert "reasoning_budget_tokens" not in body
     # Usage parsed onto result.
@@ -197,6 +215,32 @@ def test_xai_payload_includes_model_bearer_omits_gemma_fields():
     assert result.usage.total_tokens == 15
     assert result.usage.billable_tokens == 15
     assert result.content == "hi"
+
+
+def test_xai_payload_includes_reasoning_effort():
+    captured: list[dict[str, Any]] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured.append(
+            json.loads(req.data.decode("utf-8") if req.data else b"{}")
+        )
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    client = HttpChatClient.for_xai(
+        model="grok-4.5",
+        bearer_token="t",
+        reasoning_effort="low",
+    )
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "ping"}])
+        client.set_reasoning_effort("medium")
+        client.chat_completion([{"role": "user", "content": "ping"}])
+
+    assert captured[0]["reasoning_effort"] == "low"
+    assert captured[1]["reasoning_effort"] == "medium"
+    # Still no nested reasoning key
+    assert "reasoning" not in captured[0]
+    assert "reasoning" not in captured[1]
 
 
 def test_xai_set_model_and_bearer_affect_next_request():
@@ -228,9 +272,8 @@ def test_xai_set_model_and_bearer_affect_next_request():
     assert captured[1]["auth"] == "Bearer tok-b"
 
 
-def test_local_payload_still_sends_gemma_fields():
-    from elyra.llm.constants import GEMMA_TOP_K, GEMMA_TOP_P
-
+def test_local_payload_openai_compat_model_no_reasoning():
+    """Local wire: model required; omit reasoning/thinking_budget; no GEMMA defaults."""
     captured: dict[str, Any] = {}
 
     def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
@@ -239,23 +282,109 @@ def test_local_payload_still_sends_gemma_fields():
         captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
         return _FakeHTTPResponse(_ok_chat_body())
 
-    cfg = LlamaServerConfig(host="127.0.0.1", port=8080, use_reasoning=True)
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1")
     client = HttpChatClient.for_local(cfg)
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
         client.chat_completion(
             [{"role": "user", "content": "hi"}],
             max_tokens=16,
             reasoning=True,
+            reasoning_budget_tokens=2048,
+            top_k=64,
         )
 
     assert captured["url"] == "http://127.0.0.1:8080/v1/chat/completions"
     assert "authorization" not in captured["headers"]
     body = captured["body"]
-    assert "model" not in body
-    assert body["top_p"] == GEMMA_TOP_P
-    assert body["top_k"] == GEMMA_TOP_K
-    assert body["reasoning"] is True
-    assert "thinking_budget_tokens" in body
+    assert body["model"] == "local"
+    assert body["max_tokens"] == 16
+    assert body["stream"] is False
+    # Optional top_k only when resolved non-None (kwarg provided above).
+    assert body["top_k"] == 64
+    # Product defaults no longer ship GEMMA top_p.
+    assert "top_p" not in body
+    assert "reasoning" not in body
+    assert "reasoning_effort" not in body
+    assert "thinking_budget_tokens" not in body
+    assert "reasoning_budget_tokens" not in body
+
+
+def test_local_payload_omits_top_k_when_none():
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1", top_p=None, top_k=None)
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    body = captured["body"]
+    assert body["model"] == "local"
+    assert "top_p" not in body
+    assert "top_k" not in body
+    assert "reasoning" not in body
+    assert "thinking_budget_tokens" not in body
+
+
+def test_for_local_optional_bearer_when_api_key_set():
+    """Unit-test path: LocalClientConfig.api_key → Authorization Bearer."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        # Also via get_header (urllib normalizes)
+        auth = req.get_header("Authorization") or req.get_header("authorization")
+        captured["auth"] = auth
+        captured["body"] = json.loads(req.data.decode("utf-8") if req.data else b"{}")
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    cfg = LocalClientConfig(
+        base_url="http://127.0.0.1:8080/v1",
+        api_key="local-secret-key",
+        model="ollama-model",
+    )
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    assert captured["auth"] == "Bearer local-secret-key"
+    assert captured["body"]["model"] == "ollama-model"
+    # Never leak into body
+    assert "api_key" not in captured["body"]
+    assert "local-secret-key" not in json.dumps(captured["body"])
+
+
+def test_for_local_omits_authorization_when_api_key_none():
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    client = HttpChatClient.for_local(LocalClientConfig(base_url="http://127.0.0.1:8080/v1"))
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    assert "authorization" not in captured["headers"]
+
+
+def test_for_local_omits_authorization_when_api_key_empty():
+    """Design Bearer rule: empty api_key omits Authorization (same as None)."""
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    cfg = LocalClientConfig(base_url="http://127.0.0.1:8080/v1", api_key="")
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "hi"}], max_tokens=8)
+
+    assert "authorization" not in captured["headers"]
 
 
 def test_http_error_message_omits_bearer_token():
@@ -276,6 +405,30 @@ def test_http_error_message_omits_bearer_token():
     assert "401" in msg
     assert "super-secret-token" not in msg
     assert "Bearer" not in msg or "super-secret" not in msg
+
+
+def test_local_http_error_message_omits_api_key():
+    """Symmetric non-leak: local Bearer key never appears in HTTP error text."""
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        raise urllib.error.HTTPError(
+            url=req.full_url,
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=__import__("io").BytesIO(b'{"error":"bad token"}'),
+        )
+
+    cfg = LocalClientConfig(
+        base_url="http://127.0.0.1:8080/v1",
+        api_key="local-super-secret-key",
+    )
+    client = HttpChatClient.for_local(cfg)
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with pytest.raises(RuntimeError) as ei:
+            client.chat_completion([{"role": "user", "content": "x"}])
+    msg = str(ei.value)
+    assert "401" in msg
+    assert "local-super-secret-key" not in msg
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +462,7 @@ def test_result_from_response_parses_usage():
 
 
 def test_result_missing_usage_is_none():
-    client = HttpChatClient.for_local(LlamaServerConfig(use_reasoning=False))
+    client = HttpChatClient.for_local(LocalClientConfig())
 
     def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
         return _FakeHTTPResponse(
@@ -387,7 +540,8 @@ def test_usage_gate_raises_hard_stop_when_over_budget(tmp_path: Path):
     gated = UsageGatedChatClient(StubChatClient(responses=_boom), meter)
     with pytest.raises(UsageHardStopError) as ei:
         gated.chat_completion([{"role": "user", "content": "nope"}])
-    assert ei.value.level in ("week", "day", "hour")
+    assert ei.value.level in ("account", "week", "day", "hour")
+    assert ei.value.level == "week"
     assert calls["n"] == 0  # inner never invoked
     # Exception path must not record further.
     assert meter.snapshot().week_used_tokens == 10
@@ -413,6 +567,123 @@ def test_usage_gate_records_under_override_even_when_over(tmp_path: Path):
     assert meter.snapshot().week_used_tokens == 17
     assert meter.snapshot().override_active is True
 
+
+def _account_hard_meter(
+    tmp_path: Path,
+    *,
+    weekly_allowed_tokens: int = 1_000_000,
+    credit_usage_percent: float = 96.0,
+    account_hard_stop_percent: float = 95.0,
+) -> UsageMeter:
+    """Meter with fresh injected SuperGrok snapshot over account hard cap."""
+    clock = _FixedClock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    meter = UsageMeter.load(
+        tmp_path,
+        _settings(
+            weekly_allowed_tokens=weekly_allowed_tokens,
+            account_hard_stop_percent=account_hard_stop_percent,
+        ),
+        clock=clock,
+    )
+    meter.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=credit_usage_percent,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    return meter
+
+
+def test_usage_gate_account_hard_injected_snapshot(tmp_path: Path):
+    """Account A≥A_hard (injected CreditsSnapshot) refuses with level=account."""
+    meter = _account_hard_meter(tmp_path)
+    meter.record(TokenUsage(total_tokens=10))
+    assert meter.can_call() is False
+    assert meter.snapshot().hard_stop == "account"
+
+    calls = {"n": 0}
+
+    def _boom(*_a: Any, **_k: Any) -> ChatCompletionResult:
+        calls["n"] += 1
+        return ChatCompletionResult(content="x", reasoning_content="", raw_json="{}")
+
+    gated = UsageGatedChatClient(StubChatClient(responses=_boom), meter)
+    with pytest.raises(UsageHardStopError) as ei:
+        gated.chat_completion([{"role": "user", "content": "account cap"}])
+    assert ei.value.level == "account"
+    assert "account" in ei.value.reason
+    assert calls["n"] == 0
+    # Exception path must not record.
+    assert meter.snapshot().week_used_tokens == 10
+
+
+def test_usage_gate_account_hard_beats_week(tmp_path: Path):
+    """When both account and week ceilings hit, UsageHardStopError.level is account."""
+    meter = _account_hard_meter(
+        tmp_path, weekly_allowed_tokens=100, credit_usage_percent=99.0
+    )
+    meter.record(TokenUsage(total_tokens=100))
+    assert meter.snapshot().hard_stop == "account"
+    assert meter.can_call() is False
+
+    gated = UsageGatedChatClient(StubChatClient(), meter)
+    with pytest.raises(UsageHardStopError) as ei:
+        gated.chat_completion([{"role": "user", "content": "both caps"}])
+    assert ei.value.level == "account"
+
+
+def test_usage_gate_override_allows_account_hard(tmp_path: Path):
+    """hard_stop_override ON → account hard still visible but calls proceed + record."""
+    meter = _account_hard_meter(tmp_path, credit_usage_percent=99.0)
+    assert meter.can_call() is False
+    meter.set_hard_stop_override(True)
+    assert meter.can_call() is True
+    assert meter.snapshot().hard_stop == "account"  # glass honesty
+
+    inner = StubChatClient.scripted(
+        [{"content": "override ok", "usage": TokenUsage(total_tokens=5)}]
+    )
+    gated = UsageGatedChatClient(inner, meter)
+    result = gated.chat_completion([{"role": "user", "content": "x"}])
+    assert result.content == "override ok"
+    assert meter.snapshot().week_used_tokens == 5
+    assert meter.snapshot().override_active is True
+
+
+def test_usage_gate_yellow_band_still_calls(tmp_path: Path):
+    """Soft yellow pace band never refuses — gate invokes inner and records."""
+    B, k = 7000, 4.0
+    H = 168.0
+    t_hours = 24.0
+    week_start = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+    clock = _FixedClock(week_start + timedelta(hours=t_hours))
+
+    meter = UsageMeter.load(
+        tmp_path,
+        _settings(weekly_allowed_tokens=B, burst_hours=k),
+        clock=clock,
+    )
+    # p=1.2 → yellow (over burst, under week hard B)
+    S = int(round(1.2 * B * t_hours / H))
+    assert S < B
+    meter.record(TokenUsage(total_tokens=S))
+    snap = meter.snapshot()
+    assert snap.hard_stop is None
+    assert snap.pace_band == "yellow"
+    assert meter.can_call() is True
+
+    inner = StubChatClient.scripted(
+        [{"content": "yellow ok", "usage": TokenUsage(total_tokens=3)}]
+    )
+    gated = UsageGatedChatClient(inner, meter)
+    result = gated.chat_completion([{"role": "user", "content": "pace soft"}])
+    assert result.content == "yellow ok"
+    assert meter.snapshot().week_used_tokens == S + 3
+    assert meter.snapshot().pace_band in ("yellow", "red", "green")
 
 def test_usage_gate_none_meter_is_passthrough():
     inner = StubChatClient()
@@ -462,7 +733,7 @@ def test_failing_chat_client_does_not_echo_user_content():
 
 def test_label_for_model_and_defaults():
     assert DEFAULT_XAI_MODEL == "grok-4.5"
-    assert label_for_model("grok-4.5") == "Grok 4.5 Fast"
+    assert label_for_model("grok-4.5") == "Grok 4.5"
     assert label_for_model("unknown-id") == "unknown-id"
 
 

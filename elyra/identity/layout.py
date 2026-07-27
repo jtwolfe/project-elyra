@@ -19,16 +19,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
-logger = logging.getLogger(__name__)
+# Shared mint/RE/LIMIT live in util; re-export for identity back-compat (IK1).
+from elyra.util.versioning import (  # noqa: F401
+    VERSION_GC_LIMIT,
+    VERSION_ID_RE,
+    mint_version_id,
+)
 
-# Public version_id == archive filename stem only (K4).
-VERSION_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{6}$")
+logger = logging.getLogger(__name__)
 
 # Single segment: letter/digit start; alnum, dot, underscore, hyphen after.
 USER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 MAX_BODY_BYTES = 64 * 1024
-VERSION_GC_LIMIT = 50
 
 # Allowed keys in meta.draft_meta after stripping operational keys.
 ALLOWED_DRAFT_META_KEYS = frozenset(
@@ -48,17 +51,6 @@ OPERATIONAL_META_KEYS = frozenset({"force_full_name", "record_name_nudge"})
 def content_sha256(text: str) -> str:
     """SHA-256 hex digest of UTF-8 text."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def mint_version_id(now: datetime | None = None) -> str:
-    """Return e.g. ``20260726T153045Z_a1b2c3`` (filename stem)."""
-    ts = now if now is not None else datetime.now(UTC)
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=UTC)
-    else:
-        ts = ts.astimezone(UTC)
-    compact = ts.strftime("%Y%m%dT%H%M%SZ")
-    return f"{compact}_{secrets.token_hex(3)}"
 
 
 def utc_now_iso() -> str:

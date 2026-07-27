@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "Main repository path"
+    },
+    "path": {
+      "type": "string",
+      "description": "Worktree path to remove"
+    },
+    "confirm": {
+      "type": "boolean",
+      "description": "Required when worktree is dirty or force=true"
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Pass --force (still requires confirm)"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo",
+    "path"
+  ],
+  "additionalProperties": false
+}

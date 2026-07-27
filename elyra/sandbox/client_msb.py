@@ -11,7 +11,7 @@ import logging
 from typing import Any, Mapping
 
 from elyra.sandbox.errors import SandboxClientUnusableError, SandboxNotFoundError
-from elyra.sandbox.paths import resolve_msb_network_policy_id
+from elyra.sandbox.paths import MOUNT_SPEC, resolve_msb_network_policy_id
 from elyra.sandbox.protocol import ExecResult
 
 _LOG = logging.getLogger(__name__)
@@ -155,18 +155,19 @@ class MicrosandboxClient:
         pull_policy: str = "if-missing",
         detached: bool = True,
     ) -> dict[str, Any]:
-        """Pinned create kwargs (DESIGN SDK contract)."""
+        """Pinned create kwargs (DESIGN SDK contract).
+
+        Volumes are derived from ``MOUNT_SPEC`` (KD17) so live MSB guests always
+        match fingerprint / fake client mounts (including RO ``/workspace/media``).
+        """
         Volume = self._Volume
         Network = self._Network
         from pathlib import Path
 
         root = Path(host_root)
         volumes = {
-            "/workspace/lib": Volume.bind(str(root / "lib"), readonly=True),
-            "/workspace/general": Volume.bind(str(root / "general"), readonly=True),
-            "/workspace/fixtures": Volume.bind(str(root / "fixtures"), readonly=True),
-            "/workspace/tmp": Volume.bind(str(root / "tmp"), readonly=False),
-            "/workspace/tools": Volume.bind(str(root / "tools"), readonly=False),
+            guest: Volume.bind(str(root / host_rel), readonly=readonly)
+            for guest, host_rel, readonly in MOUNT_SPEC
         }
         return {
             "image": image,

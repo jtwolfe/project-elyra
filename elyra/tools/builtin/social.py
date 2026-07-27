@@ -27,11 +27,15 @@ _DEFAULT_FREE_TEXT_TIMEOUT_S = 300
 def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Address a user via glass transport.
 
-    Args (schema): ``text`` (required), optional ``user_id`` (defaults to
-    ``ctx.user_id`` or ``operator``).
+    Args (schema): ``text`` (required caption — non-empty even with media),
+    optional ``user_id`` (defaults to ``ctx.user_id`` or ``operator``),
+    optional ``attachment_ids`` (re-send host ids → new att_id same sha),
+    optional ``attachments`` (``[{path, filename?, kind?}]`` sandbox paths).
 
     Success → ``ok=True``, ``counts_as_speak=True``, payload with transport_ok.
     Transport failure → ``ok=False``, reason in payload (and error_reason).
+    Empty/whitespace text is always rejected, including when attachments are
+    present (KD8 caption policy).
     """
     raw_text = args.get("text")
     if raw_text is None and "text" not in args:
@@ -40,15 +44,25 @@ def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if not isinstance(raw_text, str):
         # Key present but not a string (incl. explicit null) — invalid_text.
         return _text_error("invalid_text", args, ctx)
+    # Caption required even with attachments (KD8) — reject before media ingest
+    # so empty-text+path does not leave orphan store entries.
+    if not raw_text.strip():
+        return _text_error("empty_text", args, ctx)
 
     transport = _resolve_transport(ctx)
     user_id = _resolve_user_id(args, ctx)
     moment_id = ctx.moment_id or None
 
+    # Resolve optional outbound media before deliver so failures never write glass.
+    att_list, att_err = _resolve_speak_attachments(args, ctx, user_id=user_id)
+    if att_err is not None:
+        return _text_error(att_err, args, ctx)
+
     delivery = transport.deliver(
         raw_text,
         user_id=user_id,
         moment_id=moment_id if moment_id else None,
+        attachments=att_list if att_list else None,
     )
 
     if delivery.ok:
@@ -286,6 +300,61 @@ def _text_error(
         error_reason=reason,
         counts_as_speak=False,
     )
+
+
+def _resolve_speak_attachments(
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    user_id: str,
+) -> tuple[list[Any] | None, str | None]:
+    """Parse attachment_ids + path attachments → media Attachment list.
+
+    Returns ``(list_or_None, error_reason)``. Empty / absent media → (None, None).
+    """
+    has_ids = "attachment_ids" in args and args.get("attachment_ids") is not None
+    has_paths = "attachments" in args and args.get("attachments") is not None
+    if not has_ids and not has_paths:
+        return None, None
+
+    raw_ids = args.get("attachment_ids") if has_ids else None
+    raw_paths = args.get("attachments") if has_paths else None
+
+    if has_ids and not isinstance(raw_ids, list):
+        return None, "invalid_attachment_ids"
+    if has_paths and not isinstance(raw_paths, list):
+        return None, "invalid_attachments"
+
+    # Nothing to attach after null/empty lists.
+    ids: list[str] = []
+    if isinstance(raw_ids, list):
+        for item in raw_ids:
+            if not isinstance(item, str) or not item.strip():
+                return None, "invalid_attachment_ids"
+            ids.append(item.strip())
+    path_specs: list[dict[str, Any]] = []
+    if isinstance(raw_paths, list):
+        for item in raw_paths:
+            if not isinstance(item, dict):
+                return None, "invalid_attachments"
+            path_specs.append(item)
+
+    if not ids and not path_specs:
+        return None, None
+
+    from elyra.media.ingest import IngestError, prepare_speak_attachments
+
+    try:
+        atts = prepare_speak_attachments(
+            attachment_ids=ids or None,
+            path_specs=path_specs or None,
+            paths=ctx.paths,
+            sandbox=ctx.sandbox,
+            uploader_user_id=user_id,
+        )
+    except IngestError as exc:
+        return None, exc.reason
+    return atts, None
 
 
 def _resolve_transport(ctx: ToolContext) -> SpeakTransport:

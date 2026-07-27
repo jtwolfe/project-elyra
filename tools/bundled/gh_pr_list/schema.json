@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "owner/name"
+    },
+    "state": {
+      "type": "string",
+      "description": "open|closed|merged|all"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "json_fields": {
+      "type": "string"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "additionalProperties": false
+}

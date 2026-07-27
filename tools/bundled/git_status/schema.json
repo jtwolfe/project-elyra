@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "Absolute or home-relative path to a git repository (must be under allowed_repo_roots)"
+    },
+    "short": {
+      "type": "boolean",
+      "description": "Use short branch status (-sb)"
+    },
+    "porcelain": {
+      "type": "boolean",
+      "description": "Machine-readable porcelain status"
+    },
+    "timeout": {
+      "type": "number",
+      "description": "Seconds before kill (default 60)",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo"
+  ],
+  "additionalProperties": false
+}

@@ -12,9 +12,11 @@ import types
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Union, get_args, get_origin, get_type_hints
+from urllib.parse import urlparse
 
 import tomllib
 
+from elyra.llm.constants import MODEL_CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 
 _CLOSE_GATES = frozenset({"soft", "hard"})
@@ -28,10 +30,13 @@ class LoopSettings:
     moment_wall_clock_minutes: int = 45
     continue_max_injects: int = 3
     max_tool_hops: int = 200
-    sliding_input_tokens: int = 24000
-    in_turn_max_tokens: int = 24000
+    sliding_input_tokens: int = 50000
+    in_turn_max_tokens: int = 50000
     tool_result_max_chars: int = 8000
     generation_max_tokens: int = 8192
+    # Full model context window (Grok 4.5 class) for glass rail + memory planning.
+    # Sliding meals still cap at sliding_input_tokens; this is the visual denominator.
+    model_context_window_tokens: int = MODEL_CONTEXT_WINDOW_TOKENS
     # Orient slice budgets (skill catalog + goals/tasks in outer meal).
     orient_skill_catalog_max_tokens: int = 400
     orient_goals_max_tokens: int = 600
@@ -60,6 +65,8 @@ class WaitSettings:
 @dataclass(frozen=True)
 class ToolsSettings:
     verify_timeout_seconds: int = 120
+    # Empty sentinel: resolve at use site in vcs_jail (project_root + paths.home).
+    allowed_repo_roots: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,8 +102,7 @@ class ContinuousSettings:
 class ProviderSettings:
     """LLM provider config (product default: xAI / Grok).
 
-    Settings surface only until supervisor/CLI wiring (later PR). Defaults
-    match Phase 0 product posture; runtime still starts local/llama until then.
+    ``local`` is reserved / unimplemented (fails closed at runtime).
     """
 
     name: str = "xai"  # xai | local
@@ -110,7 +116,7 @@ class ProviderSettings:
 
 @dataclass(frozen=True)
 class UsageSettings:
-    """Hierarchical token-usage meter ceilings (Phase 0).
+    """Hierarchical token-usage meter ceilings + SuperGrok pacing knobs.
 
     ``weekly_allowed_tokens`` is the enforcement ceiling for the allowed week
     (ship default 5_000_000). ``weekly_allowed_fraction`` is **informational
@@ -118,6 +124,14 @@ class UsageSettings:
     stored so elyra.toml can record the target next to the absolute ceiling;
     it is **not** multiplied into meter math until an external real-quota hook
     exists.
+
+    Day/hour hard-stop flags default **off** (soft diagnostics only). The meter
+    enforces day/hour hard stop only when the corresponding flag is true.
+    Pace bands (green/yellow/red), burst cushion, and account hard stop
+    (``account_hard_stop_percent`` from an applied SuperGrok credits snapshot)
+    are enforced by ``UsageMeter``. Credits HTTP polling is separate (poller
+    injects ``CreditsSnapshot``); these settings only configure thresholds and
+    poller knobs.
 
     ``hard_stop_override`` is a *runtime* preference (usage.json), not a
     Settings ship default — always starts/persists default False unless the
@@ -130,6 +144,18 @@ class UsageSettings:
     hour_block_minutes: int = 60
     day_allowed_tokens: int | None = None
     hour_allowed_tokens: int | None = None
+    day_hard_stop_enabled: bool = False
+    hour_hard_stop_enabled: bool = False
+    account_hard_stop_percent: float = 95.0
+    pace_yellow_ratio: float = 1.0
+    pace_red_ratio: float = 1.5
+    burst_hours: float = 4.0
+    credits_poll_enabled: bool = True
+    credits_base_url: str = "https://cli-chat-proxy.grok.com"
+    credits_poll_interval_s: float = 300.0
+    credits_stale_after_s: float = 3600.0
+    auto_throttle_model: bool = False
+    throttle_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,7 +170,6 @@ class Settings:
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"
     api_port: int = 8787
-    context_tokens: int | None = None
 
 
 def default_settings() -> Settings:
@@ -172,7 +197,7 @@ def merge_cli_overrides(
     """Apply CLI/runtime overrides on top of settings (wins over toml).
 
     Accepts nested section dicts (``{"loop": {"max_tool_hops": 10}}``) and
-    flat top-level keys (``api_host``, ``api_port``, ``context_tokens``).
+    flat top-level keys (``api_host``, ``api_port``).
     ``None`` values are ignored so unset CLI flags do not clobber config.
     """
     if not overrides:
@@ -208,7 +233,7 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
 
     # get_type_hints resolves postponed annotations (str -> real types).
     top_types = get_type_hints(Settings)
-    for key in ("api_host", "api_port", "context_tokens"):
+    for key in ("api_host", "api_port"):
         if key in data and data[key] is not None:
             kwargs[key] = _coerce_value(key, data[key], top_types[key])
 
@@ -260,8 +285,97 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         if path in ("usage.day_allowed_tokens", "usage.hour_allowed_tokens"):
             if coerced <= 0:
                 raise ValueError(f"{path}: expected positive int, got {coerced!r}")
+        if path == "usage.account_hard_stop_percent":
+            if not (0.0 < coerced <= 100.0):
+                raise ValueError(
+                    f"{path}: expected float in (0, 100], got {coerced!r}"
+                )
+        if path == "usage.pace_yellow_ratio" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        if path == "usage.burst_hours" and coerced < 0:
+            raise ValueError(f"{path}: expected float >= 0, got {coerced!r}")
+        if path == "usage.credits_poll_interval_s" and coerced < 30:
+            raise ValueError(f"{path}: expected float >= 30, got {coerced!r}")
+        if path == "usage.credits_base_url" and not _is_origin_url(coerced):
+            raise ValueError(
+                f"{path}: expected absolute origin URL "
+                f"(http/https host, path empty or '/', no query/fragment), "
+                f"got {coerced!r}"
+            )
+        if path == "usage.throttle_model" and (
+            not isinstance(coerced, str) or not coerced.strip()
+        ):
+            raise ValueError(
+                f"{path}: expected None or non-empty str, got {coerced!r}"
+            )
         filtered[k] = coerced
+
+    # Cross-field usage constraints use the post-merge effective values.
+    if prefix == "usage" and filtered:
+        yellow = filtered.get(
+            "pace_yellow_ratio", getattr(section, "pace_yellow_ratio")
+        )
+        red = filtered.get("pace_red_ratio", getattr(section, "pace_red_ratio"))
+        if "pace_red_ratio" in filtered or "pace_yellow_ratio" in filtered:
+            if not (red > yellow):
+                raise ValueError(
+                    f"usage.pace_red_ratio: expected > pace_yellow_ratio "
+                    f"({yellow!r}), got {red!r}"
+                )
+        poll_s = filtered.get(
+            "credits_poll_interval_s",
+            getattr(section, "credits_poll_interval_s"),
+        )
+        stale_s = filtered.get(
+            "credits_stale_after_s",
+            getattr(section, "credits_stale_after_s"),
+        )
+        if (
+            "credits_stale_after_s" in filtered
+            or "credits_poll_interval_s" in filtered
+        ):
+            if stale_s < poll_s:
+                raise ValueError(
+                    f"usage.credits_stale_after_s: expected >= "
+                    f"credits_poll_interval_s ({poll_s!r}), got {stale_s!r}"
+                )
+
     return replace(section, **filtered) if filtered else section
+
+
+def _is_origin_url(url: str) -> bool:
+    """True if ``url`` is an absolute http(s) origin (no path/query/fragment).
+
+    Accepts ``http(s)://host[:port]`` with path empty or a single ``/``.
+    Rejects userinfo, whitespace padding, non-numeric/out-of-range ports,
+    query, fragment, and non-empty paths other than ``/``.
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    # No silent normalize: leading/trailing whitespace is not an origin form.
+    if url.strip() != url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    if not parsed.hostname:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    if port is not None and not (1 <= port <= 65535):
+        return False
+    if parsed.path not in ("", "/"):
+        return False
+    if parsed.query or parsed.fragment or parsed.params:
+        return False
+    return True
 
 
 def _coerce_value(key: str, value: Any, annotation: Any) -> Any:
@@ -293,6 +407,33 @@ def _coerce_value(key: str, value: Any, annotation: Any) -> Any:
                 f"{key}: expected bool, got {type(value).__name__}: {value!r}"
             )
         return value
+
+    # tuple[str, ...] (and bare tuple): accept TOML/Python list or tuple of str.
+    origin = get_origin(expected)
+    if origin is tuple or expected is tuple:
+        args = get_args(expected) if origin is tuple else ()
+        # tuple[str, ...] or unparameterized tuple → homogeneous str sequence.
+        elem_ok = (
+            not args
+            or (len(args) == 2 and args[1] is Ellipsis and args[0] is str)
+            or (len(args) == 1 and args[0] is str)
+        )
+        if elem_ok:
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(
+                    f"{key}: expected list/tuple of str, "
+                    f"got {type(value).__name__}: {value!r}"
+                )
+            out: list[str] = []
+            for i, item in enumerate(value):
+                if not isinstance(item, str):
+                    raise ValueError(
+                        f"{key}[{i}]: expected str, "
+                        f"got {type(item).__name__}: {item!r}"
+                    )
+                out.append(item)
+            return tuple(out)
+
     # Fallback: exact type match
     if not isinstance(value, expected):
         raise ValueError(

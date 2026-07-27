@@ -7,6 +7,7 @@ const sendBtn = $("#send-btn");
 const attachBtn = $("#attach-btn");
 const attachInput = $("#attach-input");
 const attachTray = $("#attach-tray");
+const micBtn = $("#mic-btn");
 const dropOverlay = $("#drop-overlay");
 const jumpLatestBtn = $("#jump-latest");
 const chatActivity = $("#chat-activity");
@@ -18,7 +19,7 @@ const toolsCountEl = $("#tools-count");
 const skillsCountEl = $("#skills-count");
 const catalogRefreshBtn = $("#catalog-refresh-btn");
 const statusJson = $("#status-json");
-const pillLlama = $("#pill-llama");
+const pillProvider = $("#pill-provider");
 const pillSandbox = $("#pill-sandbox");
 const pillWorker = $("#pill-worker");
 const pillPhase = $("#pill-phase");
@@ -32,6 +33,21 @@ const momentsList = $("#moments-list");
 const momentDetail = $("#moment-detail");
 const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
+const catalogInspector = $("#catalog-inspector");
+const catalogInspectorTitle = $("#catalog-inspector-title");
+const catalogInspectorBadges = $("#catalog-inspector-badges");
+const catalogInspectorDesc = $("#catalog-inspector-desc");
+const catalogInspectorMeta = $("#catalog-inspector-meta");
+const catalogInspectorDoc = $("#catalog-inspector-doc");
+const catalogInspectorSchemaFold = $("#catalog-inspector-schema-fold");
+const catalogInspectorSchema = $("#catalog-inspector-schema");
+const catalogInspectorRunnerFold = $("#catalog-inspector-runner-fold");
+const catalogInspectorRunner = $("#catalog-inspector-runner");
+const catalogInspectorVcsHint = $("#catalog-inspector-vcs-hint");
+const catalogInspectorVersions = $("#catalog-inspector-versions");
+const catalogInspectorVersionDoc = $("#catalog-inspector-version-doc");
+/** @type {{ kind: "tool" | "skill", name: string } | null} */
+let catalogSelection = null;
 const identitySelf = $("#identity-self");
 const identityUser = $("#identity-user");
 const identitySelfLabel = $("#identity-self-label");
@@ -81,10 +97,30 @@ const usageBadge = $("#usage-badge");
 const usageWeekPct = $("#usage-week-pct");
 const usageDayPct = $("#usage-day-pct");
 const usageHourPct = $("#usage-hour-pct");
+const usageSgPct = $("#usage-sg-pct");
 const usageWeekBar = $("#usage-week-bar");
 const usageDayBar = $("#usage-day-bar");
 const usageHourBar = $("#usage-hour-bar");
+const usageSgBar = $("#usage-sg-bar");
+const railUsageWeekPct = $("#rail-usage-week-pct");
+const railUsageWeekBar = $("#rail-usage-week-bar");
+const railUsageSgPct = $("#rail-usage-sg-pct");
+const railUsageSgBar = $("#rail-usage-sg-bar");
+const railContextPct = $("#rail-context-pct");
+const railContextBar = $("#rail-context-bar");
+const railContextMealMark = $("#rail-context-meal-mark");
+const railContextMeta = $("#rail-context-meta");
+const contextWindowPct = $("#context-window-pct");
+const contextWindowBar = $("#context-window-bar");
+const contextMealMark = $("#context-meal-mark");
+const contextMealPct = $("#context-meal-pct");
+const contextMealBar = $("#context-meal-bar");
+const contextDetail = $("#context-detail");
+const usagePaceBadge = $("#usage-pace-badge");
+const usageBurst = $("#usage-burst");
 const usageDetail = $("#usage-detail");
+const usageProductUsage = $("#usage-product-usage");
+const usageProductUsageBody = $("#usage-product-usage-body");
 const usageOverrideToggle = $("#usage-override-toggle");
 const usageOverrideMeta = $("#usage-override-meta");
 const devSpeedToggle = $("#dev-speed-toggle");
@@ -166,8 +202,12 @@ let statusPrimed = false;
 /** Last known model / credential_source (for select change detection). */
 let lastProviderModel = null;
 let lastCredentialSource = null;
-/** Active nav panel name (chat | goals | moments | tools | identity | status). */
+/** Last *server-confirmed* reasoning effort (never set by optimistic paint). */
+let lastReasoningEffort = "high";
+/** Active nav panel name (chat | goals | moments | tools | identity | secrets | status). */
 let activePanel = "chat";
+/** True while secrets PUT/DELETE is in flight. */
+let secretsInFlight = false;
 /** Currently open moment detail id (null when closed). */
 let selectedMomentId = null;
 /** Snapshot of open moment list fields used to decide detail re-fetch. */
@@ -180,8 +220,24 @@ let tickInFlight = false;
 let lastMessagesFp = "";
 /** True when chat viewport is near the bottom (auto-stick). */
 let chatStickToBottom = true;
-/** Pending multimodal attachments (UI-only; sent as inventory text). */
+/**
+ * Pending composer attachments (local File + preview, or pre-uploaded id from STT).
+ * On send: POST /api/media for local files → attachment_ids on POST /api/messages.
+ */
 let pendingAttachments = [];
+
+/** MediaRecorder session for composer mic → POST /api/stt (PR6). */
+let micRecorder = null;
+let micChunks = [];
+let micStream = null;
+let micBusy = false;
+/** Soft client caps matching host (elyra/media/upload.py). */
+const MAX_PENDING_ATTACHMENTS = 8;
+const MAX_CLIENT_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_CLIENT_AUDIO_BYTES = 25 * 1024 * 1024;
+const MAX_CLIENT_FILE_BYTES = 48 * 1024 * 1024;
+/** Safe attachment id segment (matches host validate_att_id). */
+const ATT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Drag depth for composer drop overlay. */
 let composerDragDepth = 0;
 /** Fingerprint of last rendered activity trail (animate only on change). */
@@ -230,9 +286,69 @@ async function fetchJson(url, opts) {
 function messagesFingerprint(messages) {
   if (!messages || !messages.length) return "empty";
   const last = messages[messages.length - 1] || {};
+  const attFp = Array.isArray(last.attachments)
+    ? last.attachments.map((a) => a && a.id).filter(Boolean).join(",")
+    : "";
   return `${messages.length}|${last.id || ""}|${(last.content || "").length}|${
     last.created_at || ""
-  }|${(last.reasoning || "").length}`;
+  }|${(last.reasoning || "").length}|${attFp}`;
+}
+
+/**
+ * Resolve markdown media/link targets for glass CSP.
+ * attachment:<id> and /api/media/<id> → same-origin serve URL; else http(s)/data:image.
+ * Rejects javascript:, path traversal, and non-image data:.
+ */
+function resolveMediaUrl(url) {
+  const u = String(url || "").trim();
+  if (!u) return null;
+  if (/^javascript:/i.test(u) || /^vbscript:/i.test(u)) return null;
+  const attScheme = u.match(/^attachment:([A-Za-z0-9][A-Za-z0-9._-]*)$/i);
+  if (attScheme && ATT_ID_RE.test(attScheme[1])) {
+    return `/api/media/${attScheme[1]}`;
+  }
+  const apiPath = u.match(/^\/api\/media\/([A-Za-z0-9][A-Za-z0-9._-]*)$/i);
+  if (apiPath && ATT_ID_RE.test(apiPath[1]) && !u.includes("..")) {
+    return `/api/media/${apiPath[1]}`;
+  }
+  if (/^https?:\/\//i.test(u)) return u;
+  if (/^data:image\//i.test(u)) return u;
+  return null;
+}
+
+function mediaUrlForAttachment(att) {
+  if (!att || !att.id || !ATT_ID_RE.test(String(att.id))) return null;
+  return `/api/media/${att.id}`;
+}
+
+function visibleAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((a) => a && a.kind !== "tts_cache");
+}
+
+function detectAttachmentKind(file) {
+  const mime = String((file && file.type) || "").toLowerCase();
+  const name = String((file && file.name) || "").toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)) return "image";
+  if (/\.(mp3|wav|ogg|opus|m4a|aac|flac)$/i.test(name)) return "audio";
+  if (/\.(mp4|mov|mkv|avi|webm)$/i.test(name)) return "video";
+  return "file";
+}
+
+function clientMaxBytesForKind(kind) {
+  if (kind === "image") return MAX_CLIENT_IMAGE_BYTES;
+  if (kind === "audio") return MAX_CLIENT_AUDIO_BYTES;
+  return MAX_CLIENT_FILE_BYTES;
+}
+
+function kindIcon(kind) {
+  if (kind === "image") return "🖼";
+  if (kind === "audio") return "🔊";
+  if (kind === "video") return "🎬";
+  return "📄";
 }
 
 function formatMsgTime(iso) {
@@ -297,17 +413,41 @@ function renderMarkdown(src) {
 
   const inline = (s) => {
     let t = escape(s);
-    // images ![alt](url) — only http(s) or data:image
+    // images ![alt](url) — http(s), data:image, attachment:<id>, /api/media/<id>
     t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => {
-      const u = url.trim();
-      if (!/^(https?:|data:image\/)/i.test(u)) return escape(`![${alt}](${url})`);
-      return `<img src="${escape(u)}" alt="${escape(alt)}" loading="lazy" style="max-width:100%;border-radius:8px;margin:0.35rem 0" />`;
+      const resolved = resolveMediaUrl(url);
+      if (!resolved) return escape(`![${alt}](${url})`);
+      // Only render as <img> for image-like targets (not raw non-image data:)
+      if (/^data:/i.test(resolved) && !/^data:image\//i.test(resolved)) {
+        return escape(`![${alt}](${url})`);
+      }
+      return `<img class="md-img" src="${escape(resolved)}" alt="${escape(
+        alt
+      )}" loading="lazy" />`;
     });
-    // links [text](url)
+    // links [text](url) — https?, attachment:<id>, /api/media/<id>
     t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
-      const u = url.trim();
-      if (!/^https?:\/\//i.test(u)) return escape(`[${label}](${url})`);
-      return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
+      const resolved = resolveMediaUrl(url);
+      if (!resolved || /^data:/i.test(resolved)) {
+        // data: links not allowed as anchors; bare https only without resolve miss
+        const u = String(url || "").trim();
+        if (/^https?:\/\//i.test(u)) {
+          return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(
+            label
+          )}</a>`;
+        }
+        return escape(`[${label}](${url})`);
+      }
+      const external = /^https?:\/\//i.test(resolved);
+      if (external) {
+        return `<a href="${escape(resolved)}" target="_blank" rel="noopener noreferrer">${escape(
+          label
+        )}</a>`;
+      }
+      // same-origin media: open in new tab / download
+      return `<a class="md-att-link" href="${escape(
+        resolved
+      )}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
     });
     // inline code
     t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escape(code)}</code>`);
@@ -471,6 +611,171 @@ function wireMessageBodyInteractions(root) {
   });
 }
 
+/**
+ * Attachments footer inventory (always when non-tts attachments present).
+ * Body embeds are views; this section is the durable inventory.
+ */
+function renderAttachmentsFooter(attachments) {
+  const atts = visibleAttachments(attachments);
+  if (!atts.length) return null;
+  const foot = document.createElement("div");
+  foot.className = "msg-attachments";
+  const heading = document.createElement("div");
+  heading.className = "msg-attachments-label";
+  heading.textContent = atts.length === 1 ? "Attachment" : "Attachments";
+  foot.appendChild(heading);
+  const list = document.createElement("div");
+  list.className = "msg-attachments-list";
+  for (const att of atts) {
+    list.appendChild(renderAttachmentItem(att));
+  }
+  foot.appendChild(list);
+  return foot;
+}
+
+function renderAttachmentItem(att) {
+  const kind = String(att.kind || "file");
+  const name = String(att.filename || att.name || att.id || "file");
+  const size = Number(att.byte_size != null ? att.byte_size : att.size) || 0;
+  const href = mediaUrlForAttachment(att);
+  const item = document.createElement("div");
+  item.className = `msg-att msg-att-${kind}`;
+  item.dataset.attId = String(att.id || "");
+
+  if (kind === "image" && href) {
+    const a = document.createElement("a");
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "msg-att-thumb-link";
+    a.title = name;
+    const img = document.createElement("img");
+    img.className = "msg-att-thumb";
+    img.src = href;
+    img.alt = name;
+    img.loading = "lazy";
+    a.appendChild(img);
+    item.appendChild(a);
+  } else if (kind === "audio" && href) {
+    const audio = document.createElement("audio");
+    audio.className = "msg-att-player";
+    audio.controls = true;
+    audio.preload = "metadata";
+    audio.src = href;
+    item.appendChild(audio);
+  } else if (kind === "video" && href) {
+    const video = document.createElement("video");
+    video.className = "msg-att-player msg-att-video";
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = href;
+    item.appendChild(video);
+  } else {
+    const icon = document.createElement("span");
+    icon.className = "msg-att-icon";
+    icon.textContent = kindIcon(kind);
+    icon.setAttribute("aria-hidden", "true");
+    item.appendChild(icon);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "msg-att-meta";
+  const title = document.createElement("div");
+  title.className = "msg-att-name";
+  title.textContent = name;
+  title.title = name;
+  meta.appendChild(title);
+  const sub = document.createElement("div");
+  sub.className = "msg-att-sub";
+  const bits = [kind];
+  if (size) bits.push(formatBytes(size));
+  if (att.mime) bits.push(String(att.mime));
+  sub.textContent = bits.join(" · ");
+  meta.appendChild(sub);
+  item.appendChild(meta);
+
+  if (href) {
+    const dl = document.createElement("a");
+    dl.className = "msg-att-download";
+    dl.href = href;
+    dl.download = name;
+    dl.target = "_blank";
+    dl.rel = "noopener noreferrer";
+    dl.textContent = "↓";
+    dl.title = `Download ${name}`;
+    dl.setAttribute("aria-label", `Download ${name}`);
+    item.appendChild(dl);
+  }
+  return item;
+}
+
+/** Active TTS Audio element (stop previous play on new click). */
+let _ttsAudio = null;
+/** message_id → object URL for cached play (browser-side second click). */
+const _ttsBlobUrls = new Map();
+
+/**
+ * Play TTS for a glass message (PR7 / KD3).
+ * Host loads saved text only; disk cache on second host hit; never re-LLM.
+ * Hide play when content is empty (caller responsibility).
+ */
+async function playMessageTts(messageId, btn) {
+  if (!messageId) return;
+  // Stop any in-flight playback.
+  if (_ttsAudio) {
+    try {
+      _ttsAudio.pause();
+    } catch {
+      /* ignore */
+    }
+    _ttsAudio = null;
+  }
+  const prevLabel = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("is-loading");
+    btn.textContent = "…";
+  }
+  try {
+    let url = _ttsBlobUrls.get(messageId);
+    if (!url) {
+      const res = await fetch(
+        `/api/messages/${encodeURIComponent(messageId)}/tts?voice=eve&language=en`,
+        { method: "GET" }
+      );
+      if (!res.ok) {
+        let reason = `tts_${res.status}`;
+        try {
+          const j = await res.json();
+          if (j && j.reason) reason = j.reason;
+          else if (j && j.error) reason = String(j.error);
+        } catch {
+          /* non-json */
+        }
+        showNotice(`TTS failed: ${reason}`);
+        return;
+      }
+      const blob = await res.blob();
+      url = URL.createObjectURL(blob);
+      _ttsBlobUrls.set(messageId, url);
+    }
+    const audio = new Audio(url);
+    _ttsAudio = audio;
+    audio.addEventListener("ended", () => {
+      if (_ttsAudio === audio) _ttsAudio = null;
+    });
+    await audio.play();
+  } catch (err) {
+    showNotice(`TTS play error: ${err && err.message ? err.message : err}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("is-loading");
+      btn.textContent = prevLabel || "▶";
+    }
+  }
+}
+
 function renderMessages(messages, { force = false } = {}) {
   if (!messagesEl) return;
   const list = Array.isArray(messages) ? messages : [];
@@ -492,12 +797,39 @@ function renderMessages(messages, { force = false } = {}) {
     meta.innerHTML = `<span class="role-chip">${escapeHtml(
       label
     )}</span><span>${escapeHtml(formatMsgTime(m.created_at))}</span>`;
+    // TTS play: only when content non-empty (media-only rows have no playable text).
+    const content = m.content || "";
+    if (content.trim() && m.id) {
+      const playBtn = document.createElement("button");
+      playBtn.type = "button";
+      playBtn.className = "msg-tts-btn";
+      playBtn.textContent = "▶";
+      playBtn.title = "Play message";
+      playBtn.setAttribute("aria-label", "Play message");
+      playBtn.dataset.messageId = m.id;
+      playBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        playMessageTts(m.id, playBtn);
+      });
+      meta.appendChild(playBtn);
+    }
     div.appendChild(meta);
-    const body = document.createElement("div");
-    body.className = "msg-body";
-    body.innerHTML = renderMarkdown(m.content || "");
-    div.appendChild(body);
-    wireMessageBodyInteractions(body);
+    const atts = visibleAttachments(m.attachments);
+    // Media-only rows: skip empty markdown shell; footer carries inventory.
+    if (content.trim()) {
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      body.innerHTML = renderMarkdown(content);
+      div.appendChild(body);
+      wireMessageBodyInteractions(body);
+    } else if (!atts.length) {
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      body.innerHTML = renderMarkdown("");
+      div.appendChild(body);
+    }
+    const foot = renderAttachmentsFooter(m.attachments);
+    if (foot) div.appendChild(foot);
     if (m.reasoning) {
       const details = document.createElement("details");
       details.className = "reason-fold";
@@ -607,91 +939,192 @@ function formatPctRemaining(frac) {
   return `${pct}%`;
 }
 
-function setUsageBar(barEl, frac) {
+/** Compact token counts for context rail (e.g. 12.3k / 500k). */
+function formatTokenCount(n) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Math.max(0, Math.round(Number(n)));
+  if (v >= 1_000_000) {
+    const m = v / 1_000_000;
+    return `${m >= 10 ? Math.round(m) : m.toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+  if (v >= 1000) {
+    const k = v / 1000;
+    return `${k.toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(v);
+}
+
+function setMealBudgetMark(markEl, mealBudget, modelWindow) {
+  if (!markEl) return;
+  const budget = Number(mealBudget);
+  const window = Number(modelWindow);
+  if (!window || window <= 0 || Number.isNaN(budget) || budget <= 0) {
+    markEl.style.display = "none";
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, (budget / window) * 100));
+  markEl.style.display = "";
+  markEl.style.left = `${pct}%`;
+  markEl.title = `Product meal budget ${formatTokenCount(budget)} (${pct.toFixed(1)}% of model window)`;
+}
+
+function renderContextMeters(s) {
+  const ctx = (s && s.context) || null;
+  const used = ctx ? ctx.meal_used_tokens : null;
+  const mealBudget = ctx ? ctx.meal_budget_tokens : 50000;
+  const modelWindow = ctx ? ctx.model_window_tokens : 500000;
+  const windowFrac = ctx ? ctx.window_used_fraction : null;
+  const mealFrac = ctx ? ctx.meal_used_fraction : null;
+
+  const label =
+    used != null
+      ? `${formatTokenCount(used)} / ${formatTokenCount(modelWindow)}`
+      : `— / ${formatTokenCount(modelWindow)}`;
+
+  if (railContextPct) railContextPct.textContent = label;
+  if (contextWindowPct) contextWindowPct.textContent = label;
+  if (contextMealPct) {
+    contextMealPct.textContent =
+      used != null
+        ? `${formatTokenCount(used)} / ${formatTokenCount(mealBudget)}`
+        : `— / ${formatTokenCount(mealBudget)}`;
+  }
+
+  // Model bar: usedMode so small fills stay visible without "crit" at empty.
+  setUsageBar(railContextBar, windowFrac, { usedMode: true });
+  setUsageBar(contextWindowBar, windowFrac, { usedMode: true });
+  setUsageBar(contextMealBar, mealFrac, { usedMode: true });
+  setMealBudgetMark(railContextMealMark, mealBudget, modelWindow);
+  setMealBudgetMark(contextMealMark, mealBudget, modelWindow);
+
+  if (railContextMeta) {
+    railContextMeta.textContent = `meal ≤${formatTokenCount(mealBudget)} · model ${formatTokenCount(modelWindow)}`;
+  }
+  if (contextDetail) {
+    const hop = ctx && ctx.hop != null ? ` · hop ${ctx.hop}` : "";
+    contextDetail.textContent =
+      `Last meal ${formatTokenCount(used)} of meal budget ${formatTokenCount(mealBudget)}` +
+      ` (${formatTokenCount(modelWindow)} model window)${hop}. ` +
+      `Gold mark = meal budget on model bar. Heuristic tokens (len/4); for memory source-split planning.`;
+  }
+}
+
+function setUsageBar(barEl, frac, { usedMode = false, unavailable = false } = {}) {
   if (!barEl) return;
-  const f = Math.max(0, Math.min(1, Number(frac) || 0));
-  barEl.style.width = `${Math.round(f * 100)}%`;
-  barEl.classList.remove("usage-bar-warn", "usage-bar-crit");
-  if (f <= 0.05) barEl.classList.add("usage-bar-crit");
-  else if (f <= 0.2) barEl.classList.add("usage-bar-warn");
+  barEl.classList.remove("usage-bar-warn", "usage-bar-crit", "usage-bar-na");
+  if (unavailable || frac == null || Number.isNaN(Number(frac))) {
+    barEl.style.width = "0%";
+    barEl.classList.add("usage-bar-na");
+    return;
+  }
+  const raw = Math.max(0, Math.min(1, Number(frac) || 0));
+  // fill width = raw (remaining for Elyra bars; used fraction for SuperGrok).
+  // usedMode only flips warn/crit thresholds onto remaining = 1 - used.
+  const fill = raw;
+  const remaining = usedMode ? 1 - raw : raw;
+  barEl.style.width = `${Math.round(fill * 100)}%`;
+  if (remaining <= 0.05) barEl.classList.add("usage-bar-crit");
+  else if (remaining <= 0.2) barEl.classList.add("usage-bar-warn");
 }
 
 /**
- * Provider-aware rail pill (keeps id pill-llama for less churn).
- * xai ready/busy/auth/limit/ovrd; local llama; stub.
+ * SuperGrok pool meter view — shared by Status usage card and rail mini meter.
+ * Returns { available, usedFrac, label } with Status-parity availability/labels.
+ * KD11: never invent a simplified “ok” bar when stale / poll error.
+ */
+function supergrokMeterView(usage) {
+  const sg = (usage && usage.supergrok) || null;
+  const sgPct =
+    usage && usage.credit_usage_percent != null
+      ? usage.credit_usage_percent
+      : sg && sg.credit_usage_percent != null
+        ? sg.credit_usage_percent
+        : null;
+  const sgStatus = (sg && sg.status) || (usage && usage.credits_status) || null;
+  const sgStale = Boolean(sg && sg.stale);
+  const available =
+    sgPct != null &&
+    Number.isFinite(Number(sgPct)) &&
+    !sgStale &&
+    (sgStatus == null || sgStatus === "ok");
+  if (available) {
+    return {
+      available: true,
+      usedFrac: Number(sgPct) / 100,
+      label: `${Math.round(Number(sgPct))}% used`,
+    };
+  }
+  if (sgStale) {
+    return { available: false, usedFrac: null, label: "— · stale" };
+  }
+  if (sgStatus && sgStatus !== "ok") {
+    return { available: false, usedFrac: null, label: `— · ${sgStatus}` };
+  }
+  return { available: false, usedFrac: null, label: "— · poll …" };
+}
+
+/**
+ * Pure usage card badge label from status usage block.
+ * Stop text only from hard_stop — soft day/hour flags never invent a stop badge.
+ */
+function usageBadgeLabel(usage) {
+  if (!usage) return "n/a";
+  if (!usage.enabled) return "off";
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  if (hardStop && !overrideActive) return `stop · ${hardStop}`;
+  if (hardStop && overrideActive) return "override";
+  // Soft day/hour exhaustion is detail-only (pace shown separately).
+  return "ok";
+}
+
+/**
+ * Provider-aware rail pill (#pill-provider). Matrix (design §6.3 / KD14):
+ * xai auth / limit / ovrd / busy (chat_busy only) / ready; stub llm; local off.
+ * Never "local ready".
  */
 function renderProviderPill(s) {
-  if (!pillLlama) return;
-  const provider = (s && s.provider) || null;
+  if (!pillProvider) return;
+  const provider = (s && s.provider) || "xai";
   const usage = (s && s.usage) || {};
   const hardStop = usage.hard_stop || null;
   const overrideActive = Boolean(usage.override_active);
   const credentialOk = s && s.credential_ok !== false;
-  const workerBusy = Boolean(s && s.worker_busy);
-  const phase = (s && s.phase) || "";
-  const busy = workerBusy || phase === "in_moment";
+  const chatError = (s && s.chat_error) || null;
+  const chatBusy = Boolean(s && s.chat_busy);
 
-  // Legacy / no provider field: fall back to llama-centric display.
-  if (!provider) {
-    if (s && s.llama_ready) {
-      setPill(
-        pillLlama,
-        s.llama_busy ? "llama busy" : "llama ready",
-        s.llama_busy ? "pill-busy" : "pill-on"
-      );
-    } else if (s && s.llama_error === "stub_llm") {
-      setPill(pillLlama, "stub llm", "pill-off");
-    } else {
-      setPill(
-        pillLlama,
-        s && s.llama_error ? "llama error" : "llama off",
-        "pill-off"
-      );
-    }
+  // Stub wins for any provider.
+  if (chatError === "stub_llm") {
+    setPill(pillProvider, "stub llm", "pill-off");
     return;
   }
 
+  // Local: never show ready this pass.
   if (provider === "local") {
-    if (s.llama_ready) {
-      setPill(
-        pillLlama,
-        s.llama_busy || busy ? "llama busy" : "llama ready",
-        s.llama_busy || busy ? "pill-busy" : "pill-on"
-      );
-    } else if (s.llama_error === "stub_llm") {
-      setPill(pillLlama, "stub llm", "pill-off");
-    } else {
-      setPill(
-        pillLlama,
-        s.llama_error ? "llama error" : "llama off",
-        "pill-off"
-      );
-    }
+    setPill(pillProvider, "local off", "pill-off");
     return;
   }
 
   // xai (and any non-local remote)
-  if (s.llama_error === "stub_llm" && !s.credential_ok && !s.model) {
-    setPill(pillLlama, "stub llm", "pill-off");
-    return;
-  }
   if (!credentialOk) {
-    setPill(pillLlama, `${provider} auth`, "pill-off");
+    setPill(pillProvider, `${provider} auth`, "pill-off");
     return;
   }
   if (hardStop && !overrideActive) {
-    setPill(pillLlama, `${provider} limit`, "pill-off");
+    setPill(pillProvider, `${provider} limit`, "pill-off");
     return;
   }
   if (hardStop && overrideActive) {
-    setPill(pillLlama, `${provider} ovrd`, "pill-busy");
+    setPill(pillProvider, `${provider} ovrd`, "pill-busy");
     return;
   }
-  setPill(
-    pillLlama,
-    busy ? `${provider} busy` : `${provider} ready`,
-    busy ? "pill-busy" : "pill-on"
-  );
+  // Busy only when chat_busy is true (gate); not worker/phase.
+  if (chatBusy) {
+    setPill(pillProvider, `${provider} busy`, "pill-busy");
+    return;
+  }
+  setPill(pillProvider, `${provider} ready`, "pill-on");
 }
 
 function renderHardStopBanner(s) {
@@ -759,6 +1192,38 @@ function fillModelSelect(models, current) {
   if (pick) providerModelSelect.value = pick;
 }
 
+/** Visual only — does NOT touch lastReasoningEffort. Shared by Status + rail. */
+function paintEffortUI(effort) {
+  const e = ["low", "medium", "high"].includes(effort) ? effort : "high";
+  document.querySelectorAll(".effort-btn[data-effort]").forEach((btn) => {
+    const val = btn.getAttribute("data-effort");
+    if (val === "auto") return; // stays disabled stub
+    const on = val === e;
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.classList.toggle("effort-btn-active", on);
+  });
+}
+
+/** Server sync: paint + commit last* (only path that assigns lastReasoningEffort). */
+function commitEffortFromStatus(effort) {
+  const e = ["low", "medium", "high"].includes(effort) ? effort : "high";
+  lastReasoningEffort = e;
+  paintEffortUI(e);
+}
+
+/** Active (non-Auto) effort buttons across Status + rail. */
+function effortActiveButtons() {
+  return document.querySelectorAll(
+    '.effort-btn[data-effort]:not([data-effort="auto"])'
+  );
+}
+
+function setEffortButtonsDisabled(disabled) {
+  effortActiveButtons().forEach((btn) => {
+    btn.disabled = Boolean(disabled);
+  });
+}
+
 function renderProviderCard(s) {
   const provider = (s && s.provider) || null;
   if (providerNameEl) {
@@ -787,6 +1252,7 @@ function renderProviderCard(s) {
       providerCredentialSelect.value = s.credential_source;
       lastCredentialSource = s.credential_source;
     }
+    commitEffortFromStatus((s && s.reasoning_effort) || "high");
   }
   if (providerCredentialOk) {
     if (!provider) {
@@ -816,25 +1282,20 @@ function renderUsageCard(s) {
   const usage = (s && s.usage) || null;
   const enabled = Boolean(usage && usage.enabled);
   const overrideActive = Boolean(usage && usage.override_active);
+  // True hard stop only (account|week|day|hour). Soft day/hour alone never
+  // sets hard_stop when day/hour hard flags are off — do not invent stop badge.
   const hardStop = (usage && usage.hard_stop) || null;
+  const badgeLabel = usageBadgeLabel(usage);
 
   if (usageBadge) {
-    if (!usage) {
-      usageBadge.textContent = "n/a";
+    usageBadge.textContent = badgeLabel;
+    if (badgeLabel === "n/a" || badgeLabel === "off") {
       usageBadge.classList.remove("badge-open", "badge-bad");
-    } else if (!enabled) {
-      usageBadge.textContent = "off";
-      usageBadge.classList.remove("badge-open", "badge-bad");
-    } else if (hardStop && !overrideActive) {
-      usageBadge.textContent = `stop · ${hardStop}`;
+    } else if (badgeLabel.startsWith("stop ·")) {
       usageBadge.classList.remove("badge-open");
       usageBadge.classList.add("badge-bad");
-    } else if (hardStop && overrideActive) {
-      usageBadge.textContent = "override";
-      usageBadge.classList.add("badge-open");
-      usageBadge.classList.remove("badge-bad");
     } else {
-      usageBadge.textContent = "ok";
+      // "ok" or "override" — not a blocking stop
       usageBadge.classList.add("badge-open");
       usageBadge.classList.remove("badge-bad");
     }
@@ -849,6 +1310,38 @@ function renderUsageCard(s) {
   setUsageBar(usageWeekBar, week);
   setUsageBar(usageDayBar, day);
   setUsageBar(usageHourBar, hour);
+  // Rail compact: Elyra week only (same source + formatPctRemaining as Status).
+  if (railUsageWeekPct) railUsageWeekPct.textContent = formatPctRemaining(week);
+  setUsageBar(railUsageWeekBar, week);
+
+  // SuperGrok pool: shared helper so Status + rail stay in lockstep (KD11).
+  const sgView = supergrokMeterView(usage);
+  if (usageSgPct) usageSgPct.textContent = sgView.label;
+  if (railUsageSgPct) railUsageSgPct.textContent = sgView.label;
+  if (sgView.available) {
+    setUsageBar(usageSgBar, sgView.usedFrac, { usedMode: true });
+    setUsageBar(railUsageSgBar, sgView.usedFrac, { usedMode: true });
+  } else {
+    setUsageBar(usageSgBar, null, { unavailable: true });
+    setUsageBar(railUsageSgBar, null, { unavailable: true });
+  }
+
+  // Pace badge + burst remaining (derived max(0, BurstMax − over)).
+  const paceBand = (usage && usage.pace_band) || "green";
+  if (usagePaceBadge) {
+    usagePaceBadge.textContent = enabled ? paceBand : "—";
+    usagePaceBadge.dataset.band = enabled ? paceBand : "green";
+  }
+  if (usageBurst) {
+    if (!usage || !enabled) {
+      usageBurst.textContent = "—";
+    } else {
+      const rem = usage.burst_remaining_tokens;
+      const max = usage.burst_max_tokens;
+      usageBurst.textContent =
+        rem != null && max != null ? `burst ${rem}/${max}` : "burst —";
+    }
+  }
 
   if (usageDetail) {
     if (!usage) {
@@ -859,21 +1352,55 @@ function renderUsageCard(s) {
       const parts = [];
       if (usage.week_used_tokens != null) {
         parts.push(
-          `week ${usage.week_used_tokens}/${usage.week_limit_tokens ?? "—"}`
+          `Elyra week ${usage.week_used_tokens}/${usage.week_limit_tokens ?? usage.elyra_week_budget_tokens ?? "—"}`
         );
       }
-      if (usage.day_used_tokens != null) {
+      if (usage.pace_ratio != null) {
+        parts.push(`pace ${Number(usage.pace_ratio).toFixed(2)}`);
+      }
+      if (usage.day_soft_exhausted) {
+        parts.push("day pace high (soft)");
+      }
+      if (usage.hour_soft_exhausted) {
+        parts.push("hour pace high (soft)");
+      }
+      if (usage.day_used_tokens != null && usage.day_hard_stop_enabled) {
         parts.push(
           `day ${usage.day_used_tokens}/${usage.day_limit_tokens ?? "—"}`
         );
       }
-      if (usage.hour_used_tokens != null) {
+      if (usage.hour_used_tokens != null && usage.hour_hard_stop_enabled) {
         parts.push(
           `hour ${usage.hour_used_tokens}/${usage.hour_limit_tokens ?? "—"}`
         );
       }
+      const sttCalls = usage.week_stt_calls;
+      const ttsCalls = usage.week_tts_calls;
+      if (sttCalls != null || ttsCalls != null) {
+        parts.push(
+          `stt ${sttCalls ?? 0} · tts ${ttsCalls ?? 0}`
+        );
+      }
       if (usage.last_record_at) parts.push(`last ${usage.last_record_at}`);
       usageDetail.textContent = parts.length ? parts.join(" · ") : "no usage yet";
+    }
+  }
+
+  // product_usage collapsed under details (diagnostic only; Status card only).
+  const productUsage = usage && usage.supergrok && usage.supergrok.product_usage;
+  if (usageProductUsage && usageProductUsageBody) {
+    if (
+      productUsage &&
+      typeof productUsage === "object" &&
+      Object.keys(productUsage).length
+    ) {
+      usageProductUsage.hidden = false;
+      usageProductUsageBody.textContent = Object.entries(productUsage)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join("\n");
+    } else {
+      usageProductUsage.hidden = true;
+      usageProductUsageBody.textContent = "";
     }
   }
 
@@ -891,15 +1418,23 @@ function renderUsageCard(s) {
 
 async function patchProvider(body) {
   if (providerPatchInFlight) return;
+  // Never send Auto (UI-only stub); reject before flight.
+  if (body && body.reasoning_effort === "auto") {
+    return;
+  }
   providerPatchInFlight = true;
   if (providerModelSelect) providerModelSelect.disabled = true;
   if (providerCredentialSelect) providerCredentialSelect.disabled = true;
+  setEffortButtonsDisabled(true);
   try {
     await fetchJson("/api/provider", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    // Clear in-flight before status paint so commitEffortFromStatus runs
+    // (success path: refreshStatus → renderProviderCard → commit last*).
+    providerPatchInFlight = false;
     await refreshStatus();
   } catch (err) {
     if (providerModelSelect && lastProviderModel != null) {
@@ -908,11 +1443,14 @@ async function patchProvider(body) {
     if (providerCredentialSelect && lastCredentialSource != null) {
       providerCredentialSelect.value = lastCredentialSource;
     }
+    // Revert optimistic effort paint; lastReasoningEffort is still pre-click.
+    paintEffortUI(lastReasoningEffort);
     showNotice(String(err.message || err));
   } finally {
     providerPatchInFlight = false;
     if (providerModelSelect) providerModelSelect.disabled = false;
     if (providerCredentialSelect) providerCredentialSelect.disabled = false;
+    setEffortButtonsDisabled(false);
   }
 }
 
@@ -1183,6 +1721,7 @@ async function refreshStatus() {
   renderHardStopBanner(s);
   renderProviderCard(s);
   renderUsageCard(s);
+  renderContextMeters(s);
   maybeNoticeHardStopTransition(s);
 
   // When hard-stopped without override, surface queue pause on worker pill.
@@ -1399,12 +1938,18 @@ function renderBeats(beats) {
   return wrap;
 }
 
+function setMomentDetailOpen(on) {
+  const panel = document.getElementById("panel-moments");
+  if (panel) panel.classList.toggle("moment-detail-open", !!on);
+}
+
 function closeMomentDetail() {
   momentDetailLoadGen += 1;
   selectedMomentId = null;
   selectedMomentSnapshot = null;
   momentDetail.hidden = true;
   momentDetail.innerHTML = "";
+  setMomentDetailOpen(false);
   // Clear selected highlight without full re-fetch.
   momentsList
     .querySelectorAll(".card-selected")
@@ -1462,6 +2007,7 @@ async function loadMomentDetail(id, opts = {}) {
   selectedMomentId = id;
   // Do not commit selectedMomentSnapshot until a successful GET.
   momentDetail.hidden = false;
+  setMomentDetailOpen(true);
   const savedUi = soft ? captureMomentDetailUi() : null;
   if (!soft) {
     // Hard open: drop prior moment's last-good so soft keep/skip cannot apply
@@ -1554,30 +2100,222 @@ async function refreshMoments() {
   }
 }
 
-function renderCatalog(el, items, emptyLabel) {
+function renderCatalog(el, items, emptyLabel, kind) {
   el.innerHTML = "";
   if (!items.length) {
     el.innerHTML = `<p class="muted empty">${emptyLabel}</p>`;
     return;
   }
   for (const t of items) {
-    const card = document.createElement("article");
-    card.className = "card";
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn catalog-card";
+    card.dataset.catalogKind = kind;
+    card.dataset.catalogName = t.name || "";
+    const selected =
+      catalogSelection &&
+      catalogSelection.kind === kind &&
+      catalogSelection.name === t.name;
+    if (selected) card.classList.add("card-selected");
     const source = t.source || t.kind || "";
-    const kind = t.kind && t.source ? t.kind : "";
+    const toolKind = t.kind && t.source ? t.kind : "";
     card.innerHTML = `
       <div class="card-head">
         <strong>${escapeHtml(t.name)}</strong>
         <span class="badge">${escapeHtml(source)}</span>
       </div>
       ${
-        kind
-          ? `<div class="meta">${escapeHtml(kind)}</div>`
+        toolKind
+          ? `<div class="meta">${escapeHtml(toolKind)}</div>`
           : ""
       }
       <p class="muted">${escapeHtml(t.description || "")}</p>`;
+    card.addEventListener("click", () => {
+      selectCatalogItem(kind, t.name).catch((e) =>
+        panelLoadError("Catalog", e)
+      );
+    });
     el.appendChild(card);
   }
+}
+
+function clearCatalogSelectionHighlight() {
+  document
+    .querySelectorAll("#tools-list .card-btn, #skills-list .card-btn")
+    .forEach((el) => el.classList.remove("card-selected"));
+}
+
+function markCatalogSelectionHighlight() {
+  clearCatalogSelectionHighlight();
+  if (!catalogSelection) return;
+  const list = catalogSelection.kind === "tool" ? toolsList : skillsList;
+  if (!list) return;
+  const btn = [...list.querySelectorAll(".card-btn")].find(
+    (el) => el.dataset.catalogName === catalogSelection.name
+  );
+  if (btn) btn.classList.add("card-selected");
+}
+
+function setCatalogInspecting(on) {
+  const panel = document.getElementById("panel-tools");
+  if (panel) panel.classList.toggle("catalog-inspecting", !!on);
+}
+
+function hideCatalogInspector() {
+  setCatalogInspecting(false);
+  catalogSelection = null;
+  clearCatalogSelectionHighlight();
+  if (catalogInspector) catalogInspector.hidden = true;
+  if (catalogInspectorVersionDoc) {
+    catalogInspectorVersionDoc.hidden = true;
+    catalogInspectorVersionDoc.textContent = "";
+  }
+  if (catalogInspectorSchemaFold) catalogInspectorSchemaFold.hidden = true;
+  if (catalogInspectorRunnerFold) catalogInspectorRunnerFold.hidden = true;
+}
+
+function packageDocFromDetail(kind, detail) {
+  const pkg = detail.package || {};
+  if (kind === "skill") {
+    return (
+      detail.skill_md ||
+      pkg.skill_md_preview ||
+      detail.skill_md_preview ||
+      "(no SKILL.md)"
+    );
+  }
+  return pkg.tool_md_preview || detail.tool_md_preview || "(no TOOL.md)";
+}
+
+function renderCatalogInspector(kind, detail) {
+  if (!catalogInspector) return;
+  catalogInspector.hidden = false;
+  const name = detail.name || "—";
+  const source =
+    detail.source || detail.catalog_source || detail.package?.source || "—";
+  const which = detail.which || "current";
+  if (catalogInspectorTitle) catalogInspectorTitle.textContent = name;
+  if (catalogInspectorBadges) {
+    const bits = [kind, source, which].filter(Boolean);
+    catalogInspectorBadges.innerHTML = bits
+      .map((b) => `<span class="badge">${escapeHtml(String(b))}</span>`)
+      .join("");
+  }
+  if (catalogInspectorDesc) {
+    catalogInspectorDesc.textContent =
+      detail.description || detail.package?.description || "—";
+  }
+  const pkg = detail.package || {};
+  const files = pkg.files_present
+    ? Object.entries(pkg.files_present)
+        .map(([k, v]) => `${k}${v ? "✓" : "✗"}`)
+        .join(" · ")
+    : "";
+  const top = Array.isArray(pkg.top_level) ? pkg.top_level.join(", ") : "";
+  const metaParts = [];
+  if (detail.tool_kind) metaParts.push(`kind ${detail.tool_kind}`);
+  if (pkg.complete === true) metaParts.push("package complete");
+  if (pkg.complete === false) metaParts.push("package incomplete");
+  if (files) metaParts.push(files);
+  if (top) metaParts.push(`files: ${top}`);
+  if (detail.version_id) metaParts.push(`viewing ${detail.version_id}`);
+  if (catalogInspectorMeta) {
+    catalogInspectorMeta.textContent = metaParts.length
+      ? metaParts.join(" · ")
+      : "—";
+  }
+  if (catalogInspectorDoc) {
+    catalogInspectorDoc.textContent = packageDocFromDetail(kind, detail);
+  }
+  if (catalogInspectorSchemaFold && catalogInspectorSchema) {
+    if (detail.schema_preview) {
+      catalogInspectorSchemaFold.hidden = false;
+      catalogInspectorSchema.textContent = detail.schema_preview;
+    } else {
+      catalogInspectorSchemaFold.hidden = true;
+      catalogInspectorSchema.textContent = "—";
+    }
+  }
+  if (catalogInspectorRunnerFold && catalogInspectorRunner) {
+    if (detail.runner && typeof detail.runner === "object") {
+      catalogInspectorRunnerFold.hidden = false;
+      catalogInspectorRunner.textContent = JSON.stringify(detail.runner, null, 2);
+    } else {
+      catalogInspectorRunnerFold.hidden = true;
+      catalogInspectorRunner.textContent = "—";
+    }
+  }
+  const versions = Array.isArray(detail.versions) ? detail.versions : [];
+  if (catalogInspectorVcsHint) {
+    if (source === "bundled" || (source !== "local" && !versions.length)) {
+      catalogInspectorVcsHint.textContent =
+        "Bundled packages are immutable — no package-VCS archives. Local re-promotes archive the prior tree.";
+    } else if (!versions.length) {
+      catalogInspectorVcsHint.textContent =
+        "No archives yet. Re-promoting a local package will archive the previous tree here.";
+    } else {
+      catalogInspectorVcsHint.textContent = `${versions.length} archive(s). Click to preview that tree’s docs (read-only). Revert stays model/tool path.`;
+    }
+  }
+  if (catalogInspectorVersionDoc) {
+    catalogInspectorVersionDoc.hidden = true;
+    catalogInspectorVersionDoc.textContent = "";
+  }
+  renderVersionList(catalogInspectorVersions, versions, (vid) => {
+    loadCatalogVersion(kind, name, vid).catch((e) =>
+      panelLoadError("Package VCS", e)
+    );
+  });
+  // Prefer archived_at in version rows (package VCS uses archived_at, not promoted_at)
+  if (catalogInspectorVersions && versions.length) {
+    const rows = catalogInspectorVersions.querySelectorAll(".version-row");
+    versions.forEach((v, i) => {
+      const row = rows[i];
+      if (!row) return;
+      const vid = v.version_id || "";
+      const when = v.archived_at || v.promoted_at || "";
+      const reason = v.reason ? ` · ${v.reason}` : "";
+      row.textContent = when ? `${vid} · ${when}${reason}` : `${vid}${reason}`;
+    });
+  }
+}
+
+async function loadCatalogVersion(kind, name, versionId) {
+  const base = kind === "tool" ? "/api/tools/" : "/api/skills/";
+  const q = new URLSearchParams({
+    which: "version",
+    version_id: versionId,
+    list_versions: "0",
+  });
+  const detail = await fetchJson(`${base}${encodeURIComponent(name)}?${q}`);
+  if (!detail || detail.ok === false) {
+    throw new Error(detail?.error || "version not found");
+  }
+  if (catalogInspectorVersionDoc) {
+    catalogInspectorVersionDoc.hidden = false;
+    catalogInspectorVersionDoc.textContent =
+      `// version ${versionId}\n\n` + packageDocFromDetail(kind, detail);
+  }
+  if (catalogInspectorMeta) {
+    catalogInspectorMeta.textContent = `viewing archive ${versionId} (read-only)`;
+  }
+}
+
+async function selectCatalogItem(kind, name) {
+  if (!name) return;
+  catalogSelection = { kind, name };
+  markCatalogSelectionHighlight();
+  const base = kind === "tool" ? "/api/tools/" : "/api/skills/";
+  const q = new URLSearchParams({ which: "current", list_versions: "1" });
+  const detail = await fetchJson(`${base}${encodeURIComponent(name)}?${q}`);
+  if (!detail || detail.ok === false) {
+    hideCatalogInspector();
+    catalogSelection = null;
+    clearCatalogSelectionHighlight();
+    throw new Error(detail?.error || `${kind} not found`);
+  }
+  setCatalogInspecting(true);
+  renderCatalogInspector(kind, detail);
 }
 
 async function refreshTools() {
@@ -1587,14 +2325,30 @@ async function refreshTools() {
   ]);
   const toolItems = tools.tools || [];
   const skillItems = skills.skills || [];
-  renderCatalog(toolsList, toolItems, "No tools.");
-  renderCatalog(skillsList, skillItems, "No skills.");
+  renderCatalog(toolsList, toolItems, "No tools.", "tool");
+  renderCatalog(skillsList, skillItems, "No skills.", "skill");
+  markCatalogSelectionHighlight();
   if (toolsCountEl) toolsCountEl.textContent = String(toolItems.length);
   if (skillsCountEl) skillsCountEl.textContent = String(skillItems.length);
   if (catalogMeta) {
     const localTools = toolItems.filter((t) => t.source === "local").length;
     const localSkills = skillItems.filter((s) => s.source === "local").length;
-    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · rescanned from disk`;
+    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · select a package to inspect · rescanned from disk`;
+  }
+  // Refresh open inspector if still selected
+  if (catalogSelection) {
+    const stillThere =
+      catalogSelection.kind === "tool"
+        ? toolItems.some((t) => t.name === catalogSelection.name)
+        : skillItems.some((s) => s.name === catalogSelection.name);
+    if (stillThere) {
+      selectCatalogItem(catalogSelection.kind, catalogSelection.name).catch(
+        () => hideCatalogInspector()
+      );
+    } else {
+      catalogSelection = null;
+      hideCatalogInspector();
+    }
   }
 }
 
@@ -1976,6 +2730,20 @@ if (providerCredentialSelect) {
     patchProvider({ credential_source });
   });
 }
+// Effort segmented control (Status + rail share .effort-btn).
+document.querySelectorAll(".effort-btn[data-effort]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled || btn.getAttribute("data-effort") === "auto") return;
+    if (providerPatchInFlight) return;
+    const effort = btn.getAttribute("data-effort");
+    if (!["low", "medium", "high"].includes(effort)) return;
+    // Compare to server last, not painted state — no spurious PATCH.
+    if (effort === lastReasoningEffort) return;
+    // Optimistic visual only — do NOT assign lastReasoningEffort.
+    paintEffortUI(effort);
+    patchProvider({ reasoning_effort: effort });
+  });
+});
 if (providerApiKeySave) {
   providerApiKeySave.addEventListener("click", () => {
     saveApiKey();
@@ -1991,6 +2759,181 @@ if (providerApiKeyInput) {
     if (e.key === "Enter") {
       e.preventDefault();
       saveApiKey();
+    }
+  });
+}
+
+// ── Secrets panel (PR5) — write-only values, never re-display ───────────
+const secretsListEl = $("#secrets-list");
+const secretsCountBadge = $("#secrets-count-badge");
+const secretsNameInput = $("#secrets-name-input");
+const secretsValueInput = $("#secrets-value-input");
+const secretsGrantsInput = $("#secrets-grants-input");
+const secretsSaveBtn = $("#secrets-save-btn");
+const secretsFormMeta = $("#secrets-form-meta");
+
+function parseGrantsCsv(raw) {
+  if (!raw || typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+async function refreshSecrets() {
+  if (!secretsListEl) return;
+  const data = await fetchJson("/api/secrets");
+  const secrets = (data && data.secrets) || [];
+  if (secretsCountBadge) secretsCountBadge.textContent = String(secrets.length);
+  if (!secrets.length) {
+    secretsListEl.textContent = "No named secrets yet.";
+    return;
+  }
+  secretsListEl.innerHTML = "";
+  for (const s of secrets) {
+    const row = document.createElement("div");
+    row.className = "secrets-row";
+    const main = document.createElement("div");
+    main.className = "secrets-row-main";
+    const nameEl = document.createElement("div");
+    nameEl.className = "secrets-row-name";
+    nameEl.textContent = s.name || "—";
+    const meta = document.createElement("div");
+    meta.className = "secrets-row-meta";
+    const grants = Array.isArray(s.grants) ? s.grants : [];
+    meta.textContent = [
+      s.managed_by ? `managed_by=${s.managed_by}` : null,
+      grants.length ? `grants: ${grants.join(", ")}` : "grants: (none)",
+      s.updated_at ? `updated ${s.updated_at}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    main.appendChild(nameEl);
+    main.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "secrets-row-actions";
+    const grantBtn = document.createElement("button");
+    grantBtn.type = "button";
+    grantBtn.className = "btn-secondary btn-sm";
+    grantBtn.textContent = "Edit grants";
+    grantBtn.addEventListener("click", () => {
+      const edit = row.querySelector(".secrets-grants-edit");
+      if (edit) {
+        edit.hidden = !edit.hidden;
+        return;
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "secrets-grants-edit";
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "status-input";
+      inp.value = grants.join(", ");
+      inp.placeholder = "tool_a, tool_b";
+      inp.setAttribute("aria-label", `Grants for ${s.name}`);
+      const saveG = document.createElement("button");
+      saveG.type = "button";
+      saveG.className = "btn-secondary btn-sm";
+      saveG.textContent = "Save grants";
+      saveG.addEventListener("click", async () => {
+        if (secretsInFlight) return;
+        secretsInFlight = true;
+        try {
+          await fetchJson(`/api/secrets/${encodeURIComponent(s.name)}/grants`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ grants: parseGrantsCsv(inp.value) }),
+          });
+          showNotice(`Grants updated for ${s.name}.`);
+          await refreshSecrets();
+        } catch (err) {
+          showNotice(`Grants failed: ${err && err.message ? err.message : err}`);
+        } finally {
+          secretsInFlight = false;
+        }
+      });
+      wrap.appendChild(inp);
+      wrap.appendChild(saveG);
+      row.appendChild(wrap);
+    });
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "btn-secondary btn-sm";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", async () => {
+      if (secretsInFlight) return;
+      if (!window.confirm(`Delete secret “${s.name}”? This cannot be undone.`)) return;
+      secretsInFlight = true;
+      try {
+        await fetchJson(`/api/secrets/${encodeURIComponent(s.name)}`, {
+          method: "DELETE",
+        });
+        showNotice(`Deleted secret ${s.name}.`);
+        await refreshSecrets();
+      } catch (err) {
+        showNotice(`Delete failed: ${err && err.message ? err.message : err}`);
+      } finally {
+        secretsInFlight = false;
+      }
+    });
+    actions.appendChild(grantBtn);
+    actions.appendChild(delBtn);
+    row.appendChild(main);
+    row.appendChild(actions);
+    secretsListEl.appendChild(row);
+  }
+}
+
+async function saveSecret() {
+  if (secretsInFlight || !secretsNameInput || !secretsValueInput) return;
+  const name = secretsNameInput.value.trim();
+  const value = secretsValueInput.value;
+  if (!name) {
+    showNotice("Secret name required.");
+    return;
+  }
+  if (!value || !value.trim()) {
+    showNotice("Secret value required.");
+    return;
+  }
+  const grants = parseGrantsCsv(secretsGrantsInput ? secretsGrantsInput.value : "");
+  secretsInFlight = true;
+  if (secretsSaveBtn) secretsSaveBtn.disabled = true;
+  try {
+    const body = { name, value };
+    if (grants.length) body.grants = grants;
+    const data = await fetchJson("/api/secrets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    // Write-only: clear the value field; never paint it back from the response.
+    secretsValueInput.value = "";
+    if (data && data.secret && data.secret.value) {
+      // Defense: if server ever echoed value, do not keep it in UI state.
+      delete data.secret.value;
+    }
+    if (secretsFormMeta) secretsFormMeta.textContent = `Saved ${name} (value not stored in UI).`;
+    showNotice(`Secret ${name} saved.`);
+    await refreshSecrets();
+  } catch (err) {
+    showNotice(`Save secret failed: ${err && err.message ? err.message : err}`);
+  } finally {
+    secretsInFlight = false;
+    if (secretsSaveBtn) secretsSaveBtn.disabled = false;
+  }
+}
+
+if (secretsSaveBtn) {
+  secretsSaveBtn.addEventListener("click", () => {
+    saveSecret();
+  });
+}
+if (secretsValueInput) {
+  secretsValueInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveSecret();
     }
   });
 }
@@ -2126,7 +3069,7 @@ function renderAttachTray() {
       chip.appendChild(img);
     } else {
       const icon = document.createElement("span");
-      icon.textContent = "📄";
+      icon.textContent = kindIcon(att.kind);
       icon.setAttribute("aria-hidden", "true");
       chip.appendChild(icon);
     }
@@ -2157,35 +3100,323 @@ function addFilesAsAttachments(fileList) {
   const files = Array.from(fileList || []);
   for (const file of files) {
     if (!file || !file.name) continue;
-    if (pendingAttachments.length >= 8) {
-      showNotice("Attachment limit: 8 files per message.");
+    if (pendingAttachments.length >= MAX_PENDING_ATTACHMENTS) {
+      showNotice(
+        `Attachment limit: ${MAX_PENDING_ATTACHMENTS} files per message.`
+      );
       break;
     }
-    const isImage = String(file.type || "").startsWith("image/");
+    const kind = detectAttachmentKind(file);
+    const maxBytes = clientMaxBytesForKind(kind);
+    if (file.size > maxBytes) {
+      showNotice(
+        `${file.name} is too large (${formatBytes(file.size)}; max ${formatBytes(
+          maxBytes
+        )} for ${kind}).`
+      );
+      continue;
+    }
     const att = {
       name: file.name,
       size: file.size,
       type: file.type || "application/octet-stream",
-      kind: isImage ? "image" : "file",
-      previewUrl: isImage ? URL.createObjectURL(file) : null,
+      kind,
+      previewUrl: kind === "image" ? URL.createObjectURL(file) : null,
+      file, // File/Blob for POST /api/media on send
     };
     pendingAttachments.push(att);
   }
   renderAttachTray();
 }
 
-function buildAttachmentInventory() {
-  if (!pendingAttachments.length) return "";
-  const lines = pendingAttachments.map(
-    (a, i) =>
-      `${i + 1}. ${a.name} (${a.kind}, ${a.type || "unknown"}, ${formatBytes(
-        a.size
-      )})`
-  );
-  return (
-    "\n\n---\n**Attachments** (listed for Elyra; binary vision/file I/O not wired yet):\n" +
-    lines.join("\n")
-  );
+/**
+ * Upload pending tray files via multipart POST /api/media.
+ * Pre-uploaded ids (e.g. STT keep_audio) are returned as-is.
+ * Returns attachment id list (durable store). Does not clear tray.
+ */
+async function uploadPendingAttachments() {
+  if (!pendingAttachments.length) return [];
+  const already = [];
+  const needUpload = [];
+  for (const att of pendingAttachments) {
+    if (att.id) {
+      already.push(att.id);
+    } else {
+      needUpload.push(att);
+    }
+  }
+  if (!needUpload.length) return already;
+
+  // Group by origin so recordings keep user_recording / stt_source.
+  const byOrigin = new Map();
+  for (const att of needUpload) {
+    const origin = att.origin || "user_upload";
+    if (!byOrigin.has(origin)) byOrigin.set(origin, []);
+    byOrigin.get(origin).push(att);
+  }
+  const uploadedIds = [];
+  for (const [origin, group] of byOrigin.entries()) {
+    const formData = new FormData();
+    formData.append("user_id", getSessionUserId());
+    formData.append("origin", origin);
+    for (const att of group) {
+      const blob = att.file;
+      if (!blob) {
+        throw new Error(`Missing file bytes for ${att.name || "attachment"}`);
+      }
+      formData.append("files", blob, att.name || "file");
+    }
+    const res = await fetch("/api/media", { method: "POST", body: formData });
+    const text = await res.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
+    if (!res.ok) {
+      const msg =
+        (data && (data.error || data.reason)) || text || res.statusText;
+      const err = new Error(`${res.status}: ${msg}`);
+      err.status = res.status;
+      err.body = data;
+      throw err;
+    }
+    const uploaded = Array.isArray(data.attachments) ? data.attachments : [];
+    if (!uploaded.length) {
+      throw new Error("Upload returned no attachments");
+    }
+    for (const a of uploaded) {
+      if (a && a.id) uploadedIds.push(a.id);
+    }
+  }
+  return already.concat(uploadedIds);
+}
+
+function setMicUi({ recording = false, transcribing = false } = {}) {
+  if (!micBtn) return;
+  micBtn.classList.toggle("recording", !!recording);
+  micBtn.classList.toggle("transcribing", !!transcribing);
+  micBtn.setAttribute("aria-pressed", recording ? "true" : "false");
+  micBtn.disabled = !!transcribing;
+  micBtn.title = recording
+    ? "Stop recording"
+    : transcribing
+      ? "Transcribing…"
+      : "Record voice (speech-to-text)";
+}
+
+function stopMicStream() {
+  if (micStream) {
+    try {
+      micStream.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
+    micStream = null;
+  }
+}
+
+function pickRecorderMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/mp4",
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+      return t;
+    }
+  }
+  return "";
+}
+
+/**
+ * POST audio blob to host STT proxy; fill composer with transcript.
+ * keep_audio=1 stores recording as durable attachment and chips it in tray.
+ */
+async function transcribeRecordingBlob(blob, { keepAudio = true } = {}) {
+  const mime = blob.type || "audio/webm";
+  const ext = mime.includes("ogg")
+    ? "ogg"
+    : mime.includes("mp4") || mime.includes("m4a")
+      ? "m4a"
+      : mime.includes("wav")
+        ? "wav"
+        : "webm";
+  const filename = `recording.${ext}`;
+  const formData = new FormData();
+  formData.append("user_id", getSessionUserId());
+  formData.append("keep_audio", keepAudio ? "1" : "0");
+  formData.append("origin", "user_recording");
+  formData.append("file", blob, filename);
+
+  const res = await fetch("/api/stt", { method: "POST", body: formData });
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) {
+    const reason = (data && (data.reason || data.error)) || text || res.statusText;
+    const err = new Error(`${res.status}: ${reason}`);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+  return data;
+}
+
+function insertTranscriptIntoComposer(transcript) {
+  if (!input) return;
+  const t = String(transcript || "").trim();
+  if (!t) return;
+  const cur = input.value || "";
+  if (!cur.trim()) {
+    input.value = t;
+  } else if (cur.endsWith(" ") || cur.endsWith("\n")) {
+    input.value = cur + t;
+  } else {
+    input.value = `${cur} ${t}`;
+  }
+  autosizeComposer();
+  input.focus();
+}
+
+async function finishMicRecording() {
+  const chunks = micChunks.slice();
+  micChunks = [];
+  micRecorder = null;
+  stopMicStream();
+  setMicUi({ recording: false, transcribing: true });
+  micBusy = true;
+  try {
+    if (!chunks.length) {
+      showNotice("No audio captured.");
+      return;
+    }
+    const blob = new Blob(chunks, {
+      type: (chunks[0] && chunks[0].type) || "audio/webm",
+    });
+    if (!blob.size) {
+      showNotice("Empty recording.");
+      return;
+    }
+    const clientMax = clientMaxBytesForKind("audio");
+    if (blob.size > clientMax) {
+      showNotice(
+        `Recording too large (${formatBytes(blob.size)}; max ${formatBytes(
+          clientMax
+        )}).`
+      );
+      return;
+    }
+    showNotice("Transcribing…");
+    const data = await transcribeRecordingBlob(blob, { keepAudio: true });
+    const transcript = (data && data.text) || "";
+    if (!transcript.trim()) {
+      showNotice("Empty transcript from speech-to-text.");
+      return;
+    }
+    insertTranscriptIntoComposer(transcript);
+    if (data.attachment_id) {
+      if (pendingAttachments.length >= MAX_PENDING_ATTACHMENTS) {
+        showNotice(
+          `Transcript ready; attachment tray full (max ${MAX_PENDING_ATTACHMENTS}).`
+        );
+      } else {
+        const meta = data.attachment || {};
+        pendingAttachments.push({
+          name: meta.filename || "recording.webm",
+          size: meta.byte_size || blob.size,
+          type: meta.mime || blob.type || "audio/webm",
+          kind: "audio",
+          previewUrl: null,
+          id: data.attachment_id,
+          origin: meta.origin || "user_recording",
+        });
+        renderAttachTray();
+      }
+    }
+    showNotice("Transcript ready — edit and send when ready.");
+  } catch (err) {
+    const body = err && err.body;
+    const reason = body && body.reason;
+    if (reason === "provider_unsupported") {
+      showNotice("Speech-to-text requires the xAI provider.");
+    } else if (reason === "credential_unavailable") {
+      showNotice("Speech-to-text: credentials unavailable (host).");
+    } else if (reason === "stt_disabled") {
+      showNotice("Speech-to-text is disabled.");
+    } else {
+      showNotice(String(err.message || err));
+    }
+  } finally {
+    micBusy = false;
+    setMicUi({ recording: false, transcribing: false });
+  }
+}
+
+async function toggleMicRecording() {
+  if (!micBtn || micBusy) return;
+  if (micRecorder && micRecorder.state === "recording") {
+    try {
+      micRecorder.stop();
+    } catch (err) {
+      showNotice(String(err.message || err));
+      stopMicStream();
+      micRecorder = null;
+      setMicUi({ recording: false, transcribing: false });
+    }
+    return;
+  }
+  if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices) {
+    showNotice("Microphone recording is not supported in this browser.");
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    showNotice(
+      `Microphone permission denied or unavailable (${err && err.message ? err.message : err}).`
+    );
+    return;
+  }
+  micChunks = [];
+  const mime = pickRecorderMime();
+  try {
+    micRecorder = mime
+      ? new MediaRecorder(micStream, { mimeType: mime })
+      : new MediaRecorder(micStream);
+  } catch (err) {
+    stopMicStream();
+    showNotice(`Could not start recorder: ${err.message || err}`);
+    return;
+  }
+  micRecorder.addEventListener("dataavailable", (ev) => {
+    if (ev.data && ev.data.size) micChunks.push(ev.data);
+  });
+  micRecorder.addEventListener("stop", () => {
+    finishMicRecording();
+  });
+  micRecorder.addEventListener("error", (ev) => {
+    showNotice(`Recorder error: ${(ev.error && ev.error.message) || "unknown"}`);
+    stopMicStream();
+    micRecorder = null;
+    setMicUi({ recording: false, transcribing: false });
+  });
+  try {
+    micRecorder.start();
+    setMicUi({ recording: true, transcribing: false });
+  } catch (err) {
+    stopMicStream();
+    micRecorder = null;
+    showNotice(`Could not start recording: ${err.message || err}`);
+  }
 }
 
 function clearAttachments() {
@@ -2331,15 +3562,26 @@ function updateChatActivity(status) {
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = input.value.trim();
-  const inventory = buildAttachmentInventory();
-  if (!text && !inventory) return;
-  const content = (text + inventory).trim();
+  const hasPending = pendingAttachments.length > 0;
+  // Media-only send allowed: empty text + attachments (R1b / glass empty-content).
+  if (!text && !hasPending) return;
   sendBtn.disabled = true;
   try {
+    let attachmentIds = [];
+    if (hasPending) {
+      attachmentIds = await uploadPendingAttachments();
+    }
+    const payload = {
+      content: text, // user text only — no inventory prose (PR4)
+      user_id: getSessionUserId(),
+    };
+    if (attachmentIds.length) {
+      payload.attachment_ids = attachmentIds;
+    }
     const data = await fetchJson("/api/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, user_id: getSessionUserId() }),
+      body: JSON.stringify(payload),
     });
     input.value = "";
     autosizeComposer();
@@ -2392,6 +3634,12 @@ if (attachBtn && attachInput) {
   });
 }
 
+if (micBtn) {
+  micBtn.addEventListener("click", () => {
+    toggleMicRecording();
+  });
+}
+
 if (form) {
   form.addEventListener("dragenter", (e) => {
     e.preventDefault();
@@ -2426,6 +3674,13 @@ if (messagesEl) {
 if (jumpLatestBtn) {
   jumpLatestBtn.addEventListener("click", () => {
     scrollMessagesToBottom({ smooth: true });
+  });
+}
+
+const catalogInspectorClose = $("#catalog-inspector-close");
+if (catalogInspectorClose) {
+  catalogInspectorClose.addEventListener("click", () => {
+    hideCatalogInspector();
   });
 }
 
@@ -2487,6 +3742,7 @@ function refreshActivePanel() {
   if (name === "moments") return refreshMoments();
   if (name === "tools") return refreshTools();
   if (name === "identity") return refreshIdentity();
+  if (name === "secrets") return refreshSecrets();
   // chat / status: covered by refreshMessages / refreshStatus
   return Promise.resolve();
 }
@@ -2505,6 +3761,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
     if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
     if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
+    if (name === "secrets") refreshSecrets().catch((e) => panelLoadError("Secrets", e));
   });
 });
 
@@ -2519,7 +3776,8 @@ async function tick() {
       activePanel === "goals" ||
       activePanel === "moments" ||
       activePanel === "tools" ||
-      activePanel === "identity"
+      activePanel === "identity" ||
+      activePanel === "secrets"
     ) {
       tasks.push(refreshActivePanel().catch(() => {}));
     }

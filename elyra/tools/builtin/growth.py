@@ -1,6 +1,6 @@
 """Growth builtins: install_tool_draft, verify_tool, promote_tool, install_skill.
 
-Scope: fail-closed create-tool path and skill install to skills/local/.
+Scope: fail-closed create-tool path and skill install (compat → package VCS).
 In scope: path jail, reserved verify sidecars, hash invalidate, no force promote.
 Out of scope: sandbox FS tools, do-loop wiring.
 """
@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import Any
 
-from elyra.skills import SkillCatalog, is_valid_skill_name, normalize_skill_name
-from elyra.skills.catalog import local_skills_dir
-from elyra.skills.policy import BundledSkillsRootError, resolve_bundled_skills_root
+from elyra.identity.layout import MAX_BODY_BYTES, body_byte_len
+from elyra.skills import SkillCatalog, is_valid_skill_name
+from elyra.tools.builtin.package_vcs import (
+    assemble_skill_md,
+    bundled_skill_name_exists,
+    promote_draft_skill,
+    write_skill_draft,
+)
 from elyra.tools.policy import is_valid_tool_name
 from elyra.tools.promote import promote_draft_tool
 from elyra.tools.registry import drafts_dir
@@ -330,52 +335,38 @@ def promote_tool(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         )
 
     # Mid-process callable: reload registry so next hop can use the tool.
+    base_payload: dict[str, Any] = {
+        "name": name,
+        "local_dir": result.get("local_dir"),
+        "content_hash": result.get("content_hash"),
+    }
+    if result.get("archived_version_id") is not None:
+        base_payload["archived_version_id"] = result["archived_version_id"]
+
     if ctx.registry is not None:
         try:
             ctx.registry.reload()
         except Exception as exc:  # noqa: BLE001 — surface as soft warning in payload
             _LOG.warning("registry.reload after promote failed: %s", exc)
-            return ToolResult(
-                ok=True,
-                payload={
-                    "name": name,
-                    "local_dir": result.get("local_dir"),
-                    "content_hash": result.get("content_hash"),
-                    "reloaded": False,
-                    "reload_error": type(exc).__name__,
-                },
-            )
+            base_payload["reloaded"] = False
+            base_payload["reload_error"] = type(exc).__name__
+            return ToolResult(ok=True, payload=base_payload)
 
-    return ToolResult(
-        ok=True,
-        payload={
-            "name": name,
-            "local_dir": result.get("local_dir"),
-            "content_hash": result.get("content_hash"),
-            "reloaded": ctx.registry is not None,
-            "callable": (
-                ctx.registry.has(name) if ctx.registry is not None else False
-            ),
-        },
+    base_payload["reloaded"] = ctx.registry is not None
+    base_payload["callable"] = (
+        ctx.registry.has(name) if ctx.registry is not None else False
     )
-
-
-def _bundled_skill_exists(name: str) -> bool:
-    try:
-        root = resolve_bundled_skills_root()
-    except BundledSkillsRootError:
-        return False
-    key = normalize_skill_name(name)
-    if not root.is_dir():
-        return False
-    for child in root.iterdir():
-        if child.is_dir() and normalize_skill_name(child.name) == key:
-            return True
-    return False
+    return ToolResult(ok=True, payload=base_payload)
 
 
 def install_skill(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    """Write only ``skills/local/<name>/SKILL.md`` (no draft/verify gate)."""
+    """Compat one-shot: assemble SKILL.md → draft → promote (archive-on-overwrite).
+
+    Same args as before. Writes via ``skills/drafts/`` then whole-tree promote to
+    ``skills/local/``. When a local package already exists it is archived under
+    ``versions/`` first. Prefer ``install_skill_draft`` + ``promote_skill`` when
+    reviewing a draft before it goes live.
+    """
     name = args.get("name")
     if name is None or (isinstance(name, str) and not name.strip()):
         return ToolResult(ok=False, payload={}, error_reason="missing_name")
@@ -396,56 +387,43 @@ def install_skill(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if not isinstance(body, str):
         return ToolResult(ok=False, payload={}, error_reason="invalid_body")
 
+    if body_byte_len(body) > MAX_BODY_BYTES:
+        return ToolResult(ok=False, payload={}, error_reason="body_too_large")
+
     # Refuse overwriting shipped bundled skills (local may update).
-    if _bundled_skill_exists(name):
+    if bundled_skill_name_exists(name):
         return ToolResult(
             ok=False,
             payload={"name": name},
             error_reason="refuses_overwrite_bundled",
         )
 
-    local_root = local_skills_dir(ctx.paths)
-    pkg_dir = (local_root / name).resolve()
-    try:
-        local_root_resolved = local_root.resolve()
-        local_root_resolved.mkdir(parents=True, exist_ok=True)
-        if not pkg_dir.is_relative_to(local_root_resolved):
-            return ToolResult(ok=False, payload={}, error_reason="path_jail")
-        pkg_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
+    content = assemble_skill_md(name, description, body)
+    if body_byte_len(content) > MAX_BODY_BYTES:
+        return ToolResult(ok=False, payload={}, error_reason="body_too_large")
+
+    draft_result = write_skill_draft(ctx.paths, name, content)
+    if not draft_result.get("ok"):
         return ToolResult(
             ok=False,
-            payload={},
-            error_reason=f"mkdir_failed:{type(exc).__name__}",
+            payload={
+                k: v
+                for k, v in draft_result.items()
+                if k not in {"ok", "error_reason"} and v is not None
+            },
+            error_reason=str(draft_result.get("error_reason") or "write_failed"),
         )
 
-    # Assemble SKILL.md in the same format as hand-written packages.
-    desc_line = description or name
-    content = (
-        f"---\n"
-        f"name: {name}\n"
-        f"description: {desc_line}\n"
-        f"---\n\n"
-        f"{body.lstrip()}"
-    )
-    if not content.endswith("\n"):
-        content += "\n"
-
-    skill_md = pkg_dir / "SKILL.md"
-    try:
-        skill_md.write_text(content, encoding="utf-8")
-        final = skill_md.resolve()
-        if not final.is_relative_to(local_root_resolved):
-            try:
-                skill_md.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return ToolResult(ok=False, payload={}, error_reason="path_jail")
-    except OSError as exc:
+    promo = promote_draft_skill(ctx.paths, name, force=None)
+    if not promo.get("ok"):
         return ToolResult(
             ok=False,
-            payload={},
-            error_reason=f"write_failed:{type(exc).__name__}",
+            payload={
+                k: v
+                for k, v in promo.items()
+                if k not in {"ok", "error_reason"} and v is not None
+            },
+            error_reason=str(promo.get("error_reason") or "promote_failed"),
         )
 
     # Reload catalog if injected so same moment can load_skill next hop.
@@ -458,14 +436,16 @@ def install_skill(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("SkillCatalog.reload after install_skill failed: %s", exc)
 
-    return ToolResult(
-        ok=True,
-        payload={
-            "name": name,
-            "path": str(skill_md),
-            "reloaded": reloaded,
-        },
-    )
+    payload: dict[str, Any] = {
+        "name": name,
+        "path": promo.get("path") or str(promo.get("local_dir") or ""),
+        "reloaded": reloaded,
+    }
+    if promo.get("archived_version_id") is not None:
+        payload["archived_version_id"] = promo["archived_version_id"]
+    if promo.get("content_hash") is not None:
+        payload["content_hash"] = promo["content_hash"]
+    return ToolResult(ok=True, payload=payload)
 
 
 __all__ = [

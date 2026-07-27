@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Session id from browser_session_open"
+    },
+    "url": {
+      "type": "string",
+      "description": "Absolute http:// or https:// URL"
+    }
+  },
+  "required": [
+    "session_id",
+    "url"
+  ],
+  "additionalProperties": false
+}

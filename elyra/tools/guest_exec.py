@@ -18,10 +18,13 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
@@ -43,6 +46,7 @@ from elyra.sandbox.paths import (
 )
 from elyra.sandbox.protocol import ExecResult
 from elyra.sandbox.registry import get_sandbox_lifecycle
+from elyra.tools.package_hash import VERIFY_RECORD_NAME, content_hash
 from elyra.tools.types import ToolContext, ToolResult
 
 
@@ -53,6 +57,7 @@ class _RunnerLike(Protocol):
     argv: list[str] | None
     module: str | None
     function: str | None
+
 
 _LOG = logging.getLogger(__name__)
 
@@ -67,9 +72,11 @@ _STREAM_TAIL_CHARS = 8_000
 _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
 
 # Names/suffixes excluded from staged package trees.
-_STAGE_IGNORE_NAMES = frozenset({"__pycache__", ".stage", ".verify"})
+# Runtime stage marker is never copied from source; written after successful stage.
+STAGE_MARKER_NAME = ".elyra_stage.json"
+_STAGE_IGNORE_NAMES = frozenset({"__pycache__", ".stage", ".verify", STAGE_MARKER_NAME})
 _STAGE_IGNORE_SUFFIXES = frozenset({".pyc", ".pyo"})
-_VERIFY_RECORD_NAME = ".verify.json"
+_STAGE_MARKER_SCHEMA_VERSION = 1
 
 EXECUTOR_BACKEND_MICROSANDBOX = "microsandbox"
 EXECUTOR_BACKEND_HOST_STUB = "host_stub"
@@ -186,8 +193,161 @@ def resolve_module_file(package_dir: Path, module: str) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# Atomic stage into guest-visible tools/
+# Atomic stage into guest-visible tools/ (content-hash skip gate)
 # ---------------------------------------------------------------------------
+
+
+def load_stage_marker(dest: Path) -> dict[str, Any] | None:
+    """Load ``.elyra_stage.json`` if present and a valid JSON object; else None.
+
+    Corrupt / unreadable markers return None (never skip — fail closed to restage).
+    """
+    path = Path(dest) / STAGE_MARKER_NAME
+    if not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        _LOG.warning("unreadable stage marker %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def write_complete_stage_marker(
+    dest: Path,
+    *,
+    content_hash_value: str,
+    package_name: str,
+) -> None:
+    """Write complete stage marker only after a successful stage/refresh."""
+    payload = {
+        "schema_version": _STAGE_MARKER_SCHEMA_VERSION,
+        "incomplete": False,
+        "content_hash": content_hash_value,
+        "staged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "package_name": package_name,
+    }
+    marker_path = Path(dest) / STAGE_MARKER_NAME
+    marker_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _unlink_stage_marker(dest: Path) -> None:
+    """Invalidate any complete claim before mutate (missing marker ⇒ never skip).
+
+    Raises ``OSError`` if the marker cannot be removed. Callers must not mutate
+    the package tree while a complete marker may still claim the dest is good
+    (KD-G2: incomplete trees must never be skippable).
+    """
+    marker = Path(dest) / STAGE_MARKER_NAME
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError as exc:
+        _LOG.warning("stage marker unlink failed %s: %s", marker, exc)
+        raise
+    # Fail closed: do not proceed if the complete claim is still on disk.
+    if marker.exists() or marker.is_symlink():
+        raise OSError(f"stage marker still present after unlink: {marker}")
+
+
+def _has_payload_files(dest: Path) -> bool:
+    """True if dest has at least one regular file that is not the stage marker."""
+    dest = Path(dest)
+    if not dest.is_dir():
+        return False
+    for path in dest.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        if path.name == STAGE_MARKER_NAME:
+            continue
+        return True
+    return False
+
+
+def host_stage_looks_complete(dest: Path, package_dir: Path) -> bool:
+    """True when staged dest satisfies source runner expectations (KD-G1).
+
+    Reads **source** ``runner.json`` (not dest's possibly stale copy). Incomplete
+    dests must never be skippable.
+    """
+    dest = Path(dest)
+    package_dir = Path(package_dir)
+    if not dest.is_dir() or dest.is_symlink():
+        return False
+
+    runner_path = package_dir / "runner.json"
+    if not runner_path.is_file():
+        return False
+    try:
+        with runner_path.open(encoding="utf-8") as handle:
+            runner = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(runner, dict):
+        return False
+
+    kind = str(runner.get("kind") or "").strip()
+    if kind == "sandbox_python":
+        module = runner.get("module")
+        if not isinstance(module, str) or not module.strip():
+            return False
+        if not is_safe_module_rel(module.strip()):
+            return False
+        return resolve_module_file(dest, module.strip()) is not None
+
+    if kind == "sandbox_shell":
+        argv = runner.get("argv")
+        if not isinstance(argv, list) or not argv:
+            # Absolute-cmd style still needs a non-empty payload tree.
+            return _has_payload_files(dest)
+        argv0 = str(argv[0]).strip()
+        if not argv0:
+            return False
+        is_absolute = argv0.startswith("/") or (len(argv0) >= 2 and argv0[1] == ":")
+        has_dotdot = ".." in Path(argv0).parts
+        rel = argv0.replace("\\", "/")
+        # Package-relative when no abs / .. and looks like a path (sep or
+        # extension) rather than a bare command name like ``python3``.
+        looks_package_relative = (
+            not is_absolute
+            and not has_dotdot
+            and ("/" in rel or Path(rel).suffix != "")
+        )
+        if looks_package_relative:
+            candidate = (dest / rel).resolve()
+            try:
+                candidate.relative_to(dest.resolve())
+            except ValueError:
+                return False
+            return candidate.is_file()
+        return _has_payload_files(dest)
+
+    # Unknown / missing kind: dest dir with ≥1 regular payload file.
+    if not kind:
+        return False
+    return _has_payload_files(dest)
+
+
+def _stage_marker_allows_skip(
+    marker: dict[str, Any] | None,
+    *,
+    src_hash: str,
+) -> bool:
+    """True when marker claims complete for the given source content hash."""
+    if marker is None:
+        return False
+    if marker.get("schema_version") != _STAGE_MARKER_SCHEMA_VERSION:
+        return False
+    if marker.get("incomplete") is True:
+        return False
+    if marker.get("content_hash") != src_hash:
+        return False
+    return True
 
 
 def stage_package_for_guest(
@@ -195,12 +355,25 @@ def stage_package_for_guest(
     package_dir: Path,
     *,
     strip_verify_record: bool = False,
+    force: bool = False,
 ) -> Path:
     """Copy package into ``sandboxes/sandbox0/tools/<name>/`` (atomic-ish).
 
-    Writes under ``tools/.stage/<name>.<pid>.<token>/`` then renames into place.
-    Excludes ``__pycache__`` / ``.pyc``. Optionally strips ``.verify.json``.
-    Returns the host destination directory.
+    Content-hash stage gate (KD-G1): when dest already has a complete marker
+    whose hash matches the **source** package and the dest looks complete,
+    skip re-stage (unless ``force=True``).
+
+    Skip assumes identical stage options: when ``strip_verify_record=True`` and
+    dest still has ``.verify.json``, skip is refused so the strip contract is
+    honored even if the content hash is unchanged.
+
+    When dest already exists as a real directory, refresh **in place** (no
+    top-level ``os.rename(dest, backup)``) so the package dentry is preserved.
+    First stage (no dest) still uses ``tools/.stage/<name>.<pid>.<token>/`` then
+    renames into place. Marker is unlinked before mutate and written complete
+    only after full success (KD-G2).
+    Excludes ``__pycache__`` / ``.pyc`` / stage marker. Optionally strips
+    ``.verify.json``. Returns the host destination directory.
     """
     package_dir = Path(package_dir)
     if not package_dir.is_dir():
@@ -211,10 +384,54 @@ def stage_package_for_guest(
 
     host_root = ensure_host_tree(PRIMARY_NAME, paths)
     tools_dir = _ensure_real_subdir(host_root, "tools")
+    dest = tools_dir / name
+
+    # Always hash SOURCE (never dest) for the gate and marker.
+    src_hash = content_hash(package_dir)
+
+    # Refuse skip when strip is requested but dest still carries a verify record.
+    strip_needs_restage = strip_verify_record and (
+        dest.is_dir() and (dest / VERIFY_RECORD_NAME).is_file()
+    )
+
+    if (
+        not force
+        and not strip_needs_restage
+        and dest.is_dir()
+        and not dest.is_symlink()
+        and _stage_marker_allows_skip(load_stage_marker(dest), src_hash=src_hash)
+        and host_stage_looks_complete(dest, package_dir)
+    ):
+        return dest.resolve()
+
+    # Mutate path: invalidate complete claim BEFORE any restage when dest exists.
+    # Unlink must succeed — refuse mutate if a complete marker may remain (KD-G2).
+    dest_is_real_dir = dest.is_dir() and not dest.is_symlink()
+    if dest_is_real_dir:
+        _unlink_stage_marker(dest)
+        # Update: NEVER os.rename(dest, backup) — preserve top-level dentry.
+        # On any failure the marker stays absent (already unlinked); caller /
+        # guest_dispatch maps OSError → stage_failed; next call cannot skip.
+        _in_place_refresh(
+            package_dir,
+            dest,
+            sandbox_root=host_root,
+            strip_verify_record=strip_verify_record,
+        )
+        write_complete_stage_marker(
+            dest,
+            content_hash_value=src_hash,
+            package_name=name,
+        )
+        return dest.resolve()
+
+    # First stage (no dest), or replace non-dir dest (symlink/file).
+    if dest.exists() or dest.is_symlink():
+        _safe_rmtree(dest)
+
     stage_root = _ensure_real_subdir(host_root, "tools", ".stage")
     token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
     work = stage_root / f"{name}.{token}"
-    dest = tools_dir / name
 
     if work.exists() or work.is_symlink():
         _safe_rmtree(work)
@@ -227,24 +444,13 @@ def stage_package_for_guest(
             sandbox_root=host_root,
             strip_verify_record=strip_verify_record,
         )
-        # Swap into place: move old dest aside, rename work → dest, drop old.
-        backup: Path | None = None
-        if dest.exists() or dest.is_symlink():
-            backup = stage_root / f"{name}.old.{token}"
-            if backup.exists() or backup.is_symlink():
-                _safe_rmtree(backup)
-            os.rename(dest, backup)
-        try:
-            os.rename(work, dest)
-        except OSError:
-            if backup is not None and backup.exists():
-                try:
-                    os.rename(backup, dest)
-                except OSError:
-                    pass
-            raise
-        if backup is not None:
-            _safe_rmtree(backup)
+        # dest did not exist (or was cleared); rename work into place.
+        os.rename(work, dest)
+        write_complete_stage_marker(
+            dest,
+            content_hash_value=src_hash,
+            package_name=name,
+        )
     finally:
         if work.exists() or work.is_symlink():
             _safe_rmtree(work)
@@ -264,6 +470,219 @@ def guest_module_path(name: str, module: str) -> str:
         # Guest loader uses the path as given; host resolve may have added .py
         pass
     return f"{GUEST_WORKSPACE_ROOT}/tools/{name}/{rel}"
+
+
+# Path must appear as the *missing-path operand*, not a bare traceback frame
+# (``File "guest_script", line N``). Quoted so a prefix of a longer sibling path
+# (e.g. main.py vs main.py.bak) cannot match.
+_MISSING_PATH_OPERAND_RE = re.compile(
+    r"(?:"
+    r"No such file or directory:\s*(?P<q1>['\"])(?P<p1>.*?)(?P=q1)"
+    r"|"
+    r"can't open file\s+(?P<q2>['\"])(?P<p2>.*?)(?P=q2)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _path_is_missing_operand(combined: str, path: str) -> bool:
+    """True when ``path`` is quoted as the missing-file operand in streams."""
+    for match in _MISSING_PATH_OPERAND_RE.finditer(combined):
+        operand = (
+            match.group("p1") if match.group("p1") is not None else match.group("p2")
+        )
+        if operand == path:
+            return True
+    return False
+
+
+def path_missing_signature(
+    *,
+    exit_code: int,
+    stdout: str = "",
+    stderr: str = "",
+    guest_script: str,
+) -> bool:
+    """True when guest failed because ``guest_script`` was not visible (KD-G3).
+
+    Classify **only** when:
+
+    1. ``exit_code != 0``, and
+    2. stderr or stdout contains ``FileNotFoundError`` or errno-2 phrasing, and
+    3. the exact ``guest_script`` string is the **missing-path operand**
+       (e.g. ``No such file or directory: '…'`` / ``can't open file '…'``),
+       not merely a traceback ``File "…"`` frame.
+
+    Tool-logic FileNotFound for other package data paths must **not** match
+    (no force restage; maps to KD21 ``guest_nonzero_exit``).
+    """
+    if exit_code == 0:
+        return False
+    path = (guest_script or "").strip()
+    if not path:
+        return False
+    combined = f"{stderr or ''}\n{stdout or ''}"
+    if not _path_is_missing_operand(combined, path):
+        return False
+    # Confirm missing-file class (operand patterns already imply this; keep
+    # explicit so non-FNF text that quotes the path elsewhere cannot match).
+    if "FileNotFoundError" in combined:
+        return True
+    if "[Errno 2]" in combined:
+        return True
+    if "No such file or directory" in combined:
+        return True
+    if "can't open file" in combined.lower():
+        return True
+    return False
+
+
+def _shell_guest_script_candidates(package_name: str, argv: list[str]) -> list[str]:
+    """Package-relative argv paths under the staged guest package (for KD-G3).
+
+    Returns guest absolute paths (and bare relative forms) that should trigger
+    reactive force restage when missing — not bare command names like ``python3``.
+    """
+    pkg = guest_tools_package_path(package_name)
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in argv:
+        a = str(raw).strip()
+        if not a or a.startswith("-"):
+            continue
+        is_absolute = a.startswith("/") or (len(a) >= 2 and a[1] == ":")
+        if ".." in Path(a).parts:
+            continue
+        rel = a.replace("\\", "/")
+        if is_absolute:
+            if rel == pkg or rel.startswith(pkg + "/"):
+                if rel not in seen:
+                    seen.add(rel)
+                    out.append(rel)
+            continue
+        looks_package_relative = "/" in rel or Path(rel).suffix != ""
+        if not looks_package_relative:
+            continue
+        abs_path = f"{pkg}/{rel.lstrip('/')}"
+        for candidate in (abs_path, rel):
+            if candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
+    return out
+
+
+def _any_path_missing_signature(
+    *,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+    candidates: list[str],
+) -> bool:
+    for path in candidates:
+        if path_missing_signature(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            guest_script=path,
+        ):
+            return True
+    return False
+
+
+_GUEST_MODULE_MISSING_HINT = "host stage ok; guest visibility failed"
+
+
+def _guest_module_missing_result(
+    *,
+    guest_path: str,
+    package_dir: Path,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+) -> ToolResult:
+    """Exhausted path-missing recovery → guest_module_missing (not KD21)."""
+    return ToolResult(
+        ok=False,
+        error_reason="guest_module_missing",
+        payload={
+            "guest_path": guest_path,
+            "content_hash": content_hash(package_dir),
+            "stage_retried": True,
+            "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+            "hint": _GUEST_MODULE_MISSING_HINT,
+            "exit_code": exit_code,
+            "stdout": _tail(stdout),
+            "stderr": _tail(stderr),
+        },
+    )
+
+
+def _exec_with_path_missing_recovery(
+    *,
+    paths: ElyraPaths,
+    package_dir: Path,
+    candidate_paths: list[str],
+    primary_guest_path: str,
+    run_exec: Callable[[], ExecResult],
+    map_result: Callable[[int, str, str], ToolResult],
+) -> ToolResult:
+    """Exec once; on path-missing signature force re-stage once and re-exec (KD-G3).
+
+    Budget: exactly one force + one extra exec. Intermediate FNF is internal only.
+    Exhausted → ``guest_module_missing``; other outcomes via ``map_result``.
+    """
+    stage_retried = False
+    for _attempt in range(2):
+        try:
+            result = run_exec()
+        except _GuestTimeout:
+            return ToolResult(
+                ok=False,
+                payload={
+                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
+                    "timed_out": True,
+                },
+                error_reason="guest_timeout",
+            )
+        except _IsolationFailure as exc:
+            return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
+
+        exit_code = int(result.exit_code)
+        stdout = str(result.stdout_text or "")
+        stderr = str(result.stderr_text or "")
+        missing = bool(candidate_paths) and _any_path_missing_signature(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            candidates=candidate_paths,
+        )
+        if missing and not stage_retried:
+            try:
+                stage_package_for_guest(paths, package_dir, force=True)
+            except OSError as exc:
+                _LOG.warning("force re-stage failed for %s: %s", package_dir.name, exc)
+                return ToolResult(
+                    ok=False,
+                    payload={"executor_backend": EXECUTOR_BACKEND_MICROSANDBOX},
+                    error_reason=f"stage_failed:{type(exc).__name__}",
+                )
+            stage_retried = True
+            continue
+        if missing:
+            _LOG.warning(
+                "guest_module_missing after retry name=%s path=%s",
+                package_dir.name,
+                primary_guest_path,
+            )
+            return _guest_module_missing_result(
+                guest_path=primary_guest_path,
+                package_dir=package_dir,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+            )
+        return map_result(exit_code, stdout, stderr)
+    raise AssertionError("path-missing recovery loop exited without return")
 
 
 # ---------------------------------------------------------------------------
@@ -311,9 +730,7 @@ def map_python_exec_result(
         return ToolResult(
             ok=False,
             payload=base_streams,
-            error_reason=(
-                "guest_nonzero_exit" if isolation else "host_nonzero_exit"
-            ),
+            error_reason=("guest_nonzero_exit" if isolation else "host_nonzero_exit"),
         )
 
     stripped = (stdout or "").strip()
@@ -400,9 +817,7 @@ def map_shell_exec_result(
         return ToolResult(
             ok=False,
             payload=payload,
-            error_reason=(
-                "guest_nonzero_exit" if isolation else "host_nonzero_exit"
-            ),
+            error_reason=("guest_nonzero_exit" if isolation else "host_nonzero_exit"),
         )
     return ToolResult(ok=True, payload=payload)
 
@@ -440,11 +855,17 @@ def host_stub_dispatch(
 ) -> ToolResult:
     """Execute sandbox_* runners on the host (tests/CI only)."""
     package_dir = Path(package_dir)
-    timeout = clamp_tool_timeout(args.get("timeout") if isinstance(args, dict) else None)
+    timeout = clamp_tool_timeout(
+        args.get("timeout") if isinstance(args, dict) else None
+    )
     if runner.kind == "sandbox_python":
-        return _host_stub_python(runner, args, ctx, package_dir=package_dir, timeout=timeout)
+        return _host_stub_python(
+            runner, args, ctx, package_dir=package_dir, timeout=timeout
+        )
     if runner.kind == "sandbox_shell":
-        return _host_stub_shell(runner, args, ctx, package_dir=package_dir, timeout=timeout)
+        return _host_stub_shell(
+            runner, args, ctx, package_dir=package_dir, timeout=timeout
+        )
     return ToolResult(
         ok=False,
         payload={},
@@ -464,13 +885,9 @@ def _host_stub_python(
     module = (runner.module or "").strip()
     func_name = (runner.function or "run").strip() or "run"
     if not is_safe_module_rel(module):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:module"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:module")
     if not is_public_function_name(func_name):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:function"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:function")
     mod_path = resolve_module_file(package_dir, module)
     if mod_path is None:
         return ToolResult(
@@ -535,9 +952,7 @@ def _host_stub_shell(
 ) -> ToolResult:
     argv = list(runner.argv or [])
     if not argv or not str(argv[0]).strip():
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:argv"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:argv")
     argv = [str(a) for a in argv]
 
     paths = ctx.paths if ctx.paths is not None else resolve_paths()
@@ -624,7 +1039,9 @@ def guest_dispatch(
     paths = ctx.paths if ctx.paths is not None else resolve_paths()
     package_dir = Path(package_dir)
     name = package_dir.name
-    timeout = clamp_tool_timeout(args.get("timeout") if isinstance(args, dict) else None)
+    timeout = clamp_tool_timeout(
+        args.get("timeout") if isinstance(args, dict) else None
+    )
 
     try:
         stage_package_for_guest(paths, package_dir)
@@ -670,17 +1087,12 @@ def _guest_python(
     package_dir: Path,
     timeout: float,
 ) -> ToolResult:
-    del paths
     module = (runner.module or "").strip()
     func_name = (runner.function or "run").strip() or "run"
     if not is_safe_module_rel(module):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:module"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:module")
     if not is_public_function_name(func_name):
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:function"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:function")
     # Prefer resolved file name (may add .py) so guest path matches staged bytes.
     mod_file = resolve_module_file(package_dir, module)
     if mod_file is None:
@@ -701,8 +1113,9 @@ def _guest_python(
         args=args if isinstance(args, dict) else {},
     )
     env = {**guest_env(), "PYTHONDONTWRITEBYTECODE": "1"}
-    try:
-        result = _exec_with_one_reconnect(
+
+    def _run() -> ExecResult:
+        return _exec_with_one_reconnect(
             life,
             cmd="python3",
             argv=["-B", "-c", runner_src],
@@ -710,24 +1123,25 @@ def _guest_python(
             env=env,
             timeout=timeout,
         )
-    except _GuestTimeout as exc:
-        return ToolResult(
-            ok=False,
-            payload={
-                "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                "timed_out": True,
-            },
-            error_reason="guest_timeout",
-        )
-    except _IsolationFailure as exc:
-        return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
 
-    return map_python_exec_result(
-        exit_code=int(result.exit_code),
-        stdout=str(result.stdout_text or ""),
-        stderr=str(result.stderr_text or ""),
-        executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
-        isolation=True,
+    def _map(exit_code: int, stdout: str, stderr: str) -> ToolResult:
+        return map_python_exec_result(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
+            isolation=True,
+        )
+
+    # KD-G3 reactive-only MVP: one force re-stage + one extra exec on exact
+    # guest_script path-missing; intermediate FNF is internal only.
+    return _exec_with_path_missing_recovery(
+        paths=paths,
+        package_dir=package_dir,
+        candidate_paths=[guest_script],
+        primary_guest_path=guest_script,
+        run_exec=_run,
+        map_result=_map,
     )
 
 
@@ -742,9 +1156,7 @@ def _guest_shell(
 ) -> ToolResult:
     argv = list(runner.argv or [])
     if not argv or not str(argv[0]).strip():
-        return ToolResult(
-            ok=False, payload={}, error_reason="invalid_runner:argv"
-        )
+        return ToolResult(ok=False, payload={}, error_reason="invalid_runner:argv")
     argv_s = [str(a) for a in argv]
     cmd, cmd_args = argv_s[0], argv_s[1:]
 
@@ -754,6 +1166,14 @@ def _guest_shell(
     token = uuid.uuid4().hex
     host_args_path = tmp_dir / f"elyra_tool_args_{token}.json"
     guest_args_path = f"{GUEST_WORKSPACE_ROOT}/tmp/elyra_tool_args_{token}.json"
+    path_candidates = _shell_guest_script_candidates(package_dir.name, argv_s)
+    # Prefer absolute guest path for guest_module_missing payload.
+    primary_guest_path = next(
+        (p for p in path_candidates if p.startswith(GUEST_WORKSPACE_ROOT)),
+        path_candidates[0]
+        if path_candidates
+        else guest_tools_package_path(package_dir.name),
+    )
 
     try:
         host_args_path.write_text(
@@ -766,8 +1186,9 @@ def _guest_shell(
             "PYTHONDONTWRITEBYTECODE": "1",
         }
         guest_cwd = guest_tools_package_path(package_dir.name)
-        try:
-            result = _exec_with_one_reconnect(
+
+        def _run() -> ExecResult:
+            return _exec_with_one_reconnect(
                 life,
                 cmd=cmd,
                 argv=cmd_args,
@@ -775,24 +1196,24 @@ def _guest_shell(
                 env=env,
                 timeout=timeout,
             )
-        except _GuestTimeout:
-            return ToolResult(
-                ok=False,
-                payload={
-                    "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
-                    "timed_out": True,
-                },
-                error_reason="guest_timeout",
-            )
-        except _IsolationFailure as exc:
-            return isolation_unavailable_result(exc.message, anomaly=exc.anomaly)
 
-        return map_shell_exec_result(
-            exit_code=int(result.exit_code),
-            stdout=str(result.stdout_text or ""),
-            stderr=str(result.stderr_text or ""),
-            executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
-            isolation=True,
+        def _map(exit_code: int, stdout: str, stderr: str) -> ToolResult:
+            return map_shell_exec_result(
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                executor_backend=EXECUTOR_BACKEND_MICROSANDBOX,
+                isolation=True,
+            )
+
+        # KD-G3: same one-force budget for package-relative argv path missing.
+        return _exec_with_path_missing_recovery(
+            paths=paths,
+            package_dir=package_dir,
+            candidate_paths=path_candidates,
+            primary_guest_path=primary_guest_path,
+            run_exec=_run,
+            map_result=_map,
         )
     finally:
         try:
@@ -884,9 +1305,7 @@ def _exec_with_one_reconnect(
                 _force_ensure_reconnect(life)
             continue
         except _SandboxDeathDuringExec as exc:
-            last_iso = _IsolationFailure(
-                str(exc), anomaly="sandbox_unavailable"
-            )
+            last_iso = _IsolationFailure(str(exc), anomaly="sandbox_unavailable")
             if attempt == 0:
                 _force_ensure_reconnect(life)
             continue
@@ -930,9 +1349,7 @@ def _exec_once(
                     timeout=bridge_timeout,
                 )
             except BridgeTimeoutError as exc:
-                raise _GuestTimeout(
-                    f"guest exec timeout ({timeout:.0f}s)"
-                ) from exc
+                raise _GuestTimeout(f"guest exec timeout ({timeout:.0f}s)") from exc
             except (BridgeShutdownError, BridgeReentrancyError) as exc:
                 raise _IsolationFailure(
                     f"bridge error: {type(exc).__name__}",
@@ -948,9 +1365,7 @@ def _exec_once(
             stderr = str(getattr(result, "stderr_text", "") or "")
             # Mid-exec crash heuristic: empty streams + non-zero.
             if exit_code != 0 and not stdout.strip() and not stderr.strip():
-                raise _SandboxDeathDuringExec(
-                    "empty guest failure (possible crash)"
-                )
+                raise _SandboxDeathDuringExec("empty guest failure (possible crash)")
             return ExecResult(
                 exit_code=exit_code,
                 stdout_text=stdout,
@@ -959,9 +1374,7 @@ def _exec_once(
     except (_IsolationFailure, _SandboxDeathDuringExec, _GuestTimeout):
         raise
     except EnsureLockTimeoutError as exc:
-        raise _IsolationFailure(
-            f"lock timeout: {exc}", anomaly="lock_timeout"
-        ) from exc
+        raise _IsolationFailure(f"lock timeout: {exc}", anomaly="lock_timeout") from exc
     except SandboxClientUnusableError as exc:
         raise _IsolationFailure(
             f"client unusable: {exc}", anomaly="client_unusable"
@@ -1192,6 +1605,181 @@ def _safe_copy_file(src: Path, dest: Path) -> None:
         raise OSError(f"stage produced unexpected symlink: {dest}")
 
 
+def _is_elyra_tmp_name(name: str) -> bool:
+    """True for per-file stage temps: ``<name>.elyra_tmp.<token>``."""
+    return ".elyra_tmp." in name
+
+
+def _safe_copy_file_replace(src: Path, dest: Path, *, token: str) -> None:
+    """Copy ``src`` onto ``dest`` via sibling temp + ``os.replace`` (atomic)."""
+    if src.is_symlink():
+        raise OSError(f"refusing to stage symlink source: {src}")
+    if not src.is_file():
+        raise OSError(f"stage source is not a regular file: {src}")
+    parent = dest.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise OSError(f"stage dest parent is not a real directory: {parent}")
+    if dest.is_symlink():
+        dest.unlink(missing_ok=True)
+    elif dest.exists() and dest.is_dir() and not dest.is_symlink():
+        _safe_rmtree(dest)
+
+    tmp = parent / f"{dest.name}.elyra_tmp.{token}"
+    try:
+        if tmp.exists() or tmp.is_symlink():
+            if tmp.is_dir() and not tmp.is_symlink():
+                _safe_rmtree(tmp)
+            else:
+                _safe_unlink(tmp)
+        shutil.copyfile(src, tmp, follow_symlinks=False)
+        try:
+            shutil.copystat(src, tmp, follow_symlinks=False)
+        except OSError:
+            pass
+        if tmp.is_symlink():
+            tmp.unlink(missing_ok=True)
+            raise OSError(f"stage produced unexpected symlink: {tmp}")
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            if tmp.exists() or tmp.is_symlink():
+                if tmp.is_dir() and not tmp.is_symlink():
+                    _safe_rmtree(tmp)
+                else:
+                    tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    if dest.is_symlink():
+        dest.unlink(missing_ok=True)
+        raise OSError(f"stage produced unexpected symlink: {dest}")
+
+
+def _stage_should_skip_source_entry(child: Path, *, strip_verify_record: bool) -> bool:
+    """True when a source entry is excluded from staged payload."""
+    if child.name in _STAGE_IGNORE_NAMES:
+        return True
+    if child.suffix in _STAGE_IGNORE_SUFFIXES:
+        return True
+    if strip_verify_record and child.name == VERIFY_RECORD_NAME:
+        return True
+    return False
+
+
+def _in_place_refresh(
+    src: Path,
+    dest: Path,
+    *,
+    sandbox_root: Path,
+    strip_verify_record: bool = False,
+) -> None:
+    """Refresh ``dest`` from ``src`` without renaming the top-level package dir.
+
+    Per-file: write to sibling ``*.elyra_tmp.<token>`` then ``os.replace``.
+    After copy, prune dest paths absent from the source payload. Always
+    prunes stage markers (any depth), ``__pycache__`` / ``*.pyc`` / ``*.pyo``,
+    leftover ``*.elyra_tmp.*``, and other ignore names — no marker keep-set;
+    the complete marker is rewritten by the caller only after full success.
+    ``sandbox_root`` is accepted for call-site parity with
+    ``_safe_copytree_into`` (escape checks live in callers that create dest).
+    """
+    del sandbox_root  # dest already under tools/; same contract as copytree
+    if src.is_symlink() or not src.is_dir():
+        raise OSError(f"stage source tree invalid: {src}")
+    if dest.is_symlink() or not dest.is_dir():
+        raise OSError(f"stage dest is not a real directory: {dest}")
+
+    token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    desired_files: set[str] = set()
+    desired_dirs: set[str] = set()
+
+    def walk_copy(src_dir: Path, rel_prefix: str) -> None:
+        for child in sorted(src_dir.iterdir(), key=lambda p: p.name):
+            if _stage_should_skip_source_entry(
+                child, strip_verify_record=strip_verify_record
+            ):
+                continue
+            if child.is_symlink():
+                raise OSError(f"refusing to stage symlink: {child}")
+            rel = f"{rel_prefix}/{child.name}" if rel_prefix else child.name
+            target = dest / rel
+            if child.is_dir():
+                desired_dirs.add(rel)
+                if target.is_symlink():
+                    target.unlink(missing_ok=True)
+                if target.exists() and (not target.is_dir() or target.is_symlink()):
+                    _safe_unlink(target)
+                if not target.exists():
+                    target.mkdir(mode=0o755)
+                walk_copy(child, rel)
+            elif child.is_file():
+                desired_files.add(rel)
+                parent = target.parent
+                if parent.is_symlink() or not parent.is_dir():
+                    raise OSError(
+                        f"stage dest parent is not a real directory: {parent}"
+                    )
+                _safe_copy_file_replace(child, target, token=token)
+            else:
+                raise OSError(f"refusing to stage special file: {child}")
+
+    walk_copy(src, "")
+    _prune_stale_stage_payload(
+        dest,
+        desired_files=desired_files,
+        desired_dirs=desired_dirs,
+    )
+
+
+def _prune_stale_stage_payload(
+    dest: Path,
+    *,
+    desired_files: set[str],
+    desired_dirs: set[str],
+) -> None:
+    """Delete dest entries not in the source payload (after in-place copy).
+
+    Always prunes stage markers (top-level and nested), ignore names, bytecode
+    suffixes, leftover ``*.elyra_tmp.*``, and source-deleted modules/dirs.
+    The complete marker is rewritten by the caller only after full success —
+    never keep a pre-refresh complete claim on disk during/after refresh.
+    """
+    dest = Path(dest)
+    if not dest.is_dir() or dest.is_symlink():
+        return
+    # Bottom-up so files go before their parent dirs.
+    for path in sorted(dest.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        try:
+            rel = path.relative_to(dest).as_posix()
+        except ValueError:
+            continue
+        # Always prune stage ignore names (includes STAGE_MARKER_NAME at any
+        # depth), bytecode, and refresh temps.
+        if (
+            path.name in _STAGE_IGNORE_NAMES
+            or path.suffix in _STAGE_IGNORE_SUFFIXES
+            or _is_elyra_tmp_name(path.name)
+        ):
+            if path.is_dir() and not path.is_symlink():
+                _safe_rmtree(path)
+            else:
+                _safe_unlink(path)
+            continue
+        if path.is_symlink() or path.is_file():
+            if rel not in desired_files:
+                _safe_unlink(path)
+            continue
+        if path.is_dir():
+            if rel not in desired_dirs:
+                _safe_rmtree(path)
+            continue
+        # FIFO / device / socket / other non-file non-dir nodes: treat as stale.
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            _LOG.debug("prune could not remove special path %s", path)
+
+
 def _safe_copytree_into(
     src: Path,
     dest: Path,
@@ -1204,11 +1792,9 @@ def _safe_copytree_into(
     if dest.is_symlink() or not dest.is_dir():
         raise OSError(f"stage dest is not a real directory: {dest}")
     for child in sorted(src.iterdir(), key=lambda p: p.name):
-        if child.name in _STAGE_IGNORE_NAMES:
-            continue
-        if child.suffix in _STAGE_IGNORE_SUFFIXES:
-            continue
-        if strip_verify_record and child.name == _VERIFY_RECORD_NAME:
+        if _stage_should_skip_source_entry(
+            child, strip_verify_record=strip_verify_record
+        ):
             continue
         if child.is_symlink():
             raise OSError(f"refusing to stage symlink: {child}")
@@ -1228,8 +1814,6 @@ def _safe_copytree_into(
                 strip_verify_record=strip_verify_record,
             )
         elif child.is_file():
-            if strip_verify_record and child.name == _VERIFY_RECORD_NAME:
-                continue
             _safe_copy_file(child, target)
         else:
             raise OSError(f"refusing to stage special file: {child}")
@@ -1241,6 +1825,7 @@ __all__ = [
     "EXECUTOR_BACKEND_HOST_STUB",
     "EXECUTOR_BACKEND_MICROSANDBOX",
     "MAX_TOOL_TIMEOUT_SECONDS",
+    "STAGE_MARKER_NAME",
     "clamp_tool_timeout",
     "GuestIsolationError",
     "GuestTimeoutError",
@@ -1249,12 +1834,16 @@ __all__ = [
     "guest_module_path",
     "guest_run_argv",
     "guest_tools_package_path",
+    "host_stage_looks_complete",
     "host_stub_dispatch",
     "is_public_function_name",
     "is_safe_module_rel",
     "isolation_unavailable_result",
+    "load_stage_marker",
     "map_python_exec_result",
     "map_shell_exec_result",
+    "path_missing_signature",
     "resolve_module_file",
     "stage_package_for_guest",
+    "write_complete_stage_marker",
 ]

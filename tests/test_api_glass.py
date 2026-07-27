@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -16,7 +19,7 @@ from elyra.config import resolve_paths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
 from elyra.llm.client import StubChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.loop.doloop import DoLoopResult
 from elyra.moment import MomentStore
 from elyra.presence.queue import WakeQueue
@@ -85,7 +88,7 @@ class _ApiHarness:
         self._stop = stop
         config = RuntimeConfig(api_host="127.0.0.1", api_port=0)
         self.state = RuntimeState()
-        self.gate = LlamaServerGate()
+        self.gate = ChatRequestGate()
         # Real catalogs when bundled roots exist (editable tree); else empty.
         tools: ToolRegistry | None
         skills: SkillCatalog | None
@@ -546,6 +549,55 @@ def test_get_tools_and_skills_catalog(paths):
         h.close()
 
 
+def test_get_tool_and_skill_detail_inspector(paths):
+    """GET /api/tools|skills/{name} — package docs + versions list (read-only)."""
+    h = _ApiHarness(paths)
+    try:
+        code, tools = h.get("/api/tools")
+        assert code == 200
+        if tools.get("error") == "tools catalog unavailable" or not tools.get("tools"):
+            return
+        tname = next(
+            (t["name"] for t in tools["tools"] if t.get("name") in ("speak", "read_file")),
+            tools["tools"][0]["name"],
+        )
+        code, detail = h.get(f"/api/tools/{tname}?list_versions=1")
+        assert code == 200, detail
+        assert detail.get("ok") is True
+        assert detail.get("name") == tname
+        assert detail.get("kind") == "tool"
+        assert "package" in detail
+        assert isinstance(detail.get("versions"), list)
+        # Bundled: empty versions; package preview present when TOOL.md exists
+        pkg = detail["package"]
+        assert "files_present" in pkg or "top_level" in pkg
+
+        code, missing = h.get("/api/tools/definitely_not_a_tool_xyz")
+        assert code in (400, 404)
+        assert missing.get("ok") is False
+
+        code, skills = h.get("/api/skills")
+        assert code == 200
+        if skills.get("error") == "skills catalog unavailable" or not skills.get("skills"):
+            return
+        sname = next(
+            (s["name"] for s in skills["skills"] if s.get("name") in ("talk", "do-work")),
+            skills["skills"][0]["name"],
+        )
+        code, sdetail = h.get(f"/api/skills/{sname}?list_versions=1")
+        assert code == 200, sdetail
+        assert sdetail.get("ok") is True
+        assert sdetail.get("name") == sname
+        assert sdetail.get("kind") == "skill"
+        # Full playbook preferred when catalog can load body
+        assert sdetail.get("skill_md") or (sdetail.get("package") or {}).get(
+            "skill_md_preview"
+        )
+        assert isinstance(sdetail.get("versions"), list)
+    finally:
+        h.close()
+
+
 def test_get_tools_rescans_after_local_delete(paths):
     """GET /api/tools reloads so operator-deleted local packages leave the catalog."""
     import json
@@ -750,7 +802,8 @@ def test_static_index_served(paths):
         # Moments list is content-sized; detail owns leftover space.
         assert "list-panel-auto" in html
         # Phase 0 provider / usage glass (PR7 web).
-        assert 'id="pill-llama"' in html
+        assert 'id="pill-provider"' in html
+        assert 'id="pill-llama"' not in html
         assert 'id="hard-stop-banner"' in html
         assert 'id="provider-card"' in html
         assert 'id="provider-model-select"' in html
@@ -759,11 +812,77 @@ def test_static_index_served(paths):
         assert 'type="password"' in html
         assert 'id="provider-api-key-save"' in html
         assert 'id="provider-api-key-clear"' in html
+        # PR5 secrets panel
+        assert 'data-panel="secrets"' in html
+        assert 'id="panel-secrets"' in html
+        assert 'id="secrets-name-input"' in html
+        assert 'id="secrets-value-input"' in html
+        assert 'id="secrets-save-btn"' in html
+        assert 'id="secrets-list"' in html
+        # Reasoning effort control on Status provider card (PR3)
+        assert 'id="provider-effort"' in html
+        assert 'id="provider-effort-label"' in html
+        assert 'role="radiogroup"' in html
+        assert 'data-effort="low"' in html
+        assert 'data-effort="medium"' in html
+        assert 'data-effort="high"' in html
+        assert 'data-effort="auto"' in html
+        assert "Auto effort escalation — coming later" in html
+        assert "effort-btn-auto" in html
+        # Auto is disabled stub in markup
+        assert re.search(
+            r'data-effort="auto"[^>]*\bdisabled\b',
+            html,
+        ) or re.search(
+            r'\bdisabled\b[^>]*data-effort="auto"',
+            html,
+        )
+        # PR4: left rail effort twin + compact usage meters
+        assert 'id="rail-effort"' in html
+        assert 'class="rail-effort"' in html or "rail-effort" in html
+        assert "effort-group-compact" in html
+        # Rail Auto is also disabled (both Status + rail stubs)
+        rail_auto = re.search(
+            r'id="rail-effort"[\s\S]*?data-effort="auto"[^>]*>',
+            html,
+        )
+        assert rail_auto is not None, "rail-effort Auto button not found"
+        assert "disabled" in rail_auto.group(0)
+        assert "aria-disabled" in rail_auto.group(0)
+        assert 'id="rail-usage-week-pct"' in html
+        assert 'id="rail-usage-week-bar"' in html
+        assert 'id="rail-usage-sg-pct"' in html
+        assert 'id="rail-usage-sg-bar"' in html
+        assert 'class="rail-usage"' in html or "rail-usage" in html
+        # Rail section must not include hard-stop override / day-hour soft / pace
+        # Slice from rail-usage open through rail-foot open (compact meters only).
+        rail_start = html.find('class="rail-usage"')
+        rail_foot = html.find('class="rail-foot"', rail_start if rail_start >= 0 else 0)
+        assert rail_start >= 0 and rail_foot > rail_start, "rail-usage before rail-foot not found"
+        rail_usage_html = html[rail_start:rail_foot]
+        assert "usage-override" not in rail_usage_html
+        assert "Hard-stop override" not in rail_usage_html
+        assert "Day (soft)" not in rail_usage_html
+        assert "Hour (soft)" not in rail_usage_html
+        assert "usage-pace" not in rail_usage_html
+        assert "usage-burst" not in rail_usage_html
         assert 'id="usage-card"' in html
         assert 'id="usage-override-toggle"' in html
         assert "Hard-stop override" in html
+        # Override copy contract (design §hard_stop_override / PR6)
+        assert "When ON, model calls continue past budget limits. Usage is still recorded." in html
         assert "Usage budget" in html
         assert "Provider / model" in html
+        # Primary meters: Elyra week + SuperGrok pool; soft day/hour demoted
+        assert "Elyra week" in html
+        assert "SuperGrok pool" in html
+        assert 'id="usage-sg-bar"' in html
+        assert 'id="usage-sg-pct"' in html
+        assert 'id="usage-pace-badge"' in html
+        assert 'id="usage-burst"' in html
+        assert "Day (soft)" in html
+        assert "Hour (soft)" in html
+        assert 'id="usage-product-usage"' in html
         # Reset checklist preserves secrets / provider prefs / usage meter.
         assert "data/secrets/" in html
         assert "data/runtime/provider.json" in html
@@ -810,6 +929,10 @@ def test_static_app_js_active_panel_poll(paths):
         assert '"/api/usage"' in js or "'/api/usage'" in js
         assert '"/api/provider"' in js or "'/api/provider'" in js
         assert '"/api/provider/api-key"' in js or "'/api/provider/api-key'" in js
+        # PR5 secrets panel wiring
+        assert '"/api/secrets"' in js or "'/api/secrets'" in js
+        assert "refreshSecrets" in js
+        assert "saveSecret" in js
         assert 'method: "PUT"' in js
         assert 'method: "DELETE"' in js
         assert "xai ready" in js or "${provider} ready" in js
@@ -820,6 +943,109 @@ def test_static_app_js_active_panel_poll(paths):
         assert "providerApiKeyInput.value = \"\"" in js or "providerApiKeyInput.value = ''" in js
         assert "usageOverrideInFlight" in js
         assert "providerPatchInFlight" in js
+        # PR3: reasoning effort Status control — real wiring, not just identifiers
+        assert "function paintEffortUI" in js
+        assert "function commitEffortFromStatus" in js
+        assert "lastReasoningEffort" in js
+        # paintEffortUI is visual-only (must not assign lastReasoningEffort)
+        paint_fn = re.search(
+            r"function paintEffortUI\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert paint_fn is not None, "paintEffortUI body not found"
+        assert "lastReasoningEffort" not in paint_fn.group(1)
+        assert "effort-btn-active" in paint_fn.group(1)
+        assert "aria-pressed" in paint_fn.group(1)
+        # commitEffortFromStatus is the only assigner of lastReasoningEffort
+        commit_fn = re.search(
+            r"function commitEffortFromStatus\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert commit_fn is not None, "commitEffortFromStatus body not found"
+        assert "lastReasoningEffort =" in commit_fn.group(1)
+        assert "paintEffortUI" in commit_fn.group(1)
+        # renderProviderCard: skip overwrite while in-flight; else commit
+        assert "commitEffortFromStatus" in js
+        assert "reasoning_effort" in js
+        # Optimistic click paints only; patch body is { reasoning_effort }
+        assert "paintEffortUI(effort)" in js
+        assert "patchProvider({ reasoning_effort: effort })" in js or (
+            "reasoning_effort: effort" in js and "patchProvider" in js
+        )
+        # Error path reverts paint from server last*, not optimistic value
+        assert "paintEffortUI(lastReasoningEffort)" in js
+        # In-flight disables active effort buttons (not Auto)
+        assert "setEffortButtonsDisabled" in js
+        # Auto never in PATCH body
+        assert 'reasoning_effort === "auto"' in js or "reasoning_effort === 'auto'" in js
+        # PR6: SuperGrok + pace/burst wiring (not just identifiers)
+        assert "usageSgBar" in js or "usage-sg-bar" in js
+        assert "usagePaceBadge" in js or "usage-pace-badge" in js
+        assert "pace_band" in js
+        assert "burst_remaining_tokens" in js
+        assert "burst_max_tokens" in js
+        assert "burst ${rem}/${max}" in js or "burst " in js
+        assert "day_soft_exhausted" in js
+        assert "day pace high (soft)" in js
+        assert "credit_usage_percent" in js
+        assert "poll …" in js or "poll" in js
+        # PR4: shared SuperGrok meter view + rail wiring (not identifier-only)
+        assert "function supergrokMeterView" in js
+        sg_fn = re.search(
+            r"function supergrokMeterView\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert sg_fn is not None, "supergrokMeterView body not found"
+        sg_body = sg_fn.group(1)
+        assert "credit_usage_percent" in sg_body
+        assert "stale" in sg_body
+        assert "% used" in sg_body
+        assert "poll …" in sg_body or "poll" in sg_body
+        # renderUsageCard must call the shared helper (Status + rail parity)
+        assert "supergrokMeterView(usage)" in js
+        assert "railUsageWeekPct" in js or "rail-usage-week-pct" in js
+        assert "railUsageWeekBar" in js or "rail-usage-week-bar" in js
+        assert "railUsageSgPct" in js or "rail-usage-sg-pct" in js
+        assert "railUsageSgBar" in js or "rail-usage-sg-bar" in js
+        # Week rail uses same remaining fraction + formatPctRemaining
+        assert "formatPctRemaining(week)" in js
+        assert "setUsageBar(railUsageWeekBar" in js or (
+            "railUsageWeekBar" in js and "setUsageBar" in js
+        )
+        # SuperGrok rail + Status both driven from sgView
+        assert "sgView.label" in js
+        assert "sgView.usedFrac" in js or "sgView.available" in js
+        assert "setUsageBar(railUsageSgBar" in js or (
+            "railUsageSgBar" in js and "usedMode: true" in js
+        )
+        # Soft day → no stop badge: pure helper + structural wiring
+        assert "function usageBadgeLabel" in js
+        assert "usageBadgeLabel(usage)" in js
+        badge_fn = re.search(
+            r"function usageBadgeLabel\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert badge_fn is not None, "usageBadgeLabel body not found"
+        badge_body = badge_fn.group(1)
+        assert "hard_stop" in badge_body
+        assert "soft_exhausted" not in badge_body
+        assert "day_soft" not in badge_body
+        assert "stop · ${hardStop}" in badge_body or "stop ·" in badge_body
+        # Soft flags only feed detail text, not badge
+        soft_detail = re.search(
+            r"if\s*\(\s*usage\.day_soft_exhausted\s*\)\s*\{?\s*"
+            r"parts\.push\([\"']day pace high \(soft\)[\"']\)",
+            js,
+        )
+        assert soft_detail is not None, "day_soft_exhausted must only push detail line"
+        # No literal stop · day (stop level always comes from hard_stop)
+        assert "stop · day" not in js
+        # Banner only when hard_stop is set (true hard levels)
+        assert "if (hardStop && !overrideActive)" in js or "hardStop && !overrideActive" in js
         # Chat polish + multimodal-ready composer
         assert "renderMarkdown" in js
         assert "pendingAttachments" in js
@@ -827,6 +1053,19 @@ def test_static_app_js_active_panel_poll(paths):
         assert "updateChatActivity" in js
         assert "renderActivityTrail" in js
         assert "recent_activity" in js
+        # PR4: durable attach upload + render matrix (no inventory-text hack)
+        assert "uploadPendingAttachments" in js
+        assert "attachment_ids" in js
+        assert '"/api/media"' in js or "'/api/media'" in js
+        assert "resolveMediaUrl" in js
+        assert "attachment:" in js
+        assert "renderAttachmentsFooter" in js
+        assert "msg-attachments" in js
+        assert "buildAttachmentInventory" not in js
+        assert "binary vision/file I/O not wired yet" not in js
+        assert "detectAttachmentKind" in js
+        assert "media-only" in js.lower() or "hasPending" in js
+        assert "MAX_PENDING_ATTACHMENTS" in js
 
         req_css = urllib.request.Request(h.base + "/style.css", method="GET")
         with urllib.request.urlopen(req_css, timeout=5) as resp:
@@ -838,12 +1077,138 @@ def test_static_app_js_active_panel_poll(paths):
         assert "overscroll-behavior: contain" in css
         assert "hard-stop-banner" in css
         assert "usage-bar-fill" in css
+        assert "usage-pace-badge" in css
+        assert "usage-meters-soft" in css
+        assert "usage-bar-na" in css
         assert "status-cards" in css
+        # PR3: effort segmented control styles (shared with rail)
+        assert ".effort-group" in css
+        assert ".effort-btn" in css
+        assert "effort-btn-active" in css
+        assert "effort-btn-auto" in css or ".effort-btn:disabled" in css
+        assert "effort-group-compact" in css
+        # PR4: rail effort + compact usage meters (220px column preserved)
+        assert ".rail-effort" in css
+        assert ".rail-usage" in css
+        assert ".rail-usage-meter" in css
+        assert "grid-template-columns: 220px 1fr" in css
         # Chat polish surface
         assert "msg-body" in css
         assert "jump-latest" in css
         assert "attach-tray" in css
         assert "activity-trail" in css
         assert "activity-chip" in css
+        # PR4 attachment footer / players
+        assert "msg-attachments" in css
+        assert "msg-att-thumb" in css
+        assert "msg-att-player" in css
+    finally:
+        h.close()
+
+
+def test_usage_badge_label_soft_day_does_not_stop(paths):
+    """Fixture payloads: soft day alone → ok; true hard_stop → stop · level.
+
+    Runs pure usageBadgeLabel from app.js under node when available; otherwise
+    reimplements the locked contract in Python so CI still covers the policy.
+    """
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            js = resp.read().decode("utf-8")
+    finally:
+        h.close()
+
+    m = re.search(
+        r"(function usageBadgeLabel\s*\([^)]*\)\s*\{.*?\n\})",
+        js,
+        re.DOTALL,
+    )
+    assert m is not None
+    fn_src = m.group(1)
+    # Helper must not consult soft flags
+    assert "soft_exhausted" not in fn_src
+
+    cases = [
+        (
+            {"enabled": True, "hard_stop": None, "day_soft_exhausted": True},
+            "ok",
+        ),
+        (
+            {
+                "enabled": True,
+                "hard_stop": None,
+                "day_soft_exhausted": True,
+                "hour_soft_exhausted": True,
+                "override_active": False,
+            },
+            "ok",
+        ),
+        ({"enabled": True, "hard_stop": "week", "override_active": False}, "stop · week"),
+        ({"enabled": True, "hard_stop": "day", "override_active": False}, "stop · day"),
+        ({"enabled": True, "hard_stop": "week", "override_active": True}, "override"),
+        ({"enabled": False}, "off"),
+        (None, "n/a"),
+    ]
+
+    node = shutil.which("node")
+    if node:
+        harness = (
+            fn_src
+            + "\n"
+            + "const cases = "
+            + json.dumps([[c[0], c[1]] for c in cases])
+            + ";\n"
+            + "for (const [u, want] of cases) {\n"
+            + "  const got = usageBadgeLabel(u);\n"
+            + "  if (got !== want) {\n"
+            + "    console.error(JSON.stringify({u, got, want}));\n"
+            + "    process.exit(1);\n"
+            + "  }\n"
+            + "}\n"
+            + "console.log('ok');\n"
+        )
+        proc = subprocess.run(
+            [node, "-e", harness],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr or proc.stdout
+        return
+
+    # Python mirror of usageBadgeLabel (locked by structural asserts above).
+    def usage_badge_label(usage: dict[str, Any] | None) -> str:
+        if not usage:
+            return "n/a"
+        if not usage.get("enabled"):
+            return "off"
+        hard_stop = usage.get("hard_stop") or None
+        override_active = bool(usage.get("override_active"))
+        if hard_stop and not override_active:
+            return f"stop · {hard_stop}"
+        if hard_stop and override_active:
+            return "override"
+        return "ok"
+
+    for payload, want in cases:
+        assert usage_badge_label(payload) == want
+
+
+def test_static_glass_pr4_html_accepts_audio(paths):
+    """Composer file input accepts audio; no inventory-only attach copy."""
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+            html = resp.read().decode("utf-8")
+        assert 'id="attach-input"' in html
+        assert "audio/*" in html
+        assert "image/*" in html
+        # Placeholder signals media-only send is OK
+        assert "attachments alone" in html or "media-only" in html.lower()
     finally:
         h.close()

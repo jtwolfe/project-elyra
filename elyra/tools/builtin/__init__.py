@@ -7,4 +7,11 @@
 - skills_tools.py — load_skill
 - growth.py — install_tool_draft, verify_tool, promote_tool, install_skill
 - identity.py — get_identity, draft_identity, promote_identity
+- package_vcs.py — get/revert tool+skill package VCS
+- search.py — web_search (optional elyra[search] / ddgs)
+- browser.py — browser_session_open/close, goto, snapshot, click/type/fill, get_text, wait
+- secrets_tools.py — secrets_list, secrets_set, secrets_delete
+- git_tools.py — frozen git_* / worktree builtins (path-jailed host)
+- gh_tools.py — frozen gh_* PR/issue/project builtins (GH_TOKEN soft-fail)
+- sandbox_packages.py — sandbox_pip_update (allowlist-add guest curated env)
 """

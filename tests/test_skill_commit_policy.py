@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from elyra.loop.skill_commit_policy import (
+    ANSWER_SPEAK_HOST,
     NO_COMMIT_SKILLS,
     SKILL_COMMIT_HOST,
     SOCIAL_SKILLS,
     WORK_SKILLS,
+    answer_speak_host_message,
     format_playbook_active,
     is_commit_eligible_skill,
     is_social_skill,
@@ -14,6 +16,7 @@ from elyra.loop.skill_commit_policy import (
     is_work_skill_or_unknown,
     post_load_skill_tool_choice,
     should_allow_no_speak,
+    should_answer_speak_nudge,
     should_skill_commit_nudge,
     skill_commit_host_message,
 )
@@ -87,6 +90,8 @@ def test_format_playbook_active_work() -> None:
     assert "source: bundled\n" in text
     assert "catalog: Break work into goals\n" in text
     assert "tool_call implementing step 1" in text
+    assert "Prefer a tool_call" in text
+    assert "must be a tool_call" not in text
     assert "## Playbook" in text
     assert body.rstrip() in text
     assert text.endswith("\n")
@@ -118,14 +123,12 @@ def test_format_playbook_active_minimal_name_body() -> None:
 
 def test_skill_commit_host_message_exact_string() -> None:
     msg = skill_commit_host_message("plan-work")
-    assert msg == (
-        "HOST: skill plan-work is loaded — execute its next checklist step with tools now "
-        "(update_task / create_task / install_tool_draft / verify_tool / promote_tool / "
-        "install_skill / speak as the playbook says). Do not re-plan in free-text."
-    )
-    assert msg.startswith("HOST:")
     assert msg == SKILL_COMMIT_HOST.format(name="plan-work")
-    assert "talk" not in msg or "speak as the playbook says" in msg
+    assert msg.startswith("HOST:")
+    assert "prefer the next playbook step" in msg
+    assert "Free-text alone does not advance" in msg
+    # Choice-preserving: not a hard "execute now" checklist
+    assert "execute its next checklist step" not in msg
     # talk name
     talk = skill_commit_host_message("talk")
     assert "skill talk is loaded" in talk
@@ -289,6 +292,153 @@ def test_should_allow_no_speak_table() -> None:
         pending_skill_name="plan-work",
         skill_commit_sent=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Answer-speak HOST (status speak ≠ answer speak; Stage B Step 6)
+# ---------------------------------------------------------------------------
+
+
+def test_should_answer_speak_nudge_table() -> None:
+    long_mono = "x" * 120  # long free-text after full answer speak — soft Decide only
+
+    # Post-tool gap: tools ran, no speak since tools — soft HOST may fire
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="42",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+    )
+    assert d.inject is True
+    assert d.reason == "injected"
+
+    # Long monologue after social speak, no tools — no hard inject (false-positive case)
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content=long_mono,
+        tools_ran=False,
+    )
+    assert d.inject is False
+    assert d.reason == "no_post_tool_gap"
+
+    # Tools ran but speak already carried the answer — no inject
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="done",
+        tools_ran=True,
+        spoke_since_non_speak_tool=True,
+    )
+    assert d.inject is False
+    assert d.reason == "no_post_tool_gap"
+
+    # Short idle after pure speak — not the hole
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="done",
+        tools_ran=False,
+    )
+    assert d.inject is False
+    assert d.reason == "no_post_tool_gap"
+
+    # !spoke → no_speak owns the path
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=False,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="42",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+    )
+    assert d.inject is False
+    assert d.reason == "not_spoke"
+
+    # Non-social
+    d = should_answer_speak_nudge(
+        social_wake=False,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="42",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+    )
+    assert d.inject is False
+    assert d.reason == "not_social"
+
+    # Once only
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=True,
+        free_text_no_tools=True,
+        free_text_content="42",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+    )
+    assert d.inject is False
+    assert d.reason == "already_sent"
+
+    # Empty free-text
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="   ",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+    )
+    assert d.inject is False
+    assert d.reason == "no_content"
+
+    # Flood hard-stop
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="42",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+        hop_was_flood=True,
+    )
+    assert d.inject is False
+    assert d.reason == "flood"
+
+    # Work skill pending commit owns hop
+    d = should_answer_speak_nudge(
+        social_wake=True,
+        spoke=True,
+        answer_speak_nudge_sent=False,
+        free_text_no_tools=True,
+        free_text_content="42",
+        tools_ran=True,
+        spoke_since_non_speak_tool=False,
+        pending_skill_name="plan-work",
+        skill_commit_sent=False,
+    )
+    assert d.inject is False
+    assert d.reason == "skill_commit_owns"
+
+    host = answer_speak_host_message()
+    assert host == ANSWER_SPEAK_HOST
+    # Choice-preserving like NO_SPEAK (if / otherwise), not "must answer-speak"
+    assert "still needs" in host.lower() or "if tools returned" in host.lower()
+    assert "otherwise stop" in host.lower()
+    assert "early status" not in host.lower()
 
 
 # ---------------------------------------------------------------------------

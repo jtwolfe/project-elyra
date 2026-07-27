@@ -2,8 +2,9 @@
 
 Scope: work/social/no-commit name sets, pure classifiers, ``format_playbook_active``
 for model-facing ``load_skill`` wire content, skill-commit HOST builder, pure
-predicates for skill-commit inject + no_speak de-conflict (PR2), and optional
-post-load ``tool_choice=required`` lever (PR4, default OFF).
+predicates for skill-commit inject + no_speak de-conflict (PR2), narrow
+post-tool answer-speak reminder (choice-preserving; soft Decide owns monologue),
+and optional post-load ``tool_choice=required`` lever (PR4, default OFF).
 """
 
 from __future__ import annotations
@@ -31,10 +32,11 @@ _SOCIAL_KEYS = frozenset(normalize_skill_name(s) for s in SOCIAL_SKILLS)
 _NO_COMMIT_KEYS = frozenset(normalize_skill_name(s) for s in NO_COMMIT_SKILLS)
 
 # Template for skill-commit HOST (chain-only; never SpeakTransport). {name} filled by builder.
+# Soft recovery: prefer tools; model still chooses which step / when to stop.
 SKILL_COMMIT_HOST = (
-    "HOST: skill {name} is loaded — execute its next checklist step with tools now "
-    "(update_task / create_task / install_tool_draft / verify_tool / promote_tool / "
-    "install_skill / speak as the playbook says). Do not re-plan in free-text."
+    "HOST: skill {name} is loaded — prefer the next playbook step via tools "
+    "(ledger / growth / speak as the playbook says). Free-text alone does not "
+    "advance the skill."
 )
 
 
@@ -100,8 +102,8 @@ def format_playbook_active(
         )
     else:
         follow = (
-            "Follow steps in order. Next action must be a tool_call implementing step 1 "
-            '(see "First tool call (mandatory)" in the body). Do not narrate the plan in free-text.'
+            "Follow steps in order. Prefer a tool_call implementing step 1 "
+            '(see "First tool call" in the body) over free-text re-planning.'
         )
     lines.extend(["", follow, "", "## Playbook", "", body.rstrip(), ""])
     return "\n".join(lines)
@@ -173,6 +175,77 @@ def should_allow_no_speak(
     return True
 
 
+# Soft channel reminder (same family as NO_SPEAK_NUDGE): choice-preserving.
+# Only for the post-tool glass gap — not free-text length heuristics (those
+# false-positive after a full answer speak; soft Decide owns monologue cases).
+ANSWER_SPEAK_HOST = (
+    "HOST: free-text never reaches glass. If tools returned something the user "
+    "still needs on glass, call speak with that; otherwise stop "
+    "(no free-text monologue)."
+)
+
+
+@dataclass(frozen=True)
+class AnswerSpeakNudgeDecision:
+    """Result of should_answer_speak_nudge."""
+
+    inject: bool
+    reason: str  # injected | not_social | not_spoke | already_sent | no_content | no_post_tool_gap | flood | skill_commit_owns | not_free_text | …
+
+
+def should_answer_speak_nudge(
+    *,
+    social_wake: bool,
+    spoke: bool,
+    answer_speak_nudge_sent: bool,
+    free_text_no_tools: bool,
+    free_text_content: str,
+    tools_ran: bool,
+    spoke_since_non_speak_tool: bool = True,
+    hop_was_flood: bool = False,
+    pending_skill_name: str | None = None,
+    skill_commit_sent: bool = False,
+) -> AnswerSpeakNudgeDecision:
+    """Whether free-text path may inject ANSWER_SPEAK_HOST (post-tool glass gap).
+
+    Narrow hard path (metacog hybrid): only when non-speak tools ran and no
+    successful speak has happened *since* those tools — glass may be missing
+    a tool result. Model still chooses: speak the result, or stop.
+
+    Does **not** fire for free-text monologue after a pure social speak (status
+    or full answer) — that is soft Decide (orient / talk). Length heuristics
+    false-positive after complete answers. Never auto-copies free-text onto glass.
+    """
+    if not free_text_no_tools:
+        return AnswerSpeakNudgeDecision(False, "not_free_text")
+    if not social_wake:
+        return AnswerSpeakNudgeDecision(False, "not_social")
+    if not spoke:
+        return AnswerSpeakNudgeDecision(False, "not_spoke")
+    if answer_speak_nudge_sent:
+        return AnswerSpeakNudgeDecision(False, "already_sent")
+    if hop_was_flood:
+        return AnswerSpeakNudgeDecision(False, "flood")
+    if (
+        pending_skill_name
+        and is_work_skill_or_unknown(pending_skill_name)
+        and not skill_commit_sent
+    ):
+        return AnswerSpeakNudgeDecision(False, "skill_commit_owns")
+    text = (free_text_content or "").strip()
+    if not text:
+        return AnswerSpeakNudgeDecision(False, "no_content")
+    # Only post-tool incompleteness: tools ran, no speak since those tools.
+    if tools_ran and not spoke_since_non_speak_tool:
+        return AnswerSpeakNudgeDecision(True, "injected")
+    return AnswerSpeakNudgeDecision(False, "no_post_tool_gap")
+
+
+def answer_speak_host_message() -> str:
+    """HOST answer-speak line injected into the in-turn chain (obs / user)."""
+    return ANSWER_SPEAK_HOST
+
+
 def post_load_skill_tool_choice(
     *,
     pending_skill_name: str | None,
@@ -194,11 +267,14 @@ def post_load_skill_tool_choice(
 
 
 __all__ = [
+    "ANSWER_SPEAK_HOST",
     "NO_COMMIT_SKILLS",
     "SKILL_COMMIT_HOST",
     "SOCIAL_SKILLS",
     "WORK_SKILLS",
+    "AnswerSpeakNudgeDecision",
     "SkillCommitNudgeDecision",
+    "answer_speak_host_message",
     "format_playbook_active",
     "is_commit_eligible_skill",
     "is_social_skill",
@@ -206,6 +282,7 @@ __all__ = [
     "is_work_skill_or_unknown",
     "post_load_skill_tool_choice",
     "should_allow_no_speak",
+    "should_answer_speak_nudge",
     "should_skill_commit_nudge",
     "skill_commit_host_message",
 ]

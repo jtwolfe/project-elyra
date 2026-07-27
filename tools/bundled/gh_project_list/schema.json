@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "owner": {
+      "type": "string"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "format_json": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "additionalProperties": false
+}

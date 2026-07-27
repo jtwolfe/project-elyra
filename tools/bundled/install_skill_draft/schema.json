@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Skill package name matching [a-z0-9_][a-z0-9_-]*"
+    },
+    "description": {
+      "type": "string",
+      "description": "One-line catalog blurb"
+    },
+    "body": {
+      "type": "string",
+      "description": "Markdown body after frontmatter (checklist / steps)"
+    }
+  },
+  "required": ["name", "body"],
+  "additionalProperties": false
+}

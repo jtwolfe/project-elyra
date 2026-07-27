@@ -47,6 +47,7 @@ Pick the first that applies:
    - Sandbox artifacts (`read_file`, `list_dir`, `grep`, …)
    - Task notes / acceptance text
    - Promoted tools only if the claim is “tool exists and works” (call it if safe)
+   - If a **local tool or skill broke after promote**: `get_tool` / `get_skill` with `list_versions` → `revert_tool` / `revert_skill` (**reason required**) before closing growth claims; never overwrite bundled
 3. Mark review outcome on the ledger (`update_goal` / `update_task`: reviewed / needs_fix / notes). Be specific.
 4. Only after a green review, close the goal — or leave open with remaining tasks.
 5. If a human is in the loop, `speak` a short review summary.

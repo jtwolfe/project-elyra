@@ -2,7 +2,8 @@
 
 Scope: ELYRA_HOME and conventional directories; seed copy on first run.
 In scope: home override, model/data/skills/tools/prompts paths, ensure_data_dirs
-(including ``data/secrets`` for API key store and ``data/runtime`` prefs).
+(including ``data/secrets`` for API key store, ``data/runtime`` prefs, and
+``data/browser`` for optional Playwright session data).
 Out of scope: feature flags, settings.toml, secret *values* (see ``elyra.llm.auth``).
 """
 
@@ -57,19 +58,33 @@ class ElyraPaths:
             "goals",
             "sandbox",
             "runtime",  # continuous.json + provider.json + usage.json
+            "media",  # content-addressed attachments (KD1)
+            "browser",  # optional Playwright session user-data (v1 may use temp)
         ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
 
-        # API key secret store (mode 0700). Values written by elyra.llm.auth.
+        # Media store subdirs + lightweight reconcile/GC (PR10 / KD23).
+        from elyra.media.gc import ensure_media
+
+        ensure_media(self)
+
+        # Secrets store (mode 0700): xai_api_key (llm.auth) + named values/ (PR5).
         secrets = self.data_dir / "secrets"
         secrets.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
             os.chmod(secrets, 0o700)
         except OSError:
             pass
+        values = secrets / "values"
+        values.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            os.chmod(values, 0o700)
+        except OSError:
+            pass
 
         for path in (
             self.skills_dir / "local",
+            self.skills_dir / "drafts",
             self.tools_dir / "local",
             self.tools_dir / "drafts",
         ):

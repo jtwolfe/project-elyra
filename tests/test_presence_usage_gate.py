@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -16,6 +17,7 @@ import pytest
 
 from elyra.config import resolve_paths
 from elyra.llm.client import FailingChatClient, StubChatClient
+from elyra.llm.credits import CreditsSnapshot
 from elyra.llm.usage import TokenUsage, UsageMeter
 from elyra.loop.doloop import DoLoopResult
 from elyra.moment import MomentStore
@@ -24,6 +26,14 @@ from elyra.presence.timers import STATUS_PENDING, TimerService
 from elyra.presence.user_input import PHASE_IDLE
 from elyra.presence.worker import PresenceWorker
 from elyra.settings import UsageSettings, default_settings
+
+
+class _FixedClock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +263,119 @@ def test_override_on_allows_claim_when_over_budget(paths):
     t = _start(worker)
     try:
         wake_id = worker.enqueue_user_message("override on", user_id="operator")
+        assert _wait_until(lambda: len(stub.calls) >= 1, timeout=2.0)
+        assert _wait_until(lambda: worker._queue.status(wake_id) == "done")  # noqa: SLF001
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_account_hard_preclaim_leaves_wake_pending(paths):
+    """Injected SuperGrok A≥A_hard → can_call false → wake stays pending."""
+    clock = _FixedClock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    usage = UsageSettings(
+        enabled=True,
+        weekly_allowed_tokens=1_000_000,
+        account_hard_stop_percent=95.0,
+    )
+    meter = UsageMeter.load(paths.data_dir, usage, clock=clock)
+    meter.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=96.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    assert meter.can_call() is False
+    assert meter.snapshot().hard_stop == "account"
+
+    stub = _stub_loop()
+    worker, stop = _make_worker(
+        paths,
+        run_do_loop_fn=stub,
+        model_available=lambda: meter.can_call(),
+    )
+    t = _start(worker)
+    try:
+        wake_id = worker.enqueue_user_message("account hard", user_id="operator")
+        assert not _wait_until(lambda: len(stub.calls) >= 1, timeout=0.6)
+        assert len(stub.calls) == 0
+        assert worker.phase == PHASE_IDLE
+        assert worker._queue.status(wake_id) == "enqueue"  # noqa: SLF001
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_account_hard_override_allows_claim(paths):
+    """Account hard + override ON → claim proceeds (override kept)."""
+    clock = _FixedClock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    usage = UsageSettings(
+        enabled=True,
+        weekly_allowed_tokens=1_000_000,
+        account_hard_stop_percent=95.0,
+    )
+    meter = UsageMeter.load(paths.data_dir, usage, clock=clock)
+    meter.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=99.0,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at="2026-07-24T14:00:00Z",
+            status="ok",
+            ok=True,
+        )
+    )
+    assert meter.can_call() is False
+    meter.set_hard_stop_override(True)
+    assert meter.can_call() is True
+    assert meter.snapshot().hard_stop == "account"
+
+    stub = _stub_loop()
+    worker, stop = _make_worker(
+        paths,
+        run_do_loop_fn=stub,
+        model_available=lambda: meter.can_call(),
+    )
+    t = _start(worker)
+    try:
+        wake_id = worker.enqueue_user_message("account override", user_id="operator")
+        assert _wait_until(lambda: len(stub.calls) >= 1, timeout=2.0)
+        assert _wait_until(lambda: worker._queue.status(wake_id) == "done")  # noqa: SLF001
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_yellow_band_still_allows_claim(paths):
+    """Soft yellow pace band never blocks presence pre-claim."""
+    B, k = 7000, 4.0
+    H = 168.0
+    t_hours = 24.0
+    week_start = datetime(2026, 7, 20, 0, 0, tzinfo=UTC)
+    clock = _FixedClock(week_start + timedelta(hours=t_hours))
+    usage = UsageSettings(
+        enabled=True,
+        weekly_allowed_tokens=B,
+        burst_hours=k,
+    )
+    meter = UsageMeter.load(paths.data_dir, usage, clock=clock)
+    S = int(round(1.2 * B * t_hours / H))
+    meter.record(TokenUsage(total_tokens=S))
+    snap = meter.snapshot()
+    assert snap.hard_stop is None
+    assert snap.pace_band == "yellow"
+    assert meter.can_call() is True
+
+    stub = _stub_loop()
+    worker, stop = _make_worker(
+        paths,
+        run_do_loop_fn=stub,
+        model_available=lambda: meter.can_call(),
+    )
+    t = _start(worker)
+    try:
+        wake_id = worker.enqueue_user_message("yellow soft", user_id="operator")
         assert _wait_until(lambda: len(stub.calls) >= 1, timeout=2.0)
         assert _wait_until(lambda: worker._queue.status(wake_id) == "done")  # noqa: SLF001
     finally:

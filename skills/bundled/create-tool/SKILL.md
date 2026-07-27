@@ -68,9 +68,21 @@ install_tool_draft  →  verify_tool  →  promote_tool
 
 Sandbox FS tools (`list_dir`, `read_file`, …) **cannot** list host `tools/drafts/`. Seeing packages under sandbox `tools/` does not mean drafts are there.
 
+### Runtime file output (prefer)
+
+When a tool writes files for later use (plots, exports, intermediates):
+
+- Prefer guest paths under:
+  `tmp/<tool-name>/<run-id>/…`
+  (host: `sandboxes/sandbox0/tmp/<tool-name>/<run-id>/…`)
+- Use a short unique `run-id` per invocation (uuid hex / timestamp) so runs do not clobber each other.
+- Do **not** write tool product under `tools/`, `media/`, or seed dirs (`lib/`, `general/`, `fixtures/`).
+- For glass/outbound attachments, pass those `tmp/…` paths into `speak` (or leave them for the host to ingest).
+
 ### Runners (model-created)
 
 - `sandbox_python`: `runner.json` with `module` + optional `function` (default `run`); guest calls `fn(args)` with the model args dict. `module` may be a dotted import (`impl.web_search`) or a package-relative path (`impl/web_search.py`); the file must exist under the package or verify/promote fail with `invalid_runner:module_not_found`.
+- Keep `sandbox_python` modules **import side-effect free** (no network/FS work at import time). Verify smoke-loads and production both import the declared module the same way.
 - `sandbox_shell`: `runner.json` with `argv`; model args are **not** on argv — the runtime writes guest `tmp/elyra_tool_args_*.json` and sets env **`ELYRA_TOOL_ARGS`** to that path. Shell impls must read that file.
 - Invalid shape → `invalid_runner:*` on verify/promote. Do not use `builtin` for model drafts.
 
@@ -79,6 +91,14 @@ Sandbox FS tools (`list_dir`, `read_file`, …) **cannot** list host `tools/draf
 - Product default: isolation **on**. `verify_tool` needs guest **mount_ready** + **pyenv_ready** (curated env includes pytest). Failures: `sandbox_unavailable:*`, `guest_pytest_unavailable` — not “retry the same thrash.”
 - If the sandbox is unusable, **block the task / speak / rest** honestly. Do not thrash `read_file` or fish host paths with `run`.
 - Promoted smoke-check also needs isolation ready when isolation is on (guest exec). Host stub only when `ELYRA_SANDBOX=0` (tests/CI).
+
+### Guest package call manners (soft)
+
+Manners only — not the integrity wall. Hard reliability for multi-call batches is the content-hash **stage gate** (stage-once + in-place refresh + one path-missing recovery).
+
+- Prefer **one** tool call with richer args over N identical package loads when the schema allows batching.
+- Legitimate multi-call batches (different args in one hop) must remain reliable via that hard stage gate; thrash policy is not the fix — do not treat multi-call batches as thrash.
+- On `guest_module_missing`: surface once (ledger note / speak if needed) and continue with an alternate approach — do **not** spam the same call.
 
 ## Process
 
@@ -94,11 +114,20 @@ Sandbox FS tools (`list_dir`, `read_file`, …) **cannot** list host `tools/draf
 5. Smoke-check the promoted tool with a safe call (requires isolation ready when on).
 6. If usage is non-obvious, consider a companion skill via `create-skill`.
 
+### Package VCS recovery
+
+Re-promoting an existing **local** package is allowed: the previous payload is
+archived under `tools/local/<name>/versions/<version_id>/` automatically. Use
+`get_tool` with `list_versions` (and `which=version` + `version_id` to inspect)
+then `revert_tool` (**reason required**, min length enforced) to restore.
+Bundled names still refuse overwrite — there is no recover-via-overwrite path
+for `tools/bundled/`. After revert, smoke-check the restored tool when safe.
+
 ## Hard rules
 
 - Never skip verify.
 - Write only under `tools/drafts/<name>/` via `install_tool_draft` (sandbox FS tools cannot see host drafts; sandbox `tools/` ≠ drafts; do not thrash empty `list_dir` / host path fishing via `run` as a substitute).
-- Never overwrite bundled tools or existing promoted local tools.
+- Never overwrite **bundled** tools — `promote_tool` always refuses bundled names (`refuses_overwrite_bundled`). Re-promote of **local** packages archives the previous version (recovery via `revert_tool`). If a same-name package somehow exists under `tools/local/` (hand-placed or leftover), it **overrides** the bundled tool at registry load — never leave a local `web_search`.
 - Never call a draft tool.
 - Prefer small, clear tools over large multi-purpose ones.
 - Prefer Grok Build over creating a new tool when the need is primarily complex implementation rather than a reusable primitive — **only when that instrument exists**; until then, block the ledger honestly or ask the operator rather than rewriting the host runtime.

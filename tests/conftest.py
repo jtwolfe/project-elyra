@@ -22,3 +22,13 @@ def _hermetic_sandbox_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force isolation off for hermetic host-stub tests unless already set."""
     if ENV_ELYRA_SANDBOX not in os.environ:
         monkeypatch.setenv(ENV_ELYRA_SANDBOX, "0")
+
+
+@pytest.fixture(autouse=True)
+def _reset_media_rate_limits() -> None:
+    """PR10: process-local STT/TTS windows must not leak across tests."""
+    from elyra.media.limits import reset_rate_limits_for_tests
+
+    reset_rate_limits_for_tests()
+    yield
+    reset_rate_limits_for_tests()

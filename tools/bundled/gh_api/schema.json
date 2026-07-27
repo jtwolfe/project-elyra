@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "description": "API path e.g. repos/o/r/pulls"
+    },
+    "path": {
+      "type": "string",
+      "description": "Alias for endpoint"
+    },
+    "method": {
+      "type": "string",
+      "description": "HTTP method"
+    },
+    "fields": {
+      "type": "object",
+      "description": "String fields (-f)"
+    },
+    "raw_fields": {
+      "type": "object",
+      "description": "Typed fields (-F)"
+    },
+    "jq": {
+      "type": "string"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "additionalProperties": false
+}

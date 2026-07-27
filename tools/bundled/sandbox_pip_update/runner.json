@@ -1,0 +1,4 @@
+{
+  "kind": "builtin",
+  "entry": "elyra.tools.builtin.sandbox_packages:sandbox_pip_update"
+}

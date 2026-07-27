@@ -28,6 +28,7 @@
           <button type="button" class="nav-btn" data-panel="moments">Moments</button>
           <button type="button" class="nav-btn" data-panel="tools">Tools</button>
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
+          <button type="button" class="nav-btn" data-panel="secrets">Secrets</button>
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
         <div class="rail-session" title="Who is at the keyboard (message attribution)">
@@ -50,10 +51,66 @@
           </label>
           <div id="continuous-status-rail" class="continuous-meta muted">off</div>
         </div>
+        <div class="rail-effort" role="group" aria-label="Reasoning effort">
+          <div class="rail-foot-label muted">Effort</div>
+          <div
+            class="effort-group effort-group-compact"
+            id="rail-effort"
+            role="radiogroup"
+            aria-label="Reasoning effort"
+          >
+            <button type="button" class="effort-btn" data-effort="low" aria-pressed="false">Low</button>
+            <button type="button" class="effort-btn" data-effort="medium" aria-pressed="false">Medium</button>
+            <button type="button" class="effort-btn" data-effort="high" aria-pressed="true">High</button>
+            <button
+              type="button"
+              class="effort-btn effort-btn-auto"
+              data-effort="auto"
+              disabled
+              aria-disabled="true"
+              title="Auto effort escalation — coming later"
+            >Auto</button>
+          </div>
+        </div>
+        <div class="rail-usage" role="group" aria-label="Usage budget">
+          <div class="rail-foot-label muted">Usage</div>
+          <div class="rail-usage-meter" data-window="week">
+            <div class="usage-meter-head">
+              <span>Elyra week</span>
+              <span id="rail-usage-week-pct" class="usage-pct">—</span>
+            </div>
+            <div class="usage-bar" aria-hidden="true">
+              <div id="rail-usage-week-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+          <div class="rail-usage-meter" data-window="supergrok">
+            <div class="usage-meter-head">
+              <span>SuperGrok pool</span>
+              <span id="rail-usage-sg-pct" class="usage-pct">—</span>
+            </div>
+            <div class="usage-bar" aria-hidden="true">
+              <div id="rail-usage-sg-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+        </div>
+        <div class="rail-usage rail-context" role="group" aria-label="Context window">
+          <div class="rail-foot-label muted">Context</div>
+          <div class="rail-usage-meter" data-window="model">
+            <div class="usage-meter-head">
+              <span>Meal / model</span>
+              <span id="rail-context-pct" class="usage-pct">—</span>
+            </div>
+            <div class="usage-bar usage-bar-context" aria-hidden="true">
+              <div id="rail-context-meal-mark" class="usage-bar-meal-mark" title="Product meal budget"></div>
+              <div id="rail-context-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+          <div id="rail-context-meta" class="rail-context-meta muted">meal ≤50k · model 500k</div>
+        </div>
         <div class="rail-foot" role="group" aria-label="System status">
           <div class="rail-foot-label muted">System</div>
           <div class="rail-pills">
-            <div id="pill-llama" class="pill pill-off">llama</div>
+            <div id="pill-provider" class="pill pill-off">provider</div>
             <div id="pill-sandbox" class="pill pill-off">sandbox</div>
             <div id="pill-worker" class="pill pill-off">worker</div>
             <div id="pill-phase" class="pill pill-off">phase</div>
@@ -70,7 +127,7 @@
             <div>
               <h1>Chat</h1>
               <p class="muted">
-                Talk with Elyra. Attachments show in your message until vision is ready.
+                Talk with Elyra. Attach images, audio, or files — media is stored durably and shown in the message footer.
               </p>
             </div>
             <div id="chat-activity" class="chat-activity" hidden>
@@ -102,32 +159,44 @@
           <form id="chat-form" class="composer composer-rich">
             <div id="drop-overlay" class="drop-overlay" hidden>Drop files to attach</div>
             <div class="composer-main">
-              <button
-                type="button"
-                id="attach-btn"
-                class="icon-btn"
-                title="Attach images or files"
-                aria-label="Attach files"
-              >
-                +
-              </button>
-              <input
-                type="file"
-                id="attach-input"
-                multiple
-                hidden
-                accept="image/*,.txt,.md,.json,.csv,.py,.pdf,.log"
-              />
+              <div class="composer-tools">
+                <button
+                  type="button"
+                  id="attach-btn"
+                  class="icon-btn"
+                  title="Attach images, audio, or files"
+                  aria-label="Attach files"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  id="mic-btn"
+                  class="icon-btn mic-btn"
+                  title="Record voice (speech-to-text)"
+                  aria-label="Record voice"
+                  aria-pressed="false"
+                >
+                  <span class="mic-icon" aria-hidden="true">🎙</span>
+                </button>
+                <input
+                  type="file"
+                  id="attach-input"
+                  multiple
+                  hidden
+                  accept="image/*,audio/*,video/*,.txt,.md,.json,.csv,.py,.pdf,.log,.mp3,.wav,.ogg,.m4a,.webm,.mp4,.mov"
+                />
+              </div>
               <textarea
                 id="chat-input"
                 rows="1"
-                placeholder="Message Elyra…"
+                placeholder="Message Elyra… (or send attachments alone)"
                 autocomplete="off"
               ></textarea>
               <button type="submit" id="send-btn">Send</button>
             </div>
             <p class="composer-hint muted">
-              Enter send · Shift+Enter newline · paste or drop images/files
+              Enter send · Shift+Enter newline · mic for voice · paste or drop files · media-only OK
             </p>
           </form>
         </section>
@@ -156,7 +225,8 @@
             <div>
               <h1>Tools &amp; skills</h1>
               <p class="muted">
-                Tools and skills on this host. Refresh reloads the catalog.
+                Catalog on this host. Select a package to inspect docs, package files, and
+                package-VCS archives (local only). Refresh rescans disk.
               </p>
             </div>
             <button type="button" id="catalog-refresh-btn" class="btn-secondary btn-sm">
@@ -164,7 +234,7 @@
             </button>
           </header>
           <div class="catalog-meta muted" id="catalog-meta">—</div>
-          <div class="split-lists">
+          <div class="split-lists catalog-split">
             <div>
               <h2 class="subhead">Tools <span id="tools-count" class="count-pill">0</span></h2>
               <div id="tools-list" class="list-panel">loading…</div>
@@ -172,6 +242,47 @@
             <div>
               <h2 class="subhead">Skills <span id="skills-count" class="count-pill">0</span></h2>
               <div id="skills-list" class="list-panel">loading…</div>
+            </div>
+          </div>
+          <div id="catalog-inspector" class="detail-panel catalog-inspector" hidden>
+            <div class="catalog-inspector-head">
+              <div class="catalog-inspector-title-row">
+                <h2 id="catalog-inspector-title" class="catalog-inspector-title">—</h2>
+                <span id="catalog-inspector-badges" class="catalog-inspector-badges"></span>
+                <button
+                  type="button"
+                  id="catalog-inspector-close"
+                  class="link-btn catalog-inspector-close"
+                >
+                  close
+                </button>
+              </div>
+              <p id="catalog-inspector-desc" class="muted catalog-inspector-desc">—</p>
+              <p id="catalog-inspector-meta" class="muted catalog-inspector-meta">—</p>
+            </div>
+            <div class="catalog-inspector-body">
+              <div class="catalog-inspector-main">
+                <h3 class="subhead subhead-sm">Package docs</h3>
+                <pre id="catalog-inspector-doc" class="code-block catalog-doc">Select a tool or skill.</pre>
+                <details id="catalog-inspector-schema-fold" class="catalog-fold" hidden>
+                  <summary>schema.json</summary>
+                  <pre id="catalog-inspector-schema" class="code-block">—</pre>
+                </details>
+                <details id="catalog-inspector-runner-fold" class="catalog-fold" hidden>
+                  <summary>runner.json</summary>
+                  <pre id="catalog-inspector-runner" class="code-block">—</pre>
+                </details>
+              </div>
+              <div class="catalog-inspector-vcs">
+                <h3 class="subhead subhead-sm">Package VCS</h3>
+                <p id="catalog-inspector-vcs-hint" class="muted status-helper">
+                  Local packages archive prior trees on re-promote. Bundled packages have no versions.
+                </p>
+                <div id="catalog-inspector-versions" class="list-panel identity-versions catalog-versions">
+                  —
+                </div>
+                <pre id="catalog-inspector-version-doc" class="code-block" hidden></pre>
+              </div>
             </div>
           </div>
         </section>
@@ -247,6 +358,64 @@
           </div>
         </section>
 
+        <section id="panel-secrets" class="panel">
+          <header class="panel-head">
+            <h1>Secrets</h1>
+            <p class="muted">
+              Named secrets for host tools (e.g. <code>gh_token</code>). Values are write-only —
+              never re-displayed after save. Grant tools that may inject each secret.
+            </p>
+          </header>
+          <div class="secrets-layout">
+            <div class="card secrets-set-card">
+              <div class="card-head"><strong>Set secret</strong></div>
+              <div class="secrets-form">
+                <label class="status-label" for="secrets-name-input">Name</label>
+                <input
+                  id="secrets-name-input"
+                  type="text"
+                  class="status-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="gh_token"
+                  aria-label="Secret name"
+                />
+                <label class="status-label" for="secrets-value-input">Value</label>
+                <div class="api-key-row">
+                  <input
+                    id="secrets-value-input"
+                    type="password"
+                    class="status-input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Paste secret (never re-displayed)"
+                    aria-label="Secret value"
+                  />
+                  <button type="button" id="secrets-save-btn" class="btn-secondary btn-sm">Save</button>
+                </div>
+                <label class="status-label" for="secrets-grants-input">Grants (tools, comma-separated)</label>
+                <input
+                  id="secrets-grants-input"
+                  type="text"
+                  class="status-input"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="gh_pr_create, gh_api, gh_auth_status"
+                  aria-label="Tool grants"
+                />
+                <span id="secrets-form-meta" class="muted status-helper">Values are never echoed.</span>
+              </div>
+            </div>
+            <div class="card secrets-list-card">
+              <div class="card-head">
+                <strong>Stored secrets</strong>
+                <span id="secrets-count-badge" class="badge">—</span>
+              </div>
+              <div id="secrets-list" class="list-panel secrets-list">loading…</div>
+            </div>
+          </div>
+        </section>
+
         <section id="panel-status" class="panel">
           <header class="panel-head">
             <h1>Status</h1>
@@ -269,6 +438,30 @@
                   <select id="provider-model-select" class="status-select" aria-label="Model">
                     <option value="">—</option>
                   </select>
+                </div>
+                <div class="status-row status-row-stack">
+                  <span class="status-label" id="provider-effort-label">Effort</span>
+                  <div class="effort-stack">
+                    <div
+                      class="effort-group"
+                      id="provider-effort"
+                      role="radiogroup"
+                      aria-labelledby="provider-effort-label"
+                    >
+                      <button type="button" class="effort-btn" data-effort="low" aria-pressed="false">Low</button>
+                      <button type="button" class="effort-btn" data-effort="medium" aria-pressed="false">Medium</button>
+                      <button type="button" class="effort-btn" data-effort="high" aria-pressed="true">High</button>
+                      <button
+                        type="button"
+                        class="effort-btn effort-btn-auto"
+                        data-effort="auto"
+                        disabled
+                        aria-disabled="true"
+                        title="Auto effort escalation — coming later"
+                      >Auto</button>
+                    </div>
+                    <span class="muted status-helper">Auto is disabled (future). Effort: low / medium / high.</span>
+                  </div>
                 </div>
                 <div class="status-row">
                   <span class="status-label">Credential</span>
@@ -302,7 +495,39 @@
                 </div>
               </div>
               <p class="muted status-helper">
-                Model applies to next call. API key save does not switch source until you select it.
+                Model applies to next call. Effort applies to next Completions request (no credential rebuild).
+                API key save does not switch source until you select it.
+              </p>
+            </div>
+            <div class="card status-card" id="context-card">
+              <div class="card-head">
+                <strong>Context window</strong>
+                <span id="context-badge" class="badge">meal / model</span>
+              </div>
+              <div class="usage-meters" id="context-meters">
+                <div class="usage-meter usage-meter-primary" data-window="model">
+                  <div class="usage-meter-head">
+                    <span>Last meal vs model window</span>
+                    <span id="context-window-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar usage-bar-context" aria-hidden="true">
+                    <div id="context-meal-mark" class="usage-bar-meal-mark" title="Product meal budget"></div>
+                    <div id="context-window-bar" class="usage-bar-fill"></div>
+                  </div>
+                </div>
+                <div class="usage-meter usage-meter-soft" data-window="meal">
+                  <div class="usage-meter-head">
+                    <span>Meal fill (sliding budget)</span>
+                    <span id="context-meal-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar" aria-hidden="true">
+                    <div id="context-meal-bar" class="usage-bar-fill"></div>
+                  </div>
+                </div>
+              </div>
+              <p id="context-detail" class="muted status-helper">
+                Product meals slide at ~50k; Grok model window ~500k. Gold mark on the model bar is the meal budget.
+                Heuristic tokens (not a provider tokenizer). For memory source-split planning.
               </p>
             </div>
             <div class="card status-card" id="usage-card">
@@ -311,29 +536,46 @@
                 <span id="usage-badge" class="badge">—</span>
               </div>
               <div class="usage-meters" id="usage-meters">
-                <div class="usage-meter" data-window="week">
+                <div class="usage-meter usage-meter-primary" data-window="week">
                   <div class="usage-meter-head">
-                    <span>Week remaining</span>
+                    <span>Elyra week</span>
                     <span id="usage-week-pct" class="usage-pct">—</span>
                   </div>
                   <div class="usage-bar" aria-hidden="true"><div id="usage-week-bar" class="usage-bar-fill"></div></div>
                 </div>
-                <div class="usage-meter" data-window="day">
+                <div class="usage-meter usage-meter-primary" data-window="supergrok">
                   <div class="usage-meter-head">
-                    <span>Day remaining</span>
-                    <span id="usage-day-pct" class="usage-pct">—</span>
+                    <span>SuperGrok pool</span>
+                    <span id="usage-sg-pct" class="usage-pct">—</span>
                   </div>
-                  <div class="usage-bar" aria-hidden="true"><div id="usage-day-bar" class="usage-bar-fill"></div></div>
+                  <div class="usage-bar" aria-hidden="true"><div id="usage-sg-bar" class="usage-bar-fill"></div></div>
                 </div>
-                <div class="usage-meter" data-window="hour">
-                  <div class="usage-meter-head">
-                    <span>Hour remaining</span>
-                    <span id="usage-hour-pct" class="usage-pct">—</span>
+                <div class="usage-pace-row" id="usage-pace-row">
+                  <span id="usage-pace-badge" class="usage-pace-badge" data-band="green">—</span>
+                  <span id="usage-burst" class="usage-burst muted">—</span>
+                </div>
+                <div class="usage-meters usage-meters-soft" id="usage-meters-soft">
+                  <div class="usage-meter usage-meter-soft" data-window="day">
+                    <div class="usage-meter-head">
+                      <span>Day (soft)</span>
+                      <span id="usage-day-pct" class="usage-pct">—</span>
+                    </div>
+                    <div class="usage-bar" aria-hidden="true"><div id="usage-day-bar" class="usage-bar-fill"></div></div>
                   </div>
-                  <div class="usage-bar" aria-hidden="true"><div id="usage-hour-bar" class="usage-bar-fill"></div></div>
+                  <div class="usage-meter usage-meter-soft" data-window="hour">
+                    <div class="usage-meter-head">
+                      <span>Hour (soft)</span>
+                      <span id="usage-hour-pct" class="usage-pct">—</span>
+                    </div>
+                    <div class="usage-bar" aria-hidden="true"><div id="usage-hour-bar" class="usage-bar-fill"></div></div>
+                  </div>
                 </div>
               </div>
               <p id="usage-detail" class="muted status-helper">—</p>
+              <details id="usage-product-usage" class="usage-product-usage" hidden>
+                <summary class="muted">Product usage (diagnostic)</summary>
+                <pre id="usage-product-usage-body" class="usage-product-usage-body muted"></pre>
+              </details>
               <div class="usage-override continuous-control">
                 <label class="toggle-label" for="usage-override-toggle">
                   <input type="checkbox" id="usage-override-toggle" class="continuous-toggle" />

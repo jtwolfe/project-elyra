@@ -22,20 +22,15 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 
-if [[ ! -e model ]]; then
-  CANDIDATE="$ROOT/../aurimago/project-elyra2/model"
-  if [[ -d "$CANDIDATE" ]]; then
-    ln -sfn "$CANDIDATE" model
-    echo "Linked model/ -> $CANDIDATE"
-  else
-    echo "NOTE: model/ not found. Symlink project-elyra2/model when ready:"
-    echo "  ln -sfn ../aurimago/project-elyra2/model model"
-  fi
-fi
-
 echo ""
 echo "OK. Activate and start:"
 echo "  source .venv/bin/activate"
-echo "  elyra start                 # llama + API + UI"
-echo "  elyra start --no-llama      # stub LLM + UI only"
+echo "  # Full dogfood extras (isolation + search + browser) — see README § Install:"
+echo "  #   pip install -e '.[dev,sandbox,search,browser]'"
+echo "  #   playwright install chromium"
+echo "  #   ./scripts/setup-microsandbox.sh --doctor-only"
+echo "  # Grok (product default): grok login  # or XAI_API_KEY / glass Status"
+echo "  elyra start"
+echo "  # Hermetic UI / no remote calls:"
+echo "  elyra start --stub-llm"
 echo "  # UI: http://127.0.0.1:8787/"

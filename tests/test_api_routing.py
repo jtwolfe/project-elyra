@@ -19,7 +19,7 @@ import pytest
 
 from elyra.config import resolve_paths
 from elyra.llm.client import StubChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
 from elyra.loop.doloop import DoLoopResult
 from elyra.messages import list_messages
 from elyra.moment import MomentStore
@@ -148,7 +148,7 @@ class _ApiHarness:
 
         config = RuntimeConfig(api_host="127.0.0.1", api_port=0)
         self.state = RuntimeState()
-        self.gate = LlamaServerGate()
+        self.gate = ChatRequestGate()
         self.server, self._api_thread = start_api_server(
             config,
             paths=paths,
@@ -229,7 +229,10 @@ def test_status_includes_phase_hop_pending_wait(paths):
         assert "queue_depth_by_band" in body
         assert "interject_depth" in body
         assert body["worker_busy"] is False
-        assert "llama_busy" in body
+        assert "chat_busy" in body
+        assert "chat_ready" in body
+        assert "chat_error" in body
+        assert "chat_operation" in body
         assert "home" in body
 
         # Drive one moment so hop_count lands on snapshot.

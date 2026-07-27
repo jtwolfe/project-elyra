@@ -30,7 +30,12 @@ from typing import Any, Callable, Mapping, Sequence
 from elyra.llm.client import ChatClient, ChatCompletionResult, ToolCall as LlmToolCall
 from elyra.llm.reasoning_hygiene import is_channel_flood, sanitize_completion
 from elyra.llm.usage import UsageHardStopError
-from elyra.loop.context import assemble_outer_meal, estimate_tokens
+from elyra.loop import context_meter
+from elyra.loop.context import (
+    assemble_outer_meal,
+    estimate_content_tokens,
+    estimate_tokens,
+)
 from elyra.loop.continue_policy import (
     continue_host_message,
     idle_minutes_since,
@@ -44,10 +49,13 @@ from elyra.loop.continuous_policy import (
     work_continue_host_message,
 )
 from elyra.loop.skill_commit_policy import (
+    ANSWER_SPEAK_HOST,
+    answer_speak_host_message,
     format_playbook_active,
     is_commit_eligible_skill,
     post_load_skill_tool_choice,
     should_allow_no_speak,
+    should_answer_speak_nudge,
     should_skill_commit_nudge,
     skill_commit_host_message,
 )
@@ -152,11 +160,15 @@ class _LoopState:
     last_activity: datetime = field(default_factory=lambda: datetime.now(UTC))
     continue_injects: int = 0
     no_speak_nudge_sent: bool = False
+    answer_speak_nudge_sent: bool = False
     work_continue_injects: int = 0
     pending_skill_commit: str | None = None
     skill_commit_sent: bool = False
     skill_commit_injects: int = 0
     tools_ran: bool = False
+    # True after a successful speak; cleared when a successful non-speak tool runs.
+    # Used by answer-speak: free-text after tools without a post-tool speak is a hole.
+    spoke_since_non_speak_tool: bool = True
     ledger_mutated: bool = False
     model_beats: int = 0
     channel_flood_beats: int = 0
@@ -208,9 +220,12 @@ def _now_factory() -> datetime:
 
 
 def _message_tokens(msg: Mapping[str, Any]) -> int:
-    """Token estimate including tool_calls JSON when present."""
-    content = msg.get("content")
-    n = estimate_tokens(content if isinstance(content, str) else (str(content) if content else ""))
+    """Token estimate including tool_calls JSON when present.
+
+    Multimodal list content (image_url parts) uses the shared heuristic so
+    base64 data URLs are not counted as raw characters (PR5).
+    """
+    n = estimate_content_tokens(msg.get("content"))
     tcs = msg.get("tool_calls")
     if tcs:
         try:
@@ -293,6 +308,34 @@ def tool_result_to_content(
     return truncate_tool_content(raw, max_chars)
 
 
+def _chain_function_arguments(tc: LlmToolCall) -> str:
+    """Serialize tool_call arguments for the multi-hop chain message.
+
+    For SECRET_WRITE_TOOLS (e.g. ``secrets_set``): always parse → redact secret
+    keys → ``json.dumps``. Never pass through unredacted ``arguments_raw``.
+    Other tools keep the existing ``arguments_raw`` preference.
+    """
+    from elyra.secrets.inject import redact_tool_call_arguments
+    from elyra.secrets.policy import SECRET_WRITE_TOOLS
+
+    if tc.name in SECRET_WRITE_TOOLS:
+        args: dict[str, Any]
+        if getattr(tc, "arguments_parse_ok", True) and isinstance(tc.arguments, dict):
+            args = tc.arguments
+        else:
+            raw = tc.arguments_raw or ""
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, TypeError, ValueError):
+                parsed = {}
+            args = parsed if isinstance(parsed, dict) else {}
+        redacted = redact_tool_call_arguments(tc.name, args)
+        return json.dumps(redacted, ensure_ascii=False)
+    if tc.arguments_raw:
+        return tc.arguments_raw
+    return json.dumps(tc.arguments, ensure_ascii=False)
+
+
 def assistant_message_from_result(
     result: ChatCompletionResult,
     *,
@@ -304,6 +347,8 @@ def assistant_message_from_result(
     ``reasoning_content`` is re-fed only when non-empty **and** not a channel
     flood — defense in depth so pure floods never re-enter the multi-hop chain
     even if sanitize is skipped or residual flood text remains.
+
+    PR5: SECRET_WRITE_TOOLS never prefer unredacted ``arguments_raw`` (IK9).
     """
     msg: dict[str, Any] = {
         "role": "assistant",
@@ -316,9 +361,7 @@ def assistant_message_from_result(
                 "type": "function",
                 "function": {
                     "name": tc.name,
-                    "arguments": tc.arguments_raw
-                    if tc.arguments_raw
-                    else json.dumps(tc.arguments, ensure_ascii=False),
+                    "arguments": _chain_function_arguments(tc),
                 },
             }
             for tc in result.tool_calls
@@ -617,11 +660,12 @@ def run_do_loop(
 
     Free-text inject order (K8 extended)::
 
-        skill_commit → no_speak (via should_allow_no_speak) → work_continue → stop
+        skill_commit → no_speak → answer_speak → work_continue → stop
 
     Skill-commit fires even on channel flood free-text and is independent of
     ``continuous_enabled``. Social no-speak no longer always wins first over
-    post-skill commit.
+    post-skill commit. Answer-speak is a narrow post-tool glass reminder only
+    (choice-preserving; soft Decide owns monologue / status-vs-answer judgment).
     """
     loop = _loop_settings(settings)
     cont = _continuous_settings(settings)
@@ -829,6 +873,16 @@ def _run_loop_body(
         _ensure_lesson_pin_in_chain(state)
 
         messages = list(state.outer_prefix) + list(state.chain_messages)
+        # Glass context rail: last pre-call meal size vs model window (heuristic).
+        context_meter.record_meal(
+            _messages_tokens(messages),
+            meal_budget_tokens=budget,
+            model_window_tokens=getattr(
+                loop, "model_context_window_tokens", None
+            ),
+            hop=state.hop,
+            moment_id=moment_id,
+        )
         # Stage 5 L4: pin speak only on social first completion (hop==0 pre-call).
         # Optional K12 post-load required pin only when speak pin does not apply —
         # hop-0 social speak always wins. Flag defaults OFF.
@@ -918,8 +972,8 @@ def _run_loop_body(
         )
 
         # Free-text inject order (K8 extended): skill_commit → no_speak →
-        # work_continue → stop. Skill-commit fires even on flood free-text and
-        # is independent of continuous_enabled.
+        # answer_speak → work_continue → stop. Skill-commit fires even on flood
+        # free-text and is independent of continuous_enabled.
 
         # 1. Post-load skill-commit HOST (once per moment when pending).
         commit = should_skill_commit_nudge(
@@ -963,6 +1017,35 @@ def _run_loop_body(
                     "type": "obs",
                     "kind": "no_speak_nudge",
                     "content": NO_SPEAK_NUDGE,
+                },
+            )
+            continue
+
+        # 2b. Soft channel reminder: tools ran without a post-tool speak, free-text
+        # only (once). Not monologue length — that is soft Decide (orient / talk).
+        answer = should_answer_speak_nudge(
+            social_wake=social_wake,
+            spoke=state.spoke,
+            answer_speak_nudge_sent=state.answer_speak_nudge_sent,
+            free_text_no_tools=True,
+            free_text_content=result.content or "",
+            tools_ran=state.tools_ran,
+            spoke_since_non_speak_tool=state.spoke_since_non_speak_tool,
+            hop_was_flood=hop_was_flood,
+            pending_skill_name=state.pending_skill_commit,
+            skill_commit_sent=state.skill_commit_sent,
+        )
+        if answer.inject:
+            host_line = answer_speak_host_message()
+            state.answer_speak_nudge_sent = True
+            state.chain_messages.append(_obs_user_message(host_line))
+            _append_beat(
+                moments,
+                moment_id,
+                {
+                    "type": "obs",
+                    "kind": "answer_speak_nudge",
+                    "content": host_line,
                 },
             )
             continue
@@ -1071,6 +1154,13 @@ def _handle_tool_batch(
             if skip_dec.skip:
                 prior_error = state.thrash_last_error
                 # Synthetic model-visible result — never silent, never ends_moment.
+                # Harden args_echo: redact secret-write keys (bypasses registry
+                # post-dispatch redaction because this path never calls execute).
+                from elyra.secrets.inject import redact_tool_call_arguments
+
+                args_echo = redact_tool_call_arguments(
+                    tc.name, dict(args) if isinstance(args, dict) else {}
+                )
                 tr = ToolResult(
                     ok=False,
                     error_reason="skipped_identical",
@@ -1079,7 +1169,7 @@ def _handle_tool_batch(
                         "blocked_duplicate": True,
                         "prior_error_reason": prior_error,
                         "attempt": state.thrash_streak + 1,
-                        "args_echo": dict(args),
+                        "args_echo": args_echo,
                         "next_actions": [
                             "change tool or arguments",
                             "or free-text stop / thrash lesson",
@@ -1158,7 +1248,7 @@ def _handle_tool_batch(
                 "ok": tr.ok,
                 "error_reason": tr.error_reason,
                 "ends_moment": tr.ends_moment,
-                "content": content[:500],
+                "content": content[:tool_cap],
             },
         )
         if skipped:
@@ -1173,7 +1263,7 @@ def _handle_tool_batch(
                     "streak": upd.streak,
                     "skip_count": state.thrash_skip_count,
                     "prior_error_reason": prior_error,
-                    "content": content[:500],
+                    "content": content[:tool_cap],
                 },
             )
             _LOG.info(
@@ -1201,9 +1291,12 @@ def _handle_tool_batch(
         if tr.ok and not tr.counts_as_speak:
             # K15: tools_ran = successful non-speak only (not speak-tool name).
             state.tools_ran = True
+            # Answer-speak: glass is stale until a later speak carries the result.
+            state.spoke_since_non_speak_tool = False
 
         if tr.counts_as_speak and tr.ok:
             # Wired wrapper updates state.last_activity/spoke then host hook.
+            state.spoke_since_non_speak_tool = True
             if ctx.mark_spoke is not None:
                 ctx.mark_spoke()
             else:
@@ -1427,6 +1520,7 @@ def _finish(
 
 # Re-export meal helper for callers that build outer + run in one place.
 __all__ = [
+    "ANSWER_SPEAK_HOST",
     "NO_SPEAK_NUDGE",
     "DoLoopResult",
     "assistant_message_from_result",

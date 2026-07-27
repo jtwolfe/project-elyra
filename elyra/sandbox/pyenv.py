@@ -11,12 +11,15 @@ Install moment (product warm path, not inside the 60s mount wall budget):
 Offline / network=none / pip failure → leave marker absent; verify fails
 ``guest_pytest_unavailable``. Hermetic tests write the marker directly or skip
 the install path.
+
+KD15: :class:`InstallResult` is the structured surface for warm path + package tool.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -37,6 +40,19 @@ GUEST_REQUIREMENTS_PATH = f"{GUEST_WORKSPACE_ROOT}/lib/requirements-curated.txt"
 # Guest pip can take minutes on cold image; separate from mount ensure wall.
 DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS = 600.0
 _PIP_BRIDGE_SLACK_SECONDS = 30.0
+_TAIL_CHARS = 2000
+
+
+@dataclass(frozen=True)
+class InstallResult:
+    """Structured outcome of a curated guest pip install attempt (KD15)."""
+
+    ok: bool
+    exit_code: int | None = None
+    stderr_tail: str = ""
+    stdout_tail: str = ""
+    requirements_hash: str | None = None
+    error_reason: str | None = None  # e.g. lifecycle_unusable, pip_failed, …
 
 
 def requirements_file(host_root: Path) -> Path:
@@ -172,22 +188,32 @@ def guest_pip_install_argv() -> list[str]:
     ]
 
 
+def _tail(text: str, n: int = _TAIL_CHARS) -> str:
+    return (text or "").strip()[-n:]
+
+
 def try_install_curated_pyenv(
     life: Any,
     *,
     paths: ElyraPaths | None = None,
     name: str = PRIMARY_NAME,
     timeout_seconds: float = DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS,
-) -> bool:
+    force: bool = False,
+) -> InstallResult:
     """Run guest pip install after mount ready; write marker on success.
 
-    Returns True when marker is present/ready after the call. Failures leave
-    the marker absent (pyenv_ready stays false). Never raises for product warm.
+    Returns :class:`InstallResult`. Failures leave the marker absent
+    (pyenv_ready stays false). Never raises for product warm.
     """
     layout = paths or resolve_paths()
+    # Prefer existing product tree. ensure_host_tree seeds missing layout but
+    # must not run mid package-tool mutation in a way that drops curated edits
+    # (curated is no longer always-refreshed; allowlist still is).
     host_root = ensure_host_tree(name, layout)
-    if pyenv_ready(host_root):
-        return True
+    digest = requirements_hash(host_root)
+
+    if not force and pyenv_ready(host_root):
+        return InstallResult(ok=True, requirements_hash=digest)
 
     req = requirements_file(host_root)
     if not req.is_file():
@@ -195,17 +221,28 @@ def try_install_curated_pyenv(
             "curated requirements missing under %s — cannot install pyenv",
             req,
         )
-        return False
+        return InstallResult(
+            ok=False,
+            requirements_hash=digest,
+            error_reason="requirements_missing",
+        )
 
     if life is None or getattr(life, "client_unusable", False):
         _LOG.info("skip pyenv install: lifecycle missing or client_unusable")
-        return False
+        return InstallResult(
+            ok=False,
+            requirements_hash=digest,
+            error_reason="lifecycle_unusable",
+        )
 
     if not life.is_ready(name):
         _LOG.info("skip pyenv install: mount not ready for %s", name)
-        return False
+        return InstallResult(
+            ok=False,
+            requirements_hash=digest,
+            error_reason="mount_not_ready",
+        )
 
-    digest = requirements_hash(host_root)
     env: Mapping[str, str] = {**guest_env(), "PYTHONDONTWRITEBYTECODE": "1"}
     argv = guest_pip_install_argv()
     timeout = max(30.0, float(timeout_seconds))
@@ -224,20 +261,35 @@ def try_install_curated_pyenv(
                 timeout=timeout + _PIP_BRIDGE_SLACK_SECONDS,
             )
     except Exception as exc:  # noqa: BLE001 — warm path never kills product
+        msg = str(exc)
         _LOG.warning("guest pyenv pip install failed: %s", exc)
-        return False
+        reason = "pyenv_install_timeout" if "timeout" in msg.lower() else "pyenv_install_failed"
+        return InstallResult(
+            ok=False,
+            requirements_hash=digest,
+            stderr_tail=_tail(msg),
+            error_reason=reason,
+        )
 
     exit_code = int(getattr(result, "exit_code", 1))
     stderr = str(getattr(result, "stderr_text", "") or "")
     stdout = str(getattr(result, "stdout_text", "") or "")
+    stderr_t = _tail(stderr)
+    stdout_t = _tail(stdout)
     if exit_code != 0:
-        tail = (stderr or stdout or "").strip()[-500:]
         _LOG.warning(
             "guest pyenv pip install exit=%s: %s",
             exit_code,
-            tail or "(no output)",
+            stderr_t or stdout_t or "(no output)",
         )
-        return False
+        return InstallResult(
+            ok=False,
+            exit_code=exit_code,
+            stderr_tail=stderr_t,
+            stdout_tail=stdout_t,
+            requirements_hash=digest,
+            error_reason="pip_failed",
+        )
 
     path = write_pyenv_marker(host_root, req_hash=digest)
     if not pyenv_ready(host_root):
@@ -245,13 +297,26 @@ def try_install_curated_pyenv(
             "pyenv install reported ok but marker not readable at %s",
             path,
         )
-        return False
+        return InstallResult(
+            ok=False,
+            exit_code=exit_code,
+            stderr_tail=stderr_t,
+            stdout_tail=stdout_t,
+            requirements_hash=digest,
+            error_reason="marker_unreadable",
+        )
     _LOG.info(
         "sandbox0 pyenv ready (curated install ok, hash=%s, marker=%s)",
         (digest or "")[:12],
         path.name,
     )
-    return True
+    return InstallResult(
+        ok=True,
+        exit_code=exit_code,
+        stderr_tail=stderr_t,
+        stdout_tail=stdout_t,
+        requirements_hash=digest,
+    )
 
 
 def ensure_pyenv_marker_for_tests(paths: ElyraPaths | None = None) -> Path:
@@ -264,6 +329,7 @@ def ensure_pyenv_marker_for_tests(paths: ElyraPaths | None = None) -> Path:
 __all__ = [
     "DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS",
     "GUEST_REQUIREMENTS_PATH",
+    "InstallResult",
     "REQUIREMENTS_REL",
     "clear_pyenv_marker",
     "ensure_pyenv_marker_for_tests",

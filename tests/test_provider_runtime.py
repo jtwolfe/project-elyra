@@ -122,37 +122,41 @@ def test_merge_no_usage_meter_flag(tmp_path: Path):
     assert s.usage.enabled is False
 
 
-def test_runtime_config_start_llama_derived():
+def test_runtime_config_no_process_launch_fields():
+    """RuntimeConfig no longer starts a local inference process (PR2)."""
     s = default_settings()
-    # default provider xai → no llama
     cfg = runtime_config_from_settings(s)
     assert cfg.provider_name == "xai"
-    assert cfg.start_llama_server is False
+    assert not hasattr(cfg, "start_llama_server")
+    assert hasattr(cfg, "local")
 
     s_local = merge_cli_overrides(load_settings(), {"provider": {"name": "local"}})
     cfg_local = runtime_config_from_settings(s_local)
-    assert cfg_local.start_llama_server is True
-
-    cfg_no = runtime_config_from_settings(s_local, no_llama=True)
-    assert cfg_no.start_llama_server is False
+    assert cfg_local.provider_name == "local"
+    assert not hasattr(cfg_local, "start_llama_server")
 
     cfg_stub = runtime_config_from_settings(s_local, stub_llm=True)
-    assert cfg_stub.start_llama_server is False
+    assert cfg_stub.provider_name == "local"
 
 
-def test_cli_no_llama_does_not_force_stub():
-    """Footgun fix: use_stub_llm = stub_llm only (not stub_llm or no_llama)."""
+def test_cli_no_llama_flag_removed_stub_only_forces_stub():
+    """--no-llama removed; only --stub-llm forces StubChatClient."""
     from elyra.cli import build_parser
 
-    args = build_parser().parse_args(["start", "--no-llama"])
-    assert args.no_llama is True
-    assert args.stub_llm is False
-    # CLI main uses: use_stub = bool(args.stub_llm) only
-    use_stub = bool(args.stub_llm)
-    assert use_stub is False
+    parser = build_parser()
+    # Removed flag must error
+    with pytest.raises(SystemExit):
+        parser.parse_args(["start", "--no-llama"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["start", "--context-tokens", "4096"])
 
-    args2 = build_parser().parse_args(["start", "--stub-llm"])
-    assert bool(args2.stub_llm) is True
+    args = parser.parse_args(["start", "--stub-llm"])
+    assert bool(args.stub_llm) is True
+    use_stub = bool(args.stub_llm)
+    assert use_stub is True
+
+    args_plain = parser.parse_args(["start"])
+    assert bool(args_plain.stub_llm) is False
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +188,9 @@ def _supervisor_xai(
     cfg = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=0,
-        start_llama_server=False,
         provider_name="xai",
         model="grok-4.5",
-        model_label="Grok 4.5 Fast",
+        model_label="Grok 4.5",
         credential_source=credential_source,
         grok_auth_path=str(auth_path) if auth else str(home / "missing-auth.json"),
         usage=UsageSettings(enabled=usage_enabled),
@@ -212,8 +215,8 @@ def test_supervisor_xai_missing_creds_uses_failing_and_loads_meter(tmp_path: Pat
         assert isinstance(sup._worker.client, FailingChatClient)
         assert sup.state.credential_ok is False
         assert sup.state.credential_detail == DETAIL_MISSING_AUTH_JSON
-        assert sup.state.llama_ready is False
-        assert sup.state.llama_error == "provider_xai"
+        assert sup.state.chat_ready is False
+        assert sup.state.chat_error is None
         pr = sup.provider_runtime
         assert pr is not None
         assert pr.meter is not None  # meter loaded even when !credential_ok
@@ -244,6 +247,8 @@ def test_supervisor_xai_ok_uses_usage_gated_stack(tmp_path: Path):
         assert pr.can_open_model_moment() is True
         assert sup.state.credential_ok is True
         assert sup.state.credential_email == "op@example.com"
+        assert sup.state.chat_ready is True
+        assert sup.state.chat_error is None
     finally:
         sup.shutdown()
 
@@ -275,7 +280,8 @@ def test_supervisor_stub_llm_uses_stub_not_failing(tmp_path: Path):
         sup.shutdown()
 
 
-def test_supervisor_local_no_llama_uses_stub_not_failing(tmp_path: Path):
+def test_supervisor_local_uses_failing_not_stub(tmp_path: Path):
+    """KD2: provider=local without --stub-llm → FailingChatClient."""
     home = tmp_path / "home"
     home.mkdir()
     paths = resolve_paths(home)
@@ -290,7 +296,6 @@ def test_supervisor_local_no_llama_uses_stub_not_failing(tmp_path: Path):
     cfg = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=port,
-        start_llama_server=False,
         provider_name="local",
         model="local",
         model_label="local",
@@ -298,22 +303,175 @@ def test_supervisor_local_no_llama_uses_stub_not_failing(tmp_path: Path):
     sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=False)
     try:
         sup.start()
-        # llama not started / not ready → existing stub path (not Failing)
-        assert isinstance(sup._worker.client, StubChatClient)
+        assert isinstance(sup._worker.client, FailingChatClient)
+        assert not isinstance(sup._worker.client, StubChatClient)
         assert sup.provider_runtime is not None
         assert sup.provider_runtime.provider_name == "local"
+        assert sup.provider_runtime.can_open_model_moment() is False
+        assert sup.state.chat_ready is False
+        assert sup.state.chat_error == "local_not_implemented"
+        # rebuild must never dial for_local / open HTTP
+        with patch(
+            "elyra.runtime.provider_runtime.HttpChatClient.for_local"
+        ) as mock_for_local:
+            sup.provider_runtime.rebuild_chat_stack()
+            mock_for_local.assert_not_called()
+        assert isinstance(sup.provider_runtime.chat_client, FailingChatClient)
+    finally:
+        sup.shutdown()
+
+
+def test_supervisor_local_stub_llm_uses_stub(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    cfg = RuntimeConfig(
+        api_host="127.0.0.1",
+        api_port=port,
+        provider_name="local",
+        model="local",
+        model_label="local",
+    )
+    sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=True)
+    try:
+        sup.start()
+        assert isinstance(sup._worker.client, StubChatClient)
+        assert not isinstance(sup._worker.client, FailingChatClient)
+        assert sup.state.chat_error == "stub_llm"
+        assert sup.state.chat_ready is False
+        assert sup.provider_runtime is not None
+        assert sup.provider_runtime.stub_llm is True
+    finally:
+        sup.shutdown()
+
+
+def test_stub_llm_survives_apply_model_and_rebuild_local(tmp_path: Path):
+    """--stub-llm must stay Stub across model picker apply + rebuild (local)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    cfg = RuntimeConfig(
+        api_host="127.0.0.1",
+        api_port=port,
+        provider_name="local",
+        model="local",
+        model_label="local",
+    )
+    sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=True)
+    try:
+        sup.start()
+        pr = sup.provider_runtime
+        assert pr is not None
+        assert isinstance(pr.chat_client, StubChatClient)
+        can_open_before = pr.can_open_model_moment()
+
+        with patch(
+            "elyra.runtime.provider_runtime.HttpChatClient.for_local"
+        ) as mock_for_local:
+            with patch(
+                "elyra.runtime.provider_runtime.HttpChatClient.for_xai"
+            ) as mock_for_xai:
+                pr.apply_model("local")
+                pr.rebuild_chat_stack()
+                mock_for_local.assert_not_called()
+                mock_for_xai.assert_not_called()
+
+        assert isinstance(pr.chat_client, StubChatClient)
+        assert not isinstance(pr.chat_client, FailingChatClient)
+        assert sup._worker.client is pr.chat_client
+        assert isinstance(sup._worker.client, StubChatClient)
+        assert sup.state.chat_error == "stub_llm"
+        assert sup.state.chat_ready is False
+        assert pr.can_open_model_moment() is can_open_before
+        assert pr.stub_llm is True
+        assert pr.http_client is None
+    finally:
+        sup.shutdown()
+
+
+def test_stub_llm_survives_apply_model_and_rebuild_xai(tmp_path: Path):
+    """--stub-llm + valid auth must not escape to live HttpChatClient on apply/rebuild."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    auth = home / "auth.json"
+    _write_auth(auth, token="must-not-be-used-for-http")
+
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    cfg = RuntimeConfig(
+        api_host="127.0.0.1",
+        api_port=port,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        grok_auth_path=str(auth),
+    )
+    sup = ElyraSupervisor(paths=paths, config=cfg, use_stub_llm=True)
+    try:
+        sup.start()
+        pr = sup.provider_runtime
+        assert pr is not None
+        assert isinstance(pr.chat_client, StubChatClient)
+        assert pr.stub_llm is True
+        assert pr.http_client is None
+
+        with patch(
+            "elyra.runtime.provider_runtime.HttpChatClient.for_xai"
+        ) as mock_for_xai:
+            with patch(
+                "elyra.runtime.provider_runtime.HttpChatClient.for_local"
+            ) as mock_for_local:
+                pr.apply_model("grok-4.3")
+                assert pr.model == "grok-4.3"
+                pr.rebuild_chat_stack()
+                mock_for_xai.assert_not_called()
+                mock_for_local.assert_not_called()
+
+        assert isinstance(pr.chat_client, StubChatClient)
+        assert not isinstance(pr.chat_client, HttpChatClient)
+        assert not isinstance(pr.chat_client, FailingChatClient)
+        assert isinstance(sup._worker.client, StubChatClient)
+        assert sup.state.chat_error == "stub_llm"
+        assert sup.state.chat_ready is False
+        assert pr.http_client is None
     finally:
         sup.shutdown()
 
 
 def test_supervisor_does_not_start_llama_for_xai(tmp_path: Path):
+    """No llama process methods remain; xai start still works."""
     sup = _supervisor_xai(tmp_path, auth=False)
-    with patch.object(ElyraSupervisor, "_start_llama_server") as mock_start:
-        try:
-            sup.start()
-            mock_start.assert_not_called()
-        finally:
-            sup.shutdown()
+    assert not hasattr(ElyraSupervisor, "_start_llama_server")
+    assert not hasattr(sup, "_llama_proc")
+    try:
+        sup.start()
+        assert isinstance(sup._worker.client, FailingChatClient)
+    finally:
+        sup.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +497,6 @@ def test_rebuild_chat_stack_repairs_failing_to_gated(tmp_path: Path):
     cfg = RuntimeConfig(
         api_host="127.0.0.1",
         api_port=port,
-        start_llama_server=False,
         provider_name="xai",
         grok_auth_path=str(home / "missing.json"),  # cold start fail
     )
@@ -393,13 +550,13 @@ def test_can_open_model_moment_respects_budget(tmp_path: Path):
         worker=None,
         usage_settings=usage,
         xai_config=None,
-        llama_config=None,
+        local_config=None,
         gate=None,
         prefs_path=paths.data_dir / "runtime" / "provider.json",
         data_dir=paths.data_dir,
         provider_name="xai",
         model="grok-4.5",
-        model_label="Grok 4.5 Fast",
+        model_label="Grok 4.5",
         credential_source="grok_build",
         credential_ok=True,
         credential_detail=None,
@@ -462,6 +619,168 @@ def test_apply_credential_source_fail_leaves_previous(tmp_path: Path):
         assert pr.credential_ok is True
     finally:
         sup.shutdown()
+
+
+def test_apply_reasoning_effort_no_rebuild_when_http_live(tmp_path: Path):
+    """Effort change uses set_reasoning_effort; does not rebuild when http live."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    auth = home / "auth.json"
+    _write_auth(auth)
+
+    http = HttpChatClient.for_xai(
+        model="grok-4.5",
+        bearer_token="tok",
+        reasoning_effort="high",
+    )
+    pr = ProviderRuntime(
+        meter=None,
+        http_client=http,
+        chat_client=http,
+        worker=None,
+        usage_settings=UsageSettings(enabled=False),
+        xai_config=None,
+        local_config=None,
+        gate=None,
+        prefs_path=paths.data_dir / "runtime" / "provider.json",
+        data_dir=paths.data_dir,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        credential_ok=True,
+        credential_detail=None,
+        credential_expires_at=None,
+        credential_email=None,
+        api_key_configured=False,
+        grok_auth_path=auth,
+        reasoning_effort="high",
+    )
+    # Seed prefs so merge keeps model
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(model="grok-4.5", credential_source="grok_build"),
+    )
+    with patch.object(ProviderRuntime, "rebuild_chat_stack") as mock_rebuild:
+        pr.apply_reasoning_effort("medium")
+        mock_rebuild.assert_not_called()
+    assert pr.reasoning_effort == "medium"
+    assert pr.status_provider_fields()["reasoning_effort"] == "medium"
+    assert http._reasoning_effort == "medium"
+    raw = json.loads(
+        (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+    )
+    assert raw["reasoning_effort"] == "medium"
+    assert raw["model"] == "grok-4.5"
+
+
+def test_rebuild_chat_stack_retains_reasoning_effort(tmp_path: Path):
+    """rebuild_chat_stack passes runtime effort into for_xai (no silent high revert)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    auth = home / "auth.json"
+    _write_auth(auth, token="rebuild-token")
+
+    pr = ProviderRuntime(
+        meter=None,
+        http_client=None,
+        chat_client=FailingChatClient("x"),
+        worker=None,
+        usage_settings=UsageSettings(enabled=False),
+        xai_config=None,
+        local_config=None,
+        gate=None,
+        prefs_path=paths.data_dir / "runtime" / "provider.json",
+        data_dir=paths.data_dir,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        credential_ok=True,
+        credential_detail=None,
+        credential_expires_at=None,
+        credential_email=None,
+        api_key_configured=False,
+        grok_auth_path=auth,
+        reasoning_effort="medium",
+    )
+    with patch.object(ProviderRuntime, "refresh_models", return_value=["grok-4.5"]):
+        pr.rebuild_chat_stack()
+    assert pr.http_client is not None
+    assert pr.http_client._reasoning_effort == "medium"
+    assert pr.reasoning_effort == "medium"
+
+
+def test_runtime_config_reasoning_effort_from_prefs(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    data = home / "data"
+    data.mkdir()
+    (data / "runtime").mkdir()
+    save_provider_prefs(
+        data,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    s = load_merged_settings(home, data)
+    cfg = runtime_config_from_settings(s, data_dir=data)
+    assert cfg.reasoning_effort == "low"
+    # Without data_dir → default high
+    cfg_default = runtime_config_from_settings(s)
+    assert cfg_default.reasoning_effort == "high"
+
+
+def test_apply_model_preserves_effort_on_disk(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    pr = ProviderRuntime(
+        meter=None,
+        http_client=None,
+        chat_client=StubChatClient(),
+        worker=None,
+        usage_settings=UsageSettings(enabled=False),
+        xai_config=None,
+        local_config=None,
+        gate=None,
+        prefs_path=paths.data_dir / "runtime" / "provider.json",
+        data_dir=paths.data_dir,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        credential_ok=False,
+        credential_detail="missing_auth_json",
+        credential_expires_at=None,
+        credential_email=None,
+        api_key_configured=False,
+        models_available=["grok-4.5", "grok-4.3"],
+        reasoning_effort="low",
+        stub_llm=True,
+    )
+    pr.apply_model("grok-4.3")
+    from elyra.llm.provider_prefs import load_provider_prefs
+
+    prefs = load_provider_prefs(paths.data_dir)
+    assert prefs.model == "grok-4.3"
+    assert prefs.reasoning_effort == "low"
+    assert prefs.credential_source == "grok_build"
 
 
 def test_status_fields_never_contain_token(tmp_path: Path):

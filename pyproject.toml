@@ -14,6 +14,11 @@ dependencies = []
 dev = ["pytest>=8.0"]
 # Optional warm microVM isolation. Default install stays hermetic (Fake / host stub).
 sandbox = ["microsandbox>=0.6.0"]
+# Optional native web search (web_search builtin). Fail-closed without this extra.
+search = ["ddgs>=9.0"]
+# Optional Playwright browser primitives (host builtins). Also run:
+#   playwright install chromium
+browser = ["playwright>=1.49"]
 
 [project.scripts]
 elyra = "elyra.cli:main"
@@ -29,6 +34,6 @@ elyra = ["runtime/web/**/*"]
 pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
-    "llm: real llama-server / Gemma model (needs model/ GGUF + GPU; skip in CI without GPU)",
+    "llm: optional live LLM (OpenAI-compat local/remote); skipped when unavailable",
     "microsandbox: optional live microsandbox smoke (needs KVM + elyra[sandbox])",
 ]

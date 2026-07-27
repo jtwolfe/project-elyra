@@ -22,7 +22,8 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.llm.auth import api_key_path, write_stored_api_key
 from elyra.llm.client import FailingChatClient, StubChatClient, UsageGatedChatClient
-from elyra.llm.queue import LlamaServerGate
+from elyra.llm.queue import ChatRequestGate
+from elyra.llm.credits import CreditsSnapshot
 from elyra.llm.usage import TokenUsage, UsageMeter
 from elyra.loop.doloop import DoLoopResult
 from elyra.moment import MomentStore
@@ -109,13 +110,13 @@ def _make_provider(
         worker=worker,
         usage_settings=usage,
         xai_config=None,
-        llama_config=None,
+        local_config=None,
         gate=None,
         prefs_path=data / "runtime" / "provider.json",
         data_dir=data,
         provider_name="xai",
         model=model,
-        model_label="Grok 4.5 Fast" if model == "grok-4.5" else model,
+        model_label="Grok 4.5" if model == "grok-4.5" else model,
         credential_source=credential_source,
         credential_ok=credential_ok,
         credential_detail=None if credential_ok else "missing_auth_json",
@@ -156,7 +157,7 @@ class _ApiHarness:
             run_do_loop_fn=_stub_loop,
         )
         self.state = RuntimeState()
-        self.gate = LlamaServerGate()
+        self.gate = ChatRequestGate()
         self.provider = provider
         if provider is not None and attach_worker_to_provider:
             provider.worker = self.worker
@@ -261,9 +262,11 @@ def test_status_live_usage_and_provider_fields(paths):
         assert code == 200
         assert body["provider"] == "xai"
         assert body["model"] == "grok-4.5"
-        assert body["model_label"] == "Grok 4.5 Fast"
+        assert body["model_label"] == "Grok 4.5"
         assert body["credential_source"] == "grok_build"
         assert body["credential_ok"] is False
+        # Default resolved effort (missing prefs → high)
+        assert body["reasoning_effort"] == "high"
         assert "models_available" in body
         assert "usage" in body
         usage = body["usage"]
@@ -271,6 +274,35 @@ def test_status_live_usage_and_provider_fields(paths):
         assert usage["override_active"] is False  # default OFF
         assert usage["week_used_tokens"] == 1000
         assert 0.0 <= usage["week_remaining_fraction"] < 1.0
+        # Expanded design fields (PR6 Glass status shape)
+        assert "pace_band" in usage
+        assert usage["pace_band"] in ("green", "yellow", "red", "hard")
+        assert "pace_ratio" in usage
+        assert isinstance(usage["pace_ratio"], (int, float))
+        assert "burst_remaining_tokens" in usage
+        assert "burst_max_tokens" in usage
+        assert usage["burst_max_tokens"] >= 0
+        assert usage["burst_remaining_tokens"] >= 0
+        assert "day_hard_stop_enabled" in usage
+        assert "hour_hard_stop_enabled" in usage
+        assert usage["day_hard_stop_enabled"] is False  # soft default
+        assert usage["hour_hard_stop_enabled"] is False
+        assert "day_soft_exhausted" in usage
+        assert "hour_soft_exhausted" in usage
+        assert usage["elyra_week_budget_tokens"] == usage["week_limit_tokens"]
+        assert "weekly_allowed_fraction" in usage
+        assert "period_id" in usage
+        assert "period_authority" in usage
+        assert "week_stt_calls" in usage
+        assert "week_tts_calls" in usage
+        assert usage["week_stt_calls"] == 0
+        assert usage["week_tts_calls"] == 0
+        assert "throttle_advice" in usage
+        ta = usage["throttle_advice"]
+        assert ta["band"] == usage["pace_band"]
+        assert ta["delay_factor"] == 1.0
+        assert ta["suggest_economy_model"] is False  # auto_throttle off by default
+        assert "supergrok" in usage  # may be None without poll
         # Continuous still present and OFF by default
         cont = body.get("continuous")
         assert cont is None or cont.get("enabled") is False or cont.get("enabled") is None
@@ -309,6 +341,99 @@ def test_status_usage_refreshes_live(paths):
         code, body2 = h.get("/api/status")
         assert code == 200
         assert body2["usage"]["week_used_tokens"] == used1 + 50
+    finally:
+        h.close()
+
+
+def test_status_soft_day_exhausted_does_not_set_hard_stop(paths):
+    """Day over soft limit with day_hard_stop_enabled=false → hard_stop null.
+
+    Glass badge must not show stop · day from soft exhaustion alone.
+    """
+    usage_settings = UsageSettings(
+        enabled=True,
+        weekly_allowed_tokens=100_000,
+        day_allowed_tokens=100,
+        hour_allowed_tokens=100_000,
+        day_hard_stop_enabled=False,
+        hour_hard_stop_enabled=False,
+    )
+    meter = UsageMeter.load(paths.data_dir, usage_settings)
+    # Exhaust day soft budget; week still has headroom.
+    meter.record(TokenUsage(total_tokens=100))
+    snap = meter.snapshot()
+    assert snap.day_soft_exhausted is True
+    assert snap.hard_stop is None
+    assert meter.can_call() is True
+
+    pr = _make_provider(paths, usage=usage_settings, meter=meter, credential_ok=False)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.get("/api/status")
+        assert code == 200
+        usage = body["usage"]
+        assert usage["day_soft_exhausted"] is True
+        assert usage["day_hard_stop_enabled"] is False
+        assert usage["hard_stop"] is None
+        assert usage["override_active"] is False
+        # Pace band is status only — not hard.
+        assert usage["pace_band"] in ("green", "yellow", "red")
+        assert usage["pace_band"] != "hard"
+    finally:
+        h.close()
+
+
+def test_status_supergrok_block_from_injected_snapshot(paths):
+    """Injected CreditsSnapshot surfaces nested supergrok on status."""
+    usage_settings = UsageSettings(enabled=True, weekly_allowed_tokens=1_000_000)
+    meter = UsageMeter.load(paths.data_dir, usage_settings)
+    meter.apply_credits_snapshot(
+        CreditsSnapshot(
+            credit_usage_percent=22.5,
+            period_start="2026-07-21T00:00:00Z",
+            period_end="2026-07-28T00:00:00Z",
+            fetched_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            status="ok",
+            ok=True,
+            product_usage={"GrokBuild": 10.0, "Api": 12.5},
+        )
+    )
+    pr = _make_provider(paths, usage=usage_settings, meter=meter, credential_ok=False)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.get("/api/status")
+        assert code == 200
+        usage = body["usage"]
+        assert usage["credit_usage_percent"] == 22.5
+        sg = usage["supergrok"]
+        assert sg is not None
+        assert sg["credit_usage_percent"] == 22.5
+        assert sg["status"] == "ok"
+        assert sg["stale"] is False
+        assert sg["period_authority"] == "supergrok"
+        assert sg.get("product_usage") is not None
+        assert "period_start" in sg
+        assert "period_end" in sg
+    finally:
+        h.close()
+
+
+def test_status_usage_disabled_placeholder_shape(paths):
+    """Disabled meter still returns stable expanded keys for Glass."""
+    usage_settings = UsageSettings(enabled=False)
+    pr = _make_provider(paths, usage=usage_settings, credential_ok=False)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.get("/api/status")
+        assert code == 200
+        usage = body["usage"]
+        assert usage["enabled"] is False
+        assert usage["hard_stop"] is None
+        assert usage["override_active"] is False
+        assert "pace_band" in usage
+        assert "burst_remaining_tokens" in usage
+        assert "throttle_advice" in usage
+        assert usage["supergrok"] is None
     finally:
         h.close()
 
@@ -356,7 +481,176 @@ def test_patch_provider_empty_body(paths):
     try:
         code, body = h.patch("/api/provider", {})
         assert code == 400
-        assert body["error"] == "model or credential_source required"
+        assert body["error"] == "model, credential_source, or reasoning_effort required"
+    finally:
+        h.close()
+
+
+def test_patch_provider_reasoning_effort_ok(paths):
+    pr = _make_provider(paths)
+    assert pr.reasoning_effort == "high"
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "medium"})
+        assert code == 200
+        assert body["ok"] is True
+        assert body["reasoning_effort"] == "medium"
+        assert body["model"] == "grok-4.5"
+        assert pr.reasoning_effort == "medium"
+        # Prefs persisted
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["reasoning_effort"] == "medium"
+        # Status exposes resolved effort
+        code2, status = h.get("/api/status")
+        assert code2 == 200
+        assert status["reasoning_effort"] == "medium"
+    finally:
+        h.close()
+
+
+def test_patch_provider_reasoning_effort_auto_rejected(paths):
+    pr = _make_provider(paths)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "auto"})
+        assert code == 400
+        assert body["error"] == "invalid_reasoning_effort"
+        assert pr.reasoning_effort == "high"
+    finally:
+        h.close()
+
+
+def test_patch_provider_reasoning_effort_invalid(paths):
+    pr = _make_provider(paths)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "turbo"})
+        assert code == 400
+        assert body["error"] == "invalid_reasoning_effort"
+    finally:
+        h.close()
+
+
+@pytest.mark.parametrize("bad_effort", [None, 1, ""])
+def test_patch_provider_reasoning_effort_non_string_or_empty(paths, bad_effort):
+    """null / int / empty string → 400; runtime effort unchanged."""
+    pr = _make_provider(paths)
+    assert pr.reasoning_effort == "high"
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": bad_effort})
+        assert code == 400
+        assert body["error"] == "invalid_reasoning_effort"
+        assert pr.reasoning_effort == "high"
+    finally:
+        h.close()
+
+
+def test_patch_provider_model_only_preserves_effort(paths):
+    """model-only PATCH must not drop persisted reasoning_effort."""
+    from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
+
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    pr = _make_provider(paths)
+    pr.reasoning_effort = "low"
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"model": "grok-4.3"})
+        assert code == 200
+        assert body["model"] == "grok-4.3"
+        assert body["reasoning_effort"] == "low"
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["model"] == "grok-4.3"
+        assert raw["reasoning_effort"] == "low"
+    finally:
+        h.close()
+
+
+def test_patch_provider_effort_only_preserves_model(paths):
+    pr = _make_provider(paths, model="grok-4.5")
+    # Seed prefs so merge has model on disk
+    from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
+
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(model="grok-4.5", credential_source="grok_build"),
+    )
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "low"})
+        assert code == 200
+        assert body["reasoning_effort"] == "low"
+        assert body["model"] == "grok-4.5"
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["model"] == "grok-4.5"
+        assert raw["reasoning_effort"] == "low"
+    finally:
+        h.close()
+
+
+def test_patch_provider_credential_only_preserves_effort(paths):
+    """credential-only PATCH must not drop persisted reasoning_effort."""
+    from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
+
+    auth = paths.home / "auth.json"
+    _write_auth(auth)
+    write_stored_api_key(paths.data_dir, "sk-test-paste-key-not-real")
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    pr = _make_provider(
+        paths,
+        auth_path=auth,
+        credential_source="grok_build",
+        credential_ok=False,
+    )
+    pr.reasoning_effort = "low"
+    with patch.object(ProviderRuntime, "refresh_models", return_value=["grok-4.5"]):
+        pr.rebuild_chat_stack()
+    assert pr.credential_ok is True
+    # Rebuild re-passes runtime effort into for_xai
+    assert pr.http_client is not None
+    assert pr.http_client._reasoning_effort == "low"
+
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        with patch.object(ProviderRuntime, "refresh_models", return_value=["grok-4.5"]):
+            code, body = h.patch(
+                "/api/provider",
+                {"credential_source": "api_key"},
+            )
+        assert code == 200
+        assert body["ok"] is True
+        assert body["credential_source"] == "api_key"
+        assert body["reasoning_effort"] == "low"
+        assert pr.reasoning_effort == "low"
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["credential_source"] == "api_key"
+        assert raw["reasoning_effort"] == "low"
+        assert raw["model"] == "grok-4.5"
+        # Rebuild after credential switch retains client effort
+        assert pr.http_client is not None
+        assert pr.http_client._reasoning_effort == "low"
     finally:
         h.close()
 
@@ -604,6 +898,20 @@ def test_patch_usage_override_default_off_and_toggle(paths):
         assert body["usage"]["override_active"] is True
         assert meter.can_call() is True  # unlocks despite over budget
         assert pr.can_open_model_moment() is True
+        # PATCH response usage is expanded status block (still only mutates override)
+        assert "pace_band" in body["usage"]
+        assert "burst_remaining_tokens" in body["usage"]
+        assert "hard_stop" in body["usage"]  # would-be level still reported
+
+        # Extra keys in body must not be accepted as mutators — only override.
+        code, body = h.patch(
+            "/api/usage",
+            {"hard_stop_override": True, "pace_band": "green", "week_used_tokens": 0},
+        )
+        assert code == 200
+        assert body["usage"]["override_active"] is True
+        # Counters not reset by PATCH
+        assert body["usage"]["week_used_tokens"] == 10
 
         # Status reflects ON
         code, status = h.get("/api/status")

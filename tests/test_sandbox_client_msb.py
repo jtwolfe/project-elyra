@@ -121,9 +121,12 @@ def test_build_create_kwargs_volume_map(
     assert kwargs["workdir"] == "/workspace"
     assert kwargs["network"] == "public_only"
     volumes = kwargs["volumes"]
-    assert volumes["/workspace/lib"]["readonly"] is True
-    assert volumes["/workspace/general"]["readonly"] is True
-    assert volumes["/workspace/fixtures"]["readonly"] is True
+    # KD17: every MOUNT_SPEC guest path must appear with matching readonly.
+    assert len(volumes) == len(MOUNT_SPEC)
+    for guest, host_rel, readonly in MOUNT_SPEC:
+        assert guest in volumes, f"missing volume for {guest}"
+        assert volumes[guest]["readonly"] is readonly
+        assert volumes[guest]["host"] == str(root / host_rel)
+    assert volumes["/workspace/media"]["readonly"] is True
     assert volumes["/workspace/tmp"]["readonly"] is False
     assert volumes["/workspace/tools"]["readonly"] is False
-    assert volumes["/workspace/tmp"]["host"] == str(root / "tmp")

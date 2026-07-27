@@ -1,5 +1,7 @@
 # Inference — llama.cpp (Vulkan) + Gemma 4
 
+> **Historical freeze — do not follow for product setup.** The shipped product path is **xAI Grok** with a week ledger + SuperGrok pool pacing. Operator notes + dogfood checklist: [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md). Full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md).
+
 Port from **project-elyra2**. Do not invent a new stack.
 
 ## Model files (leave in elyra2)
@@ -24,20 +26,21 @@ ln -sfn ../aurimago/project-elyra2/model model
 | Knob | Default | Meaning |
 |------|---------|---------|
 | llama-server **`-c`** | **86000** (`CONTEXT_WINDOW_TOKENS`) | Server **KV ceiling** (allocated window) |
-| Client / meal **`sliding_input_tokens`** | **24000** (`DEFAULT_SLIDING_INPUT_TOKENS`) | Product **input budget** per outer meal + in-turn chain |
+| Client / meal **`sliding_input_tokens`** | **50000** (`DEFAULT_SLIDING_INPUT_TOKENS`) | Product **input budget** per outer meal + in-turn chain (was 24k; Grok 500k class) |
 | Generation headroom | **~8192** (`generation_max_tokens`) | Tool-loop max_tokens; do not starve multi-hop |
+| Model window (glass) | **500000** (`MODEL_CONTEXT_WINDOW_TOKENS`) | Grok-class context for UI / memory planning — not meal assembly |
 
 **Important:** starting with `-c 86000` does **not** mean every prompt is 86k tokens.  
 Crashes were mostly large prefills / VRAM, not “full context successfully used.”  
 Always assemble **sliding** meals well under the ceiling; never pack the full KV by default.
 
 ```text
-                    ┌── KV ceiling (-c, e.g. 86000) ──────────────┐
-                    │                                             │
-  [ sliding meal ~24k ]  [ generation headroom ]  [ unused KV  …  ]
+                    ┌── model window (e.g. Grok 500k) / legacy -c 86000 ──┐
+                    │                                                     │
+  [ sliding meal ~50k ]  [ generation headroom ]  [ unused context  …  ]
 ```
 
-Code constants: `elyra/llm/constants.py`. Runtime settings: `Settings.loop.sliding_input_tokens` / `in_turn_max_tokens` (see `elyra/settings.py`). CLI `--context-tokens N` only changes **`-c`**, not the 24k meal budget (lower `-c` if VRAM crashes; keep meals smaller than the new ceiling).
+Code constants: `elyra/llm/constants.py`. Runtime settings: `Settings.loop.sliding_input_tokens` / `in_turn_max_tokens` (see `elyra/settings.py`). CLI `--context-tokens N` only changes **`-c`**, not the 50k meal budget (lower `-c` if VRAM crashes; keep meals smaller than the new ceiling).
 
 ### What elyra2 used (historical)
 

@@ -175,6 +175,40 @@ def test_search_replace(sandbox: Sandbox) -> None:
     assert sandbox.read_text("edit.txt") == "x bar baz\n"
 
 
+def test_media_write_denied_media_readonly(sandbox: Sandbox) -> None:
+    """KD7: host mutators deny media/ only (PermissionError media_readonly)."""
+    # Ensure media dir exists (always-dirs).
+    assert (sandbox.root / "media").is_dir()
+    with pytest.raises(PermissionError, match="media_readonly"):
+        sandbox.write_text("media/att_x/note.txt", "nope\n")
+    with pytest.raises(PermissionError, match="media_readonly"):
+        sandbox.write_text("/workspace/media/x.txt", "nope\n")
+    # Project a file out-of-band, then search_replace must also deny.
+    dest = sandbox.root / "media" / "att_y" / "f.txt"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("old\n", encoding="utf-8")
+    with pytest.raises(PermissionError, match="media_readonly"):
+        sandbox.search_replace("media/att_y/f.txt", "old", "new")
+    # Reads remain allowed.
+    assert sandbox.read_text("media/att_y/f.txt") == "old\n"
+    assert "att_y" in sandbox.list_dir("media")
+    assert sandbox.is_readonly_relpath("media/att_y/f.txt") is True
+    assert sandbox.is_media_protected_relpath("media") is True
+
+
+def test_media_only_assert_mutable_allows_fixtures(sandbox: Sandbox) -> None:
+    """v1: assert_mutable does NOT deny lib/general/fixtures (host-stub OK)."""
+    sandbox.assert_mutable("fixtures/demo_note.txt")
+    sandbox.assert_mutable("tmp/scratch.txt")
+    sandbox.assert_mutable("tools/x.py")
+    # Host-stub may still write seed dirs (guest MSB is the RO layer there).
+    p = sandbox.write_text("fixtures/host_stub_write.txt", "ok\n")
+    assert p.is_file()
+    assert sandbox.read_text("fixtures/host_stub_write.txt") == "ok\n"
+    assert sandbox.is_readonly_relpath("fixtures/demo_note.txt") is False
+    assert sandbox.is_readonly_relpath("lib/paths.py") is False
+
+
 def test_search_replace_empty_old_rejected(sandbox: Sandbox) -> None:
     sandbox.write_text("e.txt", "x")
     with pytest.raises(ValueError, match="non-empty"):

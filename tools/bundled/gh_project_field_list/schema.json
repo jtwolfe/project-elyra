@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "number": {
+      "description": "Project number"
+    },
+    "project_number": {
+      "description": "Alias for number"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "format_json": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "number"
+  ],
+  "additionalProperties": false
+}

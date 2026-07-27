@@ -89,6 +89,32 @@ def clear_messages(paths: ElyraPaths) -> dict[str, Any]:
     return {"step": "messages", "existed": existed}
 
 
+def clear_media(paths: ElyraPaths) -> dict[str, Any]:
+    """Wipe ``data/media/**`` and sandbox media projection (KD13 / KD22).
+
+    Full reset clears media with messages so glass refs never point at retained
+    private blobs. Also clears ``sandboxes/sandbox0/media/**`` (keep dir).
+    """
+    media = _assert_under(
+        paths.data_dir / "media", paths.data_dir, label="media"
+    )
+    removed = 0
+    if media.is_dir():
+        removed = _clear_dir_contents(media)
+    # Re-scaffold empty layout for subsequent puts.
+    from elyra.media.store import ensure_media_dirs
+
+    ensure_media_dirs(paths)
+    # Disposable RO mirror (host projection); keep media/ dir.
+    try:
+        from elyra.media.project import clear_sandbox_media
+
+        removed += clear_sandbox_media(paths)
+    except OSError as exc:
+        _LOG.warning("clear_sandbox_media failed: %s", exc)
+    return {"step": "media", "removed": removed}
+
+
 def clear_goals(paths: ElyraPaths) -> dict[str, Any]:
     """Write ``data/goals/goals.json`` = ``{"goals": []}``."""
     goals_dir = _assert_under(
@@ -122,12 +148,12 @@ def clear_wakes_disk(paths: ElyraPaths) -> dict[str, Any]:
 
 
 def clear_sandbox(paths: ElyraPaths) -> dict[str, Any]:
-    """Clear legacy ``data/sandbox/**`` and new-tree RW dirs.
+    """Clear legacy ``data/sandbox/**`` and new-tree RW / projection dirs.
 
     Product FS root is ``sandboxes/sandbox0`` (H2c). Reset clears:
     - legacy ``data/sandbox/**`` (full wipe of contents)
-    - ``sandboxes/sandbox0/{tmp,tools}`` (RW only; RO seed lib/general/fixtures
-      kept; never wipe seed without re-seed)
+    - ``sandboxes/sandbox0/{tmp,tools,media}`` (RW + media projection; RO seed
+      lib/general/fixtures kept; never wipe seed without re-seed)
 
     Does **not** stop/remove the MSB instance (stop-only on process shutdown).
     """
@@ -146,7 +172,7 @@ def clear_sandbox(paths: ElyraPaths) -> dict[str, Any]:
     # Guard: primary must stay under home.
     if primary.exists() or primary.parent.exists():
         primary_r = _assert_under(primary, paths.home, label="sandbox0")
-        for sub in ("tmp", "tools"):
+        for sub in ("tmp", "tools", "media"):
             d = primary_r / sub
             if d.is_dir():
                 n_rw += _clear_dir_contents(d)
@@ -195,8 +221,12 @@ def ensure_preserved_dirs(paths: ElyraPaths) -> None:
         "goals",
         "sandbox",
         "runtime",
+        "media",
     ):
         (paths.data_dir / name).mkdir(parents=True, exist_ok=True)
+    from elyra.media.store import ensure_media_dirs
+
+    ensure_media_dirs(paths)
     (paths.skills_dir / "local").mkdir(parents=True, exist_ok=True)
     (paths.tools_dir / "local").mkdir(parents=True, exist_ok=True)
     (paths.tools_dir / "drafts").mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
-"""Serialize access to llama-server — one HTTP operation at a time.
+"""Serialize access to a chat backend — one HTTP operation at a time.
 
-Scope: gate for chat/embed so UI and worker never race the server.
+Scope: single-flight gate so UI and worker never race the inference endpoint.
 """
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ from typing import TypeVar
 T = TypeVar("T")
 
 
-class LlamaQueueShutdown(RuntimeError):
+class ChatGateShutdown(RuntimeError):
     """Raised when the gate is shutting down."""
 
 
-class LlamaServerGate:
-    """One llama-server HTTP operation at a time."""
+class ChatRequestGate:
+    """One chat HTTP operation at a time (provider-neutral single-flight)."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -38,7 +38,7 @@ class LlamaServerGate:
     def submit(self, label: str, fn: Callable[[], T]) -> T:
         with self._lock:
             if self._stop:
-                raise LlamaQueueShutdown("llama gate is shut down")
+                raise ChatGateShutdown("chat gate is shut down")
             self._busy = True
             self._label = label
         try:

@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from elyra.secrets.policy import SECRET_WRITE_ARG_KEYS
+
 # Defaults (thin lattice; constants over flag forest).
 FAIL_STREAK_THRESHOLD = 3
 OK_STREAK_THRESHOLD = 5
@@ -121,8 +123,34 @@ def _hash16(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _hash_secretish(value: Any) -> dict[str, Any]:
+    """Fingerprint placeholder for SECRET_WRITE_ARG_KEYS — never embed raw value."""
+    if isinstance(value, str):
+        raw = value
+    else:
+        try:
+            raw = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+        except (TypeError, ValueError):
+            raw = str(value)
+    return {"len": len(raw), "sha256_16": _hash16(raw)}
+
+
 def _canonicalize_value(key: str, value: Any) -> Any:
-    """Normalize one arg value for fingerprint JSON."""
+    """Normalize one arg value for fingerprint JSON.
+
+    Secret-write keys (``value``, ``token``, ``password``, …) are always hashed
+    so thrash fingerprints / tried= lessons / moment beats never embed secrets.
+    """
+    # K6 / PR5: secret material must never appear in thrash fingerprints that
+    # re-enter chain_messages via synthesize_lesson(tried=…) or moment tape.
+    if key in SECRET_WRITE_ARG_KEYS:
+        return _hash_secretish(value)
     if isinstance(value, Mapping):
         # install_tool_draft ``files`` map: path → content body → len + hash
         if key == "files":
@@ -165,6 +193,9 @@ def canonical_args(args: Mapping[str, Any] | None) -> str:
     File bodies under ``files`` fingerprint as
     ``{path: {"len": N, "sha256_16": "..."}}`` so content edits break the streak
     without hashing megabytes into the message itself.
+
+    Secret-write arg keys are always ``{len, sha256_16}`` (never raw values) so
+    thrash lessons / beats cannot re-inject secrets into model context.
     """
     if not args:
         return "{}"
