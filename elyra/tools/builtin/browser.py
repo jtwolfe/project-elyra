@@ -15,7 +15,6 @@ from elyra.tools.browser_sessions import (
     HINT_BROWSER_INSTALL,
     HINT_CHROMIUM_INSTALL,
     MAX_WAIT_SECONDS,
-    BrowserActionError,
     BrowserError,
     BrowserUnavailableError,
     ChromiumUnavailableError,

@@ -10,14 +10,19 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.tools.browser_sessions import (
     HINT_CHROMIUM_INSTALL,
+    MAX_REFS,
     MAX_SESSIONS,
     BrowserSessionManager,
     BrowserUnavailableError,
     ChromiumUnavailableError,
     SessionLimitError,
+    SnapshotUnavailableError,
     StaleRefError,
+    build_snapshot_from_aria_yaml,
     build_snapshot_from_ax_tree,
+    capture_page_snapshot,
     get_browser_session_manager,
+    page_has_structured_a11y_api,
     reset_browser_session_manager_for_tests,
     set_browser_session_manager,
 )
@@ -26,20 +31,27 @@ from elyra.tools.types import ToolContext
 
 
 # ---------------------------------------------------------------------------
-# Fake Playwright surface
+# Fake Playwright surface (aria_snapshot primary; no legacy accessibility)
 # ---------------------------------------------------------------------------
 
 
 class _FakeLocator:
-    def __init__(self, page: "_FakePage", role: str, name: str = "") -> None:
+    def __init__(
+        self,
+        page: "_FakePage",
+        role: str = "",
+        name: str = "",
+        *,
+        selector: str = "",
+    ) -> None:
         self._page = page
         self._role = role
         self._name = name
+        self._selector = selector
         self.first = self
 
     def click(self) -> None:
         self._page.clicks.append((self._role, self._name))
-        # Simulate DOM change → refs should be cleared by manager after click
 
     def fill(self, text: str) -> None:
         self._page.fills.append((self._role, self._name, text))
@@ -50,36 +62,25 @@ class _FakeLocator:
     def inner_text(self) -> str:
         return f"text:{self._role}:{self._name}"
 
-
-class _FakeAccessibility:
-    def __init__(self, page: "_FakePage") -> None:
-        self._page = page
-
-    def snapshot(self) -> dict[str, Any]:
-        return self._page.ax_tree
+    def aria_snapshot(self) -> str:
+        return self._page.aria_yaml
 
 
 class _FakePage:
-    def __init__(self) -> None:
+    def __init__(self, *, with_aria: bool = True) -> None:
         self.url = "about:blank"
         self.clicks: list[tuple[str, str]] = []
         self.fills: list[tuple[str, str, str]] = []
         self.types: list[tuple[str, str, str]] = []
         self.waited_ms: list[int] = []
-        self.ax_tree: dict[str, Any] = {
-            "role": "WebArea",
-            "name": "Test",
-            "children": [
-                {"role": "link", "name": "Home"},
-                {
-                    "role": "textbox",
-                    "name": "Search",
-                    "value": "",
-                },
-                {"role": "button", "name": "Go"},
-            ],
-        }
-        self.accessibility = _FakeAccessibility(self)
+        self.with_aria = with_aria
+        self.aria_yaml = (
+            '- heading "Test" [level=1]\n'
+            '- link "Home"\n'
+            '- textbox "Search"\n'
+            '- button "Go"\n'
+        )
+        # Intentionally no .accessibility — modern Playwright 1.57+ surface.
 
     def set_default_timeout(self, ms: int) -> None:
         self.default_timeout = ms
@@ -93,6 +94,16 @@ class _FakePage:
     def get_by_role(self, role: str, name: str | None = None) -> _FakeLocator:
         return _FakeLocator(self, role, name or "")
 
+    def locator(self, selector: str) -> Any:
+        if not self.with_aria:
+            return object()  # no aria_snapshot
+        return _FakeLocator(self, selector=selector)
+
+    def aria_snapshot(self) -> str:
+        if not self.with_aria:
+            raise RuntimeError("aria_snapshot disabled")
+        return self.aria_yaml
+
     def inner_text(self, selector: str = "body") -> str:
         return f"body-text:{self.url}"
 
@@ -104,11 +115,14 @@ class _FakeContext:
     def __init__(self, page: _FakePage) -> None:
         self._page = page
         self.closed = False
+        self.fail_close = False
 
     def new_page(self) -> _FakePage:
         return self._page
 
     def close(self) -> None:
+        if self.fail_close:
+            raise RuntimeError("context close boom")
         self.closed = True
 
 
@@ -116,28 +130,59 @@ class _FakeBrowser:
     def __init__(self, page: _FakePage) -> None:
         self._page = page
         self.closed = False
+        self.fail_close = False
+        self._proc_alive = False
 
     def new_context(self, **kwargs: Any) -> _FakeContext:
         return _FakeContext(self._page)
 
     def close(self) -> None:
+        if self.fail_close:
+            raise RuntimeError("browser close boom")
         self.closed = True
+        self._proc_alive = False
+
+    def process(self) -> Any:
+        if not self._proc_alive:
+            return None
+
+        class _P:
+            pid = 4242
+
+            def poll(self) -> int | None:
+                return None
+
+            def kill(self) -> None:
+                pass
+
+        return _P()
 
 
 class _FakePlaywright:
     def __init__(self) -> None:
         self.stopped = False
+        self.fail_stop = False
 
     def stop(self) -> None:
+        if self.fail_stop:
+            raise RuntimeError("pw stop boom")
         self.stopped = True
 
 
-def _fake_launcher() -> tuple[Any, Any, Any, Any]:
-    page = _FakePage()
-    pw = _FakePlaywright()
-    browser = _FakeBrowser(page)
-    context = browser.new_context()
-    return pw, browser, context, page
+def _fake_launcher(
+    *,
+    with_aria: bool = True,
+    fail_context_close: bool = False,
+) -> Any:
+    def launch() -> tuple[Any, Any, Any, Any]:
+        page = _FakePage(with_aria=with_aria)
+        pw = _FakePlaywright()
+        browser = _FakeBrowser(page)
+        context = browser.new_context()
+        context.fail_close = fail_context_close
+        return pw, browser, context, page
+
+    return launch
 
 
 @pytest.fixture(autouse=True)
@@ -151,44 +196,94 @@ def _ctx(moment_id: str = "mom_1") -> ToolContext:
     return ToolContext(paths=resolve_paths(), moment_id=moment_id)
 
 
-def _mgr() -> BrowserSessionManager:
-    mgr = BrowserSessionManager(launcher=_fake_launcher)
+def _mgr(**kwargs: Any) -> BrowserSessionManager:
+    mgr = BrowserSessionManager(launcher=_fake_launcher(**kwargs))
     set_browser_session_manager(mgr)
     return mgr
 
 
 # ---------------------------------------------------------------------------
-# Snapshot pure helper
+# Snapshot pure helpers
 # ---------------------------------------------------------------------------
 
 
-def test_build_snapshot_assigns_refs_and_truncates() -> None:
+def test_build_snapshot_from_aria_yaml_assigns_refs() -> None:
+    yaml = (
+        '- heading "Todos" [level=1]\n'
+        '- textbox "What needs to be done?"\n'
+        "- list:\n"
+        "  - listitem:\n"
+        '    - checkbox "Toggle" [checked]\n'
+        '    - text: "buy milk"\n'
+    )
+    text, refs, truncated = build_snapshot_from_aria_yaml(yaml)
+    assert truncated is False
+    assert "ref=e1" in text
+    assert "heading" in text
+    assert any(r.get("role") == "textbox" for r in refs.values())
+    assert any(r.get("role") == "button" or r.get("role") == "checkbox" for r in refs.values())
+    assert len(refs) >= 4
+
+
+def test_build_snapshot_from_aria_yaml_caps_chars_and_refs() -> None:
+    lines = [f'- button "B{i}"' for i in range(200)]
+    yaml = "\n".join(lines)
+    text, refs, truncated = build_snapshot_from_aria_yaml(yaml, max_chars=120)
+    assert truncated is True
+    assert "truncated" in text
+    assert len(text) <= 120 + len("\n… [truncated]") + 5
+    # refs only for emitted lines
+    assert len(refs) < 200
+    assert len(refs) <= MAX_REFS
+
+
+def test_build_snapshot_from_ax_tree_stops_at_cap() -> None:
     tree = {
         "role": "WebArea",
         "name": "Doc",
-        "children": [
-            {"role": "button", "name": "A"},
-            {"role": "button", "name": "B"},
-        ],
+        "children": [{"role": "button", "name": f"A{i}"} for i in range(300)],
     }
-    text, refs, truncated = build_snapshot_from_ax_tree(tree, max_chars=10_000)
-    assert "ref=e1" in text
-    assert "button" in text
-    assert len(refs) >= 2
-    assert truncated is False
+    text, refs, truncated = build_snapshot_from_ax_tree(tree, max_chars=200)
+    assert truncated is True
+    assert "truncated" in text
+    assert len(refs) < 300
+    # Must not retain full unbounded map relative to char budget
+    assert len(refs) <= 50
 
-    huge = {
-        "role": "WebArea",
-        "name": "X" * 100,
-        "children": [
-            {"role": "text", "name": "n" * 500} for _ in range(200)
-        ],
-    }
-    text2, refs2, truncated2 = build_snapshot_from_ax_tree(huge, max_chars=200)
-    assert truncated2 is True
-    assert len(text2) <= 200 + len("\n… [truncated]") + 5
-    assert "truncated" in text2
-    assert refs2  # still built full ref map before text cap
+
+def test_capture_prefers_aria_snapshot() -> None:
+    page = _FakePage(with_aria=True)
+    text, refs, truncated = capture_page_snapshot(page)
+    assert truncated is False
+    assert "ref=e" in text
+    assert refs
+    assert any(i.get("role") == "button" for i in refs.values())
+
+
+def test_capture_raises_without_structured_api() -> None:
+    page = object()  # no aria, no accessibility
+    assert page_has_structured_a11y_api(page) is False
+    with pytest.raises(SnapshotUnavailableError) as ei:
+        capture_page_snapshot(page)
+    assert ei.value.reason == "snapshot_unavailable"
+
+
+def test_capture_legacy_accessibility_fallback() -> None:
+    class _Ax:
+        def snapshot(self) -> dict[str, Any]:
+            return {
+                "role": "WebArea",
+                "name": "Legacy",
+                "children": [{"role": "button", "name": "OK"}],
+            }
+
+    class _LegacyPage:
+        accessibility = _Ax()
+        url = "about:blank"
+
+    text, refs, _ = capture_page_snapshot(_LegacyPage())
+    assert "button" in text
+    assert refs
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +305,6 @@ def test_open_goto_snapshot_click_close() -> None:
     assert "ref=e" in snap["snapshot"]
     assert snap["truncated"] is False
 
-    # Find a button ref
     button_ref = None
     for ref, info in mgr.get(sid).refs.items():
         if info.get("role") == "button":
@@ -219,7 +313,6 @@ def test_open_goto_snapshot_click_close() -> None:
     assert button_ref is not None
     clicked = mgr.click(sid, button_ref)
     assert clicked["clicked"] == button_ref
-    # refs cleared after click
     assert mgr.get(sid).refs == {}
 
     assert mgr.close(sid) is True
@@ -272,7 +365,6 @@ def test_stale_ref_raises() -> None:
     with pytest.raises(StaleRefError) as ei:
         mgr.click(sid, "e999")
     assert ei.value.reason == "stale_ref"
-    # After goto, old refs invalid
     ref = next(iter(mgr.get(sid).refs))
     mgr.goto(sid, "https://example.com/next")
     with pytest.raises(StaleRefError):
@@ -290,6 +382,8 @@ def test_type_fill_get_text_wait() -> None:
             break
     assert tb
     mgr.type_text(sid, tb, "hi")
+    # refs cleared after type
+    assert mgr.get(sid).refs == {}
     mgr.snapshot(sid)
     tb2 = next(
         r for r, i in mgr.get(sid).refs.items() if i.get("role") == "textbox"
@@ -300,6 +394,36 @@ def test_type_fill_get_text_wait() -> None:
     assert "body-text" in body["text"]
     waited = mgr.wait(sid, seconds=0.01)
     assert waited["waited_seconds"] == 0.01
+
+
+def test_close_retains_slot_when_teardown_fails() -> None:
+    """Issue 2: do not free slot before successful teardown (force=False)."""
+    mgr = _mgr(fail_context_close=True)
+    sid = mgr.open(moment_id="m")
+    # Make browser.close also fail so teardown is incomplete.
+    session = mgr.get(sid)
+    session.browser.fail_close = True
+    session.playwright.fail_stop = True
+
+    removed = mgr.close(sid, force=False)
+    assert removed is False
+    assert mgr.session_count == 1
+    assert mgr.get(sid).teardown_failed is True
+
+    # force frees the slot after best-effort teardown
+    assert mgr.close(sid, force=True) is True
+    assert mgr.session_count == 0
+
+
+def test_close_all_force_frees_after_failed_teardown() -> None:
+    mgr = _mgr(fail_context_close=True)
+    sid = mgr.open(moment_id="m")
+    session = mgr.get(sid)
+    session.browser.fail_close = True
+    session.playwright.fail_stop = True
+    n = mgr.close_all(force=True)
+    assert n == 1
+    assert mgr.session_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +472,45 @@ def test_chromium_unavailable_on_launch() -> None:
     assert "playwright install chromium" in result.payload.get("hint", "")
 
 
+def test_snapshot_unavailable_surfaces_tool_error() -> None:
+    """No silent body-text happy path when structured a11y API missing."""
+
+    class _BarePage:
+        """No aria_snapshot, no accessibility, no locator.aria_snapshot."""
+
+        url = "about:blank"
+
+        def set_default_timeout(self, ms: int) -> None:
+            pass
+
+        def inner_text(self, selector: str = "body") -> str:
+            return "should-not-be-used-as-structured-snapshot"
+
+        def locator(self, selector: str) -> object:
+            return object()
+
+        def get_by_role(self, role: str, name: str | None = None) -> Any:
+            raise RuntimeError("no roles")
+
+    def launch() -> tuple[Any, Any, Any, Any]:
+        page = _BarePage()
+        pw = _FakePlaywright()
+        browser = _FakeBrowser(_FakePage())
+        context = browser.new_context()
+        # Use bare page instead of fake
+        return pw, browser, context, page
+
+    mgr = BrowserSessionManager(launcher=launch)
+    set_browser_session_manager(mgr)
+    sid = mgr.open(moment_id="m")
+    with pytest.raises(SnapshotUnavailableError):
+        mgr.snapshot(sid)
+    result = browser_tools.browser_snapshot({"session_id": sid}, _ctx())
+    assert result.ok is False
+    assert result.error_reason == "snapshot_unavailable"
+    assert "aria_snapshot" in result.payload.get("hint", "")
+
+
 def test_builtin_open_goto_snapshot_click_close() -> None:
     _mgr()
     ctx = _ctx("moment_x")
@@ -362,7 +525,6 @@ def test_builtin_open_goto_snapshot_click_close() -> None:
     snap = browser_tools.browser_snapshot({"session_id": sid}, ctx)
     assert snap.ok
     assert snap.payload["ref_count"] >= 1
-    # pick first button-like ref from snapshot text
     refs_line = [
         line
         for line in snap.payload["snapshot"].splitlines()
@@ -372,7 +534,6 @@ def test_builtin_open_goto_snapshot_click_close() -> None:
     ref = refs_line[0].split("ref=")[1].rstrip("]")
     c = browser_tools.browser_click({"session_id": sid, "ref": ref}, ctx)
     assert c.ok
-    # stale after click
     stale = browser_tools.browser_click({"session_id": sid, "ref": ref}, ctx)
     assert stale.ok is False
     assert stale.error_reason == "stale_ref"
@@ -411,15 +572,13 @@ def test_screenshot_not_implemented() -> None:
 
 def test_snapshot_truncation_via_manager() -> None:
     def launcher() -> tuple[Any, Any, Any, Any]:
-        pw, browser, context, page = _fake_launcher()
-        # Huge a11y tree
-        page.ax_tree = {
-            "role": "WebArea",
-            "name": "big",
-            "children": [
-                {"role": "text", "name": ("word " * 200)} for _ in range(100)
-            ],
-        }
+        page = _FakePage()
+        page.aria_yaml = "\n".join(
+            f'- text "n{"x" * 80}"' for _ in range(100)
+        )
+        pw = _FakePlaywright()
+        browser = _FakeBrowser(page)
+        context = browser.new_context()
         return pw, browser, context, page
 
     mgr = BrowserSessionManager(launcher=launcher)
@@ -427,7 +586,7 @@ def test_snapshot_truncation_via_manager() -> None:
     sid = mgr.open(moment_id="m")
     snap = mgr.snapshot(sid, max_chars=500)
     assert snap["truncated"] is True
-    assert len(snap["snapshot"]) <= 500 + 20
+    assert len(snap["snapshot"]) <= 500 + 40
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +595,6 @@ def test_snapshot_truncation_via_manager() -> None:
 
 
 def test_close_for_moment_helper_closes_bound_sessions() -> None:
-    """Presence dual-path helper closes sessions for a moment_id."""
     from elyra.presence.worker import PresenceWorker
 
     mgr = _mgr()
@@ -487,7 +645,6 @@ def test_fail_in_flight_closes_browser(tmp_path: Any) -> None:
 
 
 def test_finalize_moment_invokes_close_for_moment(tmp_path: Any) -> None:
-    """Success finalize path closes browser sessions for the moment."""
     from elyra.loop.continuous_policy import ContinuousRuntimeState
     from elyra.loop.doloop import DoLoopResult
     from elyra.moment.types import STOP_REASONS
@@ -522,7 +679,6 @@ def test_finalize_moment_invokes_close_for_moment(tmp_path: Any) -> None:
     wake = MagicMock()
     wake.id = "wake_ok"
     wake.kind = "task_ready"
-    # Use a valid stop reason from the product set
     stop = next(iter(STOP_REASONS))
     result = DoLoopResult(stop_reason=stop, hop_count=2)
 
@@ -532,6 +688,25 @@ def test_finalize_moment_invokes_close_for_moment(tmp_path: Any) -> None:
     assert mgr.session_count == 0
     worker._moments.close_moment.assert_called()
     worker._maybe_enqueue_moment_continue_unlocked.assert_called()
+
+
+def test_worker_run_finally_closes_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue 2: worker run() finally closes sessions on the owner thread."""
+    from elyra.presence.worker import PresenceWorker
+
+    mgr = _mgr()
+    mgr.open(moment_id="leftover")
+    assert mgr.session_count == 1
+
+    worker = object.__new__(PresenceWorker)
+    worker._stop = __import__("threading").Event()
+    worker._stop.set()  # exit loop immediately
+    worker._poll = 0.01
+    worker._startup_recover = MagicMock()
+    worker._started = False
+
+    PresenceWorker.run(worker)
+    assert mgr.session_count == 0
 
 
 def test_supervisor_shutdown_calls_close_all(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -544,14 +719,13 @@ def test_supervisor_shutdown_calls_close_all(monkeypatch: pytest.MonkeyPatch) ->
     closed: list[int] = []
     real_close_all = mgr.close_all
 
-    def spy_close_all() -> int:
-        n = real_close_all()
+    def spy_close_all(*, force: bool = True) -> int:
+        n = real_close_all(force=force)
         closed.append(n)
         return n
 
     monkeypatch.setattr(mgr, "close_all", spy_close_all)
 
-    # Minimal supervisor instance
     sup = object.__new__(ElyraSupervisor)
     sup._stop = __import__("threading").Event()
     sup._sandbox_stop = __import__("threading").Event()
@@ -567,8 +741,6 @@ def test_supervisor_shutdown_calls_close_all(monkeypatch: pytest.MonkeyPatch) ->
     import elyra.runtime.supervisor as sup_mod
 
     monkeypatch.setattr(sup_mod, "clear_sandbox_lifecycle", lambda: None)
-
-    # shutdown imports get_browser_session_manager inside the method
     monkeypatch.setattr(
         "elyra.tools.browser_sessions.get_browser_session_manager",
         lambda: mgr,

@@ -445,13 +445,37 @@ class ElyraSupervisor:
             if self.provider_runtime is not None:
                 self.provider_runtime.credits_poller = None
         # 1. Presence worker join before sandbox stop.
+        # When browser sessions exist, allow nav timeout (+margin) so the
+        # worker thread can finish and close Playwright on the owner thread.
         if self._worker_thread is not None:
-            self._worker_thread.join(timeout=5)
-        # 1b. Close any leftover Playwright browser sessions (IK18).
+            join_timeout = 5.0
+            try:
+                from elyra.tools.browser_sessions import (
+                    WORKER_JOIN_TIMEOUT_S,
+                    WORKER_JOIN_TIMEOUT_WITH_BROWSER_S,
+                    get_browser_session_manager,
+                )
+
+                if get_browser_session_manager().session_count > 0:
+                    join_timeout = float(WORKER_JOIN_TIMEOUT_WITH_BROWSER_S)
+                else:
+                    join_timeout = float(WORKER_JOIN_TIMEOUT_S)
+            except Exception:  # noqa: BLE001
+                join_timeout = 5.0
+            self._worker_thread.join(timeout=join_timeout)
+        # 1b. Safety net: leftover Playwright sessions after worker exit (IK18).
+        # Prefer worker-thread close_all (run finally); this may be cross-thread.
         try:
             from elyra.tools.browser_sessions import get_browser_session_manager
 
-            get_browser_session_manager().close_all()
+            mgr = get_browser_session_manager()
+            if mgr.session_count > 0:
+                _LOG.warning(
+                    "browser sessions remain after worker join count=%s; "
+                    "force close_all from supervisor thread",
+                    mgr.session_count,
+                )
+            mgr.close_all(force=True)
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("browser close_all on shutdown failed: %s", exc)
         # 2. Warm thread best-effort join (daemon; cancel via stop event).

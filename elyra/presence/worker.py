@@ -928,6 +928,14 @@ class PresenceWorker:
                     self._fail_in_flight(wake, moment_id, exc)
                     self._stop.wait(timeout=self._poll)
         finally:
+            # Close Playwright on the owner thread (sync API is not cross-thread).
+            # Supervisor close_all is a safety net only after join.
+            try:
+                from elyra.tools.browser_sessions import get_browser_session_manager
+
+                get_browser_session_manager().close_all(force=True)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("browser close_all on worker stop failed: %s", exc)
             _LOG.info("presence worker stopped")
 
     def _startup_recover(self) -> None:
