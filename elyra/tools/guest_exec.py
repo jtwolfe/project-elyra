@@ -44,7 +44,7 @@ from elyra.sandbox.paths import (
 )
 from elyra.sandbox.protocol import ExecResult
 from elyra.sandbox.registry import get_sandbox_lifecycle
-from elyra.tools.package_hash import content_hash
+from elyra.tools.package_hash import VERIFY_RECORD_NAME, content_hash
 from elyra.tools.types import ToolContext, ToolResult
 
 
@@ -75,7 +75,6 @@ _STAGE_IGNORE_NAMES = frozenset(
     {"__pycache__", ".stage", ".verify", STAGE_MARKER_NAME}
 )
 _STAGE_IGNORE_SUFFIXES = frozenset({".pyc", ".pyo"})
-_VERIFY_RECORD_NAME = ".verify.json"
 _STAGE_MARKER_SCHEMA_VERSION = 1
 
 EXECUTOR_BACKEND_MICROSANDBOX = "microsandbox"
@@ -356,6 +355,10 @@ def stage_package_for_guest(
     whose hash matches the **source** package and the dest looks complete,
     skip re-stage (unless ``force=True``).
 
+    Skip assumes identical stage options: when ``strip_verify_record=True`` and
+    dest still has ``.verify.json``, skip is refused so the strip contract is
+    honored even if the content hash is unchanged.
+
     Writes under ``tools/.stage/<name>.<pid>.<token>/`` then renames into place
     (PR1 still rename-swaps on update; PR2 moves to in-place refresh).
     Excludes ``__pycache__`` / ``.pyc`` / stage marker. Optionally strips
@@ -376,8 +379,14 @@ def stage_package_for_guest(
     # Always hash SOURCE (never dest) for the gate and marker.
     src_hash = content_hash(package_dir)
 
+    # Refuse skip when strip is requested but dest still carries a verify record.
+    strip_needs_restage = strip_verify_record and (
+        dest.is_dir() and (dest / VERIFY_RECORD_NAME).is_file()
+    )
+
     if (
         not force
+        and not strip_needs_restage
         and dest.is_dir()
         and not dest.is_symlink()
         and _stage_marker_allows_skip(load_stage_marker(dest), src_hash=src_hash)
@@ -1393,7 +1402,7 @@ def _safe_copytree_into(
             continue
         if child.suffix in _STAGE_IGNORE_SUFFIXES:
             continue
-        if strip_verify_record and child.name == _VERIFY_RECORD_NAME:
+        if strip_verify_record and child.name == VERIFY_RECORD_NAME:
             continue
         if child.is_symlink():
             raise OSError(f"refusing to stage symlink: {child}")
@@ -1413,7 +1422,7 @@ def _safe_copytree_into(
                 strip_verify_record=strip_verify_record,
             )
         elif child.is_file():
-            if strip_verify_record and child.name == _VERIFY_RECORD_NAME:
+            if strip_verify_record and child.name == VERIFY_RECORD_NAME:
                 continue
             _safe_copy_file(child, target)
         else:

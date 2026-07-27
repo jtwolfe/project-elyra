@@ -30,9 +30,7 @@ def content_hash(package_dir: Path) -> str:
         if not path.is_file():
             continue
         rel = path.relative_to(package_dir).as_posix()
-        # Exclude verify sidecar anywhere named .verify.json
-        if path.name == VERIFY_RECORD_NAME or rel == VERIFY_RECORD_NAME:
-            continue
+        # Exclude verify sidecar anywhere named .verify.json (basename match).
         if path.name in CONTENT_HASH_EXCLUDE_NAMES:
             continue
         entries.append((rel, path))

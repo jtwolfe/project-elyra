@@ -632,6 +632,60 @@ def test_stage_restage_on_corrupt_or_missing_marker(paths, tmp_path: Path) -> No
     assert probe.is_file()
 
 
+def test_stage_restage_when_dest_incomplete_despite_marker(
+    paths, tmp_path: Path
+) -> None:
+    """Complete marker + matching hash but hollow dest → restage (module restored)."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "hollow_tool")
+    dest = stage_package_for_guest(paths, pkg)
+    marker1 = load_stage_marker(dest)
+    assert marker1 is not None
+    h = content_hash(pkg)
+    assert marker1["content_hash"] == h
+    module_path = dest / "impl" / "main.py"
+    assert module_path.is_file()
+    module_path.unlink()
+    assert not module_path.exists()
+    # Marker left intact — skip must still fail host_stage_looks_complete.
+    assert load_stage_marker(dest) is not None
+    assert load_stage_marker(dest)["content_hash"] == h
+
+    dest2 = stage_package_for_guest(paths, pkg)
+    assert (dest2 / "impl" / "main.py").is_file()
+    marker2 = load_stage_marker(dest2)
+    assert marker2 is not None
+    assert marker2["content_hash"] == h
+    assert marker2.get("incomplete") is False
+
+
+def test_stage_strip_verify_record_refuses_skip_when_present(
+    paths, tmp_path: Path
+) -> None:
+    """strip_verify_record=True restages when dest still has .verify.json."""
+    from elyra.tools.package_hash import VERIFY_RECORD_NAME
+
+    pkg = _write_sandbox_python_pkg(tmp_path, "strip_tool")
+    (pkg / VERIFY_RECORD_NAME).write_text(
+        json.dumps({"passed": True, "content_hash": "x"}),
+        encoding="utf-8",
+    )
+    # First stage keeps the verify record (default strip=False).
+    dest = stage_package_for_guest(paths, pkg, strip_verify_record=False)
+    assert (dest / VERIFY_RECORD_NAME).is_file()
+    marker1 = load_stage_marker(dest)
+    assert marker1 is not None
+    # Same source bytes + strip requested must not skip (strip contract).
+    dest2 = stage_package_for_guest(paths, pkg, strip_verify_record=True)
+    assert not (dest2 / VERIFY_RECORD_NAME).exists()
+    marker2 = load_stage_marker(dest2)
+    assert marker2 is not None
+    assert marker2["content_hash"] == content_hash(pkg)
+    # Second strip call with record already gone may skip.
+    ino = dest2.stat().st_ino
+    dest3 = stage_package_for_guest(paths, pkg, strip_verify_record=True)
+    assert dest3.stat().st_ino == ino
+
+
 def test_stage_force_restages_when_hash_matches(paths, tmp_path: Path) -> None:
     """force=True always restages even when content_hash matches."""
     pkg = _write_sandbox_python_pkg(tmp_path, "force_tool")
@@ -643,6 +697,13 @@ def test_stage_force_restages_when_hash_matches(paths, tmp_path: Path) -> None:
     # PR1 rename-swap: force creates a new top-level dest inode.
     ino1 = dest1.stat().st_ino
     probe_ino = (dest1 / "impl" / "main.py").stat().st_ino
+    # Sentinel staged_at so rewrite is observable without sleeping a second.
+    sentinel = "1999-01-01T00:00:00Z"
+    marker1["staged_at"] = sentinel
+    (dest1 / STAGE_MARKER_NAME).write_text(
+        json.dumps(marker1, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
     dest2 = stage_package_for_guest(paths, pkg, force=True)
     marker2 = load_stage_marker(dest2)
@@ -650,6 +711,7 @@ def test_stage_force_restages_when_hash_matches(paths, tmp_path: Path) -> None:
     assert marker2["content_hash"] == h
     assert dest2.stat().st_ino != ino1
     assert (dest2 / "impl" / "main.py").stat().st_ino != probe_ino
+    assert marker2["staged_at"] != sentinel
 
 
 def test_stage_pycache_excluded_from_dest(paths, tmp_path: Path) -> None:
