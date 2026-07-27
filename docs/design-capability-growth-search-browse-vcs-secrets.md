@@ -5,7 +5,7 @@
 | **Document** | Capability growth: search, browse, package VCS, secrets, workflow skills |
 | **Author** | Design (Grok) |
 | **Date** | 2026-07-27 |
-| **Status** | Draft |
+| **Status** | Draft (extended for self-improvement primitives) |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` |
 | **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `docs/grok-improvement-plan/`, `prompts/system.md` |
@@ -23,7 +23,7 @@ This design expands Elyra’s tool and skill surface so she can research the web
 - **Identity-aligned package VCS.** Tools and skills get the same draft → (verify) → promote → versions → revert culture that identity already has.
 - **Secrets never in model context.** Tool-scoped injection / broker pattern; user-managed + Elyra-managed.
 - **Agency-preserving.** Harden prompts and skills for safety, verification, and honest stop conditions — do not reduce initiative or invent a second mind.
-- **Self-improvement ready.** `github-workflow` skill teaches the conventions that Phase 1 `grok_build` and Phase 2 continuity will use.
+- **Self-improvement ready.** `github-workflow` skill teaches the conventions that Phase 1 `grok_build` and Phase 2 continuity will use. High-value primitives (worktree lifecycle + Projects item/field ops) are first-class so multi-step self-mod can be isolated and tracked without shell soup.
 
 **One-sentence outcome:** Elyra gains reliable search, real browser control, versioned package recovery, and secret-safe git/GitHub work, while the skill layer turns those tools into disciplined research and self-improvement loops that Grok Build can later amplify.
 
@@ -67,7 +67,7 @@ Elyra’s own ideal-case research guidance (operator conversation 2026-07-27) is
 1. **Package VCS** for tools and skills, modeled on identity (get / draft / (verify) / promote + versions archive + revert).
 2. **Native search** via `ddgs` (featureful, zero-key default) + later optional `web_fetch`.
 3. **Playwright browser primitives** (accessibility-first, headless, session-aware) + `browse` skill.
-4. **Structured git + `gh` tools** with secret injection points.
+4. **Structured git + `gh` tools** with secret injection points, including explicit high-value self-improvement primitives (worktree lifecycle + Projects item/field operations).
 5. **Secrets system** (user-managed + Elyra-managed, tool-scoped, Glass UI).
 6. **Judgment skills**: research family (inspired by Elyra’s ideal), `browse`, `github-workflow` (self-mod bridge).
 7. **General polish** of existing skills/tools where merited + light prompt hardening that preserves agency.
@@ -106,6 +106,7 @@ Elyra’s own ideal-case research guidance (operator conversation 2026-07-27) is
 | K12 | **Implementation via Grok Build from this design** | Design is the contract; Build executes the PR stack on `grok-improvement`. |
 | K13 | **version_id scheme matches identity** | `{UTC compact}_{6hex}` e.g. `20260727T034500Z_a1b2c3` for consistency. |
 | K14 | **Promote/revert gates for packages** | Local packages: reason required; destructive revert may take optional grant. Bundled never overwritten. Critical builtins are not grown via this path. |
+| K15 | **Worktree lifecycle + Projects item/field ops are first-class structured tools** | Highest-leverage primitives for isolated parallel/risky self-mod and durable multi-step tracking; preferred over raw `run` by the skill and later Grok Build. |
 
 ---
 
@@ -199,11 +200,34 @@ Session keyed by moment or explicit id so tools compose inside a do-loop. Fail-c
 
 ### 2.3 Git + GitHub
 
-Structured wrappers (not raw shell):
+Structured wrappers (not raw shell). All JSON-friendly; destructive actions gated; secrets injected only into the tool runner.
 
-- Local: `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_worktree_*`, etc.
-- GitHub: `gh_pr_*`, `gh_issue_*`, `gh_repo_search`, `gh_api`, `gh_project_*`, auth status.
-- All JSON-friendly; destructive actions gated; secrets injected only into the tool runner.
+**Local git (core):**
+- `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_branch`, `git_checkout`, `git_stash` (as needed)
+
+**Worktree lifecycle (high-value priority for self-improvement):**
+- `git_worktree_add` — path + optional new branch / commit-ish (supports `git worktree add [-b <branch>] <path> [<start-point>]`)
+- `git_worktree_list`
+- `git_worktree_remove`
+- `git_worktree_prune`
+- Optional: lock / unlock
+
+These enable isolated parallel or risky self-mod without file conflicts and are the preferred isolation mechanism for multi-agent or multi-step Grok Build work.
+
+**GitHub (core):**
+- `gh_pr_list` / `create` / `view` / `checks` / `merge` / `review` / `comment` / `diff`
+- `gh_issue_*` (including `develop` where useful)
+- `gh_repo_*`, `gh_api` (escape hatch for anything missing), auth status
+
+**Projects (high-value priority for multi-step self-improvement tracking):**
+- `gh_project_list` / `create` / `view`
+- `gh_project_item_list` / `add` / `create` / `edit` / `archive`
+- `gh_project_field_list` (complex field value updates may use `gh_api` / GraphQL)
+- Link / unlink as needed
+
+These give durable multi-step tracking beyond a single ledger goal and are the natural surface for long-running improvement work that Grok Build will drive.
+
+**Auth:** Prefer `GH_TOKEN` injected via the secrets system. Soft-fail cleanly if no token is available.
 
 ### 2.4 Secrets tools
 
@@ -291,10 +315,10 @@ Orchestrates Playwright primitives (or a future high-level task). Teaches snapsh
 This skill is the early scaffolding for complex self-mod:
 
 - **Branch discipline:** work on top of `grok-improvement` tip, or create `feature/<topic>` / `execute-plan/<id>` branches; never direct to `main`.
-- **Worktrees:** prefer worktrees for isolation when changes are parallel or risky.
-- **Tracking:** GitHub Issues / Projects + ledger goal with acceptance = tests + dogfood for multi-step improvement.
+- **Worktrees:** prefer the structured worktree tools (`git_worktree_add` / list / remove / prune) for isolation when changes are parallel or risky. Prefer these over raw `run` so the skill can orchestrate cleanly.
+- **Tracking:** GitHub Issues / Projects (via the structured `gh_project_*` and item/field tools) + ledger goal with acceptance = tests + dogfood for multi-step improvement. Use Projects for durable multi-step work that spans moments.
 - **Package changes:** use the new VCS tools (draft → verify → promote / revert).
-- **Instrument preference:** when a stronger coding instrument (`grok_build`) is available, prefer it for multi-file or complex coding tasks *inside this same workflow*; fall back to `search_replace` + `run` for small edits.
+- **Instrument preference:** when a stronger coding instrument (`grok_build`) is available, prefer it for multi-file or complex coding tasks *inside this same workflow*; fall back to `search_replace` + `run` for small edits. Grok Build runs should land inside a worktree + (when multi-step) a Project item.
 - **Person vs instrument:** Elyra owns goals, identity, moments; `gh`, git, and later `grok_build` are instruments under policy and gates.
 - Honest stops for human grants on high-impact actions (force-push, main merges, critical package revert, etc.).
 
@@ -351,7 +375,7 @@ This design is the contract. Implementation should be driven by Grok Build (or e
 2. **`web_search` + `web-research` (lite)** — ddgs builtin + primary research skill.
 3. **Playwright primitives + `browse` skill**.
 4. **Secrets store + tool-scoped injection + Glass panel**.
-5. **git/`gh` tools + `github-workflow` skill** (with self-mod conventions and grok_build preference hook).
+5. **git/`gh` tools + `github-workflow` skill** — include the high-value primitives (full worktree lifecycle + Projects item/field operations) as first-class structured tools; self-mod conventions and grok_build preference hook.
 6. **Polish pass** — existing skills/tools, prompt catalog, docs (`tools-and-skills.md`, status-pass, etc.).
 7. **Optional follow-ups**: `web_fetch`, SearXNG backend, fuller broker, high-level browser task.
 
@@ -365,7 +389,9 @@ Each unit stays reviewable; verify gates and fail-closed behaviour preserved thr
 - [ ] `web-research` multi-query + cites + stop conditions; can open ledger goal.
 - [ ] Browser snapshot + click-by-ref works headless; session cleans up.
 - [ ] Secret set in Glass; `gh` tool succeeds; raw secret never appears in moment tape or model context.
-- [ ] `github-workflow` skill produces sensible branch/PR steps and stops for grants; prefers grok_build when present.
+- [ ] Worktree add/list/remove works; a self-mod experiment can be isolated in a worktree.
+- [ ] Project item list/add/edit works; multi-step improvement work can be tracked on a Project.
+- [ ] `github-workflow` skill produces sensible branch/PR/worktree/Project steps and stops for grants; prefers grok_build when present.
 - [ ] Existing create-tool / identity paths still green.
 
 ---
@@ -380,6 +406,7 @@ Each unit stays reviewable; verify gates and fail-closed behaviour preserved thr
 | Browser state leaks across moments | Session keyed + explicit close |
 | Over-constraining prompts | Only catalog + skill judgment; preserve direct tool use |
 | Scope creep into Phase 1 | This design stops at rails; `grok_build` is separate |
+| Worktree / Project under-use | Explicit first-class tools + skill preference language |
 
 **Leave alone:** do-loop core, Stage B MC formulas, identity gates, sandbox isolation protocol, speak→glass law, continuous defaults.
 
@@ -388,6 +415,7 @@ Each unit stays reviewable; verify gates and fail-closed behaviour preserved thr
 ## References
 
 - Elyra’s ideal-case research guidance (operator conversation, 2026-07-27)
+- Package research (2026-07-27): ddgs extract + multi-backend; Playwright aria_snapshot; git worktree agent practice; gh project item/field surface + GH_TOKEN
 - `docs/design-identity-self-other-multi-user.md` (pattern source)
 - `docs/tools-and-skills.md`, `elyra/tools/promote.py`, `elyra/tools/registry.py`
 - `docs/project-status-pass.md` §7 (dev workflow / self-improvement conversation)
@@ -400,4 +428,6 @@ Each unit stays reviewable; verify gates and fail-closed behaviour preserved thr
 
 Start with package VCS (so recovery exists), then `web_search` + research skill, then browser, then secrets + git/gh + `github-workflow`. Keep tools thin and skills judgment-heavy. Preserve agency. Use this document as the source of truth for a Grok Build implementation pass on `grok-improvement`.
 
-The highest-leverage early win is exactly what Elyra described: a disciplined `web-research` skill on top of a reliable thin search tool, plus the ability to revert a broken package when growth goes wrong.
+**Self-improvement priority inside the git/gh unit:** land the worktree lifecycle tools and the Projects item/field tools as first-class structured surfaces so the skill (and later Grok Build) can isolate work and track multi-step improvement without falling back to raw shell.
+
+The highest-leverage early win is exactly what Elyra described: a disciplined `web-research` skill on top of a reliable thin search tool, plus the ability to revert a broken package when growth goes wrong — with the self-mod rails (worktrees + Projects) ready for the cycles that follow.
