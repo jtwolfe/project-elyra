@@ -366,9 +366,63 @@ def test_lifecycle_missing_restores(
     assert result.ok is False
     assert result.error_reason == "lifecycle_unusable"
     assert result.payload["host_reverted"] is True
-    assert result.payload["guest_site_may_be_dirty"] is True
+    # Guest pip never ran — not dirty (nit: precise honesty).
+    assert result.payload["guest_site_may_be_dirty"] is False
     assert requirements_file(host_root).read_text(encoding="utf-8") == original
     assert not marker_path(host_root).is_file()
+
+
+def test_invalid_timeout_does_not_mutate(
+    paths, host_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """timeout_seconds validated before write/clear (KD6 host revert contract)."""
+    _enable_isolation(monkeypatch)
+    original = requirements_file(host_root).read_text(encoding="utf-8")
+    write_pyenv_marker(host_root)
+    assert pyenv_ready(host_root) is True
+    _life_with_pip(paths, exit_code=0)
+
+    result = sandbox_pip_update(
+        {
+            "action": "add",
+            "packages": ["markdown"],
+            "timeout_seconds": "bad",
+        },
+        _ctx(paths),
+    )
+    assert result.ok is False
+    assert result.error_reason == "invalid_timeout"
+    assert result.payload["host_reverted"] is False
+    assert result.payload["guest_site_may_be_dirty"] is False
+    assert requirements_file(host_root).read_text(encoding="utf-8") == original
+    # Marker still present — never cleared on pre-mutation arg error.
+    assert marker_path(host_root).is_file()
+    assert "markdown" not in requirements_file(host_root).read_text(encoding="utf-8")
+
+
+def test_ensure_does_not_wipe_curated_mutations(paths, host_root: Path) -> None:
+    """Regression: curated not always-refreshed; allowlist is re-synced from seed."""
+    req = requirements_file(host_root)
+    mutated = req.read_text(encoding="utf-8") + "\n# package-tool mutation sentinel\n"
+    req.write_text(mutated, encoding="utf-8")
+
+    allowlist = host_root / "lib" / "requirements-allowlist.txt"
+    allowlist.write_text("# product-local allowlist (should be overwritten)\n", encoding="utf-8")
+
+    # Re-ensure: curated mutation must survive; allowlist re-synced from repo seed.
+    ensure_host_tree(PRIMARY_NAME, paths)
+    assert req.read_text(encoding="utf-8") == mutated
+    assert "package-tool mutation sentinel" in req.read_text(encoding="utf-8")
+
+    seed_al = (
+        project_root()
+        / "sandboxes"
+        / "sandbox0"
+        / "lib"
+        / "requirements-allowlist.txt"
+    )
+    assert allowlist.read_text(encoding="utf-8") == seed_al.read_text(encoding="utf-8")
+    assert "httpx" in allowlist.read_text(encoding="utf-8").lower()
 
 
 def test_remove_success_marks_guest_dirty(

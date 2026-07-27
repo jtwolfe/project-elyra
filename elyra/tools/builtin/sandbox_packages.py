@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +46,16 @@ BACKUP_REQ_NAME = "requirements-curated.txt.bak"
 
 MAX_PACKAGES_PER_CALL = 10
 MAX_REQUIREMENTS_BYTES = 64 * 1024
+
+# Guest pip was entered (or install path reached guest); user-site may be dirty.
+_GUEST_SITE_DIRTY_REASONS = frozenset(
+    {
+        "pip_failed",
+        "pyenv_install_timeout",
+        "pyenv_install_failed",
+        "marker_unreadable",
+    }
+)
 
 # Fail-closed: no URL/VCS/path/shell injection in requirement lines.
 _UNSAFE_IN_REQ = re.compile(
@@ -323,6 +332,44 @@ def _validate_packages_arg(
     return out, None
 
 
+def _parse_timeout_seconds(raw: Any) -> tuple[float | None, str | None]:
+    """Validate timeout before any host mutation. Returns (seconds, error_reason)."""
+    if raw is None:
+        return float(DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS), None
+    if isinstance(raw, bool):
+        return None, "invalid_timeout"
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+    elif isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None, "invalid_timeout"
+        try:
+            value = float(s)
+        except ValueError:
+            return None, "invalid_timeout"
+    else:
+        return None, "invalid_timeout"
+    if value != value or value <= 0:  # NaN or non-positive
+        return None, "invalid_timeout"
+    # Clamp model-facing timeout to a sane range.
+    return max(30.0, min(value, float(DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS))), None
+
+
+def _map_install_error_reason(reason: str | None) -> str:
+    if reason in {"pip_failed", "marker_unreadable", "pyenv_install_failed"}:
+        return "pyenv_install_failed"
+    if reason == "pyenv_install_timeout":
+        return "pyenv_install_timeout"
+    if reason == "lifecycle_unusable":
+        return "lifecycle_unusable"
+    if reason == "mount_not_ready":
+        return "mount_not_ready"
+    if reason == "requirements_missing":
+        return "requirements_missing"
+    return "pyenv_install_failed"
+
+
 def sandbox_pip_update(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     """Allowlist-add or narrow-remove packages in guest curated requirements."""
     action_raw = args.get("action")
@@ -364,6 +411,19 @@ def sandbox_pip_update(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             action=action,
             packages=packages_raw,
             hint="Guest network is none; pip install cannot reach indexes.",
+        )
+
+    # Validate timeout with other hard walls — never after host mutation (KD6).
+    timeout, terr = _parse_timeout_seconds(args.get("timeout_seconds"))
+    if terr is not None or timeout is None:
+        return _err(
+            "invalid_timeout",
+            action=action,
+            packages=packages_raw,
+            hint=(
+                "timeout_seconds must be a positive number "
+                f"(clamped 30–{int(DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS)})."
+            ),
         )
 
     host_root = ensure_host_tree(PRIMARY_NAME, ctx.paths)
@@ -476,90 +536,96 @@ def sandbox_pip_update(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     # Snapshot before any mutation (in-memory + host-only backup dir).
     _snapshot_requirements(host_root, original)
-    install_attempted = False
+    mutated = False
     try:
-        req_path.write_text(new_text, encoding="utf-8")
-    except OSError as exc:
-        return _err(
-            "requirements_write_failed",
-            action=action,
-            packages=package_names,
-            detail=str(exc),
+        try:
+            req_path.write_text(new_text, encoding="utf-8")
+        except OSError as exc:
+            return _err(
+                "requirements_write_failed",
+                action=action,
+                packages=package_names,
+                detail=str(exc),
+            )
+        mutated = True
+        clear_pyenv_marker(host_root)
+        life = get_sandbox_lifecycle()
+
+        result = try_install_curated_pyenv(
+            life,
+            paths=ctx.paths,
+            name=PRIMARY_NAME,
+            timeout_seconds=timeout,
+            force=True,
         )
 
-    clear_pyenv_marker(host_root)
-    life = get_sandbox_lifecycle()
-    install_attempted = True
-    timeout = float(
-        args.get("timeout_seconds") or DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS
-    )
-    # Clamp model-facing timeout to a sane range.
-    timeout = max(30.0, min(timeout, DEFAULT_PYENV_INSTALL_TIMEOUT_SECONDS))
+        if result.ok and pyenv_ready(host_root):
+            dirty = action == "remove"
+            payload = {
+                "ok": True,
+                "action": action,
+                "packages": package_names,
+                "requirements_hash": result.requirements_hash
+                or requirements_hash(host_root),
+                "pyenv_ready": True,
+                "host_reverted": False,
+                "guest_site_may_be_dirty": dirty,
+            }
+            if dirty:
+                payload["hint"] = _REMOVE_DIRTY_HINT
+            return ToolResult(ok=True, payload=payload)
 
-    result = try_install_curated_pyenv(
-        life,
-        paths=ctx.paths,
-        name=PRIMARY_NAME,
-        timeout_seconds=timeout,
-        force=True,
-    )
-
-    if result.ok and pyenv_ready(host_root):
-        dirty = action == "remove"
-        payload = {
-            "ok": True,
-            "action": action,
-            "packages": package_names,
-            "requirements_hash": result.requirements_hash
-            or requirements_hash(host_root),
-            "pyenv_ready": True,
-            "host_reverted": False,
-            "guest_site_may_be_dirty": dirty,
-        }
-        if dirty:
-            payload["hint"] = _REMOVE_DIRTY_HINT
-        return ToolResult(ok=True, payload=payload)
-
-    # Failure path: restore host files, clear marker, honest dirty flag.
-    restored = _restore_requirements(host_root, original)
-    clear_pyenv_marker(host_root)
-    reason = result.error_reason or "pyenv_install_failed"
-    # Map install helper reasons into tool-facing names where helpful.
-    if reason in {"pip_failed", "marker_unreadable", "pyenv_install_failed"}:
-        tool_reason = "pyenv_install_failed"
-    elif reason == "pyenv_install_timeout":
-        tool_reason = "pyenv_install_timeout"
-    elif reason == "lifecycle_unusable":
-        tool_reason = "lifecycle_unusable"
-    elif reason == "mount_not_ready":
-        tool_reason = "mount_not_ready"
-    else:
-        tool_reason = "pyenv_install_failed"
-
-    detail = result.stderr_tail or result.stdout_tail or reason
-    _LOG.warning(
-        "sandbox_pip_update install failed action=%s reason=%s restored=%s",
-        action,
-        reason,
-        restored,
-    )
-    return _err(
-        tool_reason,
-        action=action,
-        packages=package_names,
-        host_reverted=restored,
-        guest_site_may_be_dirty=install_attempted,
-        detail=detail,
-        hint=(
-            _INSTALL_FAIL_HINT
-            if install_attempted
-            else "Install was not attempted; host requirements restored."
-        ),
-        requirements_hash=requirements_hash(host_root),
-        pyenv_ready=False,
-        install_error_reason=result.error_reason,
-        exit_code=result.exit_code,
-    )
+        # Failure path: restore host files, clear marker, honest dirty flag.
+        restored = _restore_requirements(host_root, original)
+        clear_pyenv_marker(host_root)
+        reason = result.error_reason or "pyenv_install_failed"
+        tool_reason = _map_install_error_reason(reason)
+        guest_dirty = reason in _GUEST_SITE_DIRTY_REASONS
+        detail = result.stderr_tail or result.stdout_tail or reason
+        _LOG.warning(
+            "sandbox_pip_update install failed action=%s reason=%s restored=%s",
+            action,
+            reason,
+            restored,
+        )
+        return _err(
+            tool_reason,
+            action=action,
+            packages=package_names,
+            host_reverted=restored,
+            guest_site_may_be_dirty=guest_dirty,
+            detail=detail,
+            hint=(
+                _INSTALL_FAIL_HINT
+                if guest_dirty
+                else "Host requirements restored; marker cleared. Guest pip was not run."
+            ),
+            requirements_hash=requirements_hash(host_root),
+            pyenv_ready=False,
+            install_error_reason=result.error_reason,
+            exit_code=result.exit_code,
+        )
+    except Exception as exc:  # noqa: BLE001 — KD6: always restore after mutation
+        if mutated:
+            restored = _restore_requirements(host_root, original)
+            clear_pyenv_marker(host_root)
+            _LOG.exception(
+                "sandbox_pip_update unexpected error after mutation; restored=%s",
+                restored,
+            )
+            return _err(
+                "unexpected_error",
+                action=action,
+                packages=package_names,
+                host_reverted=restored,
+                # Unknown whether guest pip ran — prefer dirty honesty.
+                guest_site_may_be_dirty=True,
+                detail=str(exc),
+                hint=_INSTALL_FAIL_HINT,
+                requirements_hash=requirements_hash(host_root),
+                pyenv_ready=False,
+            )
+        raise
 
 
 __all__ = [
