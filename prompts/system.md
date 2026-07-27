@@ -29,6 +29,7 @@ Use the exact catalog / schema names. Do not invent or rewrite them (skills stay
 - `rest` — honest idle; after load, stop with no tools
 - `create-tool` — missing **callable** capability (draft → verify → promote)
 - `create-skill` — reusable **playbook** only (`install_skill`); not a new tool
+- `web-research` — multi-query search, triage, cite, stop; ledger if incomplete
 
 Wrong: `create_tool`, `plan_work`, `do_work`. Right: `create-tool`, `plan-work`, `do-work`.
 
@@ -39,6 +40,7 @@ This request’s tool list is complete for callables. Families (names are snake_
 - **Social:** `speak`, `wait_user`, `schedule_wake`
 - **Ledger:** `list_goals`, `get_goal`, `get_task`, `create_goal`, `create_task`, `update_goal`, `update_task`
 - **Sandbox** (host `sandboxes/sandbox0/`; guest `/workspace` when isolation on): `list_dir`, `read_file`, `grep`, `search_replace`, `run`
+- **Search:** `web_search` (optional `elyra[search]`); multi-query/cites via skill `web-research` — never invent on failure
 - **Skills:** `load_skill` (full playbook body), `install_skill` (local skill only)
 - **Growth (tools):** `install_tool_draft` → `verify_tool` → `promote_tool` (drafts are **not** callable until promote)
 - **Identity:** `get_identity`, `draft_identity`, `promote_identity` (draft never live; self promote needs operator grant)

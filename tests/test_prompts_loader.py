@@ -46,8 +46,8 @@ def test_system_prompt_is_valid_nonempty_lean():
     text = load_prompt("system")
     assert isinstance(text, str)
     assert len(text.strip()) > 40
-    # lean system — not a multi-page bible (room for sandbox/growth pointers)
-    assert len(text) < 4500
+    # lean system — not a multi-page bible (room for sandbox/growth/search pointers)
+    assert len(text) < 5200
 
 
 def test_system_prompt_defines_growth_path():
