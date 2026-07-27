@@ -282,6 +282,7 @@ def test_run_guest_nonzero_still_ok(
 def test_run_command_too_large_guest(
     paths, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Guest pre-exec gate rejects commands over 16 KiB with soft FS hint."""
     monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
     client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
     life = SandboxLifecycleManager(
@@ -289,11 +290,43 @@ def test_run_command_too_large_guest(
     )
     set_sandbox_lifecycle(life)
     assert life.ensure(PRIMARY_NAME).ready
-    huge = "x" * (5 * 1024)
+    huge = "x" * (17 * 1024)
     ctx = ToolContext(paths=paths, sandbox=Sandbox(paths))
     result = run_cmd.run({"command": huge}, ctx)
     assert result.ok is False
     assert result.error_reason == "command_too_large"
+    assert result.payload.get("limit_bytes") == 16384
+    assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
+    hint = result.payload.get("hint") or ""
+    assert "search_replace" in hint
+    assert "Path.write_text" in hint
+    assert "install_tool_draft" in hint
+    # Must not have reached guest exec
+    assert client.last_exec is None
+
+
+def test_run_command_at_guest_cap_not_rejected(
+    paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Command of exactly 16 KiB is not rejected at the pre-exec size gate."""
+    monkeypatch.delenv(ENV_ELYRA_SANDBOX, raising=False)
+    client = FakeSandboxClient(instances={PRIMARY_NAME: "running"})
+    life = SandboxLifecycleManager(
+        paths=paths, client=client, skip_guest_readiness=True
+    )
+    set_sandbox_lifecycle(life)
+    assert life.ensure(PRIMARY_NAME).ready
+    sb_conn = life.get_connected(PRIMARY_NAME)
+    assert sb_conn is not None
+    sb_conn.default_exec = ExecResult(exit_code=0, stdout_text="ok\n")
+    at_cap = "x" * (16 * 1024)
+    assert len(at_cap.encode("utf-8")) == run_cmd._GUEST_MAX_COMMAND_BYTES
+    ctx = ToolContext(paths=paths, sandbox=Sandbox(paths))
+    result = run_cmd.run({"command": at_cap}, ctx)
+    assert result.error_reason != "command_too_large"
+    assert result.ok is True
+    assert result.payload.get("executor_backend") == EXECUTOR_BACKEND_MICROSANDBOX
+    assert client.last_exec is not None
 
 
 # ---------------------------------------------------------------------------

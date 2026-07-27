@@ -29,14 +29,14 @@ After this playbook loads, your **next** completion must include a `tool_calls` 
 Pick the first that applies:
 
 1. `list_goals` or `get_task` / `get_goal` — pick the ready task and re-read acceptance when orient is thin
-2. Then sandbox tools (`read_file`, `list_dir`, `grep`, `search_replace`, `run`) and/or `update_task` to make progress
+2. Then sandbox tools (`read_file`, `list_dir`, `grep`, `search_replace`, `run`) and/or `update_task` to make progress. Prefer `search_replace` for **existing** files; for **new** files under 16 KiB use one `run` + `Path.write_text` (or `install_tool_draft` for packages); use `run` primarily to execute
 3. If a **capability is missing** (no tool for the job): `load_skill` with name **`create-tool`** — do not fake progress in free-text or thrash empty sandbox lists / host path fishing
 
 ## Hard rules
 
 1. **One primary task per moment** when possible; avoid thrashing across many tasks.
 2. Never claim done without **evidence** in the sandbox or honest ledger notes.
-3. Sandbox tools are jailed under the sandbox root — they do **not** see host `tools/bundled` or repo paths. Prefer ledger + allowed tools; drafts only via `install_tool_draft` (through create-tool).
+3. Sandbox tools are jailed under the sandbox root — they do **not** see host `tools/bundled` or repo paths. Prefer ledger + allowed tools; drafts only via `install_tool_draft` (through create-tool). For FS: `search_replace` for existing-file edits; new files under the guest run cap (16 KiB) via short `run` + `Path.write_text`; `run` primarily to execute — not multi-KB heredocs / `python -c` as a file bus.
 4. On blocker: set task **`blocked`** (or clear notes) with a specific reason; optional `speak` if a human must unblock. Do not spin forever. Sandbox isolation failures (`sandbox_unavailable:*`, `guest_pytest_unavailable`) are blockers — block / speak / rest; do not thrash guest tools.
 5. Do **not** close the parent goal from here. Prefer `load_skill` name `review-work` before goal close.
 6. Use **exact** tool names (snake_case) and skill names (hyphenated) only.

@@ -17,8 +17,9 @@ from elyra.sandbox import DEFAULT_RUN_TIMEOUT_SECONDS, Sandbox
 from elyra.sandbox.paths import isolation_enabled
 from elyra.tools.types import ToolContext, ToolResult
 
-# Guest command size cap (elyra2 guest_shell / design: 4 KiB UTF-8).
-_GUEST_MAX_COMMAND_BYTES = 4 * 1024
+# Guest command size cap (product: 16 KiB UTF-8; integrity fix from 4 KiB).
+# Still not unlimited — blocks multi-file dumps via shell; trust boundary.
+_GUEST_MAX_COMMAND_BYTES = 16 * 1024
 
 
 def _require_sandbox(ctx: ToolContext) -> Sandbox | ToolResult:
@@ -94,8 +95,12 @@ def _guest_run(
                 "executor_backend": EXECUTOR_BACKEND_MICROSANDBOX,
                 "limit_bytes": _GUEST_MAX_COMMAND_BYTES,
                 "hint": (
-                    "Shell/run payload exceeds guest max; write files via "
-                    "search_replace / FS tools instead of large shell heredocs."
+                    "Guest run command exceeds max bytes (16 KiB). "
+                    "Existing files: prefer search_replace for edits. "
+                    "New files: one run with Path.write_text under the limit, or "
+                    "install_tool_draft for tool packages — not multi-KB "
+                    "python -c / heredocs. "
+                    "Use run primarily to execute (python path/to/script.py, pytest)."
                 ),
             },
             error_reason="command_too_large",
