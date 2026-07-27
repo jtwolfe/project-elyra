@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -9,9 +12,11 @@ import pytest
 
 from elyra.config import resolve_paths
 from elyra.tools.browser_sessions import (
+    HINT_BROWSER_LAUNCH_FAILED,
     HINT_CHROMIUM_INSTALL,
     MAX_REFS,
     MAX_SESSIONS,
+    BrowserLaunchFailedError,
     BrowserSessionManager,
     BrowserUnavailableError,
     ChromiumUnavailableError,
@@ -472,6 +477,80 @@ def test_chromium_unavailable_on_launch() -> None:
     assert "playwright install chromium" in result.payload.get("hint", "")
 
 
+def test_browser_launch_failed_not_install_hint() -> None:
+    """Post-import Sync/start failures must not look like missing pip package."""
+
+    def bad_launch() -> tuple[Any, Any, Any, Any]:
+        raise BrowserLaunchFailedError(
+            "failed to start playwright: Sync API inside the asyncio loop",
+            hint=HINT_BROWSER_LAUNCH_FAILED,
+        )
+
+    mgr = BrowserSessionManager(launcher=bad_launch)
+    set_browser_session_manager(mgr)
+    with pytest.raises(BrowserLaunchFailedError) as ei:
+        mgr.open(moment_id="m")
+    assert ei.value.reason == "browser_launch_failed"
+    assert "pip install" not in ei.value.hint
+
+    result = browser_tools.browser_session_open({}, _ctx())
+    assert result.ok is False
+    assert result.error_reason == "browser_launch_failed"
+    hint = result.payload.get("hint", "")
+    assert "pip install" not in hint
+    assert "host browser backend" in hint or "detail" in hint.lower() or hint
+    assert "playwright install chromium" not in hint
+
+
+def test_default_launch_maps_start_failure_to_launch_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_default_launch: after import, start() boom → browser_launch_failed."""
+    import elyra.tools.browser_sessions as bs
+
+    class _FakeSync:
+        def start(self) -> Any:
+            raise RuntimeError(
+                "It looks like you are using Playwright Sync API "
+                "inside the asyncio loop"
+            )
+
+    def fake_import() -> Any:
+        return lambda: _FakeSync()
+
+    monkeypatch.setattr(bs, "_import_playwright_sync", fake_import)
+    with pytest.raises(BrowserLaunchFailedError) as ei:
+        bs._default_launch()
+    assert ei.value.reason == "browser_launch_failed"
+    assert "pip install" not in ei.value.hint
+
+
+def test_default_launch_maps_missing_binary_to_chromium(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import elyra.tools.browser_sessions as bs
+
+    class _FakeChromium:
+        def launch(self, **kwargs: Any) -> Any:
+            raise RuntimeError("Executable doesn't exist at /missing/chrome")
+
+    class _FakePW:
+        chromium = _FakeChromium()
+
+        def stop(self) -> None:
+            pass
+
+    class _FakeSync:
+        def start(self) -> _FakePW:
+            return _FakePW()
+
+    monkeypatch.setattr(bs, "_import_playwright_sync", lambda: (lambda: _FakeSync()))
+    with pytest.raises(ChromiumUnavailableError) as ei:
+        bs._default_launch()
+    assert ei.value.reason == "chromium_unavailable"
+    assert "playwright install chromium" in ei.value.hint
+
+
 def test_snapshot_unavailable_surfaces_tool_error() -> None:
     """No silent body-text happy path when structured a11y API missing."""
 
@@ -788,3 +867,233 @@ def test_browse_skill_exists() -> None:
     assert "snapshot" in text.lower()
     assert "browser_session_open" in text
     assert "stale" in text.lower()
+    assert "browser_launch_failed" in text
+
+
+def test_tool_md_documents_launch_failed_taxonomy() -> None:
+    from pathlib import Path
+
+    tool_md = Path("tools/bundled/browser_session_open/TOOL.md")
+    assert tool_md.is_file()
+    text = tool_md.read_text(encoding="utf-8")
+    assert "browser_launch_failed" in text
+    assert "browser_unavailable" in text
+    assert "chromium_unavailable" in text
+
+
+# ---------------------------------------------------------------------------
+# BrowserThread: owner_ident, pollution isolation, lock not across launch
+# ---------------------------------------------------------------------------
+
+
+def test_session_owner_ident_is_browser_thread() -> None:
+    launch_idents: list[int] = []
+
+    def launcher() -> tuple[Any, Any, Any, Any]:
+        launch_idents.append(threading.get_ident())
+        return _fake_launcher()()
+
+    mgr = BrowserSessionManager(launcher=launcher)
+    set_browser_session_manager(mgr)
+    sid = mgr.open(moment_id="m")
+    session = mgr.get(sid)
+    assert session.owner_ident == mgr.browser_thread.ident
+    assert launch_idents
+    assert launch_idents[0] == mgr.browser_thread.ident
+    # Caller is not the browser thread
+    assert session.owner_ident != threading.get_ident()
+    mgr.close(sid)
+
+
+def test_open_succeeds_when_caller_has_running_asyncio_loop() -> None:
+    """KD13: caller-thread loop pollution must not break launch (BrowserThread)."""
+    launch_idents: list[int] = []
+    launch_saw_running_loop: list[bool] = []
+
+    def launcher() -> tuple[Any, Any, Any, Any]:
+        launch_idents.append(threading.get_ident())
+        saw = False
+        try:
+            loop = asyncio.get_running_loop()
+            saw = loop.is_running()
+        except RuntimeError:
+            saw = False
+        launch_saw_running_loop.append(saw)
+        # Simulate Playwright Sync refusal if called on a polluted thread.
+        if saw:
+            raise RuntimeError(
+                "Playwright Sync API inside the asyncio loop"
+            )
+        return _fake_launcher()()
+
+    mgr = BrowserSessionManager(launcher=launcher)
+    set_browser_session_manager(mgr)
+
+    result: dict[str, Any] = {}
+    loop = asyncio.new_event_loop()
+
+    def call_open_while_loop_running() -> None:
+        try:
+            # This runs on the loop's thread *while* the loop is running.
+            result["sid"] = mgr.open(moment_id="polluted")
+        except Exception as exc:  # noqa: BLE001
+            result["err"] = exc
+        finally:
+            loop.stop()
+
+    loop.call_soon(call_open_while_loop_running)
+    loop.run_forever()
+    loop.close()
+
+    assert "err" not in result, result.get("err")
+    assert result.get("sid", "").startswith("bs_")
+    assert launch_idents == [mgr.browser_thread.ident]
+    assert launch_saw_running_loop == [False]
+
+
+def test_page_ops_run_on_browser_thread() -> None:
+    op_idents: list[int] = []
+
+    class _TrackingPage(_FakePage):
+        def goto(self, url: str, wait_until: str = "load", timeout: int = 0) -> Any:
+            op_idents.append(threading.get_ident())
+            return super().goto(url, wait_until=wait_until, timeout=timeout)
+
+        def aria_snapshot(self) -> str:
+            op_idents.append(threading.get_ident())
+            return super().aria_snapshot()
+
+    def launcher() -> tuple[Any, Any, Any, Any]:
+        page = _TrackingPage()
+        pw = _FakePlaywright()
+        browser = _FakeBrowser(page)
+        context = browser.new_context()
+        return pw, browser, context, page
+
+    mgr = BrowserSessionManager(launcher=launcher)
+    set_browser_session_manager(mgr)
+    sid = mgr.open(moment_id="m")
+    mgr.goto(sid, "https://example.com/")
+    mgr.snapshot(sid)
+    bt = mgr.browser_thread.ident
+    assert op_idents
+    assert all(i == bt for i in op_idents)
+    mgr.close(sid)
+
+
+def test_open_does_not_hold_lock_across_launch() -> None:
+    """Registry RLock must not cover the long launcher (deadlock / stall risk)."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_launcher() -> tuple[Any, Any, Any, Any]:
+        entered.set()
+        if not release.wait(timeout=3.0):
+            raise TimeoutError("release not signaled")
+        return _fake_launcher()()
+
+    mgr = BrowserSessionManager(launcher=slow_launcher)
+    set_browser_session_manager(mgr)
+
+    errors: list[BaseException] = []
+
+    def open_bg() -> None:
+        try:
+            mgr.open(moment_id="slow")
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=open_bg, name="open-bg")
+    t.start()
+    assert entered.wait(timeout=2.0)
+    # While launch is in flight, registry ops must not block on the same lock.
+    t0 = time.monotonic()
+    assert mgr.session_count == 0
+    assert time.monotonic() - t0 < 0.5
+    release.set()
+    t.join(timeout=3.0)
+    assert not t.is_alive()
+    assert not errors
+    assert mgr.session_count == 1
+    mgr.close_all()
+
+
+def test_pending_opens_count_toward_session_limit() -> None:
+    """Concurrent opens cannot exceed MAX_SESSIONS via launch-outside-lock.
+
+    BrowserThread serializes launch, but pending slots are reserved under the
+    registry lock *before* the hop — a third open must fail while two are in flight.
+    """
+    release = threading.Event()
+    first_in_launch = threading.Event()
+
+    def gated_launcher() -> tuple[Any, Any, Any, Any]:
+        first_in_launch.set()
+        release.wait(timeout=3.0)
+        return _fake_launcher()()
+
+    mgr = BrowserSessionManager(launcher=gated_launcher)
+    set_browser_session_manager(mgr)
+
+    results: list[Any] = []
+    lock = threading.Lock()
+
+    def try_open() -> None:
+        try:
+            sid = mgr.open(moment_id="c")
+            with lock:
+                results.append(sid)
+        except Exception as exc:  # noqa: BLE001
+            with lock:
+                results.append(exc)
+
+    t1 = threading.Thread(target=try_open)
+    t2 = threading.Thread(target=try_open)
+    t1.start()
+    assert first_in_launch.wait(timeout=2.0)
+    t2.start()
+    # Wait until second open has reserved its pending slot (queued on BrowserThread).
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        with mgr._lock:  # noqa: SLF001 — test inspects reservation
+            if mgr._pending_opens >= 2:  # noqa: SLF001
+                break
+        time.sleep(0.01)
+    else:
+        release.set()
+        t1.join(timeout=1)
+        t2.join(timeout=1)
+        pytest.fail("second open never reserved pending slot")
+
+    with pytest.raises(SessionLimitError) as ei:
+        mgr.open(moment_id="third")
+    assert ei.value.reason == "session_limit"
+    release.set()
+    t1.join(timeout=3.0)
+    t2.join(timeout=3.0)
+    sids = [r for r in results if isinstance(r, str)]
+    assert len(sids) == 2
+    mgr.close_all()
+
+
+def test_teardown_runs_on_browser_thread() -> None:
+    close_idents: list[int] = []
+
+    class _TrackCtx(_FakeContext):
+        def close(self) -> None:
+            close_idents.append(threading.get_ident())
+            super().close()
+
+    def launcher() -> tuple[Any, Any, Any, Any]:
+        page = _FakePage()
+        pw = _FakePlaywright()
+        browser = _FakeBrowser(page)
+        context = _TrackCtx(page)
+        return pw, browser, context, page
+
+    mgr = BrowserSessionManager(launcher=launcher)
+    set_browser_session_manager(mgr)
+    sid = mgr.open(moment_id="m")
+    assert mgr.close(sid) is True
+    assert close_idents
+    assert close_idents[0] == mgr.browser_thread.ident

@@ -28,7 +28,7 @@ Pick the first that applies:
 
 1. `browser_session_open` if you have no live `session_id`
 2. Else `browser_goto` / `browser_snapshot` for the active session
-3. On `browser_unavailable` / `chromium_unavailable`: `speak` or block honestly with the install hint — do not thrash open
+3. On `browser_unavailable` / `chromium_unavailable` / `browser_launch_failed`: `speak` or block honestly with the payload hint — do not thrash open
 
 ## Snapshot-first loop
 
@@ -47,9 +47,10 @@ browser_session_open
 1. **Refs expire.** Only use refs from the **latest** `browser_snapshot`. After `goto`, `click`, or any DOM-changing action, **re-snapshot** before the next ref action.
 2. **Stale ref → re-snapshot.** On `stale_ref` / missing element, call `browser_snapshot` again; do not invent selectors.
 3. **Max 2 sessions** process-wide. Prefer one session per moment. Close early when done.
-4. **Fail-closed install errors:**
+4. **Fail-closed open errors:**
    - `browser_unavailable` → need `pip install -e '.[browser]'` then `playwright install chromium`
    - `chromium_unavailable` → need `playwright install chromium`
+   - `browser_launch_failed` → host Sync backend failed after import (see `detail`); **not** fixed by reinstalling the pip package — do not treat as install thrash
    Do not retry open in a loop; surface the hint to the operator / ledger.
 5. **No eval / no arbitrary JS.** Use only the provided primitives.
 6. **Size caps.** Snapshots and get_text are truncated — work from structure, not full page dumps.
@@ -80,7 +81,7 @@ Screenshots: **not implemented** — do not call a screenshot tool; use snapshot
 4. Act with `browser_click` / `browser_fill` / `browser_type` / `browser_get_text`.
 5. Re-snapshot after each meaningful change; short `browser_wait` only if needed.
 6. Close the session when finished, or end the moment (host cleanup).
-7. If blocked on missing browser/chromium, set ledger blocked notes and/or `speak` the install hint.
+7. If blocked on missing browser/chromium or `browser_launch_failed`, set ledger blocked notes and/or `speak` the payload hint (install only for unavailable reasons).
 
 ## Quality / completion
 

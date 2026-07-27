@@ -7,8 +7,13 @@ Out of scope: screenshots → media store; nested Browser-Use agent; guest isola
 Lifecycle (must stay leak-free):
 - ``browser_session_close`` / ``close(session_id)``
 - ``close_for_moment(moment_id)`` on presence success finalize + fail_in_flight
-- presence worker ``run()`` ``finally`` → ``close_all`` on the owner thread
+- presence worker ``run()`` ``finally`` → ``close_all`` (work runs on BrowserThread)
 - supervisor ``shutdown()`` → ``close_all`` safety net after worker join
+
+Thread model (KD13): all Sync Playwright launch / page ops / teardown run on one
+dedicated ``BrowserThread`` so caller-thread asyncio loop pollution cannot break
+Sync API. ``owner_ident`` is the BrowserThread id. ``RLock`` is not held across
+launch (reserve slot → hop → register).
 
 Snapshot uses Playwright ``aria_snapshot`` (1.49+ locator / page API). Legacy
 ``page.accessibility.snapshot`` is a fallback only (removed in Playwright 1.57).
@@ -16,14 +21,19 @@ Snapshot uses Playwright ``aria_snapshot`` (1.49+ locator / page API). Legacy
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
+import queue
 import re
 import threading
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
 _LOG = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 MAX_SESSIONS = 2
 SNAPSHOT_MAX_CHARS = 32_000
@@ -35,11 +45,15 @@ WORKER_JOIN_TIMEOUT_S = 5.0
 WORKER_JOIN_TIMEOUT_WITH_BROWSER_S = 35.0
 DEFAULT_WAIT_SECONDS = 0.5
 MAX_WAIT_SECONDS = 10.0
+# Bound for a single hop onto BrowserThread (launch / page op / teardown).
+BROWSER_THREAD_OP_TIMEOUT_S = 120.0
+BROWSER_THREAD_JOIN_S = 5.0
 
 HINT_BROWSER_INSTALL = (
     "pip install -e '.[browser]' then playwright install chromium"
 )
 HINT_CHROMIUM_INSTALL = "playwright install chromium"
+HINT_BROWSER_LAUNCH_FAILED = "host browser backend failed; see detail"
 
 # Playwright aria YAML lines look like:
 #   - heading "Title" [level=1]
@@ -76,10 +90,21 @@ class BrowserUnavailableError(BrowserError):
 
 
 class ChromiumUnavailableError(BrowserError):
-    """playwright present but Chromium binary missing / launch failed."""
+    """playwright present but Chromium binary missing."""
 
     reason = "chromium_unavailable"
     hint = HINT_CHROMIUM_INSTALL
+
+
+class BrowserLaunchFailedError(BrowserError):
+    """Playwright imported but Sync start/launch failed (env / Sync-in-asyncio).
+
+    Never carries a pip-install / playwright-install hint — import already
+    succeeded; the failure is host backend / thread environment.
+    """
+
+    reason = "browser_launch_failed"
+    hint = HINT_BROWSER_LAUNCH_FAILED
 
 
 class SessionLimitError(BrowserError):
@@ -146,17 +171,83 @@ def _import_playwright_sync() -> Any:
     return sync_playwright
 
 
+def _looks_like_missing_chromium(exc: BaseException) -> bool:
+    """Heuristic: Playwright binary / executable missing messages."""
+    msg = str(exc).lower()
+    if "executable" in msg and ("exist" in msg or "not found" in msg):
+        return True
+    if "download new browsers" in msg:
+        return True
+    if "playwright install" in msg and (
+        "browser" in msg or "chromium" in msg or "install" in msg
+    ):
+        return True
+    if "chromium" in msg and ("missing" in msg or "not found" in msg):
+        return True
+    return False
+
+
+def _looks_like_sync_in_asyncio(exc: BaseException) -> bool:
+    """Heuristic: Playwright Sync API used while an asyncio loop is running."""
+    msg = str(exc).lower()
+    return any(
+        s in msg
+        for s in (
+            "asyncio",
+            "event loop",
+            "sync api inside",
+            "cannot be called from",
+            "greenlet",
+            "playwright sync api",
+        )
+    )
+
+
+def _log_caller_loop_diagnostics(*, phase: str = "pre_launch") -> None:
+    """Log thread-local asyncio state (DEBUG/INFO only; no secrets)."""
+    tid = threading.get_ident()
+    tname = threading.current_thread().name
+    has_running = False
+    is_running: bool | None = None
+    try:
+        loop = asyncio.get_running_loop()
+        has_running = True
+        try:
+            is_running = loop.is_running()
+        except Exception:  # noqa: BLE001
+            is_running = None
+    except RuntimeError:
+        has_running = False
+        is_running = False
+    _LOG.info(
+        "browser diagnostics phase=%s thread_ident=%s thread_name=%s "
+        "has_running_loop=%s loop_is_running=%s",
+        phase,
+        tid,
+        tname,
+        has_running,
+        is_running,
+    )
+
+
 def _default_launch() -> tuple[Any, Any, Any, Any]:
-    """Start Playwright + headless Chromium; raise typed errors on failure."""
+    """Start Playwright + headless Chromium; raise typed errors on failure.
+
+    Must run on BrowserThread (no running asyncio loop). Taxonomy:
+    - import failure → ``BrowserUnavailableError``
+    - Sync start / env / Sync-in-asyncio after import → ``BrowserLaunchFailedError``
+    - Chromium binary missing → ``ChromiumUnavailableError``
+    """
     sync_playwright = _import_playwright_sync()
     try:
         pw = sync_playwright().start()
+    except BrowserUnavailableError:
+        raise
     except Exception as exc:  # noqa: BLE001
-        if isinstance(exc, BrowserUnavailableError):
-            raise
-        raise BrowserUnavailableError(
+        # Import already succeeded — never emit pip-install as the primary hint.
+        raise BrowserLaunchFailedError(
             f"failed to start playwright: {exc}",
-            hint=HINT_BROWSER_INSTALL,
+            hint=HINT_BROWSER_LAUNCH_FAILED,
         ) from exc
     browser = None
     context = None
@@ -185,11 +276,109 @@ def _default_launch() -> tuple[Any, Any, Any, Any]:
             pw.stop()
         except Exception:  # noqa: BLE001
             pass
-        # Package import succeeded; binary/launch path failed → chromium_unavailable.
-        raise ChromiumUnavailableError(
+        if _looks_like_sync_in_asyncio(exc):
+            raise BrowserLaunchFailedError(
+                f"chromium launch failed (sync/asyncio): {exc}",
+                hint=HINT_BROWSER_LAUNCH_FAILED,
+            ) from exc
+        if _looks_like_missing_chromium(exc):
+            raise ChromiumUnavailableError(
+                f"chromium launch failed: {exc}",
+                hint=HINT_CHROMIUM_INSTALL,
+            ) from exc
+        # Other launch failures after import: backend/env, not install hint.
+        raise BrowserLaunchFailedError(
             f"chromium launch failed: {exc}",
-            hint=HINT_CHROMIUM_INSTALL,
+            hint=HINT_BROWSER_LAUNCH_FAILED,
         ) from exc
+
+
+class BrowserThread:
+    """Dedicated worker thread for all Sync Playwright session ops + teardown.
+
+    Playwright Sync is not cross-thread safe and refuses a running asyncio loop
+    on the calling thread. Callers (PresenceWorker, tool handlers) hop here via
+    ``submit``; re-entrant ``submit`` from this thread runs inline.
+    """
+
+    def __init__(self, *, name: str = "elyra-browser") -> None:
+        self._name = name
+        self._q: queue.Queue[
+            tuple[Callable[[], Any], concurrent.futures.Future[Any]] | None
+        ] = queue.Queue()
+        self._ident: int = 0
+        self._closed = False
+        self._ready = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=self._name,
+            daemon=True,
+        )
+        self._thread.start()
+        if not self._ready.wait(timeout=5.0):
+            raise RuntimeError("BrowserThread failed to start")
+
+    def _run(self) -> None:
+        self._ident = threading.get_ident()
+        self._ready.set()
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            fn, fut = item
+            if fut.set_running_or_notify_cancel():
+                try:
+                    fut.set_result(fn())
+                except BaseException as exc:  # noqa: BLE001
+                    fut.set_exception(exc)
+
+    @property
+    def ident(self) -> int:
+        return self._ident
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def submit(
+        self,
+        fn: Callable[[], T],
+        *,
+        timeout: float | None = BROWSER_THREAD_OP_TIMEOUT_S,
+    ) -> T:
+        """Run ``fn`` on the browser thread; block until done or timeout."""
+        if self._closed:
+            raise RuntimeError("BrowserThread is shut down")
+        # Inline when already on the worker — avoids self-deadlock.
+        if threading.get_ident() == self._ident:
+            return fn()
+        fut: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        self._q.put((fn, fut))
+        try:
+            return fut.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            raise TimeoutError(
+                f"BrowserThread op timed out after {timeout}s"
+            ) from exc
+
+    def shutdown(self, *, join_timeout: float = BROWSER_THREAD_JOIN_S) -> None:
+        """Stop the worker after draining is abandoned (sentinel)."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._q.put(None)
+        except Exception:  # noqa: BLE001
+            pass
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=join_timeout)
+            if thread.is_alive():
+                _LOG.warning(
+                    "BrowserThread %s did not join within %.1fs",
+                    self._name,
+                    join_timeout,
+                )
 
 
 def _walk_ax_node(
@@ -455,57 +644,117 @@ def capture_page_snapshot(
 
 
 class BrowserSessionManager:
-    """Process-scoped store of live browser sessions (max ``MAX_SESSIONS``)."""
+    """Process-scoped store of live browser sessions (max ``MAX_SESSIONS``).
 
-    def __init__(self, *, launcher: Launcher | None = None) -> None:
+    All Sync Playwright work runs on ``browser_thread`` (default: a private
+    ``BrowserThread``). The registry ``RLock`` is never held across launch.
+    """
+
+    def __init__(
+        self,
+        *,
+        launcher: Launcher | None = None,
+        browser_thread: BrowserThread | None = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, BrowserSession] = {}
+        # Slots reserved for in-flight opens (checked under lock; launch outside).
+        self._pending_opens = 0
         self._launcher: Launcher = launcher or _default_launch
+        self._owns_thread = browser_thread is None
+        self._browser_thread = browser_thread or BrowserThread()
+
+    @property
+    def browser_thread(self) -> BrowserThread:
+        return self._browser_thread
 
     @property
     def session_count(self) -> int:
         with self._lock:
             return len(self._sessions)
 
+    def _run_sync(self, fn: Callable[[], T]) -> T:
+        """Run Sync Playwright work on BrowserThread."""
+        return self._browser_thread.submit(fn)
+
     def open(self, moment_id: str = "") -> str:
-        """Launch headless Chromium; return ``session_id``.
+        """Launch headless Chromium on BrowserThread; return ``session_id``.
 
         Raises
         ------
         BrowserUnavailableError
-            playwright import/start failed.
+            playwright package not importable.
         ChromiumUnavailableError
-            binary missing or launch failed.
+            Chromium binary missing.
+        BrowserLaunchFailedError
+            Sync start / env failure after import (not an install-hint path).
         SessionLimitError
             already at ``MAX_SESSIONS``.
         """
         with self._lock:
-            if len(self._sessions) >= MAX_SESSIONS:
+            in_use = len(self._sessions) + self._pending_opens
+            if in_use >= MAX_SESSIONS:
                 raise SessionLimitError(
-                    f"already have {len(self._sessions)} sessions "
+                    f"already have {in_use} sessions "
                     f"(max {MAX_SESSIONS})"
                 )
-            # Count reserved under lock so concurrent opens cannot exceed max.
-            # Launch may block; still safer than pop-before-teardown leaks.
-            pw, browser, context, page = self._launcher()
-            session_id = f"bs_{uuid.uuid4().hex[:12]}"
-            session = BrowserSession(
-                session_id=session_id,
-                moment_id=moment_id or "",
-                playwright=pw,
-                browser=browser,
-                context=context,
-                page=page,
-                owner_ident=threading.get_ident(),
-            )
-            self._sessions[session_id] = session
-            _LOG.info(
-                "browser session open session_id=%s moment_id=%s count=%s",
-                session_id,
-                moment_id or "",
-                len(self._sessions),
-            )
-            return session_id
+            self._pending_opens += 1
+        launched: tuple[Any, Any, Any, Any] | None = None
+        try:
+            _log_caller_loop_diagnostics(phase="pre_launch")
+            # Launch OUTSIDE the registry lock on BrowserThread (KD13).
+            launched = self._run_sync(self._launcher)
+            pw, browser, context, page = launched
+            with self._lock:
+                session_id = f"bs_{uuid.uuid4().hex[:12]}"
+                session = BrowserSession(
+                    session_id=session_id,
+                    moment_id=moment_id or "",
+                    playwright=pw,
+                    browser=browser,
+                    context=context,
+                    page=page,
+                    owner_ident=self._browser_thread.ident,
+                )
+                self._sessions[session_id] = session
+                _LOG.info(
+                    "browser session open session_id=%s moment_id=%s "
+                    "count=%s owner_ident=%s",
+                    session_id,
+                    moment_id or "",
+                    len(self._sessions),
+                    session.owner_ident,
+                )
+                launched = None  # ownership transferred to session
+                return session_id
+        except Exception:
+            # If launch succeeded but registration failed, tear down on thread.
+            if launched is not None:
+                pw, browser, context, page = launched
+
+                def _abort() -> None:
+                    for obj, method in (
+                        (context, "close"),
+                        (browser, "close"),
+                        (pw, "stop"),
+                    ):
+                        if obj is None:
+                            continue
+                        try:
+                            getattr(obj, method)()
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                try:
+                    self._run_sync(_abort)
+                except Exception as abort_exc:  # noqa: BLE001
+                    _LOG.warning(
+                        "browser open abort teardown failed: %s", abort_exc
+                    )
+            raise
+        finally:
+            with self._lock:
+                self._pending_opens = max(0, self._pending_opens - 1)
 
     def get(self, session_id: str) -> BrowserSession:
         with self._lock:
@@ -517,9 +766,10 @@ class BrowserSessionManager:
     def close(self, session_id: str, *, force: bool = False) -> bool:
         """Close one session.
 
-        Teardown runs **before** freeing the registry slot. On teardown failure
-        the session stays registered (unless ``force=True``) so slot accounting
-        and a later retry still know about the live Chromium process.
+        Teardown runs on BrowserThread **before** freeing the registry slot.
+        On teardown failure the session stays registered (unless ``force=True``)
+        so slot accounting and a later retry still know about the live Chromium
+        process.
 
         Returns True if the session was known (and removed when teardown ok or
         forced).
@@ -528,7 +778,15 @@ class BrowserSessionManager:
             session = self._sessions.get(session_id)
             if session is None:
                 return False
-        ok = self._teardown(session)
+        try:
+            ok = self._run_sync(lambda: self._teardown(session))
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning(
+                "browser teardown hop failed session_id=%s: %s",
+                session_id,
+                exc,
+            )
+            ok = False
         with self._lock:
             if ok or force:
                 self._sessions.pop(session_id, None)
@@ -568,38 +826,35 @@ class BrowserSessionManager:
     def close_all(self, *, force: bool = True) -> int:
         """Close every session. Default force frees slots after best-effort teardown.
 
-        Safe to call from the presence worker thread (preferred). When called
-        from another thread, logs a warning — Playwright sync may raise
-        greenlet errors; force still drops registry entries after attempts.
+        Teardown always hops to BrowserThread (session ``owner_ident``). Callers
+        on other threads only *request* close — they do not run Sync Playwright.
         """
         with self._lock:
             ids = list(self._sessions.keys())
-            owners = {s.owner_ident for s in self._sessions.values() if s.owner_ident}
-        me = threading.get_ident()
-        if owners and me not in owners and ids:
-            _LOG.warning(
-                "browser close_all from non-owner thread ident=%s owners=%s "
-                "count=%s (prefer worker-thread cleanup)",
-                me,
-                owners,
-                len(ids),
-            )
         closed = 0
         for sid in ids:
-            # First attempt without force if not forcing? Always force on close_all
-            # for shutdown safety after a best-effort teardown inside close.
             if self.close(sid, force=force):
                 closed += 1
             elif force:
-                # close already forced; nothing left
                 pass
             else:
-                # retry once forced
                 if self.close(sid, force=True):
                     closed += 1
         if closed:
             _LOG.info("browser close_all closed=%s", closed)
         return closed
+
+    def shutdown(self) -> None:
+        """Close all sessions and stop the owned BrowserThread (if any)."""
+        try:
+            self.close_all(force=True)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("browser manager shutdown close_all failed: %s", exc)
+        if self._owns_thread:
+            try:
+                self._browser_thread.shutdown()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("BrowserThread shutdown failed: %s", exc)
 
     def goto(
         self,
@@ -608,28 +863,31 @@ class BrowserSessionManager:
         *,
         timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
     ) -> dict[str, Any]:
-        session = self.get(session_id)
-        # Clear refs — stale after navigation.
-        session.refs = {}
-        try:
-            response = session.page.goto(
-                url, wait_until="load", timeout=timeout_ms
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise BrowserActionError(
-                f"goto failed: {exc}",
-            ) from exc
-        try:
-            session.last_url = session.page.url or url
-        except Exception:  # noqa: BLE001
-            session.last_url = url
-        status = None
-        if response is not None:
+        def _op() -> dict[str, Any]:
+            session = self.get(session_id)
+            # Clear refs — stale after navigation.
+            session.refs = {}
             try:
-                status = response.status
+                response = session.page.goto(
+                    url, wait_until="load", timeout=timeout_ms
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise BrowserActionError(
+                    f"goto failed: {exc}",
+                ) from exc
+            try:
+                session.last_url = session.page.url or url
             except Exception:  # noqa: BLE001
-                status = None
-        return {"url": session.last_url, "status": status}
+                session.last_url = url
+            status = None
+            if response is not None:
+                try:
+                    status = response.status
+                except Exception:  # noqa: BLE001
+                    status = None
+            return {"url": session.last_url, "status": status}
+
+        return self._run_sync(_op)
 
     def snapshot(
         self,
@@ -637,78 +895,93 @@ class BrowserSessionManager:
         *,
         max_chars: int = SNAPSHOT_MAX_CHARS,
     ) -> dict[str, Any]:
-        session = self.get(session_id)
-        text, refs, truncated = capture_page_snapshot(
-            session.page, max_chars=max_chars
-        )
-        session.refs = refs
-        try:
-            url = session.page.url or session.last_url
-        except Exception:  # noqa: BLE001
-            url = session.last_url
-        session.last_url = url or session.last_url
-        return {
-            "snapshot": text,
-            "url": session.last_url,
-            "ref_count": len(refs),
-            "truncated": truncated,
-            "max_chars": max_chars,
-        }
+        def _op() -> dict[str, Any]:
+            session = self.get(session_id)
+            text, refs, truncated = capture_page_snapshot(
+                session.page, max_chars=max_chars
+            )
+            session.refs = refs
+            try:
+                url = session.page.url or session.last_url
+            except Exception:  # noqa: BLE001
+                url = session.last_url
+            session.last_url = url or session.last_url
+            return {
+                "snapshot": text,
+                "url": session.last_url,
+                "ref_count": len(refs),
+                "truncated": truncated,
+                "max_chars": max_chars,
+            }
+
+        return self._run_sync(_op)
 
     def click(self, session_id: str, ref: str) -> dict[str, Any]:
-        session = self.get(session_id)
-        locator = self._locator_for_ref(session, ref)
-        try:
-            locator.click()
-        except Exception as exc:  # noqa: BLE001
-            raise BrowserActionError(f"click failed for ref={ref}: {exc}") from exc
-        # DOM likely changed — force re-snapshot next.
-        session.refs = {}
-        return {"clicked": ref}
+        def _op() -> dict[str, Any]:
+            session = self.get(session_id)
+            locator = self._locator_for_ref(session, ref)
+            try:
+                locator.click()
+            except Exception as exc:  # noqa: BLE001
+                raise BrowserActionError(
+                    f"click failed for ref={ref}: {exc}"
+                ) from exc
+            # DOM likely changed — force re-snapshot next.
+            session.refs = {}
+            return {"clicked": ref}
+
+        return self._run_sync(_op)
 
     def type_text(
         self, session_id: str, ref: str, text: str, *, clear: bool = False
     ) -> dict[str, Any]:
         """Type into element by ref. ``clear=True`` fills (replace); else appends."""
-        session = self.get(session_id)
-        locator = self._locator_for_ref(session, ref)
-        try:
-            if clear:
-                locator.fill(text)
-            else:
-                locator.click()
-                locator.type(text)
-        except Exception as exc:  # noqa: BLE001
-            action = "fill" if clear else "type"
-            raise BrowserActionError(
-                f"{action} failed for ref={ref}: {exc}"
-            ) from exc
-        # Input may change accessible name/value — prefer re-snapshot.
-        session.refs = {}
-        return {"ref": ref, "text_len": len(text), "cleared": clear}
+
+        def _op() -> dict[str, Any]:
+            session = self.get(session_id)
+            locator = self._locator_for_ref(session, ref)
+            try:
+                if clear:
+                    locator.fill(text)
+                else:
+                    locator.click()
+                    locator.type(text)
+            except Exception as exc:  # noqa: BLE001
+                action = "fill" if clear else "type"
+                raise BrowserActionError(
+                    f"{action} failed for ref={ref}: {exc}"
+                ) from exc
+            # Input may change accessible name/value — prefer re-snapshot.
+            session.refs = {}
+            return {"ref": ref, "text_len": len(text), "cleared": clear}
+
+        return self._run_sync(_op)
 
     def fill(self, session_id: str, ref: str, text: str) -> dict[str, Any]:
         return self.type_text(session_id, ref, text, clear=True)
 
     def get_text(self, session_id: str, ref: str | None = None) -> dict[str, Any]:
-        session = self.get(session_id)
-        try:
-            if ref:
-                locator = self._locator_for_ref(session, ref)
-                text = locator.inner_text()
-            else:
-                text = session.page.inner_text("body")
-        except StaleRefError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise BrowserActionError(f"get_text failed: {exc}") from exc
-        if not isinstance(text, str):
-            text = str(text) if text is not None else ""
-        truncated = False
-        if len(text) > SNAPSHOT_MAX_CHARS:
-            text = text[:SNAPSHOT_MAX_CHARS].rstrip() + "\n… [truncated]"
-            truncated = True
-        return {"text": text, "ref": ref, "truncated": truncated}
+        def _op() -> dict[str, Any]:
+            session = self.get(session_id)
+            try:
+                if ref:
+                    locator = self._locator_for_ref(session, ref)
+                    text = locator.inner_text()
+                else:
+                    text = session.page.inner_text("body")
+            except StaleRefError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise BrowserActionError(f"get_text failed: {exc}") from exc
+            if not isinstance(text, str):
+                text = str(text) if text is not None else ""
+            truncated = False
+            if len(text) > SNAPSHOT_MAX_CHARS:
+                text = text[:SNAPSHOT_MAX_CHARS].rstrip() + "\n… [truncated]"
+                truncated = True
+            return {"text": text, "ref": ref, "truncated": truncated}
+
+        return self._run_sync(_op)
 
     def wait(
         self,
@@ -716,26 +989,31 @@ class BrowserSessionManager:
         *,
         seconds: float = DEFAULT_WAIT_SECONDS,
     ) -> dict[str, Any]:
-        session = self.get(session_id)
-        try:
-            secs = float(seconds)
-        except (TypeError, ValueError) as exc:
-            raise BrowserActionError("invalid wait seconds") from exc
-        if secs < 0:
-            secs = 0.0
-        if secs > MAX_WAIT_SECONDS:
-            secs = MAX_WAIT_SECONDS
-        try:
-            session.page.wait_for_timeout(int(secs * 1000))
-        except Exception as exc:  # noqa: BLE001
-            # Some fakes expose sleep instead of wait_for_timeout
+        def _op() -> dict[str, Any]:
+            session = self.get(session_id)
             try:
-                import time
+                secs = float(seconds)
+            except (TypeError, ValueError) as exc:
+                raise BrowserActionError("invalid wait seconds") from exc
+            if secs < 0:
+                secs = 0.0
+            if secs > MAX_WAIT_SECONDS:
+                secs = MAX_WAIT_SECONDS
+            try:
+                session.page.wait_for_timeout(int(secs * 1000))
+            except Exception as exc:  # noqa: BLE001
+                # Some fakes expose sleep instead of wait_for_timeout
+                try:
+                    import time
 
-                time.sleep(secs)
-            except Exception as sleep_exc:  # noqa: BLE001
-                raise BrowserActionError(f"wait failed: {exc}") from sleep_exc
-        return {"waited_seconds": secs}
+                    time.sleep(secs)
+                except Exception as sleep_exc:  # noqa: BLE001
+                    raise BrowserActionError(
+                        f"wait failed: {exc}"
+                    ) from sleep_exc
+            return {"waited_seconds": secs}
+
+        return self._run_sync(_op)
 
     def _locator_for_ref(self, session: BrowserSession, ref: str) -> Any:
         if not ref or not isinstance(ref, str):
@@ -760,7 +1038,10 @@ class BrowserSessionManager:
             ) from exc
 
     def _teardown(self, session: BrowserSession) -> bool:
-        """Best-effort close context → browser → playwright. True if all ok."""
+        """Best-effort close context → browser → playwright. True if all ok.
+
+        Must run on BrowserThread (session owner).
+        """
         me = threading.get_ident()
         if session.owner_ident and me != session.owner_ident:
             _LOG.warning(
@@ -842,18 +1123,18 @@ def get_browser_session_manager() -> BrowserSessionManager:
 
 
 def set_browser_session_manager(manager: BrowserSessionManager | None) -> None:
-    """Replace the process singleton (tests). Closes previous if set to new/None."""
+    """Replace the process singleton (tests). Shuts down previous if set."""
     global _manager
     with _manager_lock:
         old = _manager
         _manager = manager
     if old is not None and old is not manager:
         try:
-            old.close_all(force=True)
+            old.shutdown()
         except Exception as exc:  # noqa: BLE001
-            _LOG.warning("previous browser manager close_all failed: %s", exc)
+            _LOG.warning("previous browser manager shutdown failed: %s", exc)
 
 
 def reset_browser_session_manager_for_tests() -> None:
-    """Close all sessions and drop the singleton (hermetic tests)."""
+    """Close all sessions, stop BrowserThread, drop the singleton (tests)."""
     set_browser_session_manager(None)

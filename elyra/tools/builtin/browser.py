@@ -13,9 +13,11 @@ from typing import Any
 
 from elyra.tools.browser_sessions import (
     HINT_BROWSER_INSTALL,
+    HINT_BROWSER_LAUNCH_FAILED,
     HINT_CHROMIUM_INSTALL,
     MAX_WAIT_SECONDS,
     BrowserError,
+    BrowserLaunchFailedError,
     BrowserUnavailableError,
     ChromiumUnavailableError,
     SessionLimitError,
@@ -92,6 +94,13 @@ def browser_session_open(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             hint=exc.hint or HINT_CHROMIUM_INSTALL,
             detail=str(exc),
         )
+    except BrowserLaunchFailedError as exc:
+        # Import succeeded — never surface pip-install as the primary hint.
+        return _err(
+            "browser_launch_failed",
+            hint=exc.hint or HINT_BROWSER_LAUNCH_FAILED,
+            detail=str(exc),
+        )
     except SessionLimitError as exc:
         return _err(
             "session_limit",
@@ -103,9 +112,11 @@ def browser_session_open(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return _from_browser_error(exc)
     except Exception as exc:  # noqa: BLE001
         # Never crash the supervisor / worker on optional browser dep.
+        # Unknown failures after the typed paths are launch/backend, not
+        # "package missing" — avoid a misleading pip-install hint.
         return _err(
-            "browser_unavailable",
-            hint=HINT_BROWSER_INSTALL,
+            "browser_launch_failed",
+            hint=HINT_BROWSER_LAUNCH_FAILED,
             detail=str(exc),
         )
     return ToolResult(
