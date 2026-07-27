@@ -36,6 +36,46 @@ from elyra.tools.types import ToolContext, ToolResult
 
 _LOG = logging.getLogger(__name__)
 
+# Soft recovery guidance on missing ledger ids (no HOST inject, no auto-create).
+_TASK_NOT_FOUND_HINT = (
+    "No task with that id. Call list_goals (or get_goal) to refresh "
+    "ids, then get_task / update_task with an exact ledger id. "
+    "Do not invent task ids."
+)
+_GOAL_NOT_FOUND_HINT = (
+    "No goal with that id. Call list_goals to refresh ids, then "
+    "get_goal / update_goal with an exact ledger id. "
+    "Do not invent goal ids."
+)
+
+
+def _task_not_found(task_id: str) -> ToolResult:
+    """Canonical soft payload for missing task (get_task / update_task)."""
+    return ToolResult(
+        ok=False,
+        payload={
+            "ok": False,
+            "task_id": task_id,
+            "error_reason": "task_not_found",
+            "hint": _TASK_NOT_FOUND_HINT,
+        },
+        error_reason="task_not_found",
+    )
+
+
+def _goal_not_found(goal_id: str) -> ToolResult:
+    """Canonical soft payload for missing goal (get_goal / update_goal)."""
+    return ToolResult(
+        ok=False,
+        payload={
+            "ok": False,
+            "goal_id": goal_id,
+            "error_reason": "goal_not_found",
+            "hint": _GOAL_NOT_FOUND_HINT,
+        },
+        error_reason="goal_not_found",
+    )
+
 
 def _goals(ctx: ToolContext):
     """Return GoalsStore or a failed ToolResult when missing."""
@@ -360,7 +400,7 @@ def get_goal(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     goal = store.get_goal(goal_id)
     if goal is None:
-        return ToolResult(ok=False, payload={}, error_reason="goal_not_found")
+        return _goal_not_found(goal_id)
     return ToolResult(ok=True, payload={"ok": True, "goal": goal})
 
 
@@ -376,7 +416,7 @@ def get_task(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     task = store.get_task(task_id)
     if task is None:
-        return ToolResult(ok=False, payload={}, error_reason="task_not_found")
+        return _task_not_found(task_id)
     return ToolResult(ok=True, payload={"ok": True, "task": task})
 
 
@@ -425,7 +465,7 @@ def update_task(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     try:
         result = store.update_task(task_id, **kwargs)
     except KeyError:
-        return ToolResult(ok=False, payload={}, error_reason="task_not_found")
+        return _task_not_found(task_id)
     except ValueError as exc:
         return ToolResult(
             ok=False,
@@ -509,7 +549,7 @@ def update_goal(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     try:
         result = store.update_goal(goal_id, **kwargs)
     except KeyError:
-        return ToolResult(ok=False, payload={}, error_reason="goal_not_found")
+        return _goal_not_found(goal_id)
     except TypeError as exc:
         return ToolResult(
             ok=False,

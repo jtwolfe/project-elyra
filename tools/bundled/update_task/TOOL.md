@@ -14,3 +14,6 @@ Patch fields on an existing task in the goals/tasks ledger.
   `task_ready` wake when the host port is set (deduped by the host).
 - On success, marks ledger activity (`mark_task_changed`) for continue policy.
 - Does **not** end the moment; task `blocked` is ledger state only, not a moment stop.
+- On unknown `task_id`: `ok=false`, `error_reason=task_not_found`, payload echoes
+  `task_id` and a soft `hint` — call `list_goals` (or `get_goal`) to refresh
+  ids, then retry with an exact ledger id. Do not invent task ids.

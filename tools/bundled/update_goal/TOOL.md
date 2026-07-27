@@ -15,3 +15,6 @@ Patch fields on an existing goal in the goals/tasks ledger.
 - `force` only bypasses the soft-close warning key; it is not a promote override.
   Meaningful only with a field change (e.g. `status=closed`); `force` alone is rejected.
 - On success, marks ledger activity (`mark_task_changed`) for continue policy.
+- On unknown `goal_id`: `ok=false`, `error_reason=goal_not_found`, payload echoes
+  `goal_id` and a soft `hint` — call `list_goals` to refresh ids, then retry
+  with an exact ledger id. Do not invent goal ids.

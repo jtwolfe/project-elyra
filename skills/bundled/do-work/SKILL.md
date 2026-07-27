@@ -49,6 +49,8 @@ Pick the first that applies:
 3. If the task needs a capability you do not have as a **callable tool**, `load_skill` name `create-tool` and follow that path — after a ledger note. Do not rewrite the host product via `run`.
 4. Use sandbox and ledger tools for small, checkable steps.
 5. Update the task as you go (`update_task`: notes, status, blocked reason).
+   On `task_not_found` / `goal_not_found`: `list_goals` → pick a real id →
+   continue; do **not** invent ids.
 6. Stop when one of:
    - **Accepted:** acceptance met → leave ready for review (or mark per ledger convention); do not silent-close the goal
    - **Blocked:** missing info, tool/runtime failure, external dependency → status + reason; `speak` if the operator must act

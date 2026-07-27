@@ -45,6 +45,8 @@ Pick the first that applies:
 2. Split into small tasks. Each should be finishable in a short stretch of tool use.
 3. For every task, write **acceptance** and note dependencies (ready vs blocked vs pending).
 4. Persist with `create_goal` / `create_task` / `update_goal` / `update_task`. Keep goal status honest (open until there is real work; set tasks `ready` only when they can be executed).
+   On `task_not_found` / `goal_not_found`: `list_goals` → pick a real id →
+   continue; do **not** invent ids.
 5. If a human is waiting on glass, `speak` a short plan summary. Pure work wakes may stay silent.
 6. When planning is done and a task is ready, prefer `load_skill` name `do-work` rather than re-planning.
 
