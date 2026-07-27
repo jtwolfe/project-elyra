@@ -118,7 +118,7 @@ for `tools/bundled/`. After revert, smoke-check the restored tool when safe.
 
 - Never skip verify.
 - Write only under `tools/drafts/<name>/` via `install_tool_draft` (sandbox FS tools cannot see host drafts; sandbox `tools/` ≠ drafts; do not thrash empty `list_dir` / host path fishing via `run` as a substitute).
-- Never overwrite **bundled** tools. Re-promote of local packages archives the previous version (recovery via `revert_tool`). A local package with the **same name** as a bundled tool **overrides** it at runtime — do not promote a local `web_search` (or other critical host builtins) without explicit operator intent.
+- Never overwrite **bundled** tools — `promote_tool` always refuses bundled names (`refuses_overwrite_bundled`). Re-promote of **local** packages archives the previous version (recovery via `revert_tool`). If a same-name package somehow exists under `tools/local/` (hand-placed or leftover), it **overrides** the bundled tool at registry load — never leave a local `web_search`.
 - Never call a draft tool.
 - Prefer small, clear tools over large multi-purpose ones.
 - Prefer Grok Build over creating a new tool when the need is primarily complex implementation rather than a reusable primitive — **only when that instrument exists**; until then, block the ledger honestly or ask the operator rather than rewriting the host runtime.

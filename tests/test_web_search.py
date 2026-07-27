@@ -7,6 +7,7 @@ and arg validation. Process-wide cooldown state is reset between tests.
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -484,41 +485,29 @@ def test_web_search_source_is_bundled_when_local_absent(home: Path) -> None:
     """Without tools/local/web_search, registry uses host builtin ddgs path.
 
     Local packages win over bundled in ToolRegistry; a leftover sandbox_python
-    DDG Lite package must not shadow this name. Assert source + runner wiring.
+    DDG Lite package must not shadow this name. Assert source + runner wiring
+    (discovery reports bundled web_search with the host entry).
     """
     paths = resolve_paths(home)
     local_pkg = paths.tools_dir / "local" / "web_search"
     assert not local_pkg.exists()
 
+    bundled_root = resolve_bundled_tools_root().resolve()
     registry = ToolRegistry(
         paths,
-        bundled_root=resolve_bundled_tools_root(),
+        bundled_root=bundled_root,
     )
     pkg = registry.get("web_search")
     assert pkg is not None
     assert pkg.source == SOURCE_BUNDLED
-    assert pkg.source != SOURCE_LOCAL
     assert pkg.meta.name == "web_search"
     assert pkg.runner.kind == "builtin"
     assert pkg.runner.entry == "elyra.tools.builtin.search:web_search"
     assert pkg.handler is not None
     assert pkg.handler is web_search
-    # Package dir is under bundled root, not local/
-    assert "bundled" in pkg.package_dir.parts
+    # Package dir is under the real bundled tools root
+    assert pkg.package_dir.resolve().is_relative_to(bundled_root)
     assert pkg.package_dir.name == "web_search"
-
-
-def test_web_search_bundled_package_discovered(home: Path) -> None:
-    """Alias coverage: discovery still reports bundled web_search."""
-    registry = ToolRegistry(
-        resolve_paths(home),
-        bundled_root=resolve_bundled_tools_root(),
-    )
-    pkg = registry.get("web_search")
-    assert pkg is not None
-    assert pkg.source == SOURCE_BUNDLED
-    assert pkg.handler is not None
-    assert pkg.meta.name == "web_search"
 
 
 def test_local_web_search_would_override_bundled(home: Path) -> None:
@@ -526,8 +515,6 @@ def test_local_web_search_would_override_bundled(home: Path) -> None:
 
     Documents the footgun that motivated removing the DDG Lite override.
     """
-    import json
-
     paths = resolve_paths(home)
     local = paths.tools_dir / "local"
     pkg_dir = local / "web_search"
