@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import threading
-import time
 from pathlib import Path
 
 import pytest
@@ -222,8 +221,12 @@ def test_revert_requires_reason(ctx: ToolContext, paths) -> None:
 def test_versions_gc_cap_50(paths) -> None:
     name = "pkg_gc"
     dest = _plant_local_package(paths, name, marker="base")
+    # Explicit version_ids so chronological order is deterministic under sort.
     for i in range(53):
-        entry = archive_local_payload(dest, reason=f"archive_{i:03d}")
+        vid = f"20200101T{i:06d}Z_aaaaaa"
+        entry = archive_local_payload(
+            dest, version_id=vid, reason=f"archive_{i:03d}"
+        )
         meta = load_versions_meta(dest)
         meta.append(entry)
         save_versions_meta(dest, meta)
@@ -234,10 +237,13 @@ def test_versions_gc_cap_50(paths) -> None:
     versions_root = dest / VERSIONS_DIR_NAME
     dirs = [c for c in versions_root.iterdir() if c.is_dir()]
     assert len(dirs) == VERSION_GC_LIMIT
-    # Oldest dropped: remaining reasons should be the last 50.
+    # Oldest-by-version_id dropped: remaining are archive_003..archive_052.
     reasons = [r.get("reason") for r in meta]
     assert reasons[0] == "archive_003"
     assert reasons[-1] == "archive_052"
+    assert {r["version_id"] for r in meta} == {
+        f"20200101T{i:06d}Z_aaaaaa" for i in range(3, 53)
+    }
 
 
 def test_archive_excludes_nested_versions(paths) -> None:
@@ -465,5 +471,130 @@ def test_copy_payload_helper_excludes_meta(paths) -> None:
 def test_lock_path_sibling_not_inside_package(paths) -> None:
     name = "pkg_lockpath"
     lp = lock_path_for(paths, name)
-    assert lp.name == f".{name}.lock"
+    assert lp.name == f".{name.casefold()}.lock"
     assert lp.parent == paths.tools_dir / "local"
+
+
+def test_promote_failed_swap_leaves_dest_history_unchanged(
+    ctx: ToolContext, paths, monkeypatch
+) -> None:
+    """Issue 1: archive lands on stage only; failed swap must not grow dest GC."""
+    name = "pkg_fail_gc"
+    dest = _plant_local_package(paths, name, marker="live")
+    # Plant full GC-cap history on dest.
+    for i in range(VERSION_GC_LIMIT):
+        entry = archive_local_payload(
+            dest,
+            version_id=f"20200101T0000{i:02d}Z_aaaaaa",
+            reason=f"seed_{i:03d}",
+        )
+        meta = load_versions_meta(dest)
+        meta.append(entry)
+        save_versions_meta(dest, meta)
+    gc_package_versions(dest, limit=VERSION_GC_LIMIT)
+    prior_meta = load_versions_meta(dest)
+    assert len(prior_meta) == VERSION_GC_LIMIT
+    prior_ids = {r["version_id"] for r in prior_meta}
+    prior_tool = (dest / "TOOL.md").read_text(encoding="utf-8")
+
+    _install_and_verify(ctx, name, marker="new")
+    import elyra.tools.promote as promote_mod
+
+    monkeypatch.setattr(
+        promote_mod,
+        "whole_tree_rename_swap",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("simulated swap fail")),
+    )
+    # Drive five failed re-promotes (each rebuilds draft verify first once).
+    for _ in range(5):
+        # Re-verify may be needed if draft still present after fail.
+        if (drafts_dir(paths) / name).is_dir():
+            # Ensure verify record still good after failed promote.
+            from elyra.tools.verify import load_verify_record
+
+            if load_verify_record(drafts_dir(paths) / name) is None:
+                assert verify_tool({"name": name}, ctx).ok
+        p = promote_tool({"name": name}, ctx)
+        assert p.ok is False
+        assert p.error_reason and p.error_reason.startswith("promote_failed")
+
+    # Dest history must be unchanged (no archive pollution / GC breach).
+    after_meta = load_versions_meta(dest)
+    assert len(after_meta) == VERSION_GC_LIMIT
+    assert {r["version_id"] for r in after_meta} == prior_ids
+    assert package_is_complete(dest)
+    assert (dest / "TOOL.md").read_text(encoding="utf-8") == prior_tool
+    versions_dirs = [
+        c for c in (dest / VERSIONS_DIR_NAME).iterdir() if c.is_dir()
+    ]
+    assert len(versions_dirs) == VERSION_GC_LIMIT
+
+
+def test_promote_locked_casefold_alias(ctx: ToolContext, paths) -> None:
+    """Issue 2: Foo and foo share one package lock."""
+    # Tool names are validated lowercase-ish; use mixed case still matching RE.
+    # is_valid_tool_name allows A-Z; normalize casefolds.
+    name_a = "PkgCase"
+    name_b = "pkgcase"
+    held = threading.Event()
+    release = threading.Event()
+
+    def holder() -> None:
+        with package_lock(paths, name_a):
+            held.set()
+            release.wait(timeout=10)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    assert held.wait(timeout=5)
+
+    # Same logical package under different casing → promote_locked.
+    second = promote_draft_tool(paths, name_b)
+    # draft missing is ok if we never installed; force lock path via package_lock probe.
+    from elyra.tools.promote import PackageLockedError
+
+    blocked = False
+    try:
+        with package_lock(paths, name_b):
+            pass
+    except PackageLockedError:
+        blocked = True
+    assert blocked is True
+
+    # Lock files must be the same path.
+    assert lock_path_for(paths, name_a) == lock_path_for(paths, name_b)
+
+    release.set()
+    t.join(timeout=10)
+
+
+def test_gc_drops_older_orphan_before_newer_index(paths) -> None:
+    """Issue 3: orphan heal sorts by version_id before oldest-first trim."""
+    name = "pkg_orphan_gc"
+    dest = _plant_local_package(paths, name)
+    # Three newer indexed archives.
+    indexed_ids = [
+        "20260101T000001Z_bbbbbb",
+        "20260101T000002Z_bbbbbb",
+        "20260101T000003Z_bbbbbb",
+    ]
+    meta: list[dict] = []
+    for vid in indexed_ids:
+        entry = archive_local_payload(dest, version_id=vid)
+        meta.append(entry)
+    save_versions_meta(dest, meta)
+
+    # Ancient orphan dir not in index (simulates crash after mkdir/copy).
+    orphan_id = "20000101T000000Z_ffffff"
+    orphan = dest / VERSIONS_DIR_NAME / orphan_id
+    orphan.mkdir(parents=True)
+    (orphan / "TOOL.md").write_text("orphan\n", encoding="utf-8")
+
+    kept = gc_package_versions(dest, limit=3)
+    kept_ids = [r["version_id"] for r in kept]
+    assert orphan_id not in kept_ids
+    assert orphan_id not in {
+        c.name for c in (dest / VERSIONS_DIR_NAME).iterdir() if c.is_dir()
+    }
+    assert set(kept_ids) == set(indexed_ids)
+    assert len(kept) == 3

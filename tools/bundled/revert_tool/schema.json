@@ -11,6 +11,7 @@
     },
     "reason": {
       "type": "string",
+      "minLength": 8,
       "description": "Why this revert is needed (min 8 characters)"
     }
   },

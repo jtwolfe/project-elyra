@@ -64,8 +64,12 @@ def local_root_dir(paths: ElyraPaths) -> Path:
 
 
 def lock_path_for(paths: ElyraPaths, name: str) -> Path:
-    """Path of non-blocking exclusive lock file ``tools/local/.<name>.lock``."""
-    return local_root_dir(paths) / f".{name}.lock"
+    """Path of non-blocking exclusive lock ``tools/local/.<casefold(name)>.lock``.
+
+    Case-normalized so ``Foo`` and ``foo`` share one lock for the logical package.
+    """
+    key = normalize_tool_name(name)
+    return local_root_dir(paths) / f".{key}.lock"
 
 
 def bundled_name_exists(
@@ -189,20 +193,25 @@ def archive_local_payload(
     *,
     version_id: str | None = None,
     reason: str | None = None,
+    into: Path | None = None,
 ) -> dict[str, Any]:
-    """Archive payload of ``package_dir`` into ``versions/<version_id>/``.
+    """Archive payload of ``package_dir`` into ``(into or package_dir)/versions/<vid>/``.
 
     Copies payload only (excludes nested versions/, meta, __pycache__).
     Computes ``content_hash`` on the archive destination after copy (IK3).
     Does **not** append meta or run GC — caller owns index + GC.
 
+    When ``into`` is set (promote/revert stage), history is written only under
+    the stage tree so live ``dest`` stays untouched until whole-tree rename.
+
     Returns index entry: version_id, content_hash, archived_at, bytes, reason?
     """
     package_dir = Path(package_dir)
+    history_root = Path(into) if into is not None else package_dir
     vid = version_id if version_id is not None else mint_version_id()
     if not VERSION_ID_RE.fullmatch(vid):
         raise ValueError(f"invalid version_id: {vid!r}")
-    versions_root = package_dir / VERSIONS_DIR_NAME
+    versions_root = history_root / VERSIONS_DIR_NAME
     versions_root.mkdir(parents=True, exist_ok=True)
     archive_dir = versions_root / vid
     if archive_dir.exists():
@@ -238,7 +247,7 @@ def gc_package_versions(
     entries = load_versions_meta(package_dir)
     versions_root = package_dir / VERSIONS_DIR_NAME
 
-    # Heal: drop index rows whose dirs are missing; keep chronological order.
+    # Heal: drop index rows whose dirs are missing.
     cleaned: list[dict[str, Any]] = []
     for row in entries:
         vid = row.get("version_id")
@@ -247,14 +256,14 @@ def gc_package_versions(
         if (versions_root / vid).is_dir():
             cleaned.append(row)
 
-    # Also pick up orphan dirs not in index (append at end as recovered).
+    # Pick up orphan dirs not in index (crash between archive mkdir and meta).
     if versions_root.is_dir():
         indexed = {
             r["version_id"]
             for r in cleaned
             if isinstance(r.get("version_id"), str)
         }
-        for child in sorted(versions_root.iterdir()):
+        for child in versions_root.iterdir():
             if child.is_dir() and VERSION_ID_RE.fullmatch(child.name):
                 if child.name not in indexed:
                     cleaned.append(
@@ -265,6 +274,9 @@ def gc_package_versions(
                             "bytes": _dir_byte_size(child),
                         }
                     )
+
+    # version_id lexicographic order ≡ chronological for VERSION_ID_RE (UTC compact).
+    cleaned.sort(key=lambda r: str(r.get("version_id") or ""))
 
     if len(cleaned) <= limit:
         save_versions_meta(package_dir, cleaned)
@@ -393,9 +405,10 @@ def package_lock(paths: ElyraPaths, name: str) -> Iterator[None]:
 
 
 def _unique_sibling(local_root: Path, name: str, kind: str) -> Path:
-    """``tools/local/.<name>.<kind>.<pid>.<uuid>/`` — never inside dest."""
+    """``tools/local/.<casefold(name)>.<kind>.<pid>.<uuid>/`` — never inside dest."""
     token = uuid.uuid4().hex[:12]
-    return local_root / f".{name}.{kind}.{os.getpid()}.{token}"
+    key = normalize_tool_name(name) or name
+    return local_root / f".{key}.{kind}.{os.getpid()}.{token}"
 
 
 def package_is_complete(package_dir: Path) -> bool:
@@ -485,16 +498,18 @@ def promote_draft_tool(
                     "error_reason": f"promote_failed:{type(exc).__name__}",
                 }
 
-            # Step 6: if dest exists, archive payload and attach history to stage.
+            # Step 6: if dest exists, build full history on stage only (dest
+            # history untouched until rename — GC-50 holds under failure).
             if dest.exists():
                 try:
-                    entry = archive_local_payload(dest)
-                    archived_version_id = str(entry["version_id"])
-                    meta = load_versions_meta(dest)
-                    meta.append(entry)
-                    save_versions_meta(dest, meta)
-                    # Preferred: copy history onto stage (dest intact until rename).
+                    # Copy prior history onto stage, then archive dest payload
+                    # into stage/versions/ (not into live dest).
                     _copy_history_onto_stage(dest, stage)
+                    entry = archive_local_payload(dest, into=stage)
+                    archived_version_id = str(entry["version_id"])
+                    meta = load_versions_meta(stage)
+                    meta.append(entry)
+                    save_versions_meta(stage, meta)
                     # GC on stage before rename (documented choice).
                     gc_package_versions(stage, limit=VERSION_GC_LIMIT)
                 except OSError as exc:
@@ -511,7 +526,7 @@ def promote_draft_tool(
                 whole_tree_rename_swap(
                     stage=stage, dest=dest, aside_full=aside_full
                 )
-            except OSError as exc:
+            except Exception as exc:  # noqa: BLE001 — structured promote_failed:*
                 _LOG.warning("promote rename swap failed for %s: %s", name, exc)
                 if stage is not None and stage.exists():
                     shutil.rmtree(stage, ignore_errors=True)
@@ -602,17 +617,18 @@ def revert_local_tool(
             aside_full = _unique_sibling(local_root, name, "aside")
 
             try:
-                # Archive current payload first (pre_revert reason).
-                entry = archive_local_payload(
-                    dest, reason=f"pre_revert:{reason.strip()}"
-                )
-                meta = load_versions_meta(dest)
-                meta.append(entry)
-                save_versions_meta(dest, meta)
-
-                # Stage = chosen version payload + full history (incl. pre_revert).
+                # Stage = chosen version payload + dest history + pre_revert archive.
+                # All history mutations land on stage; live dest stays intact.
                 copy_package_payload(version_dir, stage)
                 _copy_history_onto_stage(dest, stage)
+                entry = archive_local_payload(
+                    dest,
+                    into=stage,
+                    reason=f"pre_revert:{reason.strip()}",
+                )
+                meta = load_versions_meta(stage)
+                meta.append(entry)
+                save_versions_meta(stage, meta)
                 gc_package_versions(stage, limit=VERSION_GC_LIMIT)
             except OSError as exc:
                 _LOG.warning("revert stage failed for %s: %s", name, exc)
@@ -627,7 +643,7 @@ def revert_local_tool(
                 whole_tree_rename_swap(
                     stage=stage, dest=dest, aside_full=aside_full
                 )
-            except OSError as exc:
+            except Exception as exc:  # noqa: BLE001 — structured revert_failed:*
                 _LOG.warning("revert rename swap failed for %s: %s", name, exc)
                 if stage is not None and stage.exists():
                     shutil.rmtree(stage, ignore_errors=True)
