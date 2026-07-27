@@ -282,6 +282,30 @@
                     <option value="">—</option>
                   </select>
                 </div>
+                <div class="status-row status-row-stack">
+                  <span class="status-label" id="provider-effort-label">Effort</span>
+                  <div class="effort-stack">
+                    <div
+                      class="effort-group"
+                      id="provider-effort"
+                      role="radiogroup"
+                      aria-labelledby="provider-effort-label"
+                    >
+                      <button type="button" class="effort-btn" data-effort="low" aria-pressed="false">Low</button>
+                      <button type="button" class="effort-btn" data-effort="medium" aria-pressed="false">Medium</button>
+                      <button type="button" class="effort-btn" data-effort="high" aria-pressed="true">High</button>
+                      <button
+                        type="button"
+                        class="effort-btn effort-btn-auto"
+                        data-effort="auto"
+                        disabled
+                        aria-disabled="true"
+                        title="Auto effort escalation — coming later"
+                      >Auto</button>
+                    </div>
+                    <span class="muted status-helper">Auto is disabled (future). Effort: low / medium / high.</span>
+                  </div>
+                </div>
                 <div class="status-row">
                   <span class="status-label">Credential</span>
                   <select id="provider-credential-select" class="status-select" aria-label="Credential source">
@@ -314,7 +338,8 @@
                 </div>
               </div>
               <p class="muted status-helper">
-                Model applies to next call. API key save does not switch source until you select it.
+                Model applies to next call. Effort applies to next Completions request (no credential rebuild).
+                API key save does not switch source until you select it.
               </p>
             </div>
             <div class="card status-card" id="usage-card">

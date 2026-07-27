@@ -173,6 +173,8 @@ let statusPrimed = false;
 /** Last known model / credential_source (for select change detection). */
 let lastProviderModel = null;
 let lastCredentialSource = null;
+/** Last *server-confirmed* reasoning effort (never set by optimistic paint). */
+let lastReasoningEffort = "high";
 /** Active nav panel name (chat | goals | moments | tools | identity | status). */
 let activePanel = "chat";
 /** Currently open moment detail id (null when closed). */
@@ -1052,6 +1054,38 @@ function fillModelSelect(models, current) {
   if (pick) providerModelSelect.value = pick;
 }
 
+/** Visual only — does NOT touch lastReasoningEffort. Shared by Status + future rail. */
+function paintEffortUI(effort) {
+  const e = ["low", "medium", "high"].includes(effort) ? effort : "high";
+  document.querySelectorAll(".effort-btn[data-effort]").forEach((btn) => {
+    const val = btn.getAttribute("data-effort");
+    if (val === "auto") return; // stays disabled stub
+    const on = val === e;
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.classList.toggle("effort-btn-active", on);
+  });
+}
+
+/** Server sync: paint + commit last* (only path that assigns lastReasoningEffort). */
+function commitEffortFromStatus(effort) {
+  const e = ["low", "medium", "high"].includes(effort) ? effort : "high";
+  lastReasoningEffort = e;
+  paintEffortUI(e);
+}
+
+/** Active (non-Auto) effort buttons across Status (+ rail when present). */
+function effortActiveButtons() {
+  return document.querySelectorAll(
+    '.effort-btn[data-effort]:not([data-effort="auto"])'
+  );
+}
+
+function setEffortButtonsDisabled(disabled) {
+  effortActiveButtons().forEach((btn) => {
+    btn.disabled = Boolean(disabled);
+  });
+}
+
 function renderProviderCard(s) {
   const provider = (s && s.provider) || null;
   if (providerNameEl) {
@@ -1080,6 +1114,7 @@ function renderProviderCard(s) {
       providerCredentialSelect.value = s.credential_source;
       lastCredentialSource = s.credential_source;
     }
+    commitEffortFromStatus((s && s.reasoning_effort) || "high");
   }
   if (providerCredentialOk) {
     if (!provider) {
@@ -1262,15 +1297,23 @@ function renderUsageCard(s) {
 
 async function patchProvider(body) {
   if (providerPatchInFlight) return;
+  // Never send Auto (UI-only stub); reject before flight.
+  if (body && body.reasoning_effort === "auto") {
+    return;
+  }
   providerPatchInFlight = true;
   if (providerModelSelect) providerModelSelect.disabled = true;
   if (providerCredentialSelect) providerCredentialSelect.disabled = true;
+  setEffortButtonsDisabled(true);
   try {
     await fetchJson("/api/provider", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    // Clear in-flight before status paint so commitEffortFromStatus runs
+    // (success path: refreshStatus → renderProviderCard → commit last*).
+    providerPatchInFlight = false;
     await refreshStatus();
   } catch (err) {
     if (providerModelSelect && lastProviderModel != null) {
@@ -1279,11 +1322,14 @@ async function patchProvider(body) {
     if (providerCredentialSelect && lastCredentialSource != null) {
       providerCredentialSelect.value = lastCredentialSource;
     }
+    // Revert optimistic effort paint; lastReasoningEffort is still pre-click.
+    paintEffortUI(lastReasoningEffort);
     showNotice(String(err.message || err));
   } finally {
     providerPatchInFlight = false;
     if (providerModelSelect) providerModelSelect.disabled = false;
     if (providerCredentialSelect) providerCredentialSelect.disabled = false;
+    setEffortButtonsDisabled(false);
   }
 }
 
@@ -2347,6 +2393,20 @@ if (providerCredentialSelect) {
     patchProvider({ credential_source });
   });
 }
+// Effort segmented control (Status + future rail share .effort-btn).
+document.querySelectorAll(".effort-btn[data-effort]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled || btn.getAttribute("data-effort") === "auto") return;
+    if (providerPatchInFlight) return;
+    const effort = btn.getAttribute("data-effort");
+    if (!["low", "medium", "high"].includes(effort)) return;
+    // Compare to server last, not painted state — no spurious PATCH.
+    if (effort === lastReasoningEffort) return;
+    // Optimistic visual only — do NOT assign lastReasoningEffort.
+    paintEffortUI(effort);
+    patchProvider({ reasoning_effort: effort });
+  });
+});
 if (providerApiKeySave) {
   providerApiKeySave.addEventListener("click", () => {
     saveApiKey();

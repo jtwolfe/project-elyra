@@ -763,6 +763,24 @@ def test_static_index_served(paths):
         assert 'type="password"' in html
         assert 'id="provider-api-key-save"' in html
         assert 'id="provider-api-key-clear"' in html
+        # Reasoning effort control on Status provider card (PR3)
+        assert 'id="provider-effort"' in html
+        assert 'id="provider-effort-label"' in html
+        assert 'role="radiogroup"' in html
+        assert 'data-effort="low"' in html
+        assert 'data-effort="medium"' in html
+        assert 'data-effort="high"' in html
+        assert 'data-effort="auto"' in html
+        assert "Auto effort escalation — coming later" in html
+        assert "effort-btn-auto" in html
+        # Auto is disabled stub in markup
+        assert re.search(
+            r'data-effort="auto"[^>]*\bdisabled\b',
+            html,
+        ) or re.search(
+            r'\bdisabled\b[^>]*data-effort="auto"',
+            html,
+        )
         assert 'id="usage-card"' in html
         assert 'id="usage-override-toggle"' in html
         assert "Hard-stop override" in html
@@ -836,6 +854,43 @@ def test_static_app_js_active_panel_poll(paths):
         assert "providerApiKeyInput.value = \"\"" in js or "providerApiKeyInput.value = ''" in js
         assert "usageOverrideInFlight" in js
         assert "providerPatchInFlight" in js
+        # PR3: reasoning effort Status control — real wiring, not just identifiers
+        assert "function paintEffortUI" in js
+        assert "function commitEffortFromStatus" in js
+        assert "lastReasoningEffort" in js
+        # paintEffortUI is visual-only (must not assign lastReasoningEffort)
+        paint_fn = re.search(
+            r"function paintEffortUI\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert paint_fn is not None, "paintEffortUI body not found"
+        assert "lastReasoningEffort" not in paint_fn.group(1)
+        assert "effort-btn-active" in paint_fn.group(1)
+        assert "aria-pressed" in paint_fn.group(1)
+        # commitEffortFromStatus is the only assigner of lastReasoningEffort
+        commit_fn = re.search(
+            r"function commitEffortFromStatus\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert commit_fn is not None, "commitEffortFromStatus body not found"
+        assert "lastReasoningEffort =" in commit_fn.group(1)
+        assert "paintEffortUI" in commit_fn.group(1)
+        # renderProviderCard: skip overwrite while in-flight; else commit
+        assert "commitEffortFromStatus" in js
+        assert "reasoning_effort" in js
+        # Optimistic click paints only; patch body is { reasoning_effort }
+        assert "paintEffortUI(effort)" in js
+        assert "patchProvider({ reasoning_effort: effort })" in js or (
+            "reasoning_effort: effort" in js and "patchProvider" in js
+        )
+        # Error path reverts paint from server last*, not optimistic value
+        assert "paintEffortUI(lastReasoningEffort)" in js
+        # In-flight disables active effort buttons (not Auto)
+        assert "setEffortButtonsDisabled" in js
+        # Auto never in PATCH body
+        assert 'reasoning_effort === "auto"' in js or "reasoning_effort === 'auto'" in js
         # PR6: SuperGrok + pace/burst wiring (not just identifiers)
         assert "usageSgBar" in js or "usage-sg-bar" in js
         assert "usagePaceBadge" in js or "usage-pace-badge" in js
@@ -907,6 +962,12 @@ def test_static_app_js_active_panel_poll(paths):
         assert "usage-meters-soft" in css
         assert "usage-bar-na" in css
         assert "status-cards" in css
+        # PR3: effort segmented control styles (shared with future rail)
+        assert ".effort-group" in css
+        assert ".effort-btn" in css
+        assert "effort-btn-active" in css
+        assert "effort-btn-auto" in css or ".effort-btn:disabled" in css
+        assert "effort-group-compact" in css
         # Chat polish surface
         assert "msg-body" in css
         assert "jump-latest" in css
