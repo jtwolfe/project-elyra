@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string"
+    },
+    "head": {
+      "type": "string"
+    },
+    "draft": {
+      "type": "boolean"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "additionalProperties": false
+}

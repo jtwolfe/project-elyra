@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "description": "When set: create (or delete) this branch"
+    },
+    "delete": {
+      "type": "boolean"
+    },
+    "force": {
+      "type": "boolean",
+      "description": "Force delete (-D)"
+    },
+    "verbose": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo"
+  ],
+  "additionalProperties": false
+}

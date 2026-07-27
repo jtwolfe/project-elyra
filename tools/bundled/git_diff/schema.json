@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "Path to git repository under allowed_repo_roots"
+    },
+    "staged": {
+      "type": "boolean",
+      "description": "Diff staged changes (--cached)"
+    },
+    "cached": {
+      "type": "boolean",
+      "description": "Alias for staged"
+    },
+    "ref": {
+      "type": "string",
+      "description": "Optional commit/range for git diff"
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Optional pathspecs"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo"
+  ],
+  "additionalProperties": false
+}

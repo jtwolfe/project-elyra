@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string",
+      "description": "Commit message"
+    },
+    "allow_empty": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo",
+    "message"
+  ],
+  "additionalProperties": false
+}

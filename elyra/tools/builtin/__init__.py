@@ -11,4 +11,6 @@
 - search.py — web_search (optional elyra[search] / ddgs)
 - browser.py — browser_session_open/close, goto, snapshot, click/type/fill, get_text, wait
 - secrets_tools.py — secrets_list, secrets_set, secrets_delete
+- git_tools.py — frozen git_* / worktree builtins (path-jailed host)
+- gh_tools.py — frozen gh_* PR/issue/project builtins (GH_TOKEN soft-fail)
 """

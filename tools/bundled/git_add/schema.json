@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string"
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Paths to stage"
+    },
+    "path": {
+      "type": "string",
+      "description": "Single path alias"
+    },
+    "all": {
+      "type": "boolean",
+      "description": "git add -A"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo"
+  ],
+  "additionalProperties": false
+}

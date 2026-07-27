@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Project item node id"
+    },
+    "item_id": {
+      "type": "string",
+      "description": "Alias for id"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "field_id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "single_select_option_id": {
+      "type": "string"
+    },
+    "number": {
+      "type": "number"
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "format_json": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false
+}

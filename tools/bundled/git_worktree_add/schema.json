@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string",
+      "description": "Main repository path"
+    },
+    "path": {
+      "type": "string",
+      "description": "New worktree path (must be under allowed_repo_roots)"
+    },
+    "branch": {
+      "type": "string",
+      "description": "Existing branch/ref to check out"
+    },
+    "new_branch": {
+      "type": "string",
+      "description": "Create new branch (-b)"
+    },
+    "detach": {
+      "type": "boolean"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo",
+    "path"
+  ],
+  "additionalProperties": false
+}

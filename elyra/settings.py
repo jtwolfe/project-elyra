@@ -61,6 +61,8 @@ class WaitSettings:
 @dataclass(frozen=True)
 class ToolsSettings:
     verify_timeout_seconds: int = 120
+    # Empty sentinel: resolve at use site in vcs_jail (project_root + paths.home).
+    allowed_repo_roots: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -401,6 +403,33 @@ def _coerce_value(key: str, value: Any, annotation: Any) -> Any:
                 f"{key}: expected bool, got {type(value).__name__}: {value!r}"
             )
         return value
+
+    # tuple[str, ...] (and bare tuple): accept TOML/Python list or tuple of str.
+    origin = get_origin(expected)
+    if origin is tuple or expected is tuple:
+        args = get_args(expected) if origin is tuple else ()
+        # tuple[str, ...] or unparameterized tuple → homogeneous str sequence.
+        elem_ok = (
+            not args
+            or (len(args) == 2 and args[1] is Ellipsis and args[0] is str)
+            or (len(args) == 1 and args[0] is str)
+        )
+        if elem_ok:
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(
+                    f"{key}: expected list/tuple of str, "
+                    f"got {type(value).__name__}: {value!r}"
+                )
+            out: list[str] = []
+            for i, item in enumerate(value):
+                if not isinstance(item, str):
+                    raise ValueError(
+                        f"{key}[{i}]: expected str, "
+                        f"got {type(item).__name__}: {item!r}"
+                    )
+                out.append(item)
+            return tuple(out)
+
     # Fallback: exact type match
     if not isinstance(value, expected):
         raise ValueError(

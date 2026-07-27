@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "json_fields": {
+      "type": "string"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "repo": {
+      "type": "string"
+    },
+    "max_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Max commits (default 20)"
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Alias for max_count"
+    },
+    "oneline": {
+      "type": "boolean"
+    },
+    "format": {
+      "type": "string",
+      "description": "git --format= value"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "repo"
+  ],
+  "additionalProperties": false
+}

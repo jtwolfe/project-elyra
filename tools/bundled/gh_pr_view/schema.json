@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "properties": {
+    "number": {
+      "description": "PR number or URL"
+    },
+    "pr": {
+      "description": "Alias for number"
+    },
+    "repo": {
+      "type": "string"
+    },
+    "json": {
+      "type": "boolean"
+    },
+    "json_fields": {
+      "type": "string"
+    },
+    "timeout": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  },
+  "required": [
+    "number"
+  ],
+  "additionalProperties": false
+}

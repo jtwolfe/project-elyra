@@ -36,6 +36,8 @@ def test_default_settings_match_design():
     assert s.wait.default_timeout_seconds == 300
     assert s.wait.free_text_timeout_seconds == 300
     assert s.tools.verify_timeout_seconds == 120
+    # IK11: empty sentinel; auto roots resolve at use site (vcs_jail), not load.
+    assert s.tools.allowed_repo_roots == ()
     assert s.goals.close_gate == "soft"
     # Continuous remains product-default OFF
     assert s.continuous.enabled is False
@@ -652,3 +654,40 @@ def test_string_int_coerces_in_cli_override():
 def test_bool_rejected_as_int():
     with pytest.raises(ValueError, match="api_port"):
         merge_cli_overrides(default_settings(), {"api_port": True})
+
+
+def test_allowed_repo_roots_from_toml(tmp_path):
+    """TOML array coerces to tuple[str, ...] (IK11 / PR7)."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[tools]
+verify_timeout_seconds = 99
+allowed_repo_roots = ["/home/jim/Workspace/project-elyra", "~/code"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.tools.verify_timeout_seconds == 99
+    assert s.tools.allowed_repo_roots == (
+        "/home/jim/Workspace/project-elyra",
+        "~/code",
+    )
+    assert isinstance(s.tools.allowed_repo_roots, tuple)
+    assert all(isinstance(x, str) for x in s.tools.allowed_repo_roots)
+
+
+def test_allowed_repo_roots_cli_list_coerces():
+    merged = merge_cli_overrides(
+        default_settings(),
+        {"tools": {"allowed_repo_roots": ["/a", "/b"]}},
+    )
+    assert merged.tools.allowed_repo_roots == ("/a", "/b")
+
+
+def test_allowed_repo_roots_rejects_non_str_elements():
+    with pytest.raises(ValueError, match="allowed_repo_roots"):
+        merge_cli_overrides(
+            default_settings(),
+            {"tools": {"allowed_repo_roots": ["/ok", 1]}},
+        )
