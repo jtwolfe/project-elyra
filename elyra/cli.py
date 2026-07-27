@@ -125,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     config = runtime_config_from_settings(
         settings,
         stub_llm=use_stub,
+        data_dir=paths.data_dir,
     )
 
     sup = ElyraSupervisor(

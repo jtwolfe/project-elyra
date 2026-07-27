@@ -22,6 +22,11 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from elyra.llm.config import LocalClientConfig, XaiClientConfig
+from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
+    resolve_reasoning_effort,
+    resolve_reasoning_effort_strict,
+)
 from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import (
     TokenUsage,
@@ -358,6 +363,7 @@ class HttpChatClient:
         profile: str | None = None,
         model: str | None = None,
         bearer_token: str | None = None,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> None:
         """Internal / BC constructor. Prefer ``for_local`` / ``for_xai``.
 
@@ -374,6 +380,7 @@ class HttpChatClient:
 
         self._profile = profile
         self._lock = threading.Lock()
+        self._reasoning_effort = resolve_reasoning_effort(reasoning_effort)
 
         if profile == "local":
             if config is None:
@@ -427,13 +434,15 @@ class HttpChatClient:
         *,
         model: str,
         bearer_token: str,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> HttpChatClient:
-        """Build an xAI client (Bearer + model; omit top_k / reasoning wire keys)."""
+        """Build an xAI client (Bearer + model; top-level reasoning_effort)."""
         return cls(
             config if config is not None else XaiClientConfig(),
             profile="xai",
             model=model,
             bearer_token=bearer_token,
+            reasoning_effort=reasoning_effort,
         )
 
     def set_model(self, model: str) -> None:
@@ -451,6 +460,14 @@ class HttpChatClient:
             if self._profile != "xai":
                 return
             self._bearer_token = token
+
+    def set_reasoning_effort(self, effort: str) -> None:
+        """Thread-safe; next chat_completion uses effort (xai only)."""
+        e = resolve_reasoning_effort_strict(effort)
+        with self._lock:
+            if self._profile != "xai":
+                return
+            self._reasoning_effort = e
 
     @property
     def profile(self) -> str:
@@ -482,8 +499,9 @@ class HttpChatClient:
         ``reasoning_budget_tokens`` are accepted for Protocol BC but ignored
         on the wire.
 
-        xai: Authorization Bearer; body includes ``model``; omit ``top_k``,
-        ``thinking_budget_tokens``, and ``reasoning`` wire keys.
+        xai: Authorization Bearer; body includes ``model`` and top-level
+        ``reasoning_effort``; omit ``top_k``, ``thinking_budget_tokens``,
+        and ``reasoning`` wire keys.
 
         Never emit chat-body key ``reasoning_budget_tokens``.
         Never put Authorization values into exception messages.
@@ -498,11 +516,13 @@ class HttpChatClient:
                 cfg_local = self._local_config
                 model: str | None = None
                 bearer: str | None = None
+                reasoning_effort: str | None = None
             else:
                 assert self._xai_config is not None
                 cfg_xai = self._xai_config
                 model = self._model
                 bearer = self._bearer_token
+                reasoning_effort = self._reasoning_effort
 
         if profile == "local":
             payload = self._build_local_payload(
@@ -529,6 +549,7 @@ class HttpChatClient:
                 top_p=top_p,
                 tools=tools,
                 tool_choice=tool_choice,
+                reasoning_effort=reasoning_effort or DEFAULT_REASONING_EFFORT,
             )
             headers = {"Content-Type": "application/json"}
             if bearer:
@@ -602,9 +623,11 @@ class HttpChatClient:
         top_p: float | None,
         tools: list[dict[str, Any]] | None,
         tool_choice: str | dict[str, Any] | None,
+        reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     ) -> dict[str, Any]:
-        # xai: model required; omit top_k / thinking_budget_tokens / reasoning.
+        # xai: model + reasoning_effort required; omit top_k / thinking_budget / reasoning.
         resolved_top_p = top_p if top_p is not None else config.top_p
+        effort = resolve_reasoning_effort(reasoning_effort)
         payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -613,6 +636,7 @@ class HttpChatClient:
                 temperature if temperature is not None else config.temperature
             ),
             "stream": False,
+            "reasoning_effort": effort,
         }
         if resolved_top_p is not None:
             payload["top_p"] = resolved_top_p

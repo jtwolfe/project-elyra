@@ -33,10 +33,13 @@ from elyra.llm.auth import (
     write_stored_api_key,
 )
 from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
     ProviderPrefs,
     load_provider_prefs,
     provider_prefs_path,
+    resolve_reasoning_effort,
     save_provider_prefs,
+    update_provider_prefs,
 )
 
 
@@ -353,18 +356,24 @@ def test_load_provider_prefs_missing(tmp_path: Path):
     prefs = load_provider_prefs(tmp_path)
     assert prefs.model is None
     assert prefs.credential_source is None
+    assert prefs.reasoning_effort is None
 
 
 def test_save_and_load_provider_prefs(tmp_path: Path):
     path = save_provider_prefs(
         tmp_path,
-        ProviderPrefs(model="grok-4.5", credential_source="api_key"),
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="api_key",
+            reasoning_effort="medium",
+        ),
     )
     assert path == provider_prefs_path(tmp_path)
     assert path.is_file()
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["model"] == "grok-4.5"
     assert raw["credential_source"] == "api_key"
+    assert raw["reasoning_effort"] == "medium"
     assert "updated_at" in raw
     # no secrets keys
     assert "api_key" not in raw
@@ -373,6 +382,7 @@ def test_save_and_load_provider_prefs(tmp_path: Path):
     prefs = load_provider_prefs(tmp_path)
     assert prefs.model == "grok-4.5"
     assert prefs.credential_source == "api_key"
+    assert prefs.reasoning_effort == "medium"
 
 
 def test_load_provider_prefs_ignores_invalid_credential_source(tmp_path: Path):
@@ -387,10 +397,51 @@ def test_load_provider_prefs_ignores_invalid_credential_source(tmp_path: Path):
     assert prefs.credential_source is None
 
 
+def test_load_provider_prefs_invalid_reasoning_effort_none(tmp_path: Path):
+    path = provider_prefs_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "model": "grok-4.5",
+                "credential_source": "grok_build",
+                "reasoning_effort": "auto",
+            }
+        ),
+        encoding="utf-8",
+    )
+    prefs = load_provider_prefs(tmp_path)
+    assert prefs.reasoning_effort is None
+    assert resolve_reasoning_effort(prefs.reasoning_effort) == DEFAULT_REASONING_EFFORT
+    # Unknown string also → None
+    path.write_text(
+        json.dumps({"reasoning_effort": "turbo"}),
+        encoding="utf-8",
+    )
+    prefs2 = load_provider_prefs(tmp_path)
+    assert prefs2.reasoning_effort is None
+
+
+def test_resolve_reasoning_effort_defaults():
+    assert resolve_reasoning_effort(None) == "high"
+    assert resolve_reasoning_effort("") == "high"
+    assert resolve_reasoning_effort("auto") == "high"
+    assert resolve_reasoning_effort("low") == "low"
+    assert resolve_reasoning_effort(" medium ") == "medium"
+    assert resolve_reasoning_effort("high") == "high"
+
+
 def test_save_provider_prefs_rejects_invalid_source(tmp_path: Path):
     with pytest.raises(ValueError):
         save_provider_prefs(
             tmp_path, ProviderPrefs(credential_source="not_a_source")
+        )
+
+
+def test_save_provider_prefs_rejects_invalid_effort(tmp_path: Path):
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        save_provider_prefs(
+            tmp_path, ProviderPrefs(reasoning_effort="auto")
         )
 
 
@@ -400,6 +451,57 @@ def test_load_provider_prefs_corrupt_json(tmp_path: Path):
     path.write_text("{bad", encoding="utf-8")
     prefs = load_provider_prefs(tmp_path)
     assert prefs.model is None
+
+
+def test_update_provider_prefs_model_only_preserves_effort(tmp_path: Path):
+    """model-only update must not clobber reasoning_effort on disk."""
+    save_provider_prefs(
+        tmp_path,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    update_provider_prefs(tmp_path, model="grok-4.3")
+    prefs = load_provider_prefs(tmp_path)
+    assert prefs.model == "grok-4.3"
+    assert prefs.credential_source == "grok_build"
+    assert prefs.reasoning_effort == "low"
+
+
+def test_update_provider_prefs_effort_only_preserves_model(tmp_path: Path):
+    """effort-only update must not clobber model / credential_source."""
+    save_provider_prefs(
+        tmp_path,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="api_key",
+            reasoning_effort="high",
+        ),
+    )
+    update_provider_prefs(tmp_path, reasoning_effort="medium")
+    prefs = load_provider_prefs(tmp_path)
+    assert prefs.model == "grok-4.5"
+    assert prefs.credential_source == "api_key"
+    assert prefs.reasoning_effort == "medium"
+
+
+def test_update_provider_prefs_credential_only_preserves_effort(tmp_path: Path):
+    """credential-only update must not clobber reasoning_effort."""
+    save_provider_prefs(
+        tmp_path,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    update_provider_prefs(tmp_path, credential_source="api_key")
+    prefs = load_provider_prefs(tmp_path)
+    assert prefs.model == "grok-4.5"
+    assert prefs.credential_source == "api_key"
+    assert prefs.reasoning_effort == "low"
 
 
 # --- ensure_data_dirs creates secrets ---

@@ -621,6 +621,168 @@ def test_apply_credential_source_fail_leaves_previous(tmp_path: Path):
         sup.shutdown()
 
 
+def test_apply_reasoning_effort_no_rebuild_when_http_live(tmp_path: Path):
+    """Effort change uses set_reasoning_effort; does not rebuild when http live."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    auth = home / "auth.json"
+    _write_auth(auth)
+
+    http = HttpChatClient.for_xai(
+        model="grok-4.5",
+        bearer_token="tok",
+        reasoning_effort="high",
+    )
+    pr = ProviderRuntime(
+        meter=None,
+        http_client=http,
+        chat_client=http,
+        worker=None,
+        usage_settings=UsageSettings(enabled=False),
+        xai_config=None,
+        local_config=None,
+        gate=None,
+        prefs_path=paths.data_dir / "runtime" / "provider.json",
+        data_dir=paths.data_dir,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        credential_ok=True,
+        credential_detail=None,
+        credential_expires_at=None,
+        credential_email=None,
+        api_key_configured=False,
+        grok_auth_path=auth,
+        reasoning_effort="high",
+    )
+    # Seed prefs so merge keeps model
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(model="grok-4.5", credential_source="grok_build"),
+    )
+    with patch.object(ProviderRuntime, "rebuild_chat_stack") as mock_rebuild:
+        pr.apply_reasoning_effort("medium")
+        mock_rebuild.assert_not_called()
+    assert pr.reasoning_effort == "medium"
+    assert pr.status_provider_fields()["reasoning_effort"] == "medium"
+    assert http._reasoning_effort == "medium"
+    raw = json.loads(
+        (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+    )
+    assert raw["reasoning_effort"] == "medium"
+    assert raw["model"] == "grok-4.5"
+
+
+def test_rebuild_chat_stack_retains_reasoning_effort(tmp_path: Path):
+    """rebuild_chat_stack passes runtime effort into for_xai (no silent high revert)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    auth = home / "auth.json"
+    _write_auth(auth, token="rebuild-token")
+
+    pr = ProviderRuntime(
+        meter=None,
+        http_client=None,
+        chat_client=FailingChatClient("x"),
+        worker=None,
+        usage_settings=UsageSettings(enabled=False),
+        xai_config=None,
+        local_config=None,
+        gate=None,
+        prefs_path=paths.data_dir / "runtime" / "provider.json",
+        data_dir=paths.data_dir,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        credential_ok=True,
+        credential_detail=None,
+        credential_expires_at=None,
+        credential_email=None,
+        api_key_configured=False,
+        grok_auth_path=auth,
+        reasoning_effort="medium",
+    )
+    with patch.object(ProviderRuntime, "refresh_models", return_value=["grok-4.5"]):
+        pr.rebuild_chat_stack()
+    assert pr.http_client is not None
+    assert pr.http_client._reasoning_effort == "medium"
+    assert pr.reasoning_effort == "medium"
+
+
+def test_runtime_config_reasoning_effort_from_prefs(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    data = home / "data"
+    data.mkdir()
+    (data / "runtime").mkdir()
+    save_provider_prefs(
+        data,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    s = load_merged_settings(home, data)
+    cfg = runtime_config_from_settings(s, data_dir=data)
+    assert cfg.reasoning_effort == "low"
+    # Without data_dir → default high
+    cfg_default = runtime_config_from_settings(s)
+    assert cfg_default.reasoning_effort == "high"
+
+
+def test_apply_model_preserves_effort_on_disk(tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    paths = resolve_paths(home)
+    paths.ensure_data_dirs()
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    pr = ProviderRuntime(
+        meter=None,
+        http_client=None,
+        chat_client=StubChatClient(),
+        worker=None,
+        usage_settings=UsageSettings(enabled=False),
+        xai_config=None,
+        local_config=None,
+        gate=None,
+        prefs_path=paths.data_dir / "runtime" / "provider.json",
+        data_dir=paths.data_dir,
+        provider_name="xai",
+        model="grok-4.5",
+        model_label="Grok 4.5",
+        credential_source="grok_build",
+        credential_ok=False,
+        credential_detail="missing_auth_json",
+        credential_expires_at=None,
+        credential_email=None,
+        api_key_configured=False,
+        models_available=["grok-4.5", "grok-4.3"],
+        reasoning_effort="low",
+        stub_llm=True,
+    )
+    pr.apply_model("grok-4.3")
+    from elyra.llm.provider_prefs import load_provider_prefs
+
+    prefs = load_provider_prefs(paths.data_dir)
+    assert prefs.model == "grok-4.3"
+    assert prefs.reasoning_effort == "low"
+    assert prefs.credential_source == "grok_build"
+
+
 def test_status_fields_never_contain_token(tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

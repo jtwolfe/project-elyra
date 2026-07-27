@@ -34,7 +34,12 @@ from elyra.llm.models import (
     list_remote_models,
     models_for_picker,
 )
-from elyra.llm.provider_prefs import ProviderPrefs, provider_prefs_path, save_provider_prefs
+from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
+    resolve_reasoning_effort,
+    resolve_reasoning_effort_strict,
+    update_provider_prefs,
+)
 from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import UsageMeter, UsageSnapshot
 from elyra.settings import UsageSettings
@@ -148,6 +153,8 @@ class ProviderRuntime:
     stub_llm: bool = False
     # SuperGrok credits poller (supervisor-owned); status may only *signal*.
     credits_poller: CreditsPoller | None = None
+    # Resolved wire effort (always low|medium|high; default high).
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def status_provider_fields(self) -> dict[str, Any]:
@@ -165,6 +172,7 @@ class ProviderRuntime:
                 "credential_email": self.credential_email,
                 "api_key_configured": self.api_key_configured,
                 "models_available": list(self.models_available),
+                "reasoning_effort": resolve_reasoning_effort(self.reasoning_effort),
             }
 
     def usage_status_block(self) -> dict[str, Any]:
@@ -315,6 +323,7 @@ class ProviderRuntime:
             xai_config = self.xai_config
             local_config = self.local_config
             meter = self.meter
+            reasoning_effort = resolve_reasoning_effort(self.reasoning_effort)
 
         if stub_llm:
             self._rebuild_stub(usage_settings=usage_settings, meter=meter)
@@ -368,6 +377,7 @@ class ProviderRuntime:
                 cfg,
                 model=model,
                 bearer_token=resolution.token,
+                reasoning_effort=reasoning_effort,
             )
             if usage_settings.enabled:
                 outer: ChatClient = UsageGatedChatClient(http, meter)
@@ -536,20 +546,14 @@ class ProviderRuntime:
             raise ValueError("model must be a non-empty string")
         with self._lock:
             available = list(self.models_available)
-            http = self.http_client
-            credential_ok = self.credential_ok
-            stub_llm = self.stub_llm
             data_dir = self.data_dir
-            source = self.credential_source
         if available and mid not in available and mid != "local":
             # Allow unknown when list is only curated fallback (operator override).
             # Strict unknown check is for API layer; rebuild still accepts wire ids.
             pass
         label = label_for_model(mid)
-        save_provider_prefs(
-            data_dir,
-            ProviderPrefs(model=mid, credential_source=source),
-        )
+        # Load-merge-save so credential_source / reasoning_effort are not clobbered.
+        update_provider_prefs(data_dir, model=mid)
         with self._lock:
             self.model = mid
             self.model_label = label
@@ -574,7 +578,6 @@ class ProviderRuntime:
             data_dir = self.data_dir
             grok_path = self.grok_auth_path
             prev_source = self.credential_source
-            model = self.model
         resolution = resolve_bearer(
             source=src,
             data_dir=data_dir,
@@ -583,10 +586,8 @@ class ProviderRuntime:
         if not resolution.ok:
             # Leave previous source/stack intact.
             return resolution
-        save_provider_prefs(
-            data_dir,
-            ProviderPrefs(model=model, credential_source=src),
-        )
+        # Load-merge-save so model / reasoning_effort are not clobbered.
+        update_provider_prefs(data_dir, credential_source=src)
         with self._lock:
             self.credential_source = src
             self._sync_state_unlocked()
@@ -594,6 +595,24 @@ class ProviderRuntime:
         if prev_source != src:
             _LOG.info("credential_source switched %s → %s", prev_source, src)
         return resolution
+
+    def apply_reasoning_effort(self, effort: str) -> None:
+        """Validate, persist prefs, set_reasoning_effort on http_client if present.
+
+        Does not rebuild the chat stack. Credential / bearer / meter unchanged.
+        Under stub_llm: prefs + runtime field update only.
+        """
+        e = resolve_reasoning_effort_strict(effort)
+        with self._lock:
+            data_dir = self.data_dir
+        # Load-merge-save so model / credential_source are not clobbered.
+        update_provider_prefs(data_dir, reasoning_effort=e)
+        with self._lock:
+            self.reasoning_effort = e
+            http = self.http_client
+        if http is not None:
+            http.set_reasoning_effort(e)
+        _LOG.info("reasoning_effort set to %s", e)
 
     def put_api_key(self, api_key: str) -> None:
         """write_stored_api_key (atomic); api_key_configured=True;

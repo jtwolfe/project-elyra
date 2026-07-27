@@ -202,9 +202,12 @@ def test_xai_payload_includes_model_bearer_omits_gemma_fields():
     assert body["messages"][0]["content"] == "ping"
     assert body["max_tokens"] == 32
     assert body["stream"] is False
+    # Explicit reasoning_effort always on xAI Completions body (default high).
+    assert body["reasoning_effort"] == "high"
     # Local-only extension wire fields must be absent on xAI.
     assert "top_k" not in body
     assert "thinking_budget_tokens" not in body
+    # Nested/boolean "reasoning" key still omitted (distinct from reasoning_effort).
     assert "reasoning" not in body
     assert "reasoning_budget_tokens" not in body
     # Usage parsed onto result.
@@ -212,6 +215,32 @@ def test_xai_payload_includes_model_bearer_omits_gemma_fields():
     assert result.usage.total_tokens == 15
     assert result.usage.billable_tokens == 15
     assert result.content == "hi"
+
+
+def test_xai_payload_includes_reasoning_effort():
+    captured: list[dict[str, Any]] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        captured.append(
+            json.loads(req.data.decode("utf-8") if req.data else b"{}")
+        )
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    client = HttpChatClient.for_xai(
+        model="grok-4.5",
+        bearer_token="t",
+        reasoning_effort="low",
+    )
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "ping"}])
+        client.set_reasoning_effort("medium")
+        client.chat_completion([{"role": "user", "content": "ping"}])
+
+    assert captured[0]["reasoning_effort"] == "low"
+    assert captured[1]["reasoning_effort"] == "medium"
+    # Still no nested reasoning key
+    assert "reasoning" not in captured[0]
+    assert "reasoning" not in captured[1]
 
 
 def test_xai_set_model_and_bearer_affect_next_request():
@@ -275,6 +304,7 @@ def test_local_payload_openai_compat_model_no_reasoning():
     # Product defaults no longer ship GEMMA top_p.
     assert "top_p" not in body
     assert "reasoning" not in body
+    assert "reasoning_effort" not in body
     assert "thinking_budget_tokens" not in body
     assert "reasoning_budget_tokens" not in body
 

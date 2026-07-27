@@ -479,7 +479,107 @@ def test_patch_provider_empty_body(paths):
     try:
         code, body = h.patch("/api/provider", {})
         assert code == 400
-        assert body["error"] == "model or credential_source required"
+        assert body["error"] == "model, credential_source, or reasoning_effort required"
+    finally:
+        h.close()
+
+
+def test_patch_provider_reasoning_effort_ok(paths):
+    pr = _make_provider(paths)
+    assert pr.reasoning_effort == "high"
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "medium"})
+        assert code == 200
+        assert body["ok"] is True
+        assert body["reasoning_effort"] == "medium"
+        assert body["model"] == "grok-4.5"
+        assert pr.reasoning_effort == "medium"
+        # Prefs persisted
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["reasoning_effort"] == "medium"
+        # Status exposes resolved effort
+        code2, status = h.get("/api/status")
+        assert code2 == 200
+        assert status["reasoning_effort"] == "medium"
+    finally:
+        h.close()
+
+
+def test_patch_provider_reasoning_effort_auto_rejected(paths):
+    pr = _make_provider(paths)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "auto"})
+        assert code == 400
+        assert body["error"] == "invalid_reasoning_effort"
+        assert pr.reasoning_effort == "high"
+    finally:
+        h.close()
+
+
+def test_patch_provider_reasoning_effort_invalid(paths):
+    pr = _make_provider(paths)
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "turbo"})
+        assert code == 400
+        assert body["error"] == "invalid_reasoning_effort"
+    finally:
+        h.close()
+
+
+def test_patch_provider_model_only_preserves_effort(paths):
+    """model-only PATCH must not drop persisted reasoning_effort."""
+    from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
+
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(
+            model="grok-4.5",
+            credential_source="grok_build",
+            reasoning_effort="low",
+        ),
+    )
+    pr = _make_provider(paths)
+    pr.reasoning_effort = "low"
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"model": "grok-4.3"})
+        assert code == 200
+        assert body["model"] == "grok-4.3"
+        assert body["reasoning_effort"] == "low"
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["model"] == "grok-4.3"
+        assert raw["reasoning_effort"] == "low"
+    finally:
+        h.close()
+
+
+def test_patch_provider_effort_only_preserves_model(paths):
+    pr = _make_provider(paths, model="grok-4.5")
+    # Seed prefs so merge has model on disk
+    from elyra.llm.provider_prefs import ProviderPrefs, save_provider_prefs
+
+    save_provider_prefs(
+        paths.data_dir,
+        ProviderPrefs(model="grok-4.5", credential_source="grok_build"),
+    )
+    h = _ApiHarness(paths, provider=pr)
+    try:
+        code, body = h.patch("/api/provider", {"reasoning_effort": "low"})
+        assert code == 200
+        assert body["reasoning_effort"] == "low"
+        assert body["model"] == "grok-4.5"
+        raw = json.loads(
+            (paths.data_dir / "runtime" / "provider.json").read_text(encoding="utf-8")
+        )
+        assert raw["model"] == "grok-4.5"
+        assert raw["reasoning_effort"] == "low"
     finally:
         h.close()
 

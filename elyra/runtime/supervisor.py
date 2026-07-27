@@ -249,6 +249,7 @@ class ElyraSupervisor:
                     xai_config,
                     model=cfg.model,
                     bearer_token=resolution.token,
+                    reasoning_effort=cfg.reasoning_effort,
                 )
                 if cfg.usage.enabled:
                     chat_client = UsageGatedChatClient(http_client, meter)
@@ -325,6 +326,7 @@ class ElyraSupervisor:
             request_timeout_s=cfg.request_timeout_s,
             state=self.state,
             stub_llm=self._use_stub,
+            reasoning_effort=cfg.reasoning_effort,
         )
         self.provider_runtime = pr
 

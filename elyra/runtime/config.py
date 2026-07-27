@@ -4,7 +4,8 @@ Merge order (normative)::
 
     defaults  <  elyra.toml  <  data/runtime/provider.json  <  explicit CLI
 
-``provider.json`` only supplies ``model`` and ``credential_source`` (non-secret).
+``provider.json`` supplies ``model``, ``credential_source``, and
+``reasoning_effort`` (non-secret). Effort is prefs-only (no toml/CLI this pass).
 No inference process is launched; ``local`` config is retained for future
 OpenAI-compat wiring only.
 """
@@ -17,7 +18,11 @@ from typing import Any
 
 from elyra.llm.config import LocalClientConfig
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL, label_for_model
-from elyra.llm.provider_prefs import load_provider_prefs
+from elyra.llm.provider_prefs import (
+    DEFAULT_REASONING_EFFORT,
+    load_provider_prefs,
+    resolve_reasoning_effort,
+)
 from elyra.settings import Settings, UsageSettings, load_settings, merge_cli_overrides
 
 
@@ -37,6 +42,8 @@ class RuntimeConfig:
     request_timeout_s: float = 120.0
     usage: UsageSettings = field(default_factory=UsageSettings)
     continuous_enabled: bool = False
+    # Resolved wire effort (low|medium|high); from provider.json prefs only.
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT
 
 
 def load_merged_settings(
@@ -54,6 +61,9 @@ def load_merged_settings(
 
     CLI kwargs that are ``None`` are ignored (do not clobber prefs/toml).
     ``no_usage_meter=True`` forces ``usage.enabled=False``.
+
+    Note: ``reasoning_effort`` is not on Settings (no toml/CLI); resolved
+    into ``RuntimeConfig`` via ``runtime_config_from_settings(data_dir=...)``.
     """
     settings = load_settings(home)
 
@@ -97,14 +107,22 @@ def runtime_config_from_settings(
     settings: Settings,
     *,
     stub_llm: bool = False,
+    data_dir: Path | str | None = None,
 ) -> RuntimeConfig:
     """Build RuntimeConfig from merged settings.
 
     ``stub_llm`` is accepted for CLI symmetry; client selection lives on the
     supervisor (``use_stub_llm``). No inference process is started.
+
+    When ``data_dir`` is provided, ``reasoning_effort`` is resolved from
+    ``provider.json`` prefs (default high when missing/invalid).
     """
     del stub_llm  # selection is supervisor-side; flag reserved for callers
     name = settings.provider.name
+    effort = DEFAULT_REASONING_EFFORT
+    if data_dir is not None:
+        prefs = load_provider_prefs(Path(data_dir))
+        effort = resolve_reasoning_effort(prefs.reasoning_effort)
     return RuntimeConfig(
         api_host=settings.api_host,
         api_port=settings.api_port,
@@ -117,4 +135,5 @@ def runtime_config_from_settings(
         request_timeout_s=settings.provider.request_timeout_s,
         usage=settings.usage,
         continuous_enabled=settings.continuous.enabled,
+        reasoning_effort=effort,
     )

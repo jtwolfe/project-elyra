@@ -1,6 +1,7 @@
 """Runtime provider preferences (non-secret) under ``data/runtime/provider.json``.
 
-Scope: load/save model + credential_source UI prefs. Never stores secrets.
+Scope: load/save model + credential_source + reasoning_effort UI prefs.
+Never stores secrets.
 Out of scope: merge order with CLI/settings (supervisor/CLI PR), API routes.
 """
 
@@ -18,25 +19,46 @@ logger = logging.getLogger(__name__)
 PROVIDER_PREFS_REL = Path("runtime") / "provider.json"
 
 _VALID_CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
+_VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+DEFAULT_REASONING_EFFORT = "high"
 
 
 @dataclass
 class ProviderPrefs:
-    """Non-secret runtime prefs for model and credential source selection."""
+    """Non-secret runtime prefs for model, credential source, reasoning effort."""
 
     model: str | None = None
     credential_source: str | None = None
+    reasoning_effort: str | None = None  # None on load means “unset in file”
 
 
 def provider_prefs_path(data_dir: Path) -> Path:
     return Path(data_dir) / PROVIDER_PREFS_REL
 
 
+def resolve_reasoning_effort(raw: str | None) -> str:
+    """Map raw/missing/invalid effort to a wire value (default high)."""
+    if isinstance(raw, str) and raw.strip() in _VALID_REASONING_EFFORTS:
+        return raw.strip()
+    return DEFAULT_REASONING_EFFORT
+
+
+def resolve_reasoning_effort_strict(raw: str | None) -> str:
+    """Return validated effort or raise ValueError (API / apply paths)."""
+    if not isinstance(raw, str) or raw.strip() not in _VALID_REASONING_EFFORTS:
+        raise ValueError(
+            f"reasoning_effort: expected one of "
+            f"{sorted(_VALID_REASONING_EFFORTS)}, got {raw!r}"
+        )
+    return raw.strip()
+
+
 def load_provider_prefs(data_dir: Path) -> ProviderPrefs:
     """Load prefs from ``data/runtime/provider.json``.
 
     Missing or corrupt file → empty prefs (all None). Invalid
-    ``credential_source`` values are ignored (treated as unset).
+    ``credential_source`` / ``reasoning_effort`` values are ignored
+    (treated as unset; no write-back on load).
     """
     path = provider_prefs_path(data_dir)
     if not path.is_file():
@@ -59,26 +81,51 @@ def load_provider_prefs(data_dir: Path) -> ProviderPrefs:
     if isinstance(cs, str) and cs.strip() in _VALID_CREDENTIAL_SOURCES:
         credential_source = cs.strip()
 
-    return ProviderPrefs(model=model, credential_source=credential_source)
+    reasoning_effort: str | None = None
+    re = raw.get("reasoning_effort")
+    if isinstance(re, str) and re.strip() in _VALID_REASONING_EFFORTS:
+        reasoning_effort = re.strip()
+    elif re is not None and re != "":
+        # Invalid string (including "auto") → None; log once.
+        logger.warning(
+            "provider prefs: invalid reasoning_effort %r ignored",
+            str(re)[:64],
+        )
+
+    return ProviderPrefs(
+        model=model,
+        credential_source=credential_source,
+        reasoning_effort=reasoning_effort,
+    )
 
 
 def save_provider_prefs(data_dir: Path, prefs: ProviderPrefs) -> Path:
-    """Persist model / credential_source to provider.json (creates parents).
+    """Persist known prefs triple to provider.json (creates parents).
 
     Only non-None fields are written (plus ``updated_at``). Does not store
-    secrets. Invalid credential_source raises ValueError.
+    secrets. Invalid credential_source / reasoning_effort raises ValueError.
     """
-    if prefs.credential_source is not None:
-        cs = prefs.credential_source.strip()
+    model = prefs.model
+    credential_source = prefs.credential_source
+    reasoning_effort = prefs.reasoning_effort
+
+    if credential_source is not None:
+        cs = credential_source.strip()
         if cs not in _VALID_CREDENTIAL_SOURCES:
             raise ValueError(
                 f"credential_source: expected one of "
-                f"{sorted(_VALID_CREDENTIAL_SOURCES)}, got {prefs.credential_source!r}"
+                f"{sorted(_VALID_CREDENTIAL_SOURCES)}, got {credential_source!r}"
             )
-        prefs = ProviderPrefs(
-            model=prefs.model,
-            credential_source=cs,
-        )
+        credential_source = cs
+
+    if reasoning_effort is not None:
+        re = reasoning_effort.strip()
+        if re not in _VALID_REASONING_EFFORTS:
+            raise ValueError(
+                f"reasoning_effort: expected one of "
+                f"{sorted(_VALID_REASONING_EFFORTS)}, got {prefs.reasoning_effort!r}"
+            )
+        reasoning_effort = re
 
     path = provider_prefs_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,13 +133,39 @@ def save_provider_prefs(data_dir: Path, prefs: ProviderPrefs) -> Path:
     body: dict[str, Any] = {
         "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
-    if prefs.model is not None and str(prefs.model).strip():
-        body["model"] = str(prefs.model).strip()
-    if prefs.credential_source is not None:
-        body["credential_source"] = prefs.credential_source
+    if model is not None and str(model).strip():
+        body["model"] = str(model).strip()
+    if credential_source is not None:
+        body["credential_source"] = credential_source
+    if reasoning_effort is not None:
+        body["reasoning_effort"] = reasoning_effort
 
     path.write_text(
         json.dumps(body, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return path
+
+
+def update_provider_prefs(
+    data_dir: Path,
+    *,
+    model: str | None = None,
+    credential_source: str | None = None,
+    reasoning_effort: str | None = None,
+) -> Path:
+    """Load existing prefs, overlay non-None kwargs, save full known triple.
+
+    Must not drop known sibling fields when only one is patched.
+    """
+    cur = load_provider_prefs(data_dir)
+    merged = ProviderPrefs(
+        model=model if model is not None else cur.model,
+        credential_source=(
+            credential_source if credential_source is not None else cur.credential_source
+        ),
+        reasoning_effort=(
+            reasoning_effort if reasoning_effort is not None else cur.reasoning_effort
+        ),
+    )
+    return save_provider_prefs(data_dir, merged)

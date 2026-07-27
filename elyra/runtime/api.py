@@ -991,6 +991,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             "ok": True,
             "model": fields.get("model"),
             "model_label": fields.get("model_label"),
+            "reasoning_effort": fields.get("reasoning_effort"),
             "credential_source": fields.get("credential_source"),
             "credential_ok": fields.get("credential_ok"),
             "credential_detail": fields.get("credential_detail"),
@@ -1002,10 +1003,11 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         }
 
     def _patch_provider(self, body: dict[str, Any]) -> None:
-        """PATCH /api/provider — ``{ model?, credential_source? }`` (at least one).
+        """PATCH /api/provider — ``{ model?, credential_source?, reasoning_effort? }``.
 
-        Successful model/credential changes persist prefs and rebuild stack when
-        needed (see ProviderRuntime.apply_*). Never echoes secrets.
+        At least one of the three is required. Successful changes persist prefs
+        and rebuild stack when needed (see ProviderRuntime.apply_*). Effort-only
+        never rebuilds when http is live. Never echoes secrets. ``auto`` rejected.
         """
         if self._provider_unavailable():
             self._json(503, {"ok": False, "error": "provider unavailable"})
@@ -1015,10 +1017,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         has_model = "model" in body
         has_source = "credential_source" in body
-        if not has_model and not has_source:
+        has_effort = "reasoning_effort" in body
+        if not has_model and not has_source and not has_effort:
             self._json(
                 400,
-                {"ok": False, "error": "model or credential_source required"},
+                {
+                    "ok": False,
+                    "error": "model, credential_source, or reasoning_effort required",
+                },
             )
             return
 
@@ -1061,6 +1067,16 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         ),
                     },
                 )
+                return
+
+        if has_effort:
+            effort = body.get("reasoning_effort")
+            if isinstance(effort, str):
+                effort = effort.strip()
+            try:
+                provider.apply_reasoning_effort(effort)  # type: ignore[arg-type]
+            except (ValueError, TypeError):
+                self._json(400, {"ok": False, "error": "invalid_reasoning_effort"})
                 return
 
         self._json(200, self._provider_response_fields())
