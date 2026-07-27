@@ -84,6 +84,7 @@ class ElyraPaths:
 
         for path in (
             self.skills_dir / "local",
+            self.skills_dir / "drafts",
             self.tools_dir / "local",
             self.tools_dir / "drafts",
         ):

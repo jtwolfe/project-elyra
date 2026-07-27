@@ -1,0 +1,4 @@
+{
+  "kind": "builtin",
+  "entry": "elyra.tools.builtin.package_vcs:install_skill_draft"
+}

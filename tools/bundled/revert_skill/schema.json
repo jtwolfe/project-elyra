@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Local skill package name to restore"
+    },
+    "version_id": {
+      "type": "string",
+      "description": "Archived version id under skills/local/<name>/versions/"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 8,
+      "description": "Why this revert is needed (min 8 characters)"
+    }
+  },
+  "required": ["name", "version_id", "reason"],
+  "additionalProperties": false
+}

@@ -6,6 +6,8 @@
 - ledger.py — create_goal, create_task, list_goals, get_goal, get_task, update_task, update_goal
 - skills_tools.py — load_skill
 - growth.py — install_tool_draft, verify_tool, promote_tool, install_skill
+- package_vcs.py — get_tool, revert_tool, install_skill_draft, promote_skill,
+  revert_skill, get_skill (package archive/recovery for tools + skills)
 - identity.py — get_identity, draft_identity, promote_identity
 - package_vcs.py — get/revert tool+skill package VCS
 - search.py — web_search (optional elyra[search] / ddgs)

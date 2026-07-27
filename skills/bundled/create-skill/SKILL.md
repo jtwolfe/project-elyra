@@ -28,7 +28,9 @@ After this playbook loads, your **next** completion must include a `tool_calls` 
 Pick the first that applies:
 
 1. Confirm no existing catalog skill covers this (orient / prior `load_skill` attempts)
-2. `install_skill` with a complete local package
+2. Draft or install:
+   - Preferred review path: `install_skill_draft` → optional `get_skill` (`which=draft`) → `promote_skill`
+   - One-shot path: `install_skill` (still archives prior local on overwrite)
 3. Immediately `load_skill` on the new name and verify body + catalog entry
 
 If the gap is executable rather than instructional, switch to `load_skill` name `create-tool` instead.
@@ -62,8 +64,22 @@ Reject skills that are:
    - **Quality / completion criteria**
    - **Out of scope** (important)
 
-5. Call `install_skill`.
+5. Install path (choose one):
+
+   - **Draft → promote (preferred when reviewing):**
+     1. `install_skill_draft` with name / description / body
+     2. Optional: `get_skill` with `which=draft` to inspect
+     3. `promote_skill` to make it catalog-loadable
+   - **One-shot:** `install_skill` (writes draft then promotes; archives any prior local)
+
 6. Immediately `load_skill` on the new name and verify that the body and catalog entry are correct and useful.
+
+### Updating an existing local skill
+
+Re-promote (or re-`install_skill`) archives the previous local package under
+`skills/local/<name>/versions/<version_id>/`. Recover with `get_skill`
+(`list_versions=true`) and `revert_skill` (reason required, min 8 chars).
+Bundled skill names cannot be overwritten.
 
 ## Format
 
@@ -81,9 +97,11 @@ description: One precise line that says what it does and when it should trigger.
 ## Hard rules
 
 - Skills are pure instructions. They never grant host power.
-- Write only under `skills/local/`. Never touch `skills/bundled/`.
+- Write only under `skills/drafts/` and `skills/local/`. Never touch `skills/bundled/`.
+- Drafts are not catalog-visible until promoted.
 - Prefer improving an existing skill over creating a new one.
 - If the missing capability is executable rather than instructional, use `create-tool` (or later Grok Build) instead.
+- Body size hard cap: 64 KiB UTF-8.
 - Do not create a skill just to feel productive. Silence is better than a low-value skill.
 
 ## Ledger and review
