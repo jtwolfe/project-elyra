@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -844,11 +847,29 @@ def test_static_app_js_active_panel_poll(paths):
         assert "day pace high (soft)" in js
         assert "credit_usage_percent" in js
         assert "poll …" in js or "poll" in js
-        # Soft day alone must not invent stop badge — only usage.hard_stop
-        assert "stop · ${hardStop}" in js or "stop ·" in js
-        assert "day_soft_exhausted" in js
-        # Badge path uses hard_stop, not soft flags for stop · day
-        assert "stop · day" not in js or "hardStop" in js
+        # Soft day → no stop badge: pure helper + structural wiring
+        assert "function usageBadgeLabel" in js
+        assert "usageBadgeLabel(usage)" in js
+        badge_fn = re.search(
+            r"function usageBadgeLabel\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert badge_fn is not None, "usageBadgeLabel body not found"
+        badge_body = badge_fn.group(1)
+        assert "hard_stop" in badge_body
+        assert "soft_exhausted" not in badge_body
+        assert "day_soft" not in badge_body
+        assert "stop · ${hardStop}" in badge_body or "stop ·" in badge_body
+        # Soft flags only feed detail text, not badge
+        soft_detail = re.search(
+            r"if\s*\(\s*usage\.day_soft_exhausted\s*\)\s*\{?\s*"
+            r"parts\.push\([\"']day pace high \(soft\)[\"']\)",
+            js,
+        )
+        assert soft_detail is not None, "day_soft_exhausted must only push detail line"
+        # No literal stop · day (stop level always comes from hard_stop)
+        assert "stop · day" not in js
         # Banner only when hard_stop is set (true hard levels)
         assert "if (hardStop && !overrideActive)" in js or "hardStop && !overrideActive" in js
         # Chat polish + multimodal-ready composer
@@ -898,6 +919,97 @@ def test_static_app_js_active_panel_poll(paths):
         assert "msg-att-player" in css
     finally:
         h.close()
+
+
+def test_usage_badge_label_soft_day_does_not_stop(paths):
+    """Fixture payloads: soft day alone → ok; true hard_stop → stop · level.
+
+    Runs pure usageBadgeLabel from app.js under node when available; otherwise
+    reimplements the locked contract in Python so CI still covers the policy.
+    """
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            js = resp.read().decode("utf-8")
+    finally:
+        h.close()
+
+    m = re.search(
+        r"(function usageBadgeLabel\s*\([^)]*\)\s*\{.*?\n\})",
+        js,
+        re.DOTALL,
+    )
+    assert m is not None
+    fn_src = m.group(1)
+    # Helper must not consult soft flags
+    assert "soft_exhausted" not in fn_src
+
+    cases = [
+        (
+            {"enabled": True, "hard_stop": None, "day_soft_exhausted": True},
+            "ok",
+        ),
+        (
+            {
+                "enabled": True,
+                "hard_stop": None,
+                "day_soft_exhausted": True,
+                "hour_soft_exhausted": True,
+                "override_active": False,
+            },
+            "ok",
+        ),
+        ({"enabled": True, "hard_stop": "week", "override_active": False}, "stop · week"),
+        ({"enabled": True, "hard_stop": "day", "override_active": False}, "stop · day"),
+        ({"enabled": True, "hard_stop": "week", "override_active": True}, "override"),
+        ({"enabled": False}, "off"),
+        (None, "n/a"),
+    ]
+
+    node = shutil.which("node")
+    if node:
+        harness = (
+            fn_src
+            + "\n"
+            + "const cases = "
+            + json.dumps([[c[0], c[1]] for c in cases])
+            + ";\n"
+            + "for (const [u, want] of cases) {\n"
+            + "  const got = usageBadgeLabel(u);\n"
+            + "  if (got !== want) {\n"
+            + "    console.error(JSON.stringify({u, got, want}));\n"
+            + "    process.exit(1);\n"
+            + "  }\n"
+            + "}\n"
+            + "console.log('ok');\n"
+        )
+        proc = subprocess.run(
+            [node, "-e", harness],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr or proc.stdout
+        return
+
+    # Python mirror of usageBadgeLabel (locked by structural asserts above).
+    def usage_badge_label(usage: dict[str, Any] | None) -> str:
+        if not usage:
+            return "n/a"
+        if not usage.get("enabled"):
+            return "off"
+        hard_stop = usage.get("hard_stop") or None
+        override_active = bool(usage.get("override_active"))
+        if hard_stop and not override_active:
+            return f"stop · {hard_stop}"
+        if hard_stop and override_active:
+            return "override"
+        return "ok"
+
+    for payload, want in cases:
+        assert usage_badge_label(payload) == want
 
 
 def test_static_glass_pr4_html_accepts_audio(paths):

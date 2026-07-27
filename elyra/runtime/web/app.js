@@ -915,12 +915,28 @@ function setUsageBar(barEl, frac, { usedMode = false, unavailable = false } = {}
     return;
   }
   const raw = Math.max(0, Math.min(1, Number(frac) || 0));
-  // usedMode: frac is used fraction (SuperGrok %); remaining mode for Elyra bars.
-  const fill = usedMode ? raw : raw;
+  // fill width = raw (remaining for Elyra bars; used fraction for SuperGrok).
+  // usedMode only flips warn/crit thresholds onto remaining = 1 - used.
+  const fill = raw;
   const remaining = usedMode ? 1 - raw : raw;
   barEl.style.width = `${Math.round(fill * 100)}%`;
   if (remaining <= 0.05) barEl.classList.add("usage-bar-crit");
   else if (remaining <= 0.2) barEl.classList.add("usage-bar-warn");
+}
+
+/**
+ * Pure usage card badge label from status usage block.
+ * Stop text only from hard_stop — soft day/hour flags never invent a stop badge.
+ */
+function usageBadgeLabel(usage) {
+  if (!usage) return "n/a";
+  if (!usage.enabled) return "off";
+  const hardStop = usage.hard_stop || null;
+  const overrideActive = Boolean(usage.override_active);
+  if (hardStop && !overrideActive) return `stop · ${hardStop}`;
+  if (hardStop && overrideActive) return "override";
+  // Soft day/hour exhaustion is detail-only (pace shown separately).
+  return "ok";
 }
 
 /**
@@ -1096,25 +1112,17 @@ function renderUsageCard(s) {
   // True hard stop only (account|week|day|hour). Soft day/hour alone never
   // sets hard_stop when day/hour hard flags are off — do not invent stop badge.
   const hardStop = (usage && usage.hard_stop) || null;
+  const badgeLabel = usageBadgeLabel(usage);
 
   if (usageBadge) {
-    if (!usage) {
-      usageBadge.textContent = "n/a";
+    usageBadge.textContent = badgeLabel;
+    if (badgeLabel === "n/a" || badgeLabel === "off") {
       usageBadge.classList.remove("badge-open", "badge-bad");
-    } else if (!enabled) {
-      usageBadge.textContent = "off";
-      usageBadge.classList.remove("badge-open", "badge-bad");
-    } else if (hardStop && !overrideActive) {
-      usageBadge.textContent = `stop · ${hardStop}`;
+    } else if (badgeLabel.startsWith("stop ·")) {
       usageBadge.classList.remove("badge-open");
       usageBadge.classList.add("badge-bad");
-    } else if (hardStop && overrideActive) {
-      usageBadge.textContent = "override";
-      usageBadge.classList.add("badge-open");
-      usageBadge.classList.remove("badge-bad");
     } else {
-      // Soft day/hour exhaustion does not set stop badge (pace shown separately).
-      usageBadge.textContent = "ok";
+      // "ok" or "override" — not a blocking stop
       usageBadge.classList.add("badge-open");
       usageBadge.classList.remove("badge-bad");
     }
