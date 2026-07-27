@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 import tomllib
 
+from elyra.llm.constants import MODEL_CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 
 _CLOSE_GATES = frozenset({"soft", "hard"})
@@ -29,10 +30,13 @@ class LoopSettings:
     moment_wall_clock_minutes: int = 45
     continue_max_injects: int = 3
     max_tool_hops: int = 200
-    sliding_input_tokens: int = 24000
-    in_turn_max_tokens: int = 24000
+    sliding_input_tokens: int = 50000
+    in_turn_max_tokens: int = 50000
     tool_result_max_chars: int = 8000
     generation_max_tokens: int = 8192
+    # Full model context window (Grok 4.5 class) for glass rail + memory planning.
+    # Sliding meals still cap at sliding_input_tokens; this is the visual denominator.
+    model_context_window_tokens: int = MODEL_CONTEXT_WINDOW_TOKENS
     # Orient slice budgets (skill catalog + goals/tasks in outer meal).
     orient_skill_catalog_max_tokens: int = 400
     orient_goals_max_tokens: int = 600

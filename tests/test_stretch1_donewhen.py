@@ -235,18 +235,25 @@ def test_bundled_skills_first_action_framing() -> None:
 def test_context_ceiling_vs_sliding_defaults() -> None:
     """Inference law: sliding meal well under KV ceiling."""
     assert CONTEXT_WINDOW_TOKENS == 86_000
-    assert DEFAULT_SLIDING_INPUT_TOKENS == 24_000
+    assert DEFAULT_SLIDING_INPUT_TOKENS == 50_000
     assert DEFAULT_SLIDING_INPUT_TOKENS < CONTEXT_WINDOW_TOKENS
     s = default_settings()
-    assert s.loop.sliding_input_tokens == 24_000
-    assert s.loop.in_turn_max_tokens == 24_000
+    assert s.loop.sliding_input_tokens == 50_000
+    assert s.loop.in_turn_max_tokens == 50_000
     assert s.loop.sliding_input_tokens < CONTEXT_WINDOW_TOKENS
 
 
 def test_inference_docs_document_ceiling_vs_sliding() -> None:
     text = (REPO / "docs" / "inference.md").read_text(encoding="utf-8")
     assert "86000" in text or "86_000" in text or "86 000" in text or "-c" in text
-    assert "24000" in text or "24k" in text or "24_000" in text
+    assert (
+        "50000" in text
+        or "50k" in text
+        or "50_000" in text
+        or "24000" in text
+        or "24k" in text
+        or "24_000" in text
+    )
     assert "ceiling" in text.lower()
     assert "sliding" in text.lower()
 

@@ -189,7 +189,7 @@ The `create-tool` skill body is a strict checklist matching the above (plus **Pa
 |-------|--------|
 | Sandbox | `read_file`, `list_dir`, `grep`, `search_replace`, `run` |
 | Ledger | `create_goal`, `create_task`, `list_goals`, `get_goal`, `get_task`, `update_task`, `update_goal` |
-| Social | `speak`, wait/questions, `schedule_wake` |
+| Social | `speak`, wait/questions, `schedule_wake` (see [known-bugs.md](known-bugs.md) BUG-wake-01: do not double-chain near-zero wakes + `task_ready` for work already finished in-moment) |
 | Skills | `load_skill` |
 | Growth | `install_tool_draft`, `verify_tool`, `promote_tool`, `install_skill` |
 | Package VCS | `get_tool`, `revert_tool`, `get_skill`, `install_skill_draft`, `promote_skill`, `revert_skill` |

@@ -30,6 +30,7 @@ from typing import Any, Callable, Mapping, Sequence
 from elyra.llm.client import ChatClient, ChatCompletionResult, ToolCall as LlmToolCall
 from elyra.llm.reasoning_hygiene import is_channel_flood, sanitize_completion
 from elyra.llm.usage import UsageHardStopError
+from elyra.loop import context_meter
 from elyra.loop.context import (
     assemble_outer_meal,
     estimate_content_tokens,
@@ -872,6 +873,16 @@ def _run_loop_body(
         _ensure_lesson_pin_in_chain(state)
 
         messages = list(state.outer_prefix) + list(state.chain_messages)
+        # Glass context rail: last pre-call meal size vs model window (heuristic).
+        context_meter.record_meal(
+            _messages_tokens(messages),
+            meal_budget_tokens=budget,
+            model_window_tokens=getattr(
+                loop, "model_context_window_tokens", None
+            ),
+            hop=state.hop,
+            moment_id=moment_id,
+        )
         # Stage 5 L4: pin speak only on social first completion (hop==0 pre-call).
         # Optional K12 post-load required pin only when speak pin does not apply —
         # hop-0 social speak always wins. Flag defaults OFF.

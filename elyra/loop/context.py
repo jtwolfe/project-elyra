@@ -274,7 +274,7 @@ def assemble_outer_meal(
     2. Sliding recent glass history (user + assistant only; **no reasoning**)
     3. Orient near the end (``prompts/orient.md`` filled)
 
-    Budget: ``settings.loop.sliding_input_tokens`` (default 24000). Drops oldest
+    Budget: ``settings.loop.sliding_input_tokens`` (default 50000). Drops oldest
     history first. Never drops system or orient. Always keeps **at least one**
     triggering user row when ``wake_content`` / ``wake_message_id`` is set
     (prefer id; else last matching content). Older duplicate triggers may drop.

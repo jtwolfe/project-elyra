@@ -106,6 +106,16 @@ const railUsageWeekPct = $("#rail-usage-week-pct");
 const railUsageWeekBar = $("#rail-usage-week-bar");
 const railUsageSgPct = $("#rail-usage-sg-pct");
 const railUsageSgBar = $("#rail-usage-sg-bar");
+const railContextPct = $("#rail-context-pct");
+const railContextBar = $("#rail-context-bar");
+const railContextMealMark = $("#rail-context-meal-mark");
+const railContextMeta = $("#rail-context-meta");
+const contextWindowPct = $("#context-window-pct");
+const contextWindowBar = $("#context-window-bar");
+const contextMealMark = $("#context-meal-mark");
+const contextMealPct = $("#context-meal-pct");
+const contextMealBar = $("#context-meal-bar");
+const contextDetail = $("#context-detail");
 const usagePaceBadge = $("#usage-pace-badge");
 const usageBurst = $("#usage-burst");
 const usageDetail = $("#usage-detail");
@@ -929,6 +939,77 @@ function formatPctRemaining(frac) {
   return `${pct}%`;
 }
 
+/** Compact token counts for context rail (e.g. 12.3k / 500k). */
+function formatTokenCount(n) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Math.max(0, Math.round(Number(n)));
+  if (v >= 1_000_000) {
+    const m = v / 1_000_000;
+    return `${m >= 10 ? Math.round(m) : m.toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+  if (v >= 1000) {
+    const k = v / 1000;
+    return `${k.toFixed(1).replace(/\.0$/, "")}k`;
+  }
+  return String(v);
+}
+
+function setMealBudgetMark(markEl, mealBudget, modelWindow) {
+  if (!markEl) return;
+  const budget = Number(mealBudget);
+  const window = Number(modelWindow);
+  if (!window || window <= 0 || Number.isNaN(budget) || budget <= 0) {
+    markEl.style.display = "none";
+    return;
+  }
+  const pct = Math.max(0, Math.min(100, (budget / window) * 100));
+  markEl.style.display = "";
+  markEl.style.left = `${pct}%`;
+  markEl.title = `Product meal budget ${formatTokenCount(budget)} (${pct.toFixed(1)}% of model window)`;
+}
+
+function renderContextMeters(s) {
+  const ctx = (s && s.context) || null;
+  const used = ctx ? ctx.meal_used_tokens : null;
+  const mealBudget = ctx ? ctx.meal_budget_tokens : 50000;
+  const modelWindow = ctx ? ctx.model_window_tokens : 500000;
+  const windowFrac = ctx ? ctx.window_used_fraction : null;
+  const mealFrac = ctx ? ctx.meal_used_fraction : null;
+
+  const label =
+    used != null
+      ? `${formatTokenCount(used)} / ${formatTokenCount(modelWindow)}`
+      : `— / ${formatTokenCount(modelWindow)}`;
+
+  if (railContextPct) railContextPct.textContent = label;
+  if (contextWindowPct) contextWindowPct.textContent = label;
+  if (contextMealPct) {
+    contextMealPct.textContent =
+      used != null
+        ? `${formatTokenCount(used)} / ${formatTokenCount(mealBudget)}`
+        : `— / ${formatTokenCount(mealBudget)}`;
+  }
+
+  // Model bar: usedMode so small fills stay visible without "crit" at empty.
+  setUsageBar(railContextBar, windowFrac, { usedMode: true });
+  setUsageBar(contextWindowBar, windowFrac, { usedMode: true });
+  setUsageBar(contextMealBar, mealFrac, { usedMode: true });
+  setMealBudgetMark(railContextMealMark, mealBudget, modelWindow);
+  setMealBudgetMark(contextMealMark, mealBudget, modelWindow);
+
+  if (railContextMeta) {
+    railContextMeta.textContent = `meal ≤${formatTokenCount(mealBudget)} · model ${formatTokenCount(modelWindow)}`;
+  }
+  if (contextDetail) {
+    const hop = ctx && ctx.hop != null ? ` · hop ${ctx.hop}` : "";
+    contextDetail.textContent =
+      `Last meal ${formatTokenCount(used)} of meal budget ${formatTokenCount(mealBudget)}` +
+      ` (${formatTokenCount(modelWindow)} model window)${hop}. ` +
+      `Gold mark = meal budget on model bar. Heuristic tokens (len/4); for memory source-split planning.`;
+  }
+}
+
 function setUsageBar(barEl, frac, { usedMode = false, unavailable = false } = {}) {
   if (!barEl) return;
   barEl.classList.remove("usage-bar-warn", "usage-bar-crit", "usage-bar-na");
@@ -1640,6 +1721,7 @@ async function refreshStatus() {
   renderHardStopBanner(s);
   renderProviderCard(s);
   renderUsageCard(s);
+  renderContextMeters(s);
   maybeNoticeHardStopTransition(s);
 
   // When hard-stopped without override, surface queue pause on worker pill.

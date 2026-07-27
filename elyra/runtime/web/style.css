@@ -205,6 +205,34 @@ body {
   height: 4px;
 }
 
+.rail-context {
+  margin-top: 0.15rem;
+}
+
+.rail-context-meta {
+  font-size: 0.65rem;
+  line-height: 1.25;
+  margin-top: 0.1rem;
+}
+
+/* Model-window bar with meal-budget marker (fraction of model window). */
+.usage-bar-context {
+  position: relative;
+  overflow: visible;
+}
+
+.usage-bar-meal-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--gold, #c9a227);
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .rail-foot {
   display: flex;
   flex-direction: column;

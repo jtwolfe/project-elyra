@@ -26,6 +26,7 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
 | 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
 | 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
+| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs (e.g. stale timer/`task_ready` wake storms → moment bloat) |
 
 **Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `grok-improvement`** over stale phase README status lines.  
 **Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes — freeze bodies stay until a docs modernization pass rewrites them.  

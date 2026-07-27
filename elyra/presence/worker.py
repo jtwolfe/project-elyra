@@ -874,6 +874,30 @@ class PresenceWorker:
                 hop_count=live_hop,
                 last_tool=live_tool,
             )
+            loop = self.settings.loop
+            meal_budget = min(
+                int(loop.sliding_input_tokens),
+                int(loop.in_turn_max_tokens),
+            )
+            try:
+                from elyra.loop import context_meter
+
+                context_block = context_meter.status_block(
+                    meal_budget_tokens=meal_budget,
+                    model_window_tokens=int(loop.model_context_window_tokens),
+                )
+            except Exception:
+                context_block = {
+                    "meal_used_tokens": 0,
+                    "meal_budget_tokens": meal_budget,
+                    "model_window_tokens": int(
+                        getattr(loop, "model_context_window_tokens", 500_000)
+                    ),
+                    "meal_used_fraction": 0.0,
+                    "window_used_fraction": 0.0,
+                    "hop": None,
+                    "moment_id": None,
+                }
             return {
                 "phase": self._phase,
                 "active_moment_id": self._active_moment_id,
@@ -895,6 +919,7 @@ class PresenceWorker:
                     pending_moment_continues=pending_continues,
                 ),
                 "dev_speed": dev_speed_status_block(self._dev_speed),
+                "context": context_block,
             }
 
     # ------------------------------------------------------------------

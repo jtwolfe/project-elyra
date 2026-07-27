@@ -43,7 +43,7 @@ elyra start (supervisor)
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
 
-Inference: product path is **xAI Grok** (usage meter + SuperGrok pacing + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals slide at **~24k** input tokens (`CONTEXT_WINDOW_TOKENS = 86000` remains the budget ceiling constant). See [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
+Inference: product path is **xAI Grok** (usage meter + SuperGrok pacing + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals slide at **~50k** input tokens; glass **Context** rail shows last meal vs **~500k** model window (`MODEL_CONTEXT_WINDOW_TOKENS`; `CONTEXT_WINDOW_TOKENS = 86000` remains legacy meal-math ceiling). See [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
 Usage / SuperGrok operator notes + dogfood checklist: [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md).  
 [docs/inference.md](docs/inference.md) is a **historical freeze — do not follow for setup** (older local-server path removed).
 
@@ -159,7 +159,7 @@ Open **http://127.0.0.1:8787/**
 | `--provider xai\|local` | Product default `xai`; `local` fails closed (not implemented) |
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
 
-Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 24000`). CLI overrides win over toml.
+Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 50000`). CLI overrides win over toml.
 
 ## Testing
 

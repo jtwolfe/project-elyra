@@ -93,6 +93,20 @@
             </div>
           </div>
         </div>
+        <div class="rail-usage rail-context" role="group" aria-label="Context window">
+          <div class="rail-foot-label muted">Context</div>
+          <div class="rail-usage-meter" data-window="model">
+            <div class="usage-meter-head">
+              <span>Meal / model</span>
+              <span id="rail-context-pct" class="usage-pct">—</span>
+            </div>
+            <div class="usage-bar usage-bar-context" aria-hidden="true">
+              <div id="rail-context-meal-mark" class="usage-bar-meal-mark" title="Product meal budget"></div>
+              <div id="rail-context-bar" class="usage-bar-fill"></div>
+            </div>
+          </div>
+          <div id="rail-context-meta" class="rail-context-meta muted">meal ≤50k · model 500k</div>
+        </div>
         <div class="rail-foot" role="group" aria-label="System status">
           <div class="rail-foot-label muted">System</div>
           <div class="rail-pills">
@@ -483,6 +497,37 @@
               <p class="muted status-helper">
                 Model applies to next call. Effort applies to next Completions request (no credential rebuild).
                 API key save does not switch source until you select it.
+              </p>
+            </div>
+            <div class="card status-card" id="context-card">
+              <div class="card-head">
+                <strong>Context window</strong>
+                <span id="context-badge" class="badge">meal / model</span>
+              </div>
+              <div class="usage-meters" id="context-meters">
+                <div class="usage-meter usage-meter-primary" data-window="model">
+                  <div class="usage-meter-head">
+                    <span>Last meal vs model window</span>
+                    <span id="context-window-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar usage-bar-context" aria-hidden="true">
+                    <div id="context-meal-mark" class="usage-bar-meal-mark" title="Product meal budget"></div>
+                    <div id="context-window-bar" class="usage-bar-fill"></div>
+                  </div>
+                </div>
+                <div class="usage-meter usage-meter-soft" data-window="meal">
+                  <div class="usage-meter-head">
+                    <span>Meal fill (sliding budget)</span>
+                    <span id="context-meal-pct" class="usage-pct">—</span>
+                  </div>
+                  <div class="usage-bar" aria-hidden="true">
+                    <div id="context-meal-bar" class="usage-bar-fill"></div>
+                  </div>
+                </div>
+              </div>
+              <p id="context-detail" class="muted status-helper">
+                Product meals slide at ~50k; Grok model window ~500k. Gold mark on the model bar is the meal budget.
+                Heuristic tokens (not a provider tokenizer). For memory source-split planning.
               </p>
             </div>
             <div class="card status-card" id="usage-card">
