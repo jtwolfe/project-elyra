@@ -1451,9 +1451,11 @@ def _in_place_refresh(
     """Refresh ``dest`` from ``src`` without renaming the top-level package dir.
 
     Per-file: write to sibling ``*.elyra_tmp.<token>`` then ``os.replace``.
-    After copy, prune dest paths absent from the source payload (keep-set:
-    stage marker name only). Always prunes ``__pycache__`` / ``*.pyc`` /
-    leftover temps. ``sandbox_root`` is accepted for call-site parity with
+    After copy, prune dest paths absent from the source payload. Always
+    prunes stage markers (any depth), ``__pycache__`` / ``*.pyc`` / ``*.pyo``,
+    leftover ``*.elyra_tmp.*``, and other ignore names — no marker keep-set;
+    the complete marker is rewritten by the caller only after full success.
+    ``sandbox_root`` is accepted for call-site parity with
     ``_safe_copytree_into`` (escape checks live in callers that create dest).
     """
     del sandbox_root  # dest already under tools/; same contract as copytree
