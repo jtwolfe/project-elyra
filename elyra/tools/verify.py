@@ -23,7 +23,6 @@ Fail-closed mitigations:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -46,13 +45,13 @@ from elyra.tools.guest_exec import (
     EXECUTOR_BACKEND_HOST_STUB,
     EXECUTOR_BACKEND_MICROSANDBOX,
 )
+from elyra.tools.package_hash import VERIFY_RECORD_NAME, content_hash
 from elyra.tools.policy import DRAFT_ALLOWED_RUNNER_KINDS, is_valid_tool_name
 from elyra.tools.registry import drafts_dir
 from elyra.tools.schema import load_schema_json
 
 _LOG = logging.getLogger(__name__)
 
-VERIFY_RECORD_NAME = ".verify.json"
 REQUIRED_PACKAGE_FILES = ("TOOL.md", "schema.json", "runner.json")
 DEFAULT_VERIFY_TIMEOUT_SECONDS = 120
 # Retained log tail written into .verify.json / returned to the model.
@@ -79,33 +78,6 @@ def verify_stage_dir(paths: ElyraPaths, name: str) -> Path:
 def guest_verify_stage_path(name: str) -> str:
     """Guest absolute path for the staged verify package."""
     return f"{GUEST_WORKSPACE_ROOT}/tools/.verify/{name}"
-
-
-def content_hash(package_dir: Path) -> str:
-    """SHA-256 over sorted ``(relpath, bytes)`` excluding ``.verify.json``.
-
-    Paths use POSIX separators relative to ``package_dir``. Directories are
-    not hashed; only regular files participate.
-    """
-    package_dir = Path(package_dir)
-    entries: list[tuple[str, Path]] = []
-    if not package_dir.is_dir():
-        return hashlib.sha256().hexdigest()
-    for path in package_dir.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(package_dir).as_posix()
-        # Exclude verify sidecar anywhere named .verify.json
-        if path.name == VERIFY_RECORD_NAME or rel == VERIFY_RECORD_NAME:
-            continue
-        entries.append((rel, path))
-    digest = hashlib.sha256()
-    for rel, path in sorted(entries, key=lambda item: item[0]):
-        digest.update(rel.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
 
 
 def load_verify_record(package_dir: Path) -> dict[str, Any] | None:

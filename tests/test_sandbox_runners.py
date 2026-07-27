@@ -20,10 +20,13 @@ from elyra.tools.guest_exec import (
     EXECUTOR_BACKEND_HOST_STUB,
     EXECUTOR_BACKEND_MICROSANDBOX,
     ENV_TOOL_ARGS,
+    STAGE_MARKER_NAME,
+    load_stage_marker,
     map_python_exec_result,
     resolve_module_file,
     stage_package_for_guest,
 )
+from elyra.tools.package_hash import content_hash
 from elyra.tools.registry import ToolRegistry
 from elyra.tools.runner import RunnerSpec, dispatch, load_runner_json, validate_runner_fields
 from elyra.tools.types import ToolContext, ToolResult
@@ -524,6 +527,152 @@ def test_stage_package_atomic_and_excludes_pycache(paths, tmp_path: Path) -> Non
     stage_root = ensure_host_tree(PRIMARY_NAME, paths) / "tools" / ".stage"
     leftovers = [p for p in stage_root.iterdir() if p.name.startswith("staged_tool.")]
     assert leftovers == []
+    # Marker written after success; content_hash matches SOURCE
+    marker = load_stage_marker(dest)
+    assert marker is not None
+    assert marker["content_hash"] == content_hash(pkg)
+    assert marker.get("incomplete") is False
+    assert marker.get("schema_version") == 1
+
+
+def test_stage_skip_same_bytes_second_call(paths, tmp_path: Path) -> None:
+    """Two stages same bytes → second skips (probe mtime stable; no leftovers)."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "skip_tool")
+    dest1 = stage_package_for_guest(paths, pkg)
+    probe = dest1 / "impl" / "main.py"
+    assert probe.is_file()
+    mtime1 = probe.stat().st_mtime_ns
+    marker1 = load_stage_marker(dest1)
+    assert marker1 is not None
+    staged_at1 = marker1["staged_at"]
+
+    dest2 = stage_package_for_guest(paths, pkg)
+    assert dest2 == dest1
+    mtime2 = probe.stat().st_mtime_ns
+    assert mtime2 == mtime1
+    marker2 = load_stage_marker(dest2)
+    assert marker2 is not None
+    assert marker2["staged_at"] == staged_at1
+    assert marker2["content_hash"] == content_hash(pkg)
+    stage_root = ensure_host_tree(PRIMARY_NAME, paths) / "tools" / ".stage"
+    leftovers = [p for p in stage_root.iterdir() if p.name.startswith("skip_tool.")]
+    assert leftovers == []
+
+
+def test_stage_restage_on_byte_change(paths, tmp_path: Path) -> None:
+    """Byte change of source → re-stage and marker hash updates."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "change_tool")
+    dest1 = stage_package_for_guest(paths, pkg)
+    h1 = content_hash(pkg)
+    marker1 = load_stage_marker(dest1)
+    assert marker1 is not None
+    assert marker1["content_hash"] == h1
+    staged_at1 = marker1["staged_at"]
+
+    # Mutate source payload bytes
+    main = pkg / "impl" / "main.py"
+    main.write_text(
+        main.read_text(encoding="utf-8") + "\n# touched\n",
+        encoding="utf-8",
+    )
+    h2 = content_hash(pkg)
+    assert h2 != h1
+
+    dest2 = stage_package_for_guest(paths, pkg)
+    assert dest2 == dest1 or dest2.resolve() == dest1.resolve()
+    marker2 = load_stage_marker(dest2)
+    assert marker2 is not None
+    assert marker2["content_hash"] == h2
+    assert marker2["staged_at"] != staged_at1 or marker2["content_hash"] != h1
+    # Dest has the new content
+    assert "# touched" in (dest2 / "impl" / "main.py").read_text(encoding="utf-8")
+
+
+def test_stage_restage_on_corrupt_or_missing_marker(paths, tmp_path: Path) -> None:
+    """Corrupt / missing / incomplete marker → re-stage."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "marker_tool")
+    dest = stage_package_for_guest(paths, pkg)
+    probe = dest / "impl" / "main.py"
+    h = content_hash(pkg)
+
+    # Missing marker
+    (dest / STAGE_MARKER_NAME).unlink()
+    assert load_stage_marker(dest) is None
+    dest2 = stage_package_for_guest(paths, pkg)
+    marker = load_stage_marker(dest2)
+    assert marker is not None
+    assert marker["content_hash"] == h
+
+    # Corrupt marker
+    (dest2 / STAGE_MARKER_NAME).write_text("not-json{{{", encoding="utf-8")
+    assert load_stage_marker(dest2) is None
+    dest3 = stage_package_for_guest(paths, pkg)
+    marker3 = load_stage_marker(dest3)
+    assert marker3 is not None
+    assert marker3["content_hash"] == h
+
+    # Incomplete marker
+    (dest3 / STAGE_MARKER_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "incomplete": True,
+                "content_hash": h,
+                "staged_at": "2020-01-01T00:00:00Z",
+                "package_name": "marker_tool",
+            }
+        ),
+        encoding="utf-8",
+    )
+    dest4 = stage_package_for_guest(paths, pkg)
+    marker4 = load_stage_marker(dest4)
+    assert marker4 is not None
+    assert marker4.get("incomplete") is False
+    assert marker4["content_hash"] == h
+    assert probe.is_file()
+
+
+def test_stage_force_restages_when_hash_matches(paths, tmp_path: Path) -> None:
+    """force=True always restages even when content_hash matches."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "force_tool")
+    dest1 = stage_package_for_guest(paths, pkg)
+    marker1 = load_stage_marker(dest1)
+    assert marker1 is not None
+    h = content_hash(pkg)
+    assert marker1["content_hash"] == h
+    # PR1 rename-swap: force creates a new top-level dest inode.
+    ino1 = dest1.stat().st_ino
+    probe_ino = (dest1 / "impl" / "main.py").stat().st_ino
+
+    dest2 = stage_package_for_guest(paths, pkg, force=True)
+    marker2 = load_stage_marker(dest2)
+    assert marker2 is not None
+    assert marker2["content_hash"] == h
+    assert dest2.stat().st_ino != ino1
+    assert (dest2 / "impl" / "main.py").stat().st_ino != probe_ino
+
+
+def test_stage_pycache_excluded_from_dest(paths, tmp_path: Path) -> None:
+    """__pycache__ excluded from staged dest (and marker is present)."""
+    pkg = _write_sandbox_python_pkg(tmp_path, "pycache_tool")
+    cache = pkg / "__pycache__"
+    cache.mkdir()
+    (cache / "mod.cpython-312.pyc").write_bytes(b"\x00\x01")
+    (pkg / "impl" / "__pycache__").mkdir(parents=True, exist_ok=True)
+    (pkg / "impl" / "__pycache__" / "main.pyc").write_bytes(b"\x00")
+
+    dest = stage_package_for_guest(paths, pkg)
+    assert not (dest / "__pycache__").exists()
+    assert not (dest / "impl" / "__pycache__").exists()
+    assert (dest / STAGE_MARKER_NAME).is_file()
+    # Marker itself is not re-copied from a polluted source
+    polluted = pkg / STAGE_MARKER_NAME
+    polluted.write_text('{"schema_version":1,"incomplete":true,"content_hash":"x"}', encoding="utf-8")
+    dest2 = stage_package_for_guest(paths, pkg, force=True)
+    marker = load_stage_marker(dest2)
+    assert marker is not None
+    assert marker.get("incomplete") is False
+    assert marker["content_hash"] == content_hash(pkg)
 
 
 # ---------------------------------------------------------------------------

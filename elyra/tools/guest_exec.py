@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
@@ -43,6 +44,7 @@ from elyra.sandbox.paths import (
 )
 from elyra.sandbox.protocol import ExecResult
 from elyra.sandbox.registry import get_sandbox_lifecycle
+from elyra.tools.package_hash import content_hash
 from elyra.tools.types import ToolContext, ToolResult
 
 
@@ -67,9 +69,14 @@ _STREAM_TAIL_CHARS = 8_000
 _MINIMAL_PATH = "/usr/bin:/bin:/usr/local/bin"
 
 # Names/suffixes excluded from staged package trees.
-_STAGE_IGNORE_NAMES = frozenset({"__pycache__", ".stage", ".verify"})
+# Runtime stage marker is never copied from source; written after successful stage.
+STAGE_MARKER_NAME = ".elyra_stage.json"
+_STAGE_IGNORE_NAMES = frozenset(
+    {"__pycache__", ".stage", ".verify", STAGE_MARKER_NAME}
+)
 _STAGE_IGNORE_SUFFIXES = frozenset({".pyc", ".pyo"})
 _VERIFY_RECORD_NAME = ".verify.json"
+_STAGE_MARKER_SCHEMA_VERSION = 1
 
 EXECUTOR_BACKEND_MICROSANDBOX = "microsandbox"
 EXECUTOR_BACKEND_HOST_STUB = "host_stub"
@@ -186,8 +193,154 @@ def resolve_module_file(package_dir: Path, module: str) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# Atomic stage into guest-visible tools/
+# Atomic stage into guest-visible tools/ (content-hash skip gate)
 # ---------------------------------------------------------------------------
+
+
+def load_stage_marker(dest: Path) -> dict[str, Any] | None:
+    """Load ``.elyra_stage.json`` if present and a valid JSON object; else None.
+
+    Corrupt / unreadable markers return None (never skip — fail closed to restage).
+    """
+    path = Path(dest) / STAGE_MARKER_NAME
+    if not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        _LOG.warning("unreadable stage marker %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def write_complete_stage_marker(
+    dest: Path,
+    *,
+    content_hash_value: str,
+    package_name: str,
+) -> None:
+    """Write complete stage marker only after a successful stage/refresh."""
+    payload = {
+        "schema_version": _STAGE_MARKER_SCHEMA_VERSION,
+        "incomplete": False,
+        "content_hash": content_hash_value,
+        "staged_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "package_name": package_name,
+    }
+    marker_path = Path(dest) / STAGE_MARKER_NAME
+    marker_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _unlink_stage_marker(dest: Path) -> None:
+    """Invalidate any complete claim before mutate (missing marker ⇒ never skip)."""
+    marker = Path(dest) / STAGE_MARKER_NAME
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError as exc:
+        _LOG.debug("stage marker unlink failed %s: %s", marker, exc)
+
+
+def _has_payload_files(dest: Path) -> bool:
+    """True if dest has at least one regular file that is not the stage marker."""
+    dest = Path(dest)
+    if not dest.is_dir():
+        return False
+    for path in dest.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        if path.name == STAGE_MARKER_NAME:
+            continue
+        return True
+    return False
+
+
+def host_stage_looks_complete(dest: Path, package_dir: Path) -> bool:
+    """True when staged dest satisfies source runner expectations (KD-G1).
+
+    Reads **source** ``runner.json`` (not dest's possibly stale copy). Incomplete
+    dests must never be skippable.
+    """
+    dest = Path(dest)
+    package_dir = Path(package_dir)
+    if not dest.is_dir() or dest.is_symlink():
+        return False
+
+    runner_path = package_dir / "runner.json"
+    if not runner_path.is_file():
+        return False
+    try:
+        with runner_path.open(encoding="utf-8") as handle:
+            runner = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(runner, dict):
+        return False
+
+    kind = str(runner.get("kind") or "").strip()
+    if kind == "sandbox_python":
+        module = runner.get("module")
+        if not isinstance(module, str) or not module.strip():
+            return False
+        if not is_safe_module_rel(module.strip()):
+            return False
+        return resolve_module_file(dest, module.strip()) is not None
+
+    if kind == "sandbox_shell":
+        argv = runner.get("argv")
+        if not isinstance(argv, list) or not argv:
+            # Absolute-cmd style still needs a non-empty payload tree.
+            return _has_payload_files(dest)
+        argv0 = str(argv[0]).strip()
+        if not argv0:
+            return False
+        is_absolute = argv0.startswith("/") or (
+            len(argv0) >= 2 and argv0[1] == ":"
+        )
+        has_dotdot = ".." in Path(argv0).parts
+        rel = argv0.replace("\\", "/")
+        # Package-relative when no abs / .. and looks like a path (sep or
+        # extension) rather than a bare command name like ``python3``.
+        looks_package_relative = (
+            not is_absolute
+            and not has_dotdot
+            and ("/" in rel or Path(rel).suffix != "")
+        )
+        if looks_package_relative:
+            candidate = (dest / rel).resolve()
+            try:
+                candidate.relative_to(dest.resolve())
+            except ValueError:
+                return False
+            return candidate.is_file()
+        return _has_payload_files(dest)
+
+    # Unknown / missing kind: dest dir with ≥1 regular payload file.
+    if not kind:
+        return False
+    return _has_payload_files(dest)
+
+
+def _stage_marker_allows_skip(
+    marker: dict[str, Any] | None,
+    *,
+    src_hash: str,
+) -> bool:
+    """True when marker claims complete for the given source content hash."""
+    if marker is None:
+        return False
+    if marker.get("schema_version") != _STAGE_MARKER_SCHEMA_VERSION:
+        return False
+    if marker.get("incomplete") is True:
+        return False
+    if marker.get("content_hash") != src_hash:
+        return False
+    return True
 
 
 def stage_package_for_guest(
@@ -195,11 +348,18 @@ def stage_package_for_guest(
     package_dir: Path,
     *,
     strip_verify_record: bool = False,
+    force: bool = False,
 ) -> Path:
     """Copy package into ``sandboxes/sandbox0/tools/<name>/`` (atomic-ish).
 
-    Writes under ``tools/.stage/<name>.<pid>.<token>/`` then renames into place.
-    Excludes ``__pycache__`` / ``.pyc``. Optionally strips ``.verify.json``.
+    Content-hash stage gate (KD-G1): when dest already has a complete marker
+    whose hash matches the **source** package and the dest looks complete,
+    skip re-stage (unless ``force=True``).
+
+    Writes under ``tools/.stage/<name>.<pid>.<token>/`` then renames into place
+    (PR1 still rename-swaps on update; PR2 moves to in-place refresh).
+    Excludes ``__pycache__`` / ``.pyc`` / stage marker. Optionally strips
+    ``.verify.json``. Writes ``.elyra_stage.json`` only after full success.
     Returns the host destination directory.
     """
     package_dir = Path(package_dir)
@@ -211,10 +371,29 @@ def stage_package_for_guest(
 
     host_root = ensure_host_tree(PRIMARY_NAME, paths)
     tools_dir = _ensure_real_subdir(host_root, "tools")
+    dest = tools_dir / name
+
+    # Always hash SOURCE (never dest) for the gate and marker.
+    src_hash = content_hash(package_dir)
+
+    if (
+        not force
+        and dest.is_dir()
+        and not dest.is_symlink()
+        and _stage_marker_allows_skip(load_stage_marker(dest), src_hash=src_hash)
+        and host_stage_looks_complete(dest, package_dir)
+    ):
+        return dest.resolve()
+
+    # Mutate path: invalidate complete claim before restage when dest exists.
+    if dest.exists() or dest.is_symlink():
+        if dest.is_dir() and not dest.is_symlink():
+            _unlink_stage_marker(dest)
+        # else: symlink/file dest will be replaced by rename-swap below
+
     stage_root = _ensure_real_subdir(host_root, "tools", ".stage")
     token = f"{os.getpid()}.{uuid.uuid4().hex[:8]}"
     work = stage_root / f"{name}.{token}"
-    dest = tools_dir / name
 
     if work.exists() or work.is_symlink():
         _safe_rmtree(work)
@@ -245,6 +424,12 @@ def stage_package_for_guest(
             raise
         if backup is not None:
             _safe_rmtree(backup)
+        # Complete marker only after full success (never on partial tree).
+        write_complete_stage_marker(
+            dest,
+            content_hash_value=src_hash,
+            package_name=name,
+        )
     finally:
         if work.exists() or work.is_symlink():
             _safe_rmtree(work)
@@ -1241,6 +1426,7 @@ __all__ = [
     "EXECUTOR_BACKEND_HOST_STUB",
     "EXECUTOR_BACKEND_MICROSANDBOX",
     "MAX_TOOL_TIMEOUT_SECONDS",
+    "STAGE_MARKER_NAME",
     "clamp_tool_timeout",
     "GuestIsolationError",
     "GuestTimeoutError",
@@ -1249,12 +1435,15 @@ __all__ = [
     "guest_module_path",
     "guest_run_argv",
     "guest_tools_package_path",
+    "host_stage_looks_complete",
     "host_stub_dispatch",
     "is_public_function_name",
     "is_safe_module_rel",
     "isolation_unavailable_result",
+    "load_stage_marker",
     "map_python_exec_result",
     "map_shell_exec_result",
     "resolve_module_file",
     "stage_package_for_guest",
+    "write_complete_stage_marker",
 ]
