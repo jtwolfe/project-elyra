@@ -102,11 +102,13 @@ def ensure_host_tree(
     return ensure_primary_sandbox_tree(paths, seed_source=seed_source)
 
 
-# Always refresh curated requirements so guest pip tracks repo pin changes
-# (e.g. dropping compile-heavy packages) without wiping operator lib extras.
+# Always refresh operator-reviewed allowlist so product trees track repo seed.
+# Do NOT always-refresh requirements-curated.txt: sandbox_pip_update mutates
+# the product curated file; re-seeding it on every ensure would wipe adds.
+# Curated still copies on first seed when missing (default copytree/child path).
 _ALWAYS_REFRESH_SEED_FILES = frozenset(
     {
-        "lib/requirements-curated.txt",
+        "lib/requirements-allowlist.txt",
     }
 )
 

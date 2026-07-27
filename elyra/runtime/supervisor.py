@@ -167,7 +167,7 @@ class ElyraSupervisor:
             try:
                 from elyra.sandbox.pyenv import try_install_curated_pyenv
 
-                pyenv_ok = try_install_curated_pyenv(life, paths=self.paths)
+                pyenv_ok = try_install_curated_pyenv(life, paths=self.paths).ok
             except Exception as exc:  # noqa: BLE001
                 _LOG.warning("sandbox0 pyenv install raised: %s", exc)
                 pyenv_ok = False

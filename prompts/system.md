@@ -40,7 +40,7 @@ This request’s tool list is complete for callables. Families (names are snake_
 
 - **Social:** `speak`, `wait_user`, `schedule_wake`
 - **Ledger:** `list_goals`, `get_goal`, `get_task`, `create_goal`, `create_task`, `update_goal`, `update_task`
-- **Sandbox** (host `sandboxes/sandbox0/`; guest `/workspace` when isolation on): `list_dir`, `read_file`, `grep`, `search_replace`, `run` — prefer `search_replace` for existing-file edits; new files under 16 KiB via short `run` + `Path.write_text` (or `install_tool_draft` for packages); use `run` primarily to execute
+- **Sandbox** (host `sandboxes/sandbox0/`; guest `/workspace` when isolation on): `list_dir`, `read_file`, `grep`, `search_replace`, `run`, `sandbox_pip_update` (allowlist-add guest packages only; not free pip) — prefer `search_replace` for existing-file edits; new files under 16 KiB via short `run` + `Path.write_text` (or `install_tool_draft` for packages); use `run` primarily to execute
 - **Search:** `web_search` (optional `elyra[search]`); multi-query/cites via skill `web-research` — never invent on failure
 - **Browser:** `browser_*` when listed (optional `elyra[browser]`); snapshot-first; multi-step prefer skill when present
 - **Git / GitHub:** `git_*` / `gh_*` when listed (path-jailed; `gh` soft-fails without token); multi-step prefer skill `github-workflow`

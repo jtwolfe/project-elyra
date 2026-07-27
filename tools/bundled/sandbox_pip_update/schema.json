@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["add", "remove"],
+      "description": "add = merge allowlisted packages into curated requirements; remove = drop allowlisted optional packages (not REQUIRED_CURATED)"
+    },
+    "packages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "maxItems": 10,
+      "description": "Allowlisted distribution names or name+pin lines for add; names for remove"
+    },
+    "timeout_seconds": {
+      "type": "number",
+      "description": "Optional guest pip timeout (default 600; clamped 30–600)"
+    }
+  },
+  "required": ["action", "packages"],
+  "additionalProperties": false
+}

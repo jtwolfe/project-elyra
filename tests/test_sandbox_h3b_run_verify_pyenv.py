@@ -162,8 +162,10 @@ def test_try_install_curated_pyenv_fake_guest(
     sb.default_exec = ExecResult(exit_code=0, stdout_text="Successfully installed\n")
     root = ensure_host_tree(PRIMARY_NAME, paths)
     assert pyenv_ready(root) is False
-    ok = try_install_curated_pyenv(life, paths=paths)
-    assert ok is True
+    result = try_install_curated_pyenv(life, paths=paths)
+    assert result.ok is True
+    assert result.error_reason is None
+    assert result.requirements_hash is not None
     assert pyenv_ready(root) is True
     assert client.last_exec is not None
     assert client.last_exec["cmd"] == "python3"
@@ -186,7 +188,11 @@ def test_try_install_skips_when_pip_fails(
     assert sb is not None
     sb.default_exec = ExecResult(exit_code=1, stderr_text="no network\n")
     root = ensure_host_tree(PRIMARY_NAME, paths)
-    assert try_install_curated_pyenv(life, paths=paths) is False
+    result = try_install_curated_pyenv(life, paths=paths)
+    assert result.ok is False
+    assert result.error_reason == "pip_failed"
+    assert result.exit_code == 1
+    assert "no network" in (result.stderr_tail or "")
     assert pyenv_ready(root) is False
 
 
