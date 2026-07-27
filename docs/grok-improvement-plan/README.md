@@ -18,9 +18,12 @@ This folder holds the design documentation for migrating Project Elyra from loca
 |----------|---------|
 | [phase-0.md](phase-0.md) | Phase 0 concept + detailed implementation plan (provider, usage meter, defaults, Web UI status contract, success criteria) |
 | [phase-0-execution.md](phase-0-execution.md) | Phase 0 execution design + operator live smoke checklist |
+| [usage-tracking-supergrok-pacing.md](usage-tracking-supergrok-pacing.md) | **Operator notes:** two meters (SuperGrok pool vs Elyra ledger `S`), first-period adoption, burst remaining, override, one-supervisor constraint + **dogfood checklist** |
 | [harness-sandbox-fitness.md](harness-sandbox-fitness.md) | **H1–H6** post–Phase 0 harness / warm microsandbox fitness (design + PR plan + **operator create-tool live smoke checklist** §H6) |
 | [metacognition.md](metacognition.md) | MC geometry, **hybrid soft Decide / hard policies**, dual with Memory, Stage A→B→C, handover gates, super-future thin-interpreter arc |
 | [stage-b-mc.md](stage-b-mc.md) | **Stage B / MC-beta implementation plan** for Grok Build (goal, non-goals, file targets, tests, glass dogfood, what to leave alone) |
+
+Full design (implementation spec, not operator short-form): [`docs/design-usage-tracking-supergrok-pacing.md`](../design-usage-tracking-supergrok-pacing.md).
 
 Phase 3 reference essay (PDF in-repo): [`docs/memory-atoms.pdf`](../memory-atoms.pdf) — *What is wrong with my memory?* (atomized experience / hypergraph thesis). Optional markdown twin `docs/memory-atoms.md` may be added later. Not required to implement Stage B.
 
@@ -65,6 +68,7 @@ Stage B execution: [stage-b-mc.md](stage-b-mc.md).
 ## Status
 
 - **Phase 0**: **Implementation complete** on `grok-improvement` (provider path, credentials, usage meter + hard-stop override, supervisor/CLI defaults, status API, Web UI). Concept + success criteria in [phase-0.md](phase-0.md); execution design + **live smoke checklist** in [phase-0-execution.md](phase-0-execution.md). Prompt fitness applied. **Live smoke against xAI is operator-run** — operator reports roughly green; promote `grok-improvement` → `main` remains a separate step when fully signed off.
+- **Usage tracking + SuperGrok pacing**: evolves Phase 0 meter (week ledger + pace/burst + SuperGrok pool poll; hard-stop override kept). Operator short-form + **dogfood checklist**: [usage-tracking-supergrok-pacing.md](usage-tracking-supergrok-pacing.md). Full design: [design-usage-tracking-supergrok-pacing.md](../design-usage-tracking-supergrok-pacing.md).
 - **H1–H6 Harness / Sandbox Fitness**: **Implementation complete** on `grok-improvement`. Design + **operator create-tool live smoke checklist** in [harness-sandbox-fitness.md](harness-sandbox-fitness.md) §H6. Operator reports tool creation working. Continuous remains default **OFF**. Prefer H-series confidence before or alongside Stage B live dogfood.
 - **Metacognition / Stage B**: **Concept + hybrid ontology + Stage B implementation plan complete** in-repo ([metacognition.md](metacognition.md), [stage-b-mc.md](stage-b-mc.md)). **Code not started.** Next: Grok Build executes Stage B (ledger-aware bias, orient Decide cadence, answer-speak soft path). Nickname **MC-beta** = Stage B only. Stage C package remains optional and is **not** the default next implementation.
 - **Memory essay**: Operator may place *What is wrong with my memory?* at `docs/memory-atoms.md` as Phase 3 design reference; not a Stage B blocker.

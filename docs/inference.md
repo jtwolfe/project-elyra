@@ -1,5 +1,7 @@
 # Inference — llama.cpp (Vulkan) + Gemma 4
 
+> **Historical freeze — do not follow for product setup.** The shipped product path is **xAI Grok** with a week ledger + SuperGrok pool pacing. Operator notes + dogfood checklist: [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md). Full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md).
+
 Port from **project-elyra2**. Do not invent a new stack.
 
 ## Model files (leave in elyra2)

@@ -17,6 +17,7 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` vs sliding ~24k; **ship knobs** (temp 0.6, top_p/k, budget, hygiene, RC re-feed, hop-0 speak pin) |
 | 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
 | 9 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phases (Phase 0–3); **refresh status if it lags code** |
+| 9a | [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | **Operator notes:** SuperGrok pool vs Elyra ledger, burst, override, dogfood checklist (full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md)) |
 | 10 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep (shipped on gi) |
 | 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
 | 12 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged sampling / hygiene (**superseded** by remove-gemma design; freeze body) |

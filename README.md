@@ -43,7 +43,8 @@ elyra start (supervisor)
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
 
-Inference: product path is **xAI Grok** (usage meter + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals slide at **~24k** input tokens (`CONTEXT_WINDOW_TOKENS = 86000` remains the budget ceiling constant). See [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
+Inference: product path is **xAI Grok** (usage meter + SuperGrok pacing + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals slide at **~24k** input tokens (`CONTEXT_WINDOW_TOKENS = 86000` remains the budget ceiling constant). See [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
+Usage / SuperGrok operator notes + dogfood checklist: [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md).  
 [docs/inference.md](docs/inference.md) is a **historical freeze — do not follow for setup** (older local-server path removed).
 
 **Status JSON (API/glass):** inference posture fields are `chat_ready` / `chat_error` / `chat_busy` / `chat_operation` (replacing former `llama_*` keys). Clean break — no dual-write.
@@ -121,6 +122,7 @@ Out of scope (Stretch 2+ / later phases): hypergraph memory, Lance graph, multi-
 | [docs/live-eval.md](docs/live-eval.md) | **Historical freeze** — live qualitative protocol |
 | [docs/design-remove-gemma-local-stub.md](docs/design-remove-gemma-local-stub.md) | Remove local-server path; stub `provider=local` |
 | [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration phases (refresh if status lags code) |
+| [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md) | Usage + SuperGrok pacing — operator notes + dogfood checklist |
 | [docs/README.md](docs/README.md) | Full index |
 
 ## Branch tip
