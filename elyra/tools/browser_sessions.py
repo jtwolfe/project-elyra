@@ -293,12 +293,43 @@ def _default_launch() -> tuple[Any, Any, Any, Any]:
         ) from exc
 
 
+def _abort_playwright_stack(
+    pw: Any,
+    browser: Any,
+    context: Any,
+    page: Any = None,
+) -> None:
+    """Best-effort close context → browser → playwright.stop (any thread).
+
+    ``page`` is accepted for call-site symmetry with launch tuples but is not
+    closed separately (context.close covers it).
+    """
+    del page  # owned by context
+    for obj, method in (
+        (context, "close"),
+        (browser, "close"),
+        (pw, "stop"),
+    ):
+        if obj is None:
+            continue
+        try:
+            fn = getattr(obj, method, None)
+            if callable(fn):
+                fn()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class BrowserThread:
     """Dedicated worker thread for all Sync Playwright session ops + teardown.
 
     Playwright Sync is not cross-thread safe and refuses a running asyncio loop
     on the calling thread. Callers (PresenceWorker, tool handlers) hop here via
     ``submit``; re-entrant ``submit`` from this thread runs inline.
+
+    On wait timeout the Future is **not** discarded: ``on_timeout_done`` (if
+    given) runs when the worker later finishes, so callers can abort late
+    launch success and keep slot accounting honest.
     """
 
     def __init__(self, *, name: str = "elyra-browser") -> None:
@@ -344,9 +375,23 @@ class BrowserThread:
         self,
         fn: Callable[[], T],
         *,
-        timeout: float | None = BROWSER_THREAD_OP_TIMEOUT_S,
+        timeout: float | None = None,
+        on_timeout_done: Callable[[concurrent.futures.Future[Any]], None]
+        | None = None,
     ) -> T:
-        """Run ``fn`` on the browser thread; block until done or timeout."""
+        """Run ``fn`` on the browser thread; block until done or timeout.
+
+        ``timeout`` defaults to ``BROWSER_THREAD_OP_TIMEOUT_S`` (looked up at
+        call time so tests can monkeypatch the module constant).
+
+        If the wait times out, the worker may still complete ``fn``. When
+        ``on_timeout_done`` is set it is invoked from the Future's done
+        callback (typically on the browser thread via ``set_result`` /
+        ``set_exception``). Without a callback, late success is logged as a
+        discarded result so leaks are visible.
+        """
+        if timeout is None:
+            timeout = BROWSER_THREAD_OP_TIMEOUT_S
         if self._closed:
             raise RuntimeError("BrowserThread is shut down")
         # Inline when already on the worker — avoids self-deadlock.
@@ -357,6 +402,41 @@ class BrowserThread:
         try:
             return fut.result(timeout=timeout)
         except concurrent.futures.TimeoutError as exc:
+            _LOG.warning(
+                "BrowserThread op timed out after %ss; work still running "
+                "on worker (late completion will be handled or logged)",
+                timeout,
+            )
+
+            def _late(f: concurrent.futures.Future[Any]) -> None:
+                if on_timeout_done is not None:
+                    try:
+                        on_timeout_done(f)
+                    except Exception as cb_exc:  # noqa: BLE001
+                        _LOG.warning(
+                            "BrowserThread on_timeout_done failed: %s", cb_exc
+                        )
+                    return
+                try:
+                    if f.cancelled():
+                        return
+                    err = f.exception()
+                    if err is not None:
+                        _LOG.warning(
+                            "BrowserThread timed-out op completed with error: %s",
+                            err,
+                        )
+                    else:
+                        _LOG.warning(
+                            "BrowserThread timed-out op completed successfully "
+                            "with no late-result cleanup (result discarded)"
+                        )
+                except Exception as probe_exc:  # noqa: BLE001
+                    _LOG.debug(
+                        "BrowserThread late future probe failed: %s", probe_exc
+                    )
+
+            fut.add_done_callback(_late)
             raise TimeoutError(
                 f"BrowserThread op timed out after {timeout}s"
             ) from exc
@@ -687,7 +767,8 @@ class BrowserSessionManager:
         ChromiumUnavailableError
             Chromium binary missing.
         BrowserLaunchFailedError
-            Sync start / env failure after import (not an install-hint path).
+            Sync start / env failure after import (not an install-hint path),
+            or launch hop timed out (late success is aborted asynchronously).
         SessionLimitError
             already at ``MAX_SESSIONS``.
         """
@@ -700,10 +781,63 @@ class BrowserSessionManager:
                 )
             self._pending_opens += 1
         launched: tuple[Any, Any, Any, Any] | None = None
+        # If the launch hop times out, pending stays reserved until the late
+        # done-callback aborts (on success) and releases the slot.
+        pending_held_for_late = False
         try:
             _log_caller_loop_diagnostics(phase="pre_launch")
+
+            def _on_timeout_launch_done(
+                fut: concurrent.futures.Future[Any],
+            ) -> None:
+                """Abort late-success launch; always release reserved slot."""
+                try:
+                    if fut.cancelled():
+                        return
+                    err = fut.exception()
+                    if err is not None:
+                        _LOG.warning(
+                            "browser open timed out; late launch failure: %s",
+                            err,
+                        )
+                        return
+                    resources = fut.result()
+                    if (
+                        isinstance(resources, tuple)
+                        and len(resources) >= 3
+                    ):
+                        _LOG.warning(
+                            "browser open timed out; aborting late-success "
+                            "launch to avoid Chromium leak"
+                        )
+                        # Done-callback runs on the thread that set the result
+                        # (BrowserThread) — safe to call Sync teardown inline.
+                        pw, browser, context = resources[0], resources[1], resources[2]
+                        page = resources[3] if len(resources) > 3 else None
+                        _abort_playwright_stack(pw, browser, context, page)
+                    else:
+                        _LOG.warning(
+                            "browser open timed out; late result not a launch "
+                            "tuple: %r",
+                            type(resources),
+                        )
+                finally:
+                    with self._lock:
+                        self._pending_opens = max(0, self._pending_opens - 1)
+
             # Launch OUTSIDE the registry lock on BrowserThread (KD13).
-            launched = self._run_sync(self._launcher)
+            try:
+                launched = self._browser_thread.submit(
+                    self._launcher,
+                    on_timeout_done=_on_timeout_launch_done,
+                )
+            except TimeoutError as exc:
+                pending_held_for_late = True
+                raise BrowserLaunchFailedError(
+                    f"browser launch timed out after "
+                    f"{BROWSER_THREAD_OP_TIMEOUT_S}s",
+                    hint=HINT_BROWSER_LAUNCH_FAILED,
+                ) from exc
             pw, browser, context, page = launched
             with self._lock:
                 session_id = f"bs_{uuid.uuid4().hex[:12]}"
@@ -717,6 +851,10 @@ class BrowserSessionManager:
                     owner_ident=self._browser_thread.ident,
                 )
                 self._sessions[session_id] = session
+                # Ownership transferred before any fallible follow-up work
+                # (logging) so except-path cannot double-teardown a registered
+                # session.
+                launched = None
                 _LOG.info(
                     "browser session open session_id=%s moment_id=%s "
                     "count=%s owner_ident=%s",
@@ -725,7 +863,6 @@ class BrowserSessionManager:
                     len(self._sessions),
                     session.owner_ident,
                 )
-                launched = None  # ownership transferred to session
                 return session_id
         except Exception:
             # If launch succeeded but registration failed, tear down on thread.
@@ -733,17 +870,7 @@ class BrowserSessionManager:
                 pw, browser, context, page = launched
 
                 def _abort() -> None:
-                    for obj, method in (
-                        (context, "close"),
-                        (browser, "close"),
-                        (pw, "stop"),
-                    ):
-                        if obj is None:
-                            continue
-                        try:
-                            getattr(obj, method)()
-                        except Exception:  # noqa: BLE001
-                            pass
+                    _abort_playwright_stack(pw, browser, context, page)
 
                 try:
                     self._run_sync(_abort)
@@ -753,8 +880,9 @@ class BrowserSessionManager:
                     )
             raise
         finally:
-            with self._lock:
-                self._pending_opens = max(0, self._pending_opens - 1)
+            if not pending_held_for_late:
+                with self._lock:
+                    self._pending_opens = max(0, self._pending_opens - 1)
 
     def get(self, session_id: str) -> BrowserSession:
         with self._lock:

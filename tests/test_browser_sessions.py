@@ -491,14 +491,16 @@ def test_browser_launch_failed_not_install_hint() -> None:
     with pytest.raises(BrowserLaunchFailedError) as ei:
         mgr.open(moment_id="m")
     assert ei.value.reason == "browser_launch_failed"
+    assert ei.value.hint == HINT_BROWSER_LAUNCH_FAILED
     assert "pip install" not in ei.value.hint
 
     result = browser_tools.browser_session_open({}, _ctx())
     assert result.ok is False
     assert result.error_reason == "browser_launch_failed"
     hint = result.payload.get("hint", "")
+    assert hint == HINT_BROWSER_LAUNCH_FAILED
+    assert "host browser backend" in hint
     assert "pip install" not in hint
-    assert "host browser backend" in hint or "detail" in hint.lower() or hint
     assert "playwright install chromium" not in hint
 
 
@@ -1097,3 +1099,122 @@ def test_teardown_runs_on_browser_thread() -> None:
     assert mgr.close(sid) is True
     assert close_idents
     assert close_idents[0] == mgr.browser_thread.ident
+
+
+def test_open_aborts_launch_when_registration_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue 2: successful launch + failed register must teardown stack."""
+    import elyra.tools.browser_sessions as bs
+
+    closed = {"context": 0, "browser": 0, "pw": 0}
+
+    class _TrackCtx(_FakeContext):
+        def close(self) -> None:
+            closed["context"] += 1
+            super().close()
+
+    class _TrackBrowser(_FakeBrowser):
+        def close(self) -> None:
+            closed["browser"] += 1
+            super().close()
+
+        def new_context(self, **kwargs: Any) -> _TrackCtx:
+            return _TrackCtx(self._page)
+
+    class _TrackPW(_FakePlaywright):
+        def stop(self) -> None:
+            closed["pw"] += 1
+            super().stop()
+
+    def launcher() -> tuple[Any, Any, Any, Any]:
+        page = _FakePage()
+        pw = _TrackPW()
+        browser = _TrackBrowser(page)
+        context = browser.new_context()
+        return pw, browser, context, page
+
+    def boom_uuid() -> Any:
+        raise RuntimeError("uuid boom")
+
+    monkeypatch.setattr(bs.uuid, "uuid4", boom_uuid)
+    mgr = BrowserSessionManager(launcher=launcher)
+    set_browser_session_manager(mgr)
+    with pytest.raises(RuntimeError, match="uuid boom"):
+        mgr.open(moment_id="m")
+    assert closed["context"] == 1
+    assert closed["browser"] == 1
+    assert closed["pw"] == 1
+    assert mgr.session_count == 0
+    with mgr._lock:  # noqa: SLF001
+        assert mgr._pending_opens == 0  # noqa: SLF001
+
+
+def test_open_timeout_aborts_late_success_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue 1: hop timeout must not leak Chromium when launch later succeeds."""
+    import elyra.tools.browser_sessions as bs
+
+    monkeypatch.setattr(bs, "BROWSER_THREAD_OP_TIMEOUT_S", 0.05)
+
+    release = threading.Event()
+    closed = {"context": 0, "browser": 0, "pw": 0}
+    launched_ok = threading.Event()
+
+    class _TrackCtx(_FakeContext):
+        def close(self) -> None:
+            closed["context"] += 1
+            super().close()
+
+    class _TrackBrowser(_FakeBrowser):
+        def close(self) -> None:
+            closed["browser"] += 1
+            super().close()
+
+        def new_context(self, **kwargs: Any) -> _TrackCtx:
+            return _TrackCtx(self._page)
+
+    class _TrackPW(_FakePlaywright):
+        def stop(self) -> None:
+            closed["pw"] += 1
+            super().stop()
+
+    def slow_launcher() -> tuple[Any, Any, Any, Any]:
+        if not release.wait(timeout=3.0):
+            raise TimeoutError("test release not signaled")
+        page = _FakePage()
+        pw = _TrackPW()
+        browser = _TrackBrowser(page)
+        context = browser.new_context()
+        launched_ok.set()
+        return pw, browser, context, page
+
+    mgr = BrowserSessionManager(launcher=slow_launcher)
+    set_browser_session_manager(mgr)
+
+    with pytest.raises(BrowserLaunchFailedError) as ei:
+        mgr.open(moment_id="slow")
+    assert ei.value.reason == "browser_launch_failed"
+    assert "timed out" in str(ei.value).lower()
+    # Slot still reserved until late callback finishes.
+    with mgr._lock:  # noqa: SLF001
+        assert mgr._pending_opens == 1  # noqa: SLF001
+    assert mgr.session_count == 0
+
+    release.set()
+    assert launched_ok.wait(timeout=2.0)
+    # Late done-callback aborts stack and releases pending.
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        with mgr._lock:  # noqa: SLF001
+            pending = mgr._pending_opens  # noqa: SLF001
+        if pending == 0 and closed["pw"] >= 1:
+            break
+        time.sleep(0.01)
+    assert closed["context"] >= 1
+    assert closed["browser"] >= 1
+    assert closed["pw"] >= 1
+    with mgr._lock:  # noqa: SLF001
+        assert mgr._pending_opens == 0  # noqa: SLF001
+    assert mgr.session_count == 0
