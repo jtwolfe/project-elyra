@@ -8,4 +8,5 @@
 - growth.py — install_tool_draft, verify_tool, promote_tool, install_skill
 - package_vcs.py — get_tool, revert_tool (package archive/recovery)
 - identity.py — get_identity, draft_identity, promote_identity
+- search.py — web_search (optional elyra[search] / ddgs)
 """

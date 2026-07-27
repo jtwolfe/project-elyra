@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "Search query string (required, non-empty)"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["text", "news", "images", "videos"],
+      "description": "Result kind; default text"
+    },
+    "max_results": {
+      "type": "integer",
+      "description": "Max results to return (default 8, hard cap 20)"
+    },
+    "region": {
+      "type": "string",
+      "description": "Optional region code (e.g. us-en, uk-en)"
+    },
+    "safesearch": {
+      "type": "string",
+      "description": "Optional safesearch level (on | moderate | off)"
+    },
+    "timelimit": {
+      "type": "string",
+      "description": "Optional recency filter (d | w | m | y; backend-dependent)"
+    }
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}
