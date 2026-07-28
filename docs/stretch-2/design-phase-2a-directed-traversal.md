@@ -1,28 +1,32 @@
 # Phase 2a — Directed Traversal
 
-**Status:** Design draft  
-**Depends on:** Phase 1 + Phase 2 (atoms + semantic seeds exist)
+**Status:** Design draft
+**Depends on:** Phase 1 + Phase 2 seeds
+**Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 
 ## Goal
 
-Give Elyra the ability to *actively* explore the memory graph around semantically relevant seeds.
+Realise **model-managed retrieval**: walk the weave around semantic/temporal seeds, inspect neighbours, and **keep** only what should enter durable context.
 
-- Start from atoms returned by temporal + semantic search.
-- Walk temporal, sequential, and early structural edges to gather neighbours.
-- The model (or a thin controller) decides which neighbours are worth keeping.
-- **Temporary context hygiene:** any material pulled in solely for the traversal is flagged as temporary. After the model confirms the final selection, temporary items are discarded; only the chosen atoms remain in the durable temporal / working context.
+Critical invariant from planning: traversal material is **temporary** until explicitly selected. Temporary atoms must not flow into period-summary consolidation as ordinary experience.
 
-This realises the “model-managed / directed search” bucket of context construction.
+## Concept mapping
+
+| Essay / planning term | Phase 2a structure |
+|----------------------|-------------------|
+| Weave / connections | Edge (and reified hyperedge) neighbourhood queries |
+| Active use of memory | Directed expand + keep tool/API |
+| Context hygiene | Temporary flag + discard on abandon/timeout |
 
 ## Care points
 
-- Traversal must not permanently pollute the temporal context.
-- Budget limits (max atoms, max depth, max tokens) are mandatory.
-- Clear observability in glass / logs so the operator can see what was considered vs kept.
+- Budgets: max depth, max nodes, max tokens
+- Observability: what was considered vs kept (glass/logs)
+- Graph access behind `elyra/memory/graph.py` (Python walk and/or lance-graph Cypher)
 
 ## Success criteria
 
-- [ ] Directed walk API exists and respects budgets.
-- [ ] Temporary vs durable distinction is enforced.
-- [ ] Selected neighbours can be added to the context package for the remainder of the moment.
-- [ ] Tests cover flagging, selection, and cleanup.
+- [ ] Expand → review → keep/discard cycle tested
+- [ ] Temporary context cannot enter summary refresh
+- [ ] Meal labels distinguish candidate vs selected
+- [ ] Architecture note: traversal invariants + activity map

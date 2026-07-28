@@ -1,68 +1,50 @@
 # Phase 2 — Semantic Memory (Nemotron + Multi-Embeddings)
 
-**Status:** Design draft  
-**Depends on:** Phase 1 temporal substrate stable
+**Status:** Design draft
+**Depends on:** Phase 1 stable
+**Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md), [design-database-choices.md](design-database-choices.md)
 
 ## Goal
 
-Add semantic / vector support as *supporting context*:
+Add **associative / semantic** structure as *supporting* context: “this reminds me of…”, aligned with the essay’s associative connections — not a replacement for temporal sequence.
 
-- Load **NVIDIA Omni-Embed-Nemotron-3B** (or compatible) portably (CPU / CUDA / ROCm).
-- For every atom (and summary atom) that has media, produce:
-  - per-modality embeddings (text, image, audio, video as present)
-  - one joint embedding
-- These form **bonded sub-atoms** / channels inside the parent atom.
-- Maintain vector indexes (or multi-channel indexes) so similarity search can seed the mnemonic subspace.
-- Large messages that exceed model context are segmented at natural boundaries into **linked parcels** that remain retrieval-coherent.
+- Omni-Embed-Nemotron (portable CPU / CUDA / ROCm)
+- Per-modality + joint embeddings per atom (**bonded subatoms** as internal channels)
+- Linked **parcels** when content exceeds safe limits
+- ANN query with filters (time, moment, kind)
+- Documented index freshness policy under continuous insert
 
 ## Non-goals
 
-- No success-path weighting yet.
-- Directed traversal is Phase 2a.
-- No assumption that the vector index is the primary organiser; it supports the temporal structure.
+- Success-path weighting (Phase 3)
+- Full directed traversal product (Phase 2a)
+- Fine-tuning Nemotron
+
+## Concept mapping
+
+| Essay / planning term | Phase 2 structure |
+|----------------------|-------------------|
+| Associative connection | Semantic edges and/or ANN neighbours over embeddings |
+| Multimodal instance | Multi-channel embedding set on one atom |
+| Recombination | Channel-level match + parent atom identity |
+| Supporting vs primary context | Semantic section budgeted under temporal package |
 
 ## Key design points
 
-### Multi-channel embeddings per atom
-
-```text
-Atom
-  ...
-  embeddings:
-    text:    vector | null
-    image:   vector | null
-    audio:   vector | null
-    video:   vector | null
-    joint:   vector | null
-```
-
-Intra-atom bonds are implicit (all channels belong to the same atom id) and can later be materialised as edges if useful.
-
-### Segmentation of oversized content
-
-If a single message / generated text exceeds Nemotron context:
-
-1. Split at natural points (paragraphs, sections, tool-result boundaries).
-2. Create a sequence of parcel atoms (or sub-records) that are explicitly linked (sequential + “same-parent-message” structural link).
-3. Embed each parcel; the parent can hold a joint or summary embedding if desired.
-
-Retrieval of any parcel can surface the linked siblings.
-
-### Indexes
-
-- Primary: joint embedding index for whole-atom similarity.
-- Secondary (optional in first cut): per-modality indexes for cross-modal queries.
-- Short-timescale buffer (recent atoms) can be a flat or small HNSW for speed; longer-term indexes updated incrementally.
-
-### Portable runtime
-
-See companion doc `design-nemotron-runtime.md`. Must detect available device (CUDA, ROCm, CPU) and fall back cleanly. No hard-coded paths or assumptions about Radeon VII.
+- Embedding set: text / image / audio / video / joint as present
+- Parcels: split at natural boundaries; sequential + parent links
+- Indexes: Lance ANN on joint (and optional channels); recent buffer + optimize schedule
+- Meal role: supporting context only
 
 ## Success criteria
 
-- [ ] Nemotron loads and produces multi-channel embeddings on at least CPU + one GPU backend.
-- [ ] Atoms receive embeddings; similarity search returns coherent neighbours.
-- [ ] Oversized content is segmented and linked correctly.
-- [ ] Semantic results can be mixed into the temporal context package as supporting context.
-- [ ] Tests cover embedding shape, segmentation, and basic retrieval.
-- [ ] No Phase 3 machinery.
+- [ ] Multi-embeddings stored and queryable
+- [ ] Portable encode path documented and tested (mock in CI; real GPU optional)
+- [ ] Segmentation + linked retrieval tested
+- [ ] ANN freshness policy written and implemented
+- [ ] Architecture note updated (semantic map + activities)
+
+## Open questions
+
+- Ranking fusion across channels
+- Lazy vs eager joint embedding

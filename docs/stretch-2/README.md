@@ -1,65 +1,117 @@
 # Stretch 2 — Atomized Memory Substrate
 
 **Branch:** `grok-improvement-memory` (from `main`)
+**Philosophy:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
+**Planning baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 
-**Goal:** Implement the atomized, multi-regime memory system described in the operator essay (`docs/memory-atoms.pdf`) and subsequent design conversations. This becomes the durable substrate that later enables Grok Build integration, autonomous self-improvement workflows, and organised GitHub project visibility for Elyra.
+## Goal
 
-Stretch 2 is deliberately slow and phased. Phases 2 and 3 in particular require careful tuning and evidence before proceeding.
+Implement a durable, multi-regime memory substrate aligned with the atomized-memory philosophy: instances (atoms), temporal scaffold, weave of connections, consolidation into higher-scale structure, and later success-weighted pathways — not a warehouse of detached facts.
 
-## Alignment with Engineering Principles
+This substrate later supports Grok Build integration and autonomous self-improvement workflows. Those integrations are **out of scope** until the memory phases are solid.
 
-- **Modular packages, no god modules.** Memory lives in its own package(s) under `elyra/memory/` (or similar). Temporal, semantic, and procedural concerns are separate modules that compose. The do-loop and presence remain thin orchestrators.
-- **Small units with explicit scope.** Every encoder, summary refresher, edge updater, and traversal helper declares in/out of scope.
-- **Tests are part of the feature.** Unit + contract + integration tests for every phase; synthetic datasets required before Phase 3 claims success.
-- **Stretch discipline.** No half-built hypergraphs or success-path machinery in Phase 1. Leave clean hooks only.
-- **Config defaults + few env vars.** Nemotron paths, index locations, period scales live under `ELYRA_HOME` + config.
-- **Portability.** Embedding inference must work on CPU, modern NVIDIA, and AMD (ROCm) with graceful fallback. Implementation must not be specific to any single GPU.
+Stretch 2 is deliberately slow and phased. Phases 2a and 3 require evidence and tuning; Phase 3 is evaluation-first.
 
-## High-level architecture
+---
 
-Three memory regimes over the same atom substrate:
+## Alignment with engineering principles
 
-1. **Temporal / Episodic** — Moments contain atoms. Atoms and moments are temporally linked. Rolling ladder of natural-language (and embeddable) summary atoms at fixed scales (15 m, 1 h, 6 h, 1 d, 1 w, 1 m). Drop-in replacement / evolution of the current sliding meal/window.
-2. **Semantic** — Nemotron multi-channel embeddings (per-modality + joint) plus bonded sub-atoms. Vector search as supporting context. Large messages are segmented into linked parcels.
-3. **Procedural / Success-path** — Goal → outcome trajectories. Edges accumulate weight from efficient successful re-use within a semantic + episodic subspace. Derived traversal prior ("ANN" in earlier discussion). Extremely delicate; requires testing plan and synthetic data.
+All of [engineering-principles.md](../engineering-principles.md) applies. Stretch 2 **extends** them in one critical way:
 
-Supporting capability:
+### Documentation is part of the product surface
 
-- **Phase 2a Directed traversal** — Once a hypergraph (or adjacency) exists, Elyra can actively walk neighbourhoods around semantically relevant seeds, gather atoms + high-value neighbours. Temporary context flagging during traversal; only confirmed selections persist into the permanent temporal context.
+For a system this conceptual, “docs updated when behaviour changes” is not enough. Each phase must ship **concept-mapping documentation** that explains:
+
+1. What was implemented (types, tables, APIs, jobs).
+2. How those structures map to essay concepts (atom, context, edge kinds, summary/consolidation, trajectory, temporary vs durable context).
+3. Which activities from the [inspiration activity model](inspiration-activity-model-and-storage.md) are live vs background.
+4. Invariants and failure behaviour.
+
+Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual.
+
+Other principle reminders:
+
+- **Modular packages** — `elyra/memory/` (and submodules); do-loop/presence stay orchestrators.
+- **Small units, explicit scope** — parse / compute / persist.
+- **Tests are part of the feature** — Phase 3 needs synthetic evaluation, not vibes.
+- **Stretch discipline** — no hypergraph or success-path machinery smuggled into Phase 1.
+- **Config defaults** — data under `ELYRA_HOME`; few new env vars.
+- **Portability** — Nemotron on CUDA / ROCm / CPU fallback; no single-GPU hard dependency in core imports.
+
+---
+
+## Memory regimes
+
+| Regime | Role in context meal | Primary structures |
+|--------|----------------------|--------------------|
+| **Temporal / Episodic** | Drop-in for sliding recent history | Moments → atoms; sequential links; rolling period-summary ladder (15m, 1h, 6h, 1d, 1w, 1m) |
+| **Semantic** | Supporting context (“reminds me of”) | Nemotron multi-embeddings (per-modality + joint); bonded subatoms; parcels for oversized content; ANN |
+| **Procedural** | Process context (goal → outcome) | Trajectories; success-weighted edges; derived traversal prior |
+
+**Phase 2a — Directed traversal:** model-managed walk around seeds; **temporary** context flags; only confirmed keeps enter durable context.
+
+---
 
 ## Phase overview
 
-| Phase | Focus | Role in context construction | Risk / care level |
-|-------|--------|------------------------------|-------------------|
-| **1** | Temporal / Episodic (moments, atoms, sequential links, rolling summary ladder) | Primary temporal context; drop-in for current sliding window | Medium — foundation |
-| **2** | Semantic (Nemotron multi-embeddings, bonded sub-atoms, segmentation, vector search) | Supporting context | Medium–High — model loading + indexing |
-| **2a** | Directed traversal over the emerging graph | Model-managed / directed retrieval | High — temporary context hygiene |
-| **3** | Procedural / success-path weighting + derived ANN priors | Process context | Very High — continuous learning correctness, synthetic evaluation |
+| Phase | Focus | Care |
+|-------|--------|------|
+| **1** | Temporal / episodic foundation | Must stand alone without vectors |
+| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy |
+| **2a** | Directed traversal | Temporary context hygiene |
+| **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on |
 
-Later Stretch 2 work (after memory is solid): Grok Build tool integration and autonomous self-improvement workflow that keeps GitHub projects organised and visible while Elyra uses Grok.
+---
+
+## Storage direction (summary)
+
+Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** for optional Cypher over the same tables; **reified hyperedges**. Full rationale and limitations: [design-database-choices.md](design-database-choices.md).
+
+---
 
 ## Document map
 
-| Document | Purpose |
-|----------|---------|
-| [README.md](README.md) | This overview |
-| [design-phase-1-temporal.md](design-phase-1-temporal.md) | Moments, atoms, sequential links, rolling ladder of summary atoms |
-| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Nemotron multi-embeddings, bonded sub-atoms, large-message segmentation, vector indexes |
-| [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Hypergraph / adjacency walk, temporary context flags, selection confirmation |
-| [design-phase-3-procedural.md](design-phase-3-procedural.md) | Success-path recording, efficiency-based weighting, continuous learning, testing plan |
-| [design-database-choices.md](design-database-choices.md) | Storage substrate research and recommendation (to be completed next) |
-| [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable loading of Omni-Embed-Nemotron (CPU / CUDA / ROCm) |
+| Document | Role |
+|----------|------|
+| [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
+| [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
+| [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design |
+| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 design |
+| [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
+| [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
+| `architecture/` (to be created as phases ship) | **Detailed post-implement manuals** mapping code ↔ philosophy |
+| [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable embedding runtime (when written) |
 
-## Working rules for this branch
+Canonical tree: **`docs/stretch-2/`**. Older pointer folder `docs/stretch-2-memory/` should redirect readers here.
 
-- All design docs land before substantial implementation PRs for that phase.
-- Each phase PR stack stays small, testable, and reversible.
-- Promote individual phase work onto `grok-improvement-memory`; promote the whole stretch to `main` only after operator sign-off and live smoke.
-- Continuous learning (Phase 3) and any background consolidation must respect presence timers / rest concepts and never starve the do-loop.
+---
 
-## Next immediate steps
+## Definition of done (per phase)
 
-1. Flesh out the Phase 1 design document in detail.
-2. Complete database / storage research and record decisions in `design-database-choices.md`.
-3. Define the portable Nemotron runtime contract.
-4. Only then begin Phase 1 implementation on this branch.
+In addition to engineering-principles “done”:
+
+- [ ] Behaviour implemented and tested for that phase only
+- [ ] Public memory APIs minimal and documented
+- [ ] **Concept-mapping architecture note** written or updated (structures ↔ essay)
+- [ ] Activity list updated (which §3 activities are now live)
+- [ ] No dependency on later phases for correctness
+- [ ] Operator-visible failure modes documented
+
+---
+
+## Working rules
+
+1. Design docs before substantial implementation PRs for that phase.
+2. Small, reversible PR stacks.
+3. Background consolidation and index optimize never starve the do-loop.
+4. Promote to `main` only after operator sign-off and live smoke.
+5. Prefer clarifying the philosophy mapping over clever storage tricks that obscure it.
+
+---
+
+## Next steps
+
+1. Keep Phase 1 design sharp against the inspiration data prototype.
+2. Run storage spikes listed in `design-database-choices.md`.
+3. Write Nemotron runtime design when Phase 2 approaches.
+4. Begin Phase 1 implementation only with store interface + tests + initial architecture note skeleton.

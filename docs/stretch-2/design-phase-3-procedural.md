@@ -1,31 +1,41 @@
 # Phase 3 — Procedural / Success-Path Memory
 
-**Status:** Design draft (highest care)  
-**Depends on:** Phases 1, 2, 2a stable and tuned
+**Status:** Design draft (highest care)
+**Depends on:** Phases 1–2a stable enough to record real trajectories
+**Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 
 ## Goal
 
-Record trajectories from goal-like atoms to outcome-like atoms. When a later similar trajectory succeeds *more efficiently* while earlier pathway material was in context, up-weight the edges that participated. This creates a derived, continuously learnable traversal prior (the “ANN” layer discussed earlier) that is local to semantic + episodic subspaces.
+Record **goal → outcome** trajectories. When a similar goal is later solved more efficiently while prior pathway material was in context, **up-weight** participating edges inside the relevant semantic + episodic subspace. That weighted weave is **process context** — the derived traversal prior discussed in planning (not a second vector ANN index).
 
-This supplies **process context**.
+Aligns with the essay’s edge-strength dynamics and learning-from-patterns ideas: procedures are pathways over instances, not stored skill blobs detached from experience.
 
-## Why this phase is delicate
+## Why delicate
 
-- Incorrect weighting can create feedback loops or suppress useful exploration.
-- Continuous online updates must remain cheap and reversible.
-- Evaluation requires synthetic or carefully curated trajectory datasets that exercise both success and failure, efficiency gains, and subspace locality.
-- “ANN” behaviour must be measurable (retrieval quality, path efficiency over time) before it is trusted in the live do-loop.
+- Wrong weights create self-reinforcing bad procedures
+- Success labels are noisy in an open agent
+- Requires synthetic/evaluation harness before default-on continuous updates
 
-## Required before implementation
+## Concept mapping
 
-1. Detailed testing plan.
-2. Synthetic dataset strategy (generate or acquire).
-3. Clear metrics for “efficiency gain” and “subspace similarity”.
-4. Offline / background update path that cannot starve the presence loop.
+| Essay / planning term | Phase 3 structure |
+|----------------------|-------------------|
+| Edge strength / use | `weight` updates on success edges |
+| Causal / procedural connection | `edge_type=success` (and related) + trajectories |
+| Patterns over atoms | Pathways retrieved as process context |
+| Qualia (future) | Optional modulator; not required for first landing |
+
+## Required before implementation claims success
+
+1. Testing plan and metrics (efficiency, subspace locality, non-collapse)
+2. Synthetic or curated trajectory datasets
+3. Feature flag / shadow mode for weight updates
+4. Architecture manual section on update rules and failure modes
 
 ## Success criteria (high bar)
 
-- [ ] Trajectories can be recorded and linked to goals/outcomes.
-- [ ] Online weight updates are correct and cheap.
-- [ ] Derived prior improves path efficiency on held-out synthetic workloads without harming unrelated subspaces.
-- [ ] Full test suite + evaluation report reviewed before enabling in default continuous operation.
+- [ ] Trajectories recorded
+- [ ] Online updates cheap and scoped
+- [ ] Eval report on synthetic workloads reviewed
+- [ ] Process context optional and budgeted in meal/traversal
+- [ ] Explicit go/no-go before default continuous operation
