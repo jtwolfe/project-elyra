@@ -259,13 +259,17 @@ class EncodeQueue:
         if status in ("ready", "skipped"):
             return "skipped"
 
-        # Already successfully encoded (no index yet) and content unchanged.
+        # Already successfully encoded and content unchanged:
+        # - index is None → leave pending (KD8); skip re-encode thrash
+        # - index present → fall through to re-encode + upsert so PR3 can
+        #   promote to ready (vectors are not stored on the Atom)
         fp = content_fingerprint(atom)
         meta = dict(atom.meta or {})
         if (
             meta.get(_META_ENCODE_OK)
             and meta.get(_META_CONTENT_FP) == fp
             and status == "pending"
+            and index is None
         ):
             return "ok"
 
@@ -286,6 +290,17 @@ class EncodeQueue:
         result = encode_atom(embedder, atom, media_store=media_store)
         attempts = int(meta.get(_META_ATTEMPTS) or 0) + 1
         updates: dict[str, Any] = {_META_ATTEMPTS: attempts}
+
+        # Media-only atom with unresolved media: leave pending (retry when
+        # MediaStore is available). Do not burn toward permanent failed/skipped.
+        if result.error == "media_unresolved":
+            updates[_META_ERROR] = "media_unresolved"
+            # Do not increment attempts for unresolved media.
+            updates[_META_ATTEMPTS] = int(meta.get(_META_ATTEMPTS) or 0)
+            _mark_atom_status(
+                store, atom, status="pending", meta_updates=updates
+            )
+            return "skipped"
 
         if result.status == "skipped":
             updates[_META_ERROR] = result.error or "skipped"

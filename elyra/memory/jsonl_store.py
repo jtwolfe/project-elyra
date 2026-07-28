@@ -14,7 +14,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from elyra.config import ElyraPaths
 from elyra.memory.config import (

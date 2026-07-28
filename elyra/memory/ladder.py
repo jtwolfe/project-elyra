@@ -334,6 +334,9 @@ def build_summary_atom(
         content_text=body,
         content_ref="inline",
         meta=meta,
+        # PR2: summaries stay "none". Defer pending-when-semantic until a
+        # later PR (ladder not in PR2 encode enqueue scope; hooks would
+        # only fire for pending). Experience atoms are enqueued via promote.
         embedding_status="none",
     )
 

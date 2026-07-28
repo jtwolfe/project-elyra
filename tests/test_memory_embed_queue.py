@@ -159,6 +159,77 @@ def test_drain_ready_when_index_upserts(store):
     assert got.embedding_status == "ready"
 
 
+def test_drain_without_index_then_with_index_becomes_ready(store):
+    """Issue 1: encode_ok short-circuit must not block a later index upsert."""
+
+    class _Idx:
+        def __init__(self) -> None:
+            self.seen: dict[str, Any] = {}
+
+        def upsert(self, atom_id: str, embeddings: Any) -> bool:
+            self.seen[atom_id] = embeddings
+            return True
+
+    atom = store.put_atom(_atom(text="later index", status="pending"))
+    q = EncodeQueue(maxsize=4)
+    emb = MockEmbedder()
+    q.enqueue(atom.atom_id)
+    q.drain(store, emb, index=None, max_items=2)
+    got = store.get_atom(atom.atom_id)
+    assert got is not None
+    assert got.embedding_status == "pending"
+    assert got.meta.get("embed_encode_ok") is True
+
+    # Second drain with index must re-encode and upsert → ready.
+    q.enqueue(atom.atom_id)
+    idx = _Idx()
+    stats = q.drain(store, emb, index=idx, max_items=2)
+    assert stats["ok"] == 1
+    assert atom.atom_id in idx.seen
+    got2 = store.get_atom(atom.atom_id)
+    assert got2 is not None
+    assert got2.embedding_status == "ready"
+
+
+def test_media_only_unresolved_stays_pending(store):
+    """Issue 3: media-only + no MediaStore must not permanent-skip."""
+    atom = store.put_atom(
+        _atom(text="", status="pending", media_ids=("att_missing_1",))
+    )
+    # Ensure empty text persisted (prepare may leave "").
+    from elyra.memory.types import atom_replace
+
+    atom = store.put_atom(
+        atom_replace(
+            atom,
+            content_text="",
+            media_ids=("att_missing_1",),
+            embedding_status="pending",
+        ),
+        notify=False,
+    )
+    q = EncodeQueue(maxsize=4)
+    q.enqueue(atom.atom_id)
+    stats = q.drain(store, MockEmbedder(), media_store=None, max_items=2)
+    assert stats["skipped"] == 1  # not encoded this tick
+    got = store.get_atom(atom.atom_id)
+    assert got is not None
+    assert got.embedding_status == "pending"
+    assert got.meta.get("embed_error") == "media_unresolved"
+    # Attempts not burned
+    assert int(got.meta.get("embed_attempts") or 0) == 0
+
+
+def test_encode_atom_media_unresolved_error():
+    result = encode_atom(
+        MockEmbedder(),
+        _atom(text="", media_ids=("m1",)),
+        media_store=None,
+    )
+    assert result.error == "media_unresolved"
+    assert result.embeddings is None
+
+
 def test_drain_skips_empty_content(store):
     atom = store.put_atom(
         _atom(text="", status="pending", media_ids=())
@@ -502,6 +573,7 @@ def test_worker_encode_noop_when_embed_disabled(paths):
             backend="jsonl",
             semantic_enabled=True,
             embed_enabled=False,
+            encode_queue_max=2,
         ),
     )
     worker = PresenceWorker(
@@ -523,12 +595,102 @@ def test_worker_encode_noop_when_embed_disabled(paths):
     )
     assert atom is not None
     assert atom.embedding_status == "pending"
+    # Hook must not enqueue while embed off (Issue 2).
+    assert worker._encode_queue is not None  # noqa: SLF001
+    assert not worker._encode_queue.contains(atom.atom_id)  # noqa: SLF001
     # Drain should no-op (embed_enabled false).
     worker._idle_memory_encode()  # noqa: SLF001
     got = store.get_atom(atom.atom_id)
     assert got is not None
     assert got.embedding_status == "pending"
     assert not got.meta.get("embed_encode_ok")
+
+
+def test_semantic_on_embed_off_overflow_leaves_pending(paths):
+    """Issue 2: many pending puts with embed off must not skip via overflow."""
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            semantic_enabled=True,
+            embed_enabled=False,
+            encode_queue_max=2,
+        ),
+    )
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    store = worker._ensure_memory_store()  # noqa: SLF001
+    ids: list[str] = []
+    for i in range(5):
+        atom = promote_beat(
+            store,
+            f"m{i}",
+            {
+                "type": "model",
+                "content": f"pending body number {i} long enough " * 4,
+                "ts": f"2026-07-28T12:{i:02d}:00Z",
+            },
+            settings=settings.memory,
+        )
+        assert atom is not None
+        ids.append(atom.atom_id)
+        assert atom.embedding_status == "pending"
+
+    # Queue empty (hook no-ops when embed off); all stay pending.
+    assert worker._encode_queue is not None  # noqa: SLF001
+    assert len(worker._encode_queue) == 0  # noqa: SLF001
+    for aid in ids:
+        got = store.get_atom(aid)
+        assert got is not None
+        assert got.embedding_status == "pending"
+        assert got.meta.get("embed_error") != "queue_overflow"
+
+
+def test_hook_skips_encode_ok_same_fingerprint(paths):
+    """Issue 4: re-put of encode_ok pending with same content does not re-enqueue."""
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+        ),
+    )
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    store = worker._ensure_memory_store()  # noqa: SLF001
+    atom = promote_beat(
+        store,
+        "m1",
+        {
+            "type": "model",
+            "content": "encode once then re-put " * 4,
+            "ts": "2026-07-28T13:00:00Z",
+        },
+        settings=settings.memory,
+    )
+    assert atom is not None
+    worker._idle_memory_encode()  # noqa: SLF001
+    got = store.get_atom(atom.atom_id)
+    assert got is not None
+    assert got.meta.get("embed_encode_ok") is True
+    # Clear queue, re-put same content with pending + encode_ok
+    worker._encode_queue.clear()  # noqa: SLF001
+    store.put_atom(got)  # notify=True → hook should no-op
+    assert not worker._encode_queue.contains(got.atom_id)  # noqa: SLF001
 
 
 def test_worker_encode_noop_when_semantic_off(paths):

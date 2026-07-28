@@ -419,5 +419,48 @@ def test_spill_then_shrink_reloads_short_body(paths):
         store2.close()
 
 
+def test_list_atoms_filter_embedding_status(store):
+    """Issue 5: Lance list_atoms status filter + newest_first + cap."""
+    from elyra.memory.store import LIST_ATOMS_MAX
+
+    store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text="a", embedding_status="none")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:01:00Z", text="b", embedding_status="pending")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:02:00Z", text="c", embedding_status="pending")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:03:00Z", text="d", embedding_status="skipped")
+    )
+    pending = store.list_atoms(embedding_status="pending", limit=50)
+    assert len(pending) == 2
+    assert all(a.embedding_status == "pending" for a in pending)
+    assert pending[0].content_text == "c"
+    assert pending[1].content_text == "b"
+
+    oldest = store.list_atoms(
+        embedding_status="pending", newest_first=False, limit=50
+    )
+    assert oldest[0].content_text == "b"
+
+    capped = store.list_atoms(limit=1)
+    assert len(capped) == 1
+
+    for i in range(3):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T11:{i:02d}:00Z",
+                text=f"x{i}",
+                atom_id=new_atom_id(),
+            )
+        )
+    all_rows = store.list_atoms(limit=10_000)
+    assert len(all_rows) <= LIST_ATOMS_MAX
+    assert len(all_rows) == store.health()["atom_count"]
+
+
 def test_protocol_runtime_checkable(store):
     assert isinstance(store, MemoryStore)

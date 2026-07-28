@@ -125,6 +125,15 @@ def encode_atom(
         text_s = text.strip() or None
         media = resolve_media_inputs(atom, media_store)
         if not text_s and not any(media.values()):
+            # Media-only atom whose ids did not resolve: leave retryable
+            # (drain keeps pending). True empty content → permanent skip.
+            if atom.media_ids:
+                return EncodeResult(
+                    status="failed",
+                    embeddings=None,
+                    error="media_unresolved",
+                    channels_encoded=(),
+                )
             return EncodeResult(
                 status="skipped",
                 embeddings=None,

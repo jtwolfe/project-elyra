@@ -29,8 +29,13 @@ AtomWriteHook = Callable[[Atom], None]
 class MemoryStore(Protocol):
     """Swappable atom persistence. Single-writer assumed (presence worker)."""
 
-    def put_atom(self, atom: Atom) -> Atom:
-        """Insert or replace by atom_id. Returns stored atom."""
+    def put_atom(self, atom: Atom, *, notify: bool = True) -> Atom:
+        """Insert or replace by atom_id. Returns stored atom.
+
+        ``notify`` (default True): when False, skip the write hook. Internal
+        encode-status updates must use ``notify=False`` so they do not
+        re-enqueue into the encode queue (see ``EncodeQueue._mark_atom_status``).
+        """
         ...
 
     def get_atom(self, atom_id: str) -> Atom | None:

@@ -1116,8 +1116,28 @@ class PresenceWorker:
                     cfg = self.settings.memory
                     if not cfg.semantic_enabled:
                         return
+                    # Only enqueue when drain can run; otherwise backlog
+                    # overflows mark atoms skipped (semantic+embed-off must
+                    # leave pending until embed is enabled — KD intent).
+                    # Idle pending scan fills the queue once embed turns on.
+                    if not cfg.embed_enabled:
+                        return
                     if getattr(atom, "embedding_status", None) != "pending":
                         return
+                    # KD16 re-put: already encode-ok with same content → no-op.
+                    meta = getattr(atom, "meta", None) or {}
+                    if meta.get("embed_encode_ok"):
+                        try:
+                            from elyra.memory.embed.encode import (
+                                content_fingerprint,
+                            )
+
+                            if meta.get("embed_content_fp") == content_fingerprint(
+                                atom
+                            ):
+                                return
+                        except Exception:  # noqa: BLE001
+                            pass
                     queue.enqueue(atom.atom_id, store=store)
                 except Exception:  # noqa: BLE001
                     _LOG.exception(
@@ -1295,6 +1315,13 @@ class PresenceWorker:
             embedder = self._ensure_embedder()
             if embedder is None:
                 return
+            media_store = None
+            try:
+                from elyra.media.store import MediaStore
+
+                media_store = MediaStore(self.paths)
+            except Exception:  # noqa: BLE001 — media optional for encode
+                _LOG.debug("MediaStore open for encode failed", exc_info=True)
             queue.drain(
                 store,
                 embedder,
@@ -1302,7 +1329,7 @@ class PresenceWorker:
                 max_ms=int(mem_cfg.encode_max_ms_per_tick or 100),
                 max_items=max_items,
                 max_attempts=int(mem_cfg.encode_max_attempts or 3),
-                media_store=None,  # media resolve stub OK in PR2
+                media_store=media_store,
             )
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("memory idle encode drain failed")
