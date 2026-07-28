@@ -62,9 +62,26 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | Phase | Focus | Care | Status |
 |-------|--------|------|--------|
 | **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors | **Done** (2026-07-28) — see caveats below |
-| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy | **Design ready** — [design-phase-2-implementation.md](design-phase-2-implementation.md) (execute-plan when operator starts) |
+| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy | **Done / shipped** (2026-07-28) — flags default **off**; see caveats below |
 | **2a** | Directed traversal | Temporary context hygiene | Planned |
 | **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on | Planned |
+
+### Phase 2 close-out (2026-07-28)
+
+**Operator-complete on execute-plan stack / `grok-improvement-memory`:** multi-embeddings (mock encoder + Lance `emb_*`), async encode queue + store write hooks + idle drain, ANN hybrid recent-buffer + idle optimize, opt-in parcels, meal **semantic** channel (`select_semantic`, budget v2, timeout omit), architecture note.
+
+**Defaults stay safe:** `semantic_enabled` / `embed_enabled` / `parcels_enabled` **false** until dogfood. Durable ANN needs `backend=lance` + `elyra[memory-lance]`. JSONL remains hermetic CI (no production ANN).
+
+**Caveats / follow-ups (not Phase 2 reopen blockers for core path):**
+
+| Topic | Notes |
+|-------|--------|
+| Glass **Vectors** tab | Still a **stub** (health/neighbor UI polish); meal semantic works without it — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
+| Glass **Graph** tab | Phase **2a** — out of scope |
+| Real Nemotron weights | Mock-first; `embed_backend=nemotron` falls back until Gate B / optional runtime |
+| Default-on semantic | Only after Gate B spike checklist + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
+
+**Docs:** [design-phase-2-implementation.md](design-phase-2-implementation.md) (implementation design), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped map).
 
 ### Phase 1 close-out (2026-07-28)
 
@@ -103,11 +120,12 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |
 | [design-phase-1-implementation.md](design-phase-1-implementation.md) | Phase 1 implementation design + key decisions |
 | [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) | **Phase 1 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
-| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 short sketch (superseded for implement by implementation design) |
-| [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Phase 2 implementation design + PR plan** (Ready for `/execute-plan`) |
+| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 short sketch (points at implementation design + architecture note) |
+| [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Phase 2 implementation design + PR plan** (shipped stack reference) |
+| [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
 | [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
 | [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
-| `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 shipped) |
+| `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 + Phase 2 shipped) |
 
 All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
@@ -117,14 +135,14 @@ All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
 In addition to engineering-principles “done”:
 
-- [x] Behaviour implemented and tested for that phase only — **Phase 1** (PR1–PR9 + dogfood); later phases open
-- [x] Public memory APIs minimal and documented — **Phase 1** store Protocol + glass inspect; expand in Phase 2+
-- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)
-- [x] Activity list updated (which §3 activities are now live) — Phase 1 map in architecture note
-- [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors
-- [x] Operator-visible failure modes documented — Phase 1 architecture note
+- [x] Behaviour implemented and tested for that phase only — **Phase 1** + **Phase 2** (semantic flags default off; dogfood opt-in); 2a/3 open
+- [x] Public memory APIs minimal and documented — Phase 1 store Protocol + glass inspect; Phase 2 index/embed surfaces + meal semantic
+- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md); Phase 2: [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)
+- [x] Activity list updated (which §3 activities are now live) — Phase 1 + Phase 2 maps in architecture notes
+- [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors; **Phase 2** meal works with semantic off or omitted
+- [x] Operator-visible failure modes documented — Phase 1 + Phase 2 architecture notes
 
-Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats).
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 done means semantic path exists with safe defaults — not Vectors UI completeness or product default-on.
 
 ---
 
@@ -143,8 +161,7 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 ## Next steps
 
 1. Dogfood Phase 1 with `write_atoms` + `enabled` (defaults on; see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)).
-2. **PR8** — Lance `MemoryStore` backend (Protocol parity; storage only; foundation for Phase 2 vectors). See [design-phase-1-implementation.md](design-phase-1-implementation.md) PR Plan.
-3. **PR9** — Glass **Memory** page: live **context meal inspector** + light atom list + **Vectors / Graph stubs** (rich browsers fill in Phase 2 / 2a). Same PR Plan section.
-4. Run storage spikes in [design-database-choices.md](design-database-choices.md); spike Nemotron checklist in [design-nemotron-runtime.md](design-nemotron-runtime.md) before Phase 2 default-on.
-5. Phase 2 semantic → fill Vectors tab; Phase 2a → fill Graph tab.
-6. Keep architecture manuals updated when behaviour changes.
+2. Dogfood Phase 2 ladder (mock → optional Nemotron → `semantic_enabled`) with `backend=lance`; flags stay off until Gate B — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md).
+3. Optional polish: fill glass **Vectors** tab (health + neighbors); real Nemotron runtime after spike.
+4. Phase 2a directed traversal → fill **Graph** tab; Phase 3 procedural eval-first.
+5. Keep architecture manuals updated when behaviour changes.
