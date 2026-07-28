@@ -59,12 +59,29 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 ## Phase overview
 
-| Phase | Focus | Care |
-|-------|--------|------|
-| **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors |
-| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy |
-| **2a** | Directed traversal | Temporary context hygiene |
-| **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on |
+| Phase | Focus | Care | Status |
+|-------|--------|------|--------|
+| **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors | **Done** (2026-07-28) — see caveats below |
+| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy | Next |
+| **2a** | Directed traversal | Temporary context hygiene | Planned |
+| **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on | Planned |
+
+### Phase 1 close-out (2026-07-28)
+
+**Operator-complete on `grok-improvement-memory`:** atoms, promote, ladder (template), labeled meal + slide-off, defaults `memory.enabled` / `write_atoms` on, optional **Lance** backend (`backend=lance` + `elyra[memory-lance]`), glass **Memory** page (context meal inspector, atoms list, Vectors/Graph stubs), architecture note.
+
+**Not Phase 1 blockers** (tracked in [known-bugs.md](../known-bugs.md); polish after or parallel to Phase 2):
+
+| ID | Topic |
+|----|--------|
+| BUG-glass-01 / 02 | Moments beautify; move Moments under Memory |
+| BUG-mem-ui-01 / 02 / 03 | Context/Atoms beautify; summary-generation review; inspector flash |
+| BUG-chat-01 | Chat equation / math rendering |
+| BUG-status-01 / 02 / 03 | Status scroll; dev-speed dual control; hard-stop override OFF stickiness |
+| BUG-prompt-01 | Soften system prompt walls (**review after memory up** — now eligible, not blocking Phase 2) |
+| BUG-wake-01 / BUG-usage-01 | Pre-existing deferrals (wake storms; usage pacing) |
+
+**Still out of Phase 1 by design:** Nemotron / ANN, directed traversal, success-path weights, historical glass→atom backfill, rich Vectors/Graph UIs (stubs only).
 
 ---
 
@@ -99,14 +116,14 @@ All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
 In addition to engineering-principles “done”:
 
-- [ ] Behaviour implemented and tested for that phase only
-- [ ] Public memory APIs minimal and documented
+- [x] Behaviour implemented and tested for that phase only — **Phase 1** (PR1–PR9 + dogfood); later phases open
+- [x] Public memory APIs minimal and documented — **Phase 1** store Protocol + glass inspect; expand in Phase 2+
 - [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)
 - [x] Activity list updated (which §3 activities are now live) — Phase 1 map in architecture note
-- [ ] No dependency on later phases for correctness
+- [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors
 - [x] Operator-visible failure modes documented — Phase 1 architecture note
 
-Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios.
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats).
 
 ---
 

@@ -177,6 +177,288 @@ Also: gates care about **overall weekly limit + cumulative Elyra spend**; produc
 
 ---
 
+## BUG-glass-01 — Moments panel looks like raw JSON (needs beautify pass)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Low–Med (operator readability; dogfood friction) |
+| **Severity later** | Med if Moments remain a primary debug surface |
+| **Area** | Glass Moments panel (`elyra/runtime/web/`, moments API payload render) |
+| **Dogfood** | 2026-07-28 operator note on `grok-improvement-memory` — moments read as dumped JSON rather than a scannable tape |
+
+### Symptom
+
+Moments UI presents beats / payload in a raw or near-JSON shape that is hard to scan while dogfooding (speak/tool/obs/stop not visually structured for humans).
+
+### Fix directions
+
+1. Beautify pass: role/kind chips, readable timestamps, collapsible raw JSON, prose-first speak bodies.
+2. Keep full raw available for debug (expand / copy), do not lose fidelity for operators who need it.
+3. Coordinate with **BUG-glass-02** if Moments move under Memory.
+
+---
+
+## BUG-glass-02 — Move Moments page into Memory as a subsection
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) — product IA, not a functional defect |
+| **Severity now** | Low (nav clutter / split brain: Moments vs Memory) |
+| **Severity later** | Med once Memory (context/atoms/vectors/graph) is the default operator mental model |
+| **Area** | Glass nav + panels; Memory tabs (context / atoms / vectors / graph) |
+| **Dogfood** | 2026-07-28 operator request: Moments should sit next to Context, Atoms, Vectors, Graph |
+
+### Symptom
+
+Moments is a top-level nav peer of Memory. After Stretch 2 Phase 1, operators think “history / tape / meal” as one place; two panels force context-switching and duplicate mental models (moment tape vs atom store).
+
+### Fix directions
+
+1. Add a **Moments** (or **Tape**) tab under Memory next to Context / Atoms / Vectors / Graph.
+2. Retire or demote top-level Moments nav once the subsection is at parity.
+3. Preserve deep-link / refresh behavior; do not break moment-id filters used by Atoms.
+4. Pair with **BUG-glass-01** beautify so the moved panel is worth opening.
+
+### Explicit non-goals
+
+- Do not delete the moment store or change moment = do-loop semantics.
+- Do not block on Vectors/Graph product before the IA move.
+
+---
+
+## BUG-mem-ui-01 — Memory Context needs beautify + review of summary generation
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Med (hard to understand what the model is “eating”) |
+| **Severity later** | High if Context is the primary trust surface for meal/ladder correctness |
+| **Area** | Glass Memory → Context (`inspect.meal_*`, `app.js` `renderMemoryContext`); ladder (`elyra/memory/ladder.py`) |
+| **Dogfood** | 2026-07-28 — episodic summaries look truncated / opaque; unclear UI vs generation |
+
+### Symptom
+
+Context cards are hard to read: snipped text, channel labels without hierarchy, little visual structure for temporal vs episodic vs orient. Operators cannot easily tell whether a short summary is **inspect snippet truncation** (240 chars), **template highlight truncation** (160 chars/line), or missing ladder work.
+
+### Related generation notes (current truth)
+
+- Summaries are **template-first, no LLM** (`render_template_summary` / `select_highlights`).
+- Highlight lines cap by scale (12/16/20); each body truncated ~160 chars in the **stored** summary.
+- Glass inspect further truncates meal item `snippet` to **240** chars; full body is not expandable in Context today.
+
+### Fix directions
+
+1. **Beautify:** channel sections, scale/window badges, token budget bars, expandable full content (use `content_chars` / detail endpoint).
+2. **Generation review:** when ladder runs (idle `refresh_due` vs on-compose), skip-unchanged behavior, child-preference vs raw, highlight ranking, whether template-only is enough for dogfood.
+3. Document operator-visible “this is a snippet of N chars” so truncation is not mistaken for empty memory.
+4. Optional later: richer narrative summaries (LLM) only after template path is trustworthy and budgeted.
+
+---
+
+## BUG-mem-ui-02 — Memory Atoms list needs beautify pass
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Low–Med |
+| **Severity later** | Med as atom volume grows |
+| **Area** | Glass Memory → Atoms (`atom_to_list_row` / detail, `app.js` atoms timeline) |
+| **Dogfood** | 2026-07-28 operator note |
+
+### Symptom
+
+Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time visual hierarchy). Hard to browse speak vs tool vs summary vs observation at a glance; empty `content_text` with blob-backed speak bodies is especially confusing.
+
+### Fix directions
+
+1. Beautify list rows: kind color/chip, relative time, moment badge, clearer empty-vs-blob affordance.
+2. Detail pane: structured meta, full text when under cap, blob hydrate indicator.
+3. Avoid fighting **BUG-mem-ui-03** (do not full re-render while selecting text).
+
+---
+
+## BUG-mem-ui-03 — Memory Atoms inspector flashes; system update breaks text selection
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Med (actively interferes with inspection) |
+| **Severity later** | Med |
+| **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active); possibly status/system strip re-render |
+| **Dogfood** | 2026-07-28 — inspector keeps flashing; system update also impacts ability to select text |
+
+### Symptom
+
+While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular cadence. Selecting text for copy is interrupted or reset — likely full DOM rebuild from the global poll. Operator also reports **system update** (status rail / status refresh) interfering with text selection.
+
+### Likely cause (unverified)
+
+`setInterval(tick, 1500)` always runs `refreshStatus()` + `refreshMessages()`, and when `activePanel === "memory"` also `refreshMemory()`, which rebuilds Context/Atoms DOM even when data is unchanged.
+
+### Fix directions
+
+1. Diff-then-patch or skip re-render when payload hash/etag unchanged.
+2. Do not replace nodes that contain an active text selection / focus.
+3. Pause aggressive panel refresh while pointer is selecting or detail is focused.
+4. Audit status/system strip updates for the same full-replace pattern.
+
+---
+
+## BUG-chat-01 — Chat needs equation / math rendering (LaTeX or equivalent)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) — feature gap |
+| **Severity now** | Low–Med (depends on dogfood topics; calculator / STEM chats unreadable) |
+| **Severity later** | Med for teaching / technical work |
+| **Area** | Glass chat message render (`app.js` message HTML); speak / model content pipeline |
+| **Dogfood** | 2026-07-28 operator request — add equation rendering (LaTeX? whatever format models emit) |
+
+### Symptom
+
+Math in chat shows as raw `$...$` / `$$...$$` / `\(...\)` (or similar) instead of rendered equations.
+
+### Fix directions
+
+1. Inventory what Grok / tools actually emit (KaTeX-friendly `$`, `$$`, code fences, Unicode).
+2. Client-side render with a maintained math library (e.g. KaTeX) on assistant/user bubbles; CSP-safe, no remote fonts required if vendored.
+3. Fallback: keep raw source on render failure; never execute untrusted HTML.
+4. Decide speak-tool vs model-beat parity (only surface promoted speak, or also debug model content).
+
+### Explicit non-goals
+
+- Do not treat this as memory/atom formatting (separate from **BUG-mem-ui-***).
+- Do not pull a heavy full Markdown+math stack without need.
+
+---
+
+## BUG-status-01 — Status page does not scroll
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Med (lower half of Status unreachable on typical viewports) |
+| **Severity later** | Med |
+| **Area** | Glass Status panel layout/CSS (`#panel-status`, `.status-cards`, main content overflow) |
+| **Dogfood** | 2026-07-28 — unable to scroll Status page |
+
+### Symptom
+
+Status panel content that exceeds the viewport cannot be scrolled; cards below the fold (usage, continuous, dev speed, reset, etc.) are hard or impossible to reach depending on window height.
+
+### Fix directions
+
+1. Fix overflow on the main panel / status container (`overflow-y: auto` on the scroll parent, not a non-scrolling flex child).
+2. Verify with reduced height and with all cards expanded (usage product details, etc.).
+3. Regression: keyboard / trackpad scroll and focus order.
+
+---
+
+## BUG-status-02 — Dev speed mode shows checkbox + switch; switch is inoperative
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Low–Med (confusing control; one affordance appears dead) |
+| **Severity later** | Low |
+| **Area** | Glass Status → Dev speed card (`#dev-speed-toggle` in `index.html` / `app.js` `renderDevSpeed`) |
+| **Dogfood** | 2026-07-28 — checkbox and switch sit next to each other; switch does nothing |
+
+### Symptom
+
+Dev speed control presents **both** a native checkbox and a styled switch track. Operator expectation: one switch. The visual switch appears inoperative; functionality may only be on the checkbox (or CSS class mismatch vs continuous/override toggles).
+
+### Likely cause (unverified)
+
+Hard-stop override / continuous use `input.continuous-toggle` + `.toggle-track` styling. Dev speed checkbox may be **missing** `class="continuous-toggle"`, so the native box stays visible beside the track and click targets feel split.
+
+### Fix directions (operator preference)
+
+1. **Remove the visible checkbox** (hide native input via existing toggle pattern).
+2. **Single switch** drives enable/disable; wire the same `PATCH /api/dev-speed` path.
+3. Keep delay number input; badge/meta should track enabled state only from server status.
+
+---
+
+## BUG-status-03 — Hard-stop override does not reliably remember OFF across restarts
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Med (budget safety + operator trust; override ON is dangerous if sticky) |
+| **Severity later** | High if ON sticks unintentionally across restarts |
+| **Area** | `UsageMeter` / `usage.json` `hard_stop_override`; `PATCH /api/usage`; Status override toggle |
+| **Dogfood** | 2026-07-28 — override was ON at one point; after turning OFF it does **not** seem to stay off between restarts (or UI/state disagree) |
+| **Related** | BUG-usage-01; design claims override **persists** in `usage.json` and default is OFF |
+
+### Symptom
+
+Hard-stop override can be switched ON successfully. Turning it OFF appears not to survive process/app restarts (comes back ON), or the Status toggle does not reflect the persisted OFF state. Exact failure mode not fully bisected (write path vs load path vs UI re-check from stale status).
+
+### Design intent (do not regress)
+
+- Override default **OFF**.
+- When set, **persist** across restarts in `usage.json`.
+- Fail-soft on corrupt usage file: **never invent override ON**.
+- Override never skips usage `record`.
+
+### Fix directions
+
+1. Repro matrix: ON → restart (must stay ON); OFF → restart (must stay OFF); corrupt/missing file → OFF.
+2. Confirm PATCH false writes disk; confirm load maps `hard_stop_override` / `override_active` into Status toggle without a race that re-applies last ON.
+3. Glass: do not treat missing field as ON; seed toggle only from server.
+4. Add/extend tests for OFF persistence if coverage is only ON-path happy.
+
+---
+
+## BUG-prompt-01 — System prompt is too hard; soften identity walls (post-memory review)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) — **review after memory is up** (Phase 1 meal/store stable in dogfood) |
+| **Severity now** | Med (over-constrains presence / tone; feels like hard identity enforcement) |
+| **Severity later** | Med–High if hard walls fight natural self from memory + identity digests |
+| **Area** | `prompts/system.md` (loaded via `elyra/prompts/loader.py` → `loop/context.py`); possibly orient copy; tests that pin system-prompt wording (`tests/test_prompts_loader.py`, skill/tool name tests) |
+| **Dogfood** | 2026-07-28 — Memory Context shows system channel with quite hard instructions; operator: *“this is too hard”* |
+
+### Symptom
+
+The fixed **system** block (esp. the leading `# Elyra system` framing and **Hard walls** posture) reads as rigid identity enforcement rather than light ethical guardrails. Walls that should be gentle (self ≠ user, honest tools, speak for glass) are packaged as hard product law that may over-prescribe how Elyra *is*, not only what must not be done.
+
+### Intent for later review (not implement now)
+
+1. Consider **removing or de-emphasizing** the `# Elyra system` element / title framing.
+2. **General pass** over system (and related fixed prompts): keep necessary **ethical gentle walls**, drop or soften over-hard identity / process commandments.
+3. Prefer identity + memory (SELF digest, atoms, orient) to carry *who she is*; system should not re-litigate a full persona constitution every hop.
+4. Revisit after memory dogfood so meal composition and digests are real — do not soften blindly while Context still hard to inspect (**BUG-mem-ui-01**).
+
+### What should probably stay (sketch — confirm in review)
+
+- Self ≠ user (data-path safety; no writing prefs into the wrong digest).
+- Do not pretend tools ran; speak for user-visible glass.
+- No inventing private memories not in context.
+- Secrets / grant stops as real safety.
+
+### What to question in review
+
+- Dense tool-family catalogs and growth pipelines duplicated in system when schemas + skills already teach them.
+- Command tone (“Hard walls”, mandatory hop choreography) vs collaborative teammate tone.
+- Anything that freezes a fixed Elyra persona against emerging memory/identity.
+
+### Explicit non-goals until review
+
+- Do not rewrite `prompts/system.md` in this note’s landing commit.
+- Do not remove self≠user or tool honesty casually.
+- Do not expand system into a longer constitution while “softening.”
+
+### Related
+
+- Memory Context surfaces this as fixed `system` snippet (**BUG-mem-ui-01** beautify may make the hardness more obvious).
+- Identity digests: `prompts/seeds/identity/`, `data/identity/`.
+
+---
+
 ## Template for new entries
 
 ```markdown

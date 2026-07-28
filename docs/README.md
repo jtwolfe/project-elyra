@@ -26,8 +26,8 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
 | 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
 | 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
-| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs (e.g. stale timer/`task_ready` wake storms → moment bloat) |
-| 17 | **[stretch-2/README.md](stretch-2/README.md)** | **Stretch 2 memory planning** (`grok-improvement-memory`) — phases, storage, meal composition |
+| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog (wake storms, usage pacing, glass polish, chat math, soften system prompt post-memory) |
+| 17 | **[stretch-2/README.md](stretch-2/README.md)** | **Stretch 2 memory** — **Phase 1 done** (caveats in known-bugs); next Phase 2 semantic; storage, meal composition |
 | 17a | [stretch-2/inspiration-activity-model-and-storage.md](stretch-2/inspiration-activity-model-and-storage.md) | Activity model, data prototype, storage requirements |
 | 17b | [stretch-2/design-context-meal-composition.md](stretch-2/design-context-meal-composition.md) | Provisional labeled meal + slide-off |
 | 17c | [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (not goals) |

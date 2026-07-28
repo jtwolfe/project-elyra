@@ -6,7 +6,7 @@
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
 | **Date** | 2026-07-28 |
-| **Status** | Implemented (PR1–PR6 code; PR7 architecture note) — see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) |
+| **Status** | **Done** (2026-07-28) — PR1–PR9 shipped; see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md), residual [design-phase-1-remaining-pr8-pr9.md](design-phase-1-remaining-pr8-pr9.md), [README.md](README.md) close-out + [known-bugs.md](../known-bugs.md) caveats |
 | **Branch** | `grok-improvement-memory` (planning); runtime product work typically lands via `grok-improvement` |
 | **Philosophy** | [`docs/memory-atoms.pdf`](../docs/memory-atoms.pdf) |
 | **Baseline** | [`docs/stretch-2/inspiration-activity-model-and-storage.md`](../docs/stretch-2/inspiration-activity-model-and-storage.md) |

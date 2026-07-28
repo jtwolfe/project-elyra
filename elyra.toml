@@ -1,0 +1,5 @@
+# Operator overrides (defaults < this file < data/runtime/* < CLI).
+# Optional LanceDB MemoryStore — requires elyra[memory-lance] in the venv.
+
+[memory]
+backend = "lance"

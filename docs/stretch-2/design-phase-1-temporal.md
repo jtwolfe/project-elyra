@@ -1,6 +1,6 @@
 # Phase 1 — Temporal / Episodic Memory
 
-**Status:** Implemented (code on `grok-improvement-memory` PR stack; flags default off) — see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) for the shipped concept map and [design-phase-1-implementation.md](design-phase-1-implementation.md) for implementation design.
+**Status:** **Done** (2026-07-28) — PR1–PR9 on `grok-improvement-memory`; `enabled`/`write_atoms` default on; optional Lance; glass Memory page. Deferred polish in [known-bugs.md](../known-bugs.md). See [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) and [README.md](README.md) Phase 1 close-out.
 **Branch:** `grok-improvement-memory`
 **Philosophy:** [memory-atoms.pdf](../memory-atoms.pdf)
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)

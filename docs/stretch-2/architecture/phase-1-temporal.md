@@ -1,11 +1,13 @@
 # Architecture — Phase 1 Temporal / Episodic Memory
 
-**Status:** Shipped (implementation on `grok-improvement-memory` PR stack; flags default off)
+**Status:** **Done** (2026-07-28) — Phase 1 operator-complete on `grok-improvement-memory` (PR1–PR9). Defaults: `memory.enabled` / `write_atoms` **on**. Deferred glass/prompt polish: [known-bugs.md](../../known-bugs.md).
 **Package:** `elyra/memory/`
 **Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
 **Design (planning):** [design-phase-1-temporal.md](../design-phase-1-temporal.md), [design-phase-1-implementation.md](../design-phase-1-implementation.md)
+**Residual stack (closed):** [design-phase-1-remaining-pr8-pr9.md](../design-phase-1-remaining-pr8-pr9.md)
 **Meal sketch:** [design-context-meal-composition.md](../design-context-meal-composition.md)
 **Baseline activities:** [inspiration-activity-model-and-storage.md](../inspiration-activity-model-and-storage.md) §3
+**Program status:** [stretch-2 README](../README.md) Phase 1 close-out
 
 This is the **post-implement concept-mapping manual** for Phase 1. It describes what shipped, how code maps to essay concepts, which activities are live, and how the system fails. It is not a re-statement of the design PR stack plan.
 
@@ -19,18 +21,23 @@ Phase 1 adds a durable episodic substrate that can run **without** embeddings, A
 |---------|------------------|
 | Atom record + period grids | `elyra/memory/types.py` |
 | Swappable store Protocol + factory | `elyra/memory/store.py` |
-| Default hermetic backend | `elyra/memory/jsonl_store.py` (`JsonlMemoryStore`) |
+| Default hermetic backend | `elyra/memory/jsonl_store.py` (`JsonlMemoryStore`) — **CI / default** |
+| Optional Lance backend (PR8) | `elyra/memory/lance_store.py`; `memory.backend = "lance"` + `elyra[memory-lance]` |
 | Beat → atom promotion | `elyra/memory/promote.py` |
 | Range / walk helpers | `elyra/memory/temporal.py` |
 | Period summary ladder (template-first) | `elyra/memory/ladder.py` |
 | Labeled meal + slide-off + media expand | `elyra/memory/meal.py` |
+| Glass inspect helpers | `elyra/memory/inspect.py` |
 | Token split (`len//4`) | `elyra/memory/tokens.py` |
 | Paths + `MemorySettings` | `elyra/memory/config.py` |
 | Settings / flags | `Settings.memory` in `elyra/settings.py` (`[memory]` in elyra.toml) |
 | Write path | `elyra/loop/doloop.py` (`promote_beat` on memorable beats) |
 | Store open, wake promote, idle ladder, meal drop-in | `elyra/presence/worker.py` |
+| Glass Memory page (PR9) | Context meal inspector, atoms list; Vectors/Graph **stubs** |
 
-**Not shipped in Phase 1:** LanceDB backend (factory falls back to jsonl), Nemotron embeddings, directed keep-set, trajectory / success edges, automatic archival of fine atoms under summaries, historical backfill of pre-flag life.
+**Not shipped in Phase 1 (by design):** Nemotron embeddings, ANN ranking, directed keep-set, trajectory / success edges, automatic archival of fine atoms under summaries, historical backfill of pre-flag life, rich Vectors/Graph UIs.
+
+**Deferred polish (not Phase 1 reopen):** Moments/Memory UI beautify, inspector flash, Status bugs, system-prompt soften — see [known-bugs.md](../../known-bugs.md).
 
 ---
 
