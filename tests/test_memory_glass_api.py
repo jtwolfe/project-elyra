@@ -152,7 +152,8 @@ def test_memory_overview_defaults(paths):
         assert code == 200
         assert "memory" in body
         assert "tabs" in body
-        assert body["tabs"]["vectors"]["stub"] is True
+        assert body["tabs"]["vectors"]["stub"] is False
+        assert body["tabs"]["vectors"]["phase"] == "2"
         assert body["tabs"]["graph"]["stub"] is True
         assert body["tabs"]["context"] is True
         assert body["tabs"]["atoms"] is True

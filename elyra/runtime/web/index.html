@@ -306,15 +306,66 @@
             <div id="memory-atom-detail" class="list-panel detail-panel" hidden></div>
           </div>
           <div id="memory-tab-vectors" class="memory-tab-panel" role="tabpanel" hidden>
-            <div class="memory-stub card">
+            <div id="memory-vectors-health" class="memory-flags status-fields">loading…</div>
+            <div class="memory-vectors-toolbar">
+              <label class="status-label" for="memory-vector-status">Status</label>
+              <select
+                id="memory-vector-status"
+                class="status-select memory-filter"
+                aria-label="Filter by embedding status"
+              >
+                <option value="">all</option>
+                <option value="pending">pending</option>
+                <option value="ready">ready</option>
+                <option value="failed">failed</option>
+                <option value="skipped">skipped</option>
+                <option value="none">none</option>
+              </select>
+              <button type="button" id="memory-vectors-apply" class="btn-secondary btn-sm">
+                Apply
+              </button>
+            </div>
+            <div id="memory-vectors-list" class="list-panel list-panel-auto">loading…</div>
+            <div class="memory-neighbors-panel card">
               <div class="card-head">
-                <strong>Vectors</strong>
-                <span class="badge">Phase 2</span>
+                <strong>Neighbor inspect</strong>
+                <span class="badge">ANN</span>
               </div>
-              <p class="muted">
-                Embeddings + ANN browser land in Phase 2 (semantic memory). No projection UI here —
-                this tab is a reserved slot only.
-              </p>
+              <div class="memory-neighbors-toolbar">
+                <label class="status-label" for="memory-neighbor-atom">Atom id</label>
+                <input
+                  id="memory-neighbor-atom"
+                  type="text"
+                  class="status-input memory-filter"
+                  placeholder="a_…"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-neighbor-q">or query</label>
+                <input
+                  id="memory-neighbor-q"
+                  type="text"
+                  class="status-input memory-filter memory-neighbor-q"
+                  placeholder="free-text seed"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-neighbor-k">k</label>
+                <input
+                  id="memory-neighbor-k"
+                  type="number"
+                  class="status-input memory-filter memory-neighbor-k"
+                  value="8"
+                  min="1"
+                  max="50"
+                />
+                <button type="button" id="memory-neighbors-run" class="btn-secondary btn-sm">
+                  Search
+                </button>
+              </div>
+              <div id="memory-neighbors-list" class="list-panel list-panel-auto memory-neighbors-list">
+                <p class="muted empty memory-empty">Pick an atom id or free-text query.</p>
+              </div>
             </div>
           </div>
           <div id="memory-tab-graph" class="memory-tab-panel" role="tabpanel" hidden>

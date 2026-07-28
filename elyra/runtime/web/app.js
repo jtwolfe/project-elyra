@@ -39,6 +39,15 @@ const memoryAtomDetail = $("#memory-atom-detail");
 const memoryAtomKind = $("#memory-atom-kind");
 const memoryAtomMoment = $("#memory-atom-moment");
 const memoryAtomsApply = $("#memory-atoms-apply");
+const memoryVectorsHealth = $("#memory-vectors-health");
+const memoryVectorsList = $("#memory-vectors-list");
+const memoryVectorStatus = $("#memory-vector-status");
+const memoryVectorsApply = $("#memory-vectors-apply");
+const memoryNeighborAtom = $("#memory-neighbor-atom");
+const memoryNeighborQ = $("#memory-neighbor-q");
+const memoryNeighborK = $("#memory-neighbor-k");
+const memoryNeighborsRun = $("#memory-neighbors-run");
+const memoryNeighborsList = $("#memory-neighbors-list");
 /** @type {"context" | "atoms" | "vectors" | "graph"} */
 let memoryActiveTab = "context";
 /** @type {string | null} */
@@ -2427,13 +2436,247 @@ async function refreshMemoryAtoms() {
   }
 }
 
+function renderVectorsHealth(data) {
+  if (!memoryVectorsHealth) return;
+  memoryVectorsHealth.innerHTML = "";
+  const enc = data.encoder || {};
+  const idx = data.index || {};
+  const mem = data.memory || {};
+  const rows = [
+    [
+      "encoder",
+      enc.ok
+        ? `${enc.backend || "—"} · ${enc.device || enc.device_pref || "—"}`
+        : enc.error || "down",
+      enc.ok === true,
+    ],
+    ["model", enc.model_id || "—", null],
+    [
+      "queue",
+      `${enc.queue_depth != null ? enc.queue_depth : 0}/${
+        enc.queue_max != null ? enc.queue_max : "—"
+      }${enc.queue_dropped ? ` · dropped=${enc.queue_dropped}` : ""}`,
+      null,
+    ],
+    [
+      "embed flags",
+      `embed=${enc.embed_enabled ? "on" : "off"} · semantic=${
+        enc.semantic_enabled ? "on" : "off"
+      }`,
+      null,
+    ],
+    [
+      "index",
+      idx.ok
+        ? `${idx.backend || "—"} · ready=${
+            idx.vectors_ready != null ? idx.vectors_ready : 0
+          }`
+        : idx.error || "down",
+      idx.ok === true,
+    ],
+    [
+      "freshness",
+      [
+        idx.index_stale ? "stale" : "fresh",
+        idx.search_mode ? `mode=${idx.search_mode}` : null,
+        idx.recent_buffer != null ? `buf=${idx.recent_buffer}` : null,
+        idx.last_optimize ? `opt=${idx.last_optimize}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "—",
+      idx.index_stale === true ? false : null,
+    ],
+    ["store", mem.ok ? mem.backend || "ok" : mem.error || "down", mem.ok === true],
+  ];
+  for (const [label, value, good] of rows) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = label;
+    const val = document.createElement("span");
+    val.className = "status-value";
+    if (good === true) val.classList.add("status-ok");
+    if (good === false) {
+      val.classList.add(
+        label === "freshness" ? "memory-vector-stale" : "status-bad"
+      );
+    }
+    val.textContent = value;
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryVectorsHealth.appendChild(row);
+  }
+}
+
+function renderVectorsAtomsList(atoms) {
+  if (!memoryVectorsList) return;
+  memoryVectorsList.innerHTML = "";
+  if (!atoms.length) {
+    memoryVectorsList.innerHTML = `<p class="muted empty memory-empty">No atoms match this embedding status.</p>`;
+    return;
+  }
+  for (const a of atoms) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn";
+    card.dataset.atomId = a.atom_id || "";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const strong = document.createElement("strong");
+    strong.textContent = a.embedding_status || a.kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = a.kind || "—";
+    head.appendChild(strong);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const channels = Array.isArray(a.channels) && a.channels.length
+      ? `ch=${a.channels.join(",")}`
+      : null;
+    meta.textContent = [
+      a.atom_id || "—",
+      a.t_start || null,
+      channels,
+      a.embed_error ? `err=${a.embed_error}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const snip = document.createElement("div");
+    snip.className = "muted";
+    snip.style.fontSize = "0.85rem";
+    snip.style.marginTop = "0.35rem";
+    snip.textContent = a.text || "(empty)";
+    card.appendChild(snip);
+    card.addEventListener("click", () => {
+      if (memoryNeighborAtom && a.atom_id) {
+        memoryNeighborAtom.value = a.atom_id;
+      }
+      if (memoryNeighborQ) memoryNeighborQ.value = "";
+      runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
+    });
+    memoryVectorsList.appendChild(card);
+  }
+}
+
+function renderNeighborsList(data) {
+  if (!memoryNeighborsList) return;
+  memoryNeighborsList.innerHTML = "";
+  const neighbors = data.neighbors || [];
+  if (!neighbors.length) {
+    const reason = data.omitted_reason || data.error || "no hits";
+    memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+      String(reason)
+    )}</p>`;
+    return;
+  }
+  for (const n of neighbors) {
+    const card = document.createElement("div");
+    card.className = "card memory-channel-card";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const title = document.createElement("strong");
+    title.textContent = n.kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    const score =
+      n.score != null && Number.isFinite(Number(n.score))
+        ? Number(n.score).toFixed(4)
+        : "—";
+    badge.textContent = `score=${score}`;
+    head.appendChild(title);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      n.atom_id || "—",
+      n.moment_id ? `moment=${n.moment_id}` : null,
+      n.channel ? `ch=${n.channel}` : null,
+      n.embedding_status || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet";
+    pre.textContent = n.snippet || "(empty)";
+    card.appendChild(pre);
+    memoryNeighborsList.appendChild(card);
+  }
+}
+
+async function refreshMemoryVectors() {
+  const health = await fetchJson("/api/memory/vectors");
+  renderVectorsHealth(health);
+
+  const params = new URLSearchParams();
+  params.set("limit", "50");
+  const status = memoryVectorStatus ? memoryVectorStatus.value.trim() : "";
+  if (status) params.set("status", status);
+  const data = await fetchJson(
+    `/api/memory/vectors/atoms?${params.toString()}`
+  );
+  if (!data.ok && !(data.atoms || []).length) {
+    if (memoryVectorsList) {
+      memoryVectorsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        data.error || "store unavailable"
+      )}</p>`;
+    }
+    return;
+  }
+  renderVectorsAtomsList(data.atoms || []);
+}
+
+async function runNeighborSearch() {
+  const params = new URLSearchParams();
+  const atomId = memoryNeighborAtom ? memoryNeighborAtom.value.trim() : "";
+  const q = memoryNeighborQ ? memoryNeighborQ.value.trim() : "";
+  let k = 8;
+  if (memoryNeighborK) {
+    const raw = parseInt(memoryNeighborK.value, 10);
+    if (Number.isFinite(raw)) k = raw;
+  }
+  params.set("k", String(k));
+  if (atomId) params.set("atom_id", atomId);
+  else if (q) params.set("q", q);
+  else {
+    if (memoryNeighborsList) {
+      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id or free-text query.</p>`;
+    }
+    return;
+  }
+  if (memoryNeighborsList) {
+    memoryNeighborsList.innerHTML = `<p class="muted">searching…</p>`;
+  }
+  try {
+    const data = await fetchJson(
+      `/api/memory/vectors/neighbors?${params.toString()}`
+    );
+    renderNeighborsList(data);
+  } catch (err) {
+    if (memoryNeighborsList) {
+      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+  }
+}
+
 async function refreshMemory() {
   if (memoryActiveTab === "atoms") {
     await refreshMemoryAtoms();
     return;
   }
-  if (memoryActiveTab === "vectors" || memoryActiveTab === "graph") {
-    // Stubs — static HTML only.
+  if (memoryActiveTab === "vectors") {
+    await refreshMemoryVectors();
+    return;
+  }
+  if (memoryActiveTab === "graph") {
+    // Stub phase 2a — static HTML only.
     return;
   }
   await refreshMemoryContext();
@@ -2460,6 +2703,23 @@ if (memoryAtomKind) {
     if (memoryActiveTab === "atoms") {
       refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
     }
+  });
+}
+if (memoryVectorsApply) {
+  memoryVectorsApply.addEventListener("click", () => {
+    refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+  });
+}
+if (memoryVectorStatus) {
+  memoryVectorStatus.addEventListener("change", () => {
+    if (memoryActiveTab === "vectors") {
+      refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+    }
+  });
+}
+if (memoryNeighborsRun) {
+  memoryNeighborsRun.addEventListener("click", () => {
+    runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
   });
 }
 

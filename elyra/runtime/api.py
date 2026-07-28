@@ -9,7 +9,8 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
   STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
   named secrets store GET/PUT/DELETE + grants (PR5 / IK10),
-  memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only).
+  memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only;
+  Phase 2 PR7 — vectors health/status/neighbors, graph still stub).
 Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
 """
@@ -291,7 +292,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, {"moment": meta, "beats": beats})
             return
 
-        # Memory inspect (PR9) — read-only; no secrets; fail closed if store down.
+        # Memory inspect (PR9 + Phase 2 PR7) — read-only; no secrets; fail closed.
         if path == "/api/memory" or path == "/api/memory/":
             self._get_memory_overview()
             return
@@ -307,6 +308,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 self._json(400, {"ok": False, "error": "invalid atom id"})
                 return
             self._get_memory_atom(aid)
+            return
+        if path == "/api/memory/vectors" or path == "/api/memory/vectors/":
+            self._get_memory_vectors()
+            return
+        if path == "/api/memory/vectors/atoms":
+            self._get_memory_vectors_atoms(qs)
+            return
+        if path == "/api/memory/vectors/neighbors":
+            self._get_memory_vectors_neighbors(qs)
             return
         if path.startswith("/api/memory/"):
             self._json(404, {"ok": False, "error": "not found"})
@@ -630,7 +640,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             "tabs": {
                 "context": True,
                 "atoms": True,
-                "vectors": {"stub": True, "phase": "2"},
+                "vectors": {"stub": False, "phase": "2"},
                 "graph": {"stub": True, "phase": "2a"},
             },
         }
@@ -912,6 +922,305 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "memory": flags,
                 },
             )
+
+    def _vectors_worker_handles(self) -> tuple[Any | None, Any | None, Any | None]:
+        """Best-effort (embedder, queue, index) from presence worker — never raises."""
+        embedder = getattr(self.worker, "_embedder", None)
+        queue = getattr(self.worker, "_encode_queue", None)
+        index = getattr(self.worker, "_embedding_index", None)
+        # Warm index if store is open (Null for JSONL); glass path only.
+        if index is None:
+            ensure_idx = getattr(self.worker, "_ensure_embedding_index", None)
+            if callable(ensure_idx):
+                try:
+                    index = ensure_idx()
+                except Exception:  # noqa: BLE001
+                    index = None
+        return embedder, queue, index
+
+    def _get_memory_vectors(self) -> None:
+        """GET /api/memory/vectors — encoder + index health (read-only)."""
+        from elyra.memory.inspect import encoder_health_block, index_health_block
+
+        flags = self._memory_flags_block()
+        mem_cfg = getattr(getattr(self.worker, "settings", None), "memory", None)
+        embedder, queue, index = self._vectors_worker_handles()
+        encoder = encoder_health_block(
+            settings=mem_cfg, embedder=embedder, queue=queue
+        )
+        index_h = index_health_block(index)
+        # Overview is always 200; ok when store flags ok (index may still be null).
+        ok = bool(flags.get("ok")) or bool(encoder.get("ok")) or bool(index_h.get("ok"))
+        self._json(
+            200,
+            {
+                "ok": ok,
+                "encoder": encoder,
+                "index": index_h,
+                "memory": flags,
+                "tabs": {
+                    "vectors": {"stub": False, "phase": "2"},
+                    "graph": {"stub": True, "phase": "2a"},
+                },
+            },
+        )
+
+    def _get_memory_vectors_atoms(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/vectors/atoms — embedding status list (read-only)."""
+        flags = self._memory_flags_block()
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+        if store is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        status = (qs.get("status") or [None])[0]
+        limit_raw = (qs.get("limit") or ["50"])[0]
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        try:
+            from elyra.memory.inspect import (
+                atom_to_vector_row,
+                list_atoms_by_embedding_status,
+            )
+
+            atoms = list_atoms_by_embedding_status(
+                store,
+                status=status if isinstance(status, str) else None,
+                limit=limit,
+            )
+            rows = [atom_to_vector_row(a) for a in atoms]
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "atoms": rows,
+                    "count": len(rows),
+                    "limit": limit,
+                    "filters": {
+                        "status": status if status else None,
+                    },
+                    "memory": flags,
+                },
+            )
+        except ValueError as exc:
+            self._json(
+                400,
+                {"ok": False, "error": str(exc), "atoms": [], "memory": flags},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("list memory vectors atoms failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+
+    def _get_memory_vectors_neighbors(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/vectors/neighbors — top-k by atom_id or free-text q.
+
+        Read-only. No raw 2048-d vectors in the response. Fail soft with empty
+        neighbors when encoder/index unavailable (may no-op).
+        """
+        from elyra.memory.inspect import (
+            neighbor_hit_to_inspect,
+            query_vector_for_atom,
+            resolve_neighbor_k,
+        )
+
+        flags = self._memory_flags_block()
+        atom_id_raw = (qs.get("atom_id") or [None])[0]
+        q_raw = (qs.get("q") or [None])[0]
+        channel = ((qs.get("channel") or ["joint"])[0] or "joint").strip() or "joint"
+        k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
+
+        atom_id = (
+            atom_id_raw.strip()
+            if isinstance(atom_id_raw, str) and atom_id_raw.strip()
+            else None
+        )
+        query_text = (
+            q_raw.strip() if isinstance(q_raw, str) and q_raw.strip() else None
+        )
+        if not atom_id and not query_text:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "atom_id or q required",
+                    "neighbors": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "neighbors": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        embedder, _queue, index = self._vectors_worker_handles()
+        query_vec: list[float] | None = None
+        seed_atom_id: str | None = atom_id
+        source = "atom" if atom_id else "text"
+        omit_reason: str | None = None
+
+        if atom_id:
+            query_vec, omit_reason = query_vector_for_atom(
+                atom_id, index=index, store=store, channel=channel
+            )
+            if query_vec is None and store is not None:
+                # Fall back: encode atom content_text when encoder is warm.
+                try:
+                    atom = store.get_atom(atom_id)
+                except Exception:  # noqa: BLE001
+                    atom = None
+                if atom is None:
+                    self._json(
+                        404,
+                        {
+                            "ok": False,
+                            "error": "atom not found",
+                            "neighbors": [],
+                            "memory": flags,
+                        },
+                    )
+                    return
+                text = (atom.content_text or "").strip()
+                if text and embedder is None:
+                    ensure_emb = getattr(self.worker, "_ensure_embedder", None)
+                    if callable(ensure_emb):
+                        try:
+                            embedder = ensure_emb()
+                        except Exception:  # noqa: BLE001
+                            embedder = None
+                if text and embedder is not None:
+                    try:
+                        query_vec = list(embedder.encode_text(text))
+                        omit_reason = None
+                        source = "atom_text"
+                    except Exception:  # noqa: BLE001
+                        omit_reason = "encode_failed"
+                elif query_vec is None:
+                    omit_reason = omit_reason or "no_vector"
+        else:
+            # Free-text query — need encoder.
+            if embedder is None:
+                ensure_emb = getattr(self.worker, "_ensure_embedder", None)
+                if callable(ensure_emb):
+                    try:
+                        embedder = ensure_emb()
+                    except Exception:  # noqa: BLE001
+                        embedder = None
+            if embedder is None:
+                omit_reason = "encoder"
+            else:
+                try:
+                    health = embedder.health() if hasattr(embedder, "health") else {}
+                    if isinstance(health, dict) and health.get("ok") is False:
+                        omit_reason = "encoder"
+                    else:
+                        query_vec = list(embedder.encode_text(str(query_text)))
+                except Exception:  # noqa: BLE001
+                    omit_reason = "encode_failed"
+
+        neighbors: list[dict[str, Any]] = []
+        if query_vec is not None and index is not None:
+            exclude: set[str] = set()
+            if seed_atom_id:
+                exclude.add(seed_atom_id)
+            try:
+                # Fetch k+1 when excluding seed so we still fill the page.
+                fetch_k = k + (1 if exclude else 0)
+                hits = index.search(
+                    query_vec,
+                    k=fetch_k,
+                    channel=channel,
+                    exclude_atom_ids=exclude or None,
+                )
+                for hit in hits:
+                    if seed_atom_id and getattr(hit, "atom_id", None) == seed_atom_id:
+                        continue
+                    neighbors.append(neighbor_hit_to_inspect(hit))
+                    if len(neighbors) >= k:
+                        break
+            except Exception as exc:  # noqa: BLE001
+                _LOG.exception("memory vectors neighbor search failed")
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error": str(exc) or type(exc).__name__,
+                        "neighbors": [],
+                        "memory": flags,
+                        "query": {
+                            "atom_id": atom_id,
+                            "q": query_text,
+                            "channel": channel,
+                            "k": k,
+                            "source": source,
+                        },
+                    },
+                )
+                return
+        elif query_vec is not None and index is None:
+            omit_reason = omit_reason or "no_index"
+        elif query_vec is None and omit_reason is None:
+            omit_reason = "no_vector"
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "neighbors": neighbors,
+                "count": len(neighbors),
+                "omitted_reason": omit_reason if not neighbors else None,
+                "query": {
+                    "atom_id": atom_id,
+                    "q": query_text,
+                    "channel": channel,
+                    "k": k,
+                    "source": source,
+                },
+                "memory": flags,
+            },
+        )
 
     # ── Glass session + identity panel helpers ───────────────────────────
 

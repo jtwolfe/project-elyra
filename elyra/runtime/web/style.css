@@ -2757,3 +2757,48 @@ body {
 .memory-empty {
   padding: 0.5rem 0;
 }
+
+.memory-vectors-toolbar,
+.memory-neighbors-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  padding: 0.65rem 1.5rem 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-neighbors-panel {
+  margin: 0.75rem 1.5rem 1rem;
+  max-width: 52rem;
+}
+
+.memory-neighbors-panel .memory-neighbors-toolbar {
+  padding: 0.5rem 0 0.35rem;
+  border-bottom: none;
+}
+
+.memory-neighbor-q {
+  min-width: 10rem;
+  flex: 1 1 12rem;
+  max-width: 22rem;
+}
+
+.memory-neighbor-k {
+  max-width: 4.5rem;
+  width: 4.5rem;
+}
+
+.memory-neighbors-list {
+  max-height: min(36vh, 20rem);
+  margin-top: 0.35rem;
+}
+
+#memory-vectors-list {
+  flex: 0 1 auto;
+  max-height: min(36vh, 22rem);
+}
+
+.memory-vector-stale {
+  color: var(--warn, #c9a227);
+}
