@@ -18,12 +18,19 @@ import tomllib
 
 from elyra.llm.constants import MODEL_CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
-from elyra.memory.config import MEMORY_BACKENDS, MemorySettings
+from elyra.memory.config import (
+    MEMORY_BACKENDS,
+    MEMORY_EMBED_BACKENDS,
+    MEMORY_EMBED_DEVICES,
+    MemorySettings,
+)
 
 _CLOSE_GATES = frozenset({"soft", "hard"})
 _PROVIDER_NAMES = frozenset({"xai", "local"})
 _CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
 _MEMORY_BACKENDS = MEMORY_BACKENDS
+_MEMORY_EMBED_BACKENDS = MEMORY_EMBED_BACKENDS
+_MEMORY_EMBED_DEVICES = MEMORY_EMBED_DEVICES
 
 
 @dataclass(frozen=True)
@@ -316,7 +323,7 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(
                 f"{path}: expected None or non-empty str, got {coerced!r}"
             )
-        # Memory (Phase 1): backend allowlist + fraction/horizon/budget floors.
+        # Memory (Phase 1 + Phase 2): allowlists + fraction/horizon/budget floors.
         if path == "memory.backend" and coerced not in _MEMORY_BACKENDS:
             raise ValueError(
                 f"{path}: expected one of {sorted(_MEMORY_BACKENDS)}, "
@@ -344,6 +351,50 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         if path == "memory.regather_every_n_hops" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.compact_max_tokens" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        # Phase 2 embed / semantic (KD9 defaults off; validation always active).
+        if path == "memory.embed_backend" and coerced not in _MEMORY_EMBED_BACKENDS:
+            raise ValueError(
+                f"{path}: expected one of {sorted(_MEMORY_EMBED_BACKENDS)}, "
+                f"got {coerced!r}"
+            )
+        if path == "memory.embed_device" and coerced not in _MEMORY_EMBED_DEVICES:
+            raise ValueError(
+                f"{path}: expected one of {sorted(_MEMORY_EMBED_DEVICES)}, "
+                f"got {coerced!r}"
+            )
+        if path in (
+            "memory.semantic_fraction",
+            "memory.episodic_fraction_with_semantic",
+            "memory.temporal_min_fraction",
+            "memory.semantic_min_score",
+        ):
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path in (
+            "memory.semantic_horizon_hours",
+            "memory.embed_media_max_seconds",
+        ) and coerced <= 0:
+            raise ValueError(f"{path}: expected float/int > 0, got {coerced!r}")
+        if path == "memory.encode_queue_max" and coerced < 1:
+            raise ValueError(f"{path}: expected int >= 1, got {coerced!r}")
+        if path in (
+            "memory.encode_max_ms_per_tick",
+            "memory.encode_max_items_per_tick",
+            "memory.encode_max_attempts",
+            "memory.encode_query_max_ms",
+            "memory.semantic_select_max_ms",
+            "memory.semantic_top_k",
+            "memory.ann_recent_buffer_max",
+            "memory.ann_full_search_below",
+            "memory.ann_optimize_every_n_encodes",
+            "memory.ann_optimize_interval_s",
+            "memory.ann_optimize_max_ms",
+            "memory.parcel_threshold_chars",
+            "memory.embed_media_max_bytes",
+        ) and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         filtered[k] = coerced
 

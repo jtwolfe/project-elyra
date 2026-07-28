@@ -70,7 +70,7 @@ def test_default_settings_match_design():
     assert s.usage.credits_stale_after_s == 3600.0
     assert s.usage.auto_throttle_model is False
     assert s.usage.throttle_model is None
-    # Memory defaults OFF (PR5: no write, no meal until dogfood / PR6).
+    # Memory defaults (Phase 1 on; Phase 2 semantic/embed OFF — KD9).
     assert s.memory.enabled is True
     assert s.memory.write_atoms is True
     assert s.memory.backend == "jsonl"
@@ -80,6 +80,34 @@ def test_default_settings_match_design():
     assert s.memory.ladder_max_ms_per_tick == 50
     assert s.memory.link_across_moments is True
     assert s.memory.max_tool_atoms_per_moment == 48
+    # Phase 2 semantic/embed knobs default off (no behaviour change).
+    assert s.memory.semantic_enabled is False
+    assert s.memory.embed_enabled is False
+    assert s.memory.parcels_enabled is False
+    assert s.memory.embed_backend == "mock"
+    assert s.memory.embed_device == "auto"
+    assert s.memory.embed_model_id == "nvidia/omni-embed-nemotron-3b"
+    assert s.memory.embed_preload is False
+    assert s.memory.semantic_fraction == 0.12
+    assert s.memory.episodic_fraction_with_semantic == 0.18
+    assert s.memory.temporal_min_fraction == 0.55
+    assert s.memory.semantic_horizon_hours == 168.0
+    assert s.memory.semantic_top_k == 12
+    assert s.memory.semantic_min_score == 0.0
+    assert s.memory.semantic_select_max_ms == 50
+    assert s.memory.encode_query_max_ms == 30
+    assert s.memory.encode_queue_max == 1024
+    assert s.memory.encode_max_ms_per_tick == 100
+    assert s.memory.encode_max_items_per_tick == 4
+    assert s.memory.encode_max_attempts == 3
+    assert s.memory.ann_recent_buffer_max == 256
+    assert s.memory.ann_full_search_below == 2000
+    assert s.memory.ann_optimize_every_n_encodes == 64
+    assert s.memory.ann_optimize_interval_s == 300
+    assert s.memory.ann_optimize_max_ms == 200
+    assert s.memory.parcel_threshold_chars == 8000
+    assert s.memory.embed_media_max_bytes == 8_000_000
+    assert s.memory.embed_media_max_seconds == 30
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert not hasattr(s, "context_tokens")
@@ -275,6 +303,149 @@ def test_invalid_memory_horizon_and_ladder_ms_raise(tmp_path):
     )
     with pytest.raises(ValueError, match="memory.max_tool_atoms_per_moment"):
         load_settings(tmp_path)
+
+
+def test_memory_phase2_semantic_toml_and_defaults(tmp_path):
+    """Phase 2 knobs load from toml; defaults stay off when omitted."""
+    s = load_settings(tmp_path)
+    assert s.memory.semantic_enabled is False
+    assert s.memory.embed_enabled is False
+    assert s.memory.parcels_enabled is False
+
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+semantic_enabled = true
+embed_enabled = true
+embed_backend = "mock"
+embed_device = "cpu"
+semantic_fraction = 0.10
+episodic_fraction_with_semantic = 0.15
+temporal_min_fraction = 0.60
+semantic_horizon_hours = 72.0
+semantic_top_k = 8
+semantic_min_score = 0.25
+semantic_select_max_ms = 40
+encode_queue_max = 64
+encode_max_ms_per_tick = 80
+parcels_enabled = true
+parcel_threshold_chars = 4000
+ann_recent_buffer_max = 128
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s2 = load_settings(tmp_path)
+    assert s2.memory.semantic_enabled is True
+    assert s2.memory.embed_enabled is True
+    assert s2.memory.embed_backend == "mock"
+    assert s2.memory.embed_device == "cpu"
+    assert s2.memory.semantic_fraction == 0.10
+    assert s2.memory.episodic_fraction_with_semantic == 0.15
+    assert s2.memory.temporal_min_fraction == 0.60
+    assert s2.memory.semantic_horizon_hours == 72.0
+    assert s2.memory.semantic_top_k == 8
+    assert s2.memory.semantic_min_score == 0.25
+    assert s2.memory.semantic_select_max_ms == 40
+    assert s2.memory.encode_queue_max == 64
+    assert s2.memory.encode_max_ms_per_tick == 80
+    assert s2.memory.parcels_enabled is True
+    assert s2.memory.parcel_threshold_chars == 4000
+    assert s2.memory.ann_recent_buffer_max == 128
+
+
+def test_invalid_memory_embed_backend_and_device_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nembed_backend = "openai"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.embed_backend"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nembed_device = "tpu"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.embed_device"):
+        load_settings(tmp_path)
+
+
+def test_invalid_memory_semantic_fractions_raise(tmp_path):
+    for field, bad in (
+        ("semantic_fraction", 1.5),
+        ("semantic_fraction", -0.1),
+        ("episodic_fraction_with_semantic", 2.0),
+        ("temporal_min_fraction", -0.01),
+        ("semantic_min_score", 1.1),
+    ):
+        (tmp_path / "elyra.toml").write_text(
+            f"[memory]\n{field} = {bad}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=f"memory\\.{field}"):
+            load_settings(tmp_path)
+
+
+def test_invalid_memory_semantic_budgets_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsemantic_horizon_hours = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.semantic_horizon_hours"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nembed_media_max_seconds = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.embed_media_max_seconds"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nencode_queue_max = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.encode_queue_max"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsemantic_select_max_ms = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.semantic_select_max_ms"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_optimize_max_ms = -5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_optimize_max_ms"):
+        load_settings(tmp_path)
+
+
+def test_memory_phase2_zero_budgets_allowed_where_safe(tmp_path):
+    """0 is valid for ms budgets / top_k / optimize counters (off/unlimited)."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+encode_max_ms_per_tick = 0
+encode_max_items_per_tick = 0
+encode_query_max_ms = 0
+semantic_select_max_ms = 0
+semantic_top_k = 0
+ann_optimize_every_n_encodes = 0
+ann_optimize_interval_s = 0
+ann_optimize_max_ms = 0
+parcel_threshold_chars = 0
+embed_media_max_bytes = 0
+semantic_min_score = 0.0
+semantic_fraction = 0.0
+temporal_min_fraction = 1.0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.encode_max_ms_per_tick == 0
+    assert s.memory.semantic_top_k == 0
+    assert s.memory.semantic_min_score == 0.0
+    assert s.memory.semantic_fraction == 0.0
+    assert s.memory.temporal_min_fraction == 1.0
 
 
 def test_load_settings_provider_and_usage_toml(tmp_path):

@@ -55,9 +55,10 @@ PERIOD_SCALE_ORDER: tuple[PeriodScale, ...] = (
     "1m",
 )
 
-EmbeddingStatus = Literal["none", "pending", "ready", "failed"]
+# KD8: skipped = empty content / encoder permanently unavailable for atom.
+EmbeddingStatus = Literal["none", "pending", "ready", "failed", "skipped"]
 EMBEDDING_STATUSES: frozenset[str] = frozenset(
-    {"none", "pending", "ready", "failed"}
+    {"none", "pending", "ready", "failed", "skipped"}
 )
 
 

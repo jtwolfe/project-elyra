@@ -1,9 +1,9 @@
-"""Memory path roots and Phase 1 settings helpers.
+"""Memory path roots and settings helpers (Phase 1 + Phase 2 knobs).
 
 Scope: data/memory layout constants, MemorySettings defaults used by the store
 and nested under ``Settings.memory`` (elyra.toml / CLI merge in settings.py).
-In scope: path helpers, frozen MemorySettings, backend allowlist.
-Out of scope: promote/meal/ladder runtime wiring (presence / doloop).
+In scope: path helpers, frozen MemorySettings, backend/embed allowlists.
+Out of scope: promote/meal/ladder/embed worker wiring (later PRs).
 """
 
 from __future__ import annotations
@@ -33,14 +33,22 @@ MEMORY_JSONL_COMPACT_DIRTY = 256
 MEMORY_BACKENDS = frozenset({"jsonl", "lance"})
 _MEMORY_BACKENDS = MEMORY_BACKENDS  # alias for older call sites
 
+# Phase 2 embed allowlists (mirrored in embed/types.py for pure imports).
+MEMORY_EMBED_BACKENDS = frozenset({"mock", "nemotron"})
+MEMORY_EMBED_DEVICES = frozenset({"auto", "cuda", "rocm", "cpu"})
+
 
 @dataclass(frozen=True)
 class MemorySettings:
-    """Phase 1 memory knobs (defaults both false — no write, no meal).
+    """Memory knobs (Phase 1 + Phase 2 semantic/embed; semantic defaults OFF).
 
     Nested under ``Settings.memory``; loaded from ``[memory]`` in elyra.toml.
     Store-only knobs (inline/compact) remain on this dataclass so factory and
     toml can tune them without a second type.
+
+    Phase 2 flags (KD9 / KD23): ``semantic_enabled``, ``embed_enabled``, and
+    ``parcels_enabled`` default **false** — zero behaviour change until
+    operators opt in. No worker/meal wiring reads these in PR1.
     """
 
     enabled: bool = True  # outer meal uses labeled memory package (not full glass slide)
@@ -62,6 +70,36 @@ class MemorySettings:
     inline_max_chars: int = MEMORY_INLINE_MAX_CHARS
     jsonl_compact_bytes: int = MEMORY_JSONL_COMPACT_BYTES
     jsonl_compact_dirty: int = MEMORY_JSONL_COMPACT_DIRTY
+
+    # --- Phase 2 semantic / embed (defaults OFF — KD9) ---
+    semantic_enabled: bool = False  # meal channel + pending writes
+    embed_enabled: bool = False  # allow load real/mock encoder drain
+    embed_backend: str = "mock"  # mock | nemotron
+    embed_model_id: str = "nvidia/omni-embed-nemotron-3b"
+    embed_model_path: str = ""  # optional local path under ELYRA_HOME
+    embed_device: str = "auto"  # auto | cuda | rocm | cpu
+    embed_preload: bool = False
+    embed_media_max_bytes: int = 8_000_000
+    embed_media_max_seconds: int = 30
+    encode_max_ms_per_tick: int = 100
+    encode_max_items_per_tick: int = 4
+    encode_max_attempts: int = 3
+    encode_queue_max: int = 1024
+    encode_query_max_ms: int = 30  # sub-budget of semantic_select_max_ms
+    semantic_select_max_ms: int = 50  # total encode+search+pack in rebuild_outer
+    parcels_enabled: bool = False  # KD23: off until operator enables
+    parcel_threshold_chars: int = 8000
+    semantic_fraction: float = 0.12  # of remaining when semantic on
+    episodic_fraction_with_semantic: float = 0.18
+    temporal_min_fraction: float = 0.55
+    semantic_horizon_hours: float = 168.0
+    semantic_top_k: int = 12
+    semantic_min_score: float = 0.0  # 0 = off
+    ann_recent_buffer_max: int = 256
+    ann_full_search_below: int = 2000
+    ann_optimize_every_n_encodes: int = 64
+    ann_optimize_interval_s: int = 300
+    ann_optimize_max_ms: int = 200
 
 
 def memory_root(paths: ElyraPaths) -> Path:
@@ -114,6 +152,8 @@ __all__ = [
     "LANCE_DIRNAME",
     "MEMORY_BACKENDS",
     "MEMORY_DIRNAME",
+    "MEMORY_EMBED_BACKENDS",
+    "MEMORY_EMBED_DEVICES",
     "MEMORY_INLINE_MAX_CHARS",
     "MEMORY_JSONL_COMPACT_BYTES",
     "MEMORY_JSONL_COMPACT_DIRTY",
