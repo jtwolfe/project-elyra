@@ -62,7 +62,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | Phase | Focus | Care | Status |
 |-------|--------|------|--------|
 | **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors | **Done** (2026-07-28) — see caveats below |
-| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy | Next |
+| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy | **Design ready** — [design-phase-2-implementation.md](design-phase-2-implementation.md) (execute-plan when operator starts) |
 | **2a** | Directed traversal | Temporary context hygiene | Planned |
 | **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on | Planned |
 
@@ -103,7 +103,8 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |
 | [design-phase-1-implementation.md](design-phase-1-implementation.md) | Phase 1 implementation design + key decisions |
 | [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) | **Phase 1 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
-| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 design |
+| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 short sketch (superseded for implement by implementation design) |
+| [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Phase 2 implementation design + PR plan** (Ready for `/execute-plan`) |
 | [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
 | [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
 | `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 shipped) |
