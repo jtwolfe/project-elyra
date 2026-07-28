@@ -363,6 +363,10 @@ def _put_parcel_children(
 
     Does **not** join the experience weave (``moment_tail`` already excludes
     ``kind=parcel``). Each put still fires write hooks for encode enqueue.
+
+    On mid-chain ``put_atom`` failure: stop, return the partial list (caller
+    must reconcile parent meta). Full rollback of an already-linked parent is
+    out of scope.
     """
     stored: list[Atom] = []
     prev_id: str | None = None
@@ -377,9 +381,12 @@ def _put_parcel_children(
             row = store.put_atom(atom)
         except Exception:  # noqa: BLE001
             _LOG.exception(
-                "memory promote parcel put failed atom_id=%s parent=%s",
+                "memory promote parcel put failed atom_id=%s parent=%s "
+                "stored=%s planned=%s",
                 atom.atom_id,
                 atom.parent_atom_id,
+                len(stored),
+                len(children),
             )
             break
         if prev_id is not None:
@@ -394,6 +401,74 @@ def _put_parcel_children(
         stored.append(row)
         prev_id = row.atom_id
     return stored
+
+
+def _reconcile_parent_parcel_meta(
+    store: MemoryStore,
+    parent: Atom,
+    *,
+    planned_count: int,
+    stored_children: Sequence[Atom],
+) -> Atom:
+    """Rewrite parent (and stored children) meta when parcel puts were partial.
+
+    Parent is already on the experience chain — full rollback is out of scope.
+    Meta must not claim ``parcel_count=N`` when fewer parcels exist.
+    """
+    actual = len(stored_children)
+    if actual == planned_count:
+        return parent
+
+    _LOG.error(
+        "memory promote incomplete parcels parent=%s planned=%s stored=%s; "
+        "rewriting meta (rollback out of scope)",
+        parent.atom_id,
+        planned_count,
+        actual,
+    )
+    meta = dict(parent.meta or {})
+    meta["parcel_incomplete"] = True
+    meta["parcel_planned_count"] = planned_count
+    if actual == 0:
+        meta.pop("has_parcels", None)
+        meta.pop("parcel_count", None)
+        meta.pop("first_parcel_id", None)
+        # Only first chunk remains; meal must not treat body as complete.
+        meta["truncated"] = True
+    else:
+        meta["has_parcels"] = True
+        meta["parcel_count"] = actual
+        meta["first_parcel_id"] = stored_children[0].atom_id
+
+    parent = atom_replace(parent, meta=meta)
+    try:
+        # Preserve experience prev/next; replace scalar meta only.
+        parent = store.put_atom(parent)
+    except Exception:  # noqa: BLE001
+        _LOG.exception(
+            "memory promote failed to rewrite parent parcel meta atom_id=%s",
+            parent.atom_id,
+        )
+        return parent
+
+    for child in stored_children:
+        cmeta = dict(child.meta or {})
+        if (
+            cmeta.get("parcel_count") == actual
+            and cmeta.get("parcel_incomplete") is True
+        ):
+            continue
+        cmeta["parcel_count"] = actual
+        cmeta["parcel_incomplete"] = True
+        cmeta["parcel_planned_count"] = planned_count
+        try:
+            store.put_atom(atom_replace(child, meta=cmeta))
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "memory promote failed to rewrite parcel meta atom_id=%s",
+                child.atom_id,
+            )
+    return parent
 
 
 def _link_and_put_with_parcels(
@@ -411,8 +486,10 @@ def _link_and_put_with_parcels(
 ) -> Atom:
     """Put experience atom; when parcels apply, split before any truncate.
 
-    KD21: parcels run before ``_truncate`` / store cap. On split failure,
-    falls back to Phase 1 single-atom truncate path.
+    KD21: parcels run before ``_truncate`` / store cap. Effective chunk size
+    is ``min(parcel_threshold_chars, atom_max_chars)``. On split construction
+    failure, falls back to Phase 1 single-atom truncate. Mid-chain parcel put
+    failures reconcile parent meta (no silent wrong ``parcel_count``).
     """
     meta = dict(base_meta or {})
     if should_split_into_parcels(raw_text, settings):
@@ -433,7 +510,16 @@ def _link_and_put_with_parcels(
                 store, parent, moment_id=moment_id, settings=settings
             )
             if children:
-                _put_parcel_children(store, children, settings=settings)
+                stored_children = _put_parcel_children(
+                    store, children, settings=settings
+                )
+                if len(stored_children) != len(children):
+                    stored_parent = _reconcile_parent_parcel_meta(
+                        store,
+                        stored_parent,
+                        planned_count=len(children),
+                        stored_children=stored_children,
+                    )
             return stored_parent
         except Exception:  # noqa: BLE001
             _LOG.exception(

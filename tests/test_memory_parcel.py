@@ -59,10 +59,24 @@ def test_should_split_default_off():
 
 
 def test_should_split_when_enabled_and_over_threshold():
-    settings = MemorySettings(parcels_enabled=True, parcel_threshold_chars=100)
+    settings = MemorySettings(
+        parcels_enabled=True, parcel_threshold_chars=100, atom_max_chars=100
+    )
     assert should_split_into_parcels("a" * 101, settings) is True
     assert should_split_into_parcels("a" * 100, settings) is False
     assert should_split_into_parcels("short", settings) is False
+
+
+def test_should_split_uses_atom_max_when_threshold_higher():
+    """atom_max < len(body) ≤ parcel_threshold still splits (clamped cap)."""
+    settings = MemorySettings(
+        parcels_enabled=True,
+        parcel_threshold_chars=5000,
+        atom_max_chars=200,
+    )
+    assert parcel_threshold(settings) == 200
+    assert should_split_into_parcels("a" * 201, settings) is True
+    assert should_split_into_parcels("a" * 200, settings) is False
 
 
 def test_split_oversized_text_preserves_full_join():
@@ -79,14 +93,21 @@ def test_split_oversized_text_fits_returns_single():
 
 
 def test_split_prefers_paragraph_then_line():
-    # First paragraph ends well before max; second overflows alone after join.
+    # max_chars=40 would hard-cut mid-second-block; paragraph break must win.
     p1 = "first block\n\n"
     p2 = "second block that is long " + ("y" * 80)
     text = p1 + p2
+    assert len(p1) < 40 < len(text)
     chunks = split_oversized_text(text, max_chars=40)
+    assert chunks[0] == "first block\n\n"
     assert "".join(chunks) == text
-    # First cut should land on paragraph boundary when possible.
-    assert chunks[0].endswith("\n\n") or "\n" in chunks[0]
+
+
+def test_split_hard_cut_no_newlines():
+    text = "a" * 100
+    chunks = split_oversized_text(text, max_chars=30)
+    assert chunks == ["a" * 30, "a" * 30, "a" * 30, "a" * 10]
+    assert "".join(chunks) == text
 
 
 def test_make_parent_and_parcels_shapes():
@@ -355,7 +376,104 @@ def test_tool_ok_preview_does_not_parcel(store):
 
 
 def test_parcel_threshold_helper():
-    s = MemorySettings(parcel_threshold_chars=1234)
+    s = MemorySettings(parcel_threshold_chars=1234, atom_max_chars=8000)
     assert parcel_threshold(s) == 1234
     s2 = MemorySettings(parcel_threshold_chars=0, atom_max_chars=500)
     assert parcel_threshold(s2) == 500
+    # Clamp to atom_max when threshold is misconfigured high.
+    s3 = MemorySettings(parcel_threshold_chars=500, atom_max_chars=200)
+    assert parcel_threshold(s3) == 200
+
+
+def test_threshold_above_atom_max_preserves_full_join_after_store(store):
+    """Issue 1 regression: parcel_threshold > atom_max must not re-truncate."""
+    settings = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        parcels_enabled=True,
+        parcel_threshold_chars=500,
+        atom_max_chars=200,
+    )
+    body = ("para block text here\n\n" * 30).strip()
+    if len(body) < 1200:
+        body = body + ("x" * (1200 - len(body)))
+    assert len(body) > settings.parcel_threshold_chars
+    assert parcel_threshold(settings) == 200
+
+    parent = promote_wake_observation(
+        store,
+        "m_clamp",
+        content=body,
+        message_id="clamp1",
+        settings=settings,
+    )
+    assert parent is not None
+    assert parent.meta.get("truncated") is not True
+    assert parent.meta.get("has_parcels") is True
+    assert len(parent.content_text) <= settings.atom_max_chars
+
+    parcels = [r for r in store.list_by_moment("m_clamp") if r.kind == "parcel"]
+    assert parcels
+    assert all(len(p.content_text) <= settings.atom_max_chars for p in parcels)
+    assert reconstruct_text(parent, parcels) == body
+
+
+def test_mid_chain_parcel_put_failure_rewrites_parent_meta(store):
+    """Issue 2 regression: partial parcel puts must not leave wrong parcel_count."""
+    settings = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        parcels_enabled=True,
+        parcel_threshold_chars=50,
+        atom_max_chars=50,
+    )
+    body = ("chunk of text that is long enough\n\n" * 20).strip()
+    assert should_split_into_parcels(body, settings)
+
+    # Fail put_atom on the 2nd *new* parcel (parent + first parcel succeed).
+    # Re-puts of already-stored parcels (meta reconcile) must still work.
+    real_put = store.put_atom
+    first_time_parcels = {"n": 0}
+    seen_parcel_ids: set[str] = set()
+
+    def flaky_put(atom, **kwargs):
+        if atom.kind == "parcel" and atom.atom_id not in seen_parcel_ids:
+            first_time_parcels["n"] += 1
+            if first_time_parcels["n"] >= 2:
+                raise RuntimeError("simulated parcel put failure")
+            row = real_put(atom, **kwargs)
+            seen_parcel_ids.add(atom.atom_id)
+            return row
+        return real_put(atom, **kwargs)
+
+    store.put_atom = flaky_put  # type: ignore[method-assign]
+
+    parent = promote_wake_observation(
+        store,
+        "m_partial",
+        content=body,
+        message_id="partial1",
+        settings=settings,
+    )
+    assert parent is not None
+
+    # Reload parent from store (meta may have been rewritten after partial put).
+    stored_parent = store.get_atom(parent.atom_id)
+    parcels = [r for r in store.list_by_moment("m_partial") if r.kind == "parcel"]
+
+    assert stored_parent.meta.get("parcel_incomplete") is True
+    assert stored_parent.meta.get("parcel_count") == len(parcels)
+    assert stored_parent.meta.get("parcel_planned_count", 0) > len(parcels)
+    if parcels:
+        assert stored_parent.meta.get("has_parcels") is True
+        assert stored_parent.meta.get("first_parcel_id") == parcels[0].atom_id
+        for p in parcels:
+            reloaded = store.get_atom(p.atom_id)
+            assert reloaded.meta.get("parcel_count") == len(parcels)
+            assert reloaded.meta.get("parcel_incomplete") is True
+    else:
+        assert stored_parent.meta.get("has_parcels") is not True
+        assert stored_parent.meta.get("truncated") is True
+
+    # Parent remains on the experience chain (rollback out of scope).
+    assert store.moment_tail("m_partial").atom_id == stored_parent.atom_id

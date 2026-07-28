@@ -23,15 +23,28 @@ _DEFAULT_THRESHOLD = 8000
 
 
 def parcel_threshold(settings: MemorySettings) -> int:
-    """Effective max chars per parcel/parent body slice."""
+    """Effective max chars per parcel/parent body slice.
+
+    Always clamped to ``atom_max_chars`` so each slice fits the store put
+    safety net (design: ``parcel_threshold ≤ atom_max``). Misconfigured
+    ``parcel_threshold_chars > atom_max_chars`` cannot produce re-truncated
+    slices that break full-text reconstruction.
+    """
+    atom_max = int(settings.atom_max_chars or 0)
+    if atom_max <= 0:
+        atom_max = _DEFAULT_THRESHOLD
     n = int(settings.parcel_threshold_chars or 0)
     if n <= 0:
-        n = int(settings.atom_max_chars or 0) or _DEFAULT_THRESHOLD
-    return n if n > 0 else _DEFAULT_THRESHOLD
+        n = atom_max
+    return min(n, atom_max)
 
 
 def should_split_into_parcels(text: str, settings: MemorySettings) -> bool:
-    """True when parcels_enabled and body exceeds the parcel threshold.
+    """True when parcels_enabled and body exceeds the effective parcel cap.
+
+    Uses the clamped threshold (min of configured threshold and atom_max)
+    so ``atom_max < len(body) ≤ parcel_threshold_chars`` still splits when
+    parcels are enabled.
 
     KD23: default ``parcels_enabled=False`` → always False (Phase 1 path).
     """
