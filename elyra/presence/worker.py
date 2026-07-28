@@ -456,6 +456,8 @@ class PresenceWorker:
         self._memory: Any | None = None
         self._memory_open_attempted = False
         self._memory_open_failed = False
+        # Last labeled meal package inspect payload (glass Memory Context tab).
+        self._last_meal_snapshot: dict[str, Any] | None = None
 
         self._phase: str = PHASE_IDLE
         self._busy = False
@@ -1129,6 +1131,7 @@ class PresenceWorker:
             "backend": str(mem_cfg.backend),
             "store_open": self._memory is not None,
             "ok": False,
+            "has_last_meal": self._last_meal_snapshot is not None,
         }
         if self._memory is None:
             if self._memory_open_failed:
@@ -1149,6 +1152,39 @@ class PresenceWorker:
             block["ok"] = False
             block["error"] = str(exc) or type(exc).__name__
         return block
+
+    def last_meal_snapshot(self) -> dict[str, Any] | None:
+        """Return a copy of the last composed meal inspect payload, if any."""
+        with self._lock:
+            snap = self._last_meal_snapshot
+            return dict(snap) if isinstance(snap, dict) else None
+
+    def _record_last_meal_snapshot(
+        self,
+        package: Any,
+        *,
+        system_text: str = "",
+        orient_text: str = "",
+        budget_tokens: int | None = None,
+        source: str = "rebuild_outer",
+    ) -> None:
+        """Best-effort: stash inspect payload for glass Memory Context tab."""
+        try:
+            from elyra.memory.inspect import meal_package_to_inspect
+            from elyra.memory.types import utc_now_iso
+
+            payload = meal_package_to_inspect(
+                package,
+                system_text=system_text,
+                orient_text=orient_text,
+                budget_tokens=budget_tokens,
+                source=source,
+                recorded_at=utc_now_iso(),
+            )
+            with self._lock:
+                self._last_meal_snapshot = payload
+        except Exception:  # noqa: BLE001 — never break rebuild for glass
+            _LOG.exception("record last meal snapshot failed")
 
     def _idle_memory_ladder(self) -> None:
         """Budgeted period-summary refresh outside the state lock (idle only)."""
@@ -1395,6 +1431,7 @@ class PresenceWorker:
                 try:
                     from elyra.loop.context import fill_orient, format_now
                     from elyra.memory.meal import (
+                        compose_meal,
                         compose_outer_messages,
                         expand_memory_meal_for_provider,
                     )
@@ -1412,13 +1449,30 @@ class PresenceWorker:
                         skill_catalog=skill_catalog_s,
                         skill_bias=skill_bias_s,
                     )
-                    meal = compose_outer_messages(
+                    budget = int(loop.sliding_input_tokens)
+                    package = compose_meal(
                         self._memory,
                         open_moment_id=moment_id,
-                        budget_tokens=int(loop.sliding_input_tokens),
+                        budget_tokens=budget,
                         system_text=system_text,
                         orient_text=orient_body,
                         settings=self.settings.memory,
+                    )
+                    self._record_last_meal_snapshot(
+                        package,
+                        system_text=system_text,
+                        orient_text=orient_body,
+                        budget_tokens=budget,
+                        source="rebuild_outer",
+                    )
+                    meal = compose_outer_messages(
+                        self._memory,
+                        open_moment_id=moment_id,
+                        budget_tokens=budget,
+                        system_text=system_text,
+                        orient_text=orient_body,
+                        settings=self.settings.memory,
+                        package=package,
                     )
                     expanded = expand_memory_meal_for_provider(
                         meal,
@@ -2059,6 +2113,7 @@ class PresenceWorker:
             self._hop_count = 0
             self._last_tool = None
             self._continue_injects = 0
+            self._last_meal_snapshot = None
             self._phase = PHASE_IDLE
 
             pending = self._queue.pending()

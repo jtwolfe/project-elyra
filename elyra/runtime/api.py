@@ -8,7 +8,8 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   provider/model/credential mutators, live usage + hard-stop override,
   media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
   STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
-  named secrets store GET/PUT/DELETE + grants (PR5 / IK10).
+  named secrets store GET/PUT/DELETE + grants (PR5 / IK10),
+  memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only).
 Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
 """
@@ -288,6 +289,27 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 return
             beats = self.moments.list_beats(mid)
             self._json(200, {"moment": meta, "beats": beats})
+            return
+
+        # Memory inspect (PR9) — read-only; no secrets; fail closed if store down.
+        if path == "/api/memory" or path == "/api/memory/":
+            self._get_memory_overview()
+            return
+        if path == "/api/memory/context":
+            self._get_memory_context(qs)
+            return
+        if path == "/api/memory/atoms":
+            self._get_memory_atoms(qs)
+            return
+        if path.startswith("/api/memory/atoms/"):
+            aid = _safe_segment(unquote(path[len("/api/memory/atoms/") :]))
+            if aid is None:
+                self._json(400, {"ok": False, "error": "invalid atom id"})
+                return
+            self._get_memory_atom(aid)
+            return
+        if path.startswith("/api/memory/"):
+            self._json(404, {"ok": False, "error": "not found"})
             return
 
         if path == "/api/identity":
@@ -573,6 +595,323 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(503, {"ok": False, "error": "resetting"})
             return True
         return False
+
+    # ── Memory inspect (PR9) ─────────────────────────────────────────────
+
+    def _memory_flags_block(self) -> dict[str, Any]:
+        """Flags + store health from worker status (no secrets)."""
+        try:
+            snap = self.worker.status_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "enabled": False,
+                "write_atoms": False,
+                "backend": "unknown",
+                "store_open": False,
+                "ok": False,
+                "error": str(exc) or type(exc).__name__,
+            }
+        mem = snap.get("memory") if isinstance(snap, dict) else None
+        if not isinstance(mem, dict):
+            mem = {}
+        out = dict(mem)
+        out["active_moment_id"] = snap.get("active_moment_id") if isinstance(snap, dict) else None
+        out["phase"] = snap.get("phase") if isinstance(snap, dict) else None
+        return out
+
+    def _get_memory_overview(self) -> None:
+        """GET /api/memory — flags, store health, whether a last meal exists."""
+        block = self._memory_flags_block()
+        ok = bool(block.get("ok"))
+        payload: dict[str, Any] = {
+            "ok": ok,
+            "memory": block,
+            "has_last_meal": bool(block.get("has_last_meal")),
+            "tabs": {
+                "context": True,
+                "atoms": True,
+                "vectors": {"stub": True, "phase": "2"},
+                "graph": {"stub": True, "phase": "2a"},
+            },
+        }
+        if not ok and block.get("error"):
+            payload["error"] = block.get("error")
+        self._json(200, payload)
+
+    def _get_memory_context(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/context — last/current meal by channel labels.
+
+        Prefer last compose snapshot from the worker. Optional
+        ``?compose=1`` rebuilds on demand for the open/active moment when
+        the store is healthy (careful path; may be empty without atoms).
+        """
+        flags = self._memory_flags_block()
+        force_compose = (qs.get("compose") or ["0"])[0] in ("1", "true", "yes")
+        snap = None
+        if hasattr(self.worker, "last_meal_snapshot"):
+            try:
+                snap = self.worker.last_meal_snapshot()
+            except Exception:  # noqa: BLE001
+                snap = None
+
+        if snap and not force_compose:
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "meal": snap,
+                    "memory": flags,
+                    "source": snap.get("source") or "last_compose",
+                },
+            )
+            return
+
+        # Fail closed when store not usable and no snapshot to show.
+        store_ok = bool(flags.get("ok")) and bool(flags.get("store_open"))
+        if not store_ok and not snap:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "meal": None,
+                    "memory": flags,
+                },
+            )
+            return
+
+        if force_compose or not snap:
+            composed = self._compose_meal_for_inspect(flags)
+            if composed is not None:
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "meal": composed,
+                        "memory": flags,
+                        "source": composed.get("source") or "on_demand",
+                    },
+                )
+                return
+            if snap:
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "meal": snap,
+                        "memory": flags,
+                        "source": snap.get("source") or "last_compose",
+                        "compose_error": "on_demand_failed",
+                    },
+                )
+                return
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": "compose_failed",
+                    "meal": None,
+                    "memory": flags,
+                },
+            )
+            return
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "meal": snap,
+                "memory": flags,
+                "source": snap.get("source") or "last_compose",
+            },
+        )
+
+    def _compose_meal_for_inspect(self, flags: dict[str, Any]) -> dict[str, Any] | None:
+        """Best-effort on-demand compose for open/active moment (glass only)."""
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001 — inspect path
+        except Exception:  # noqa: BLE001
+            return None
+        if store is None:
+            return None
+        try:
+            health = store.health()
+            if isinstance(health, dict) and not health.get("ok", True):
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+
+        open_mid = flags.get("active_moment_id")
+        if not open_mid:
+            # Prefer most recent open moment from moment store.
+            try:
+                opens = self.moments.list_moments(limit=5, open_only=True)
+                if opens:
+                    open_mid = opens[0].get("id") or opens[0].get("moment_id")
+            except Exception:  # noqa: BLE001
+                open_mid = None
+
+        try:
+            from elyra.memory.inspect import meal_package_to_inspect
+            from elyra.memory.meal import compose_meal
+            from elyra.memory.types import utc_now_iso
+
+            mem_cfg = self.worker.settings.memory
+            loop = self.worker.settings.loop
+            budget = int(getattr(loop, "sliding_input_tokens", 50_000))
+            # Avoid loading full prompts on inspect poll — empty fixed cost.
+            package = compose_meal(
+                store,
+                open_moment_id=str(open_mid) if open_mid else None,
+                budget_tokens=budget,
+                system_text="",
+                orient_text="",
+                settings=mem_cfg,
+            )
+            return meal_package_to_inspect(
+                package,
+                system_text="",
+                orient_text="",
+                budget_tokens=budget,
+                source="on_demand",
+                recorded_at=utc_now_iso(),
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("on-demand memory meal compose failed")
+            return None
+
+    def _get_memory_atoms(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/atoms — filterable recent atom list (read-only)."""
+        flags = self._memory_flags_block()
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+        if store is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        kind = (qs.get("kind") or [None])[0]
+        moment_id = (qs.get("moment_id") or [None])[0]
+        limit_raw = (qs.get("limit") or ["50"])[0]
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        try:
+            from elyra.memory.inspect import atom_to_list_row, list_atoms_for_glass
+
+            atoms = list_atoms_for_glass(
+                store,
+                kind=kind if isinstance(kind, str) else None,
+                moment_id=moment_id if isinstance(moment_id, str) else None,
+                limit=limit,
+            )
+            rows = [atom_to_list_row(a) for a in atoms]
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "atoms": rows,
+                    "count": len(rows),
+                    "limit": limit,
+                    "filters": {
+                        "kind": kind if kind else None,
+                        "moment_id": moment_id if moment_id else None,
+                    },
+                    "memory": flags,
+                },
+            )
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc), "atoms": [], "memory": flags})
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("list memory atoms failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+
+    def _get_memory_atom(self, atom_id: str) -> None:
+        """GET /api/memory/atoms/{id} — single atom drill-down (read-only)."""
+        flags = self._memory_flags_block()
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "atom": None,
+                    "memory": flags,
+                },
+            )
+            return
+        if store is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "atom": None,
+                    "memory": flags,
+                },
+            )
+            return
+        try:
+            from elyra.memory.inspect import atom_to_detail
+
+            atom = store.get_atom(atom_id)
+            if atom is None:
+                self._json(
+                    404,
+                    {
+                        "ok": False,
+                        "error": "atom not found",
+                        "atom": None,
+                        "memory": flags,
+                    },
+                )
+                return
+            self._json(
+                200,
+                {"ok": True, "atom": atom_to_detail(atom), "memory": flags},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("get memory atom failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "atom": None,
+                    "memory": flags,
+                },
+            )
 
     # ── Glass session + identity panel helpers ───────────────────────────
 

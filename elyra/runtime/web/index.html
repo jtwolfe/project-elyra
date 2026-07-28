@@ -26,6 +26,7 @@
           <button type="button" class="nav-btn active" data-panel="chat">Chat</button>
           <button type="button" class="nav-btn" data-panel="goals">Goals</button>
           <button type="button" class="nav-btn" data-panel="moments">Moments</button>
+          <button type="button" class="nav-btn" data-panel="memory">Memory</button>
           <button type="button" class="nav-btn" data-panel="tools">Tools</button>
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
           <button type="button" class="nav-btn" data-panel="secrets">Secrets</button>
@@ -218,6 +219,116 @@
           </header>
           <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
           <div id="moment-detail" class="list-panel detail-panel" hidden></div>
+        </section>
+
+        <section id="panel-memory" class="panel">
+          <header class="panel-head panel-head-row">
+            <div>
+              <h1>Memory</h1>
+              <p class="muted">
+                What the model is fed (context meal) and store atoms. Read-only.
+              </p>
+            </div>
+            <button type="button" id="memory-refresh-btn" class="btn-secondary btn-sm">
+              Refresh
+            </button>
+          </header>
+          <div class="memory-tabs" role="tablist" aria-label="Memory views">
+            <button
+              type="button"
+              class="memory-tab active"
+              role="tab"
+              data-memory-tab="context"
+              aria-selected="true"
+            >
+              Context
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="atoms"
+              aria-selected="false"
+            >
+              Atoms
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="vectors"
+              aria-selected="false"
+            >
+              Vectors
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="graph"
+              aria-selected="false"
+            >
+              Graph
+            </button>
+          </div>
+          <div id="memory-tab-context" class="memory-tab-panel active" role="tabpanel">
+            <div id="memory-context-flags" class="memory-flags status-fields">loading…</div>
+            <div id="memory-context-body" class="list-panel memory-context-body">loading…</div>
+          </div>
+          <div id="memory-tab-atoms" class="memory-tab-panel" role="tabpanel" hidden>
+            <div class="memory-atoms-toolbar">
+              <label class="status-label" for="memory-atom-kind">Kind</label>
+              <select id="memory-atom-kind" class="status-select memory-filter" aria-label="Filter by kind">
+                <option value="">all</option>
+                <option value="observation">observation</option>
+                <option value="speak">speak</option>
+                <option value="tool">tool</option>
+                <option value="model">model</option>
+                <option value="ledger">ledger</option>
+                <option value="summary">summary</option>
+                <option value="parcel">parcel</option>
+                <option value="moment_meta">moment_meta</option>
+              </select>
+              <label class="status-label" for="memory-atom-moment">Moment</label>
+              <input
+                id="memory-atom-moment"
+                type="text"
+                class="status-input memory-filter"
+                placeholder="moment id (optional)"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <button type="button" id="memory-atoms-apply" class="btn-secondary btn-sm">
+                Apply
+              </button>
+            </div>
+            <div id="memory-atoms-list" class="list-panel list-panel-auto">loading…</div>
+            <div id="memory-atom-detail" class="list-panel detail-panel" hidden></div>
+          </div>
+          <div id="memory-tab-vectors" class="memory-tab-panel" role="tabpanel" hidden>
+            <div class="memory-stub card">
+              <div class="card-head">
+                <strong>Vectors</strong>
+                <span class="badge">Phase 2</span>
+              </div>
+              <p class="muted">
+                Embeddings + ANN browser land in Phase 2 (semantic memory). No projection UI here —
+                this tab is a reserved slot only.
+              </p>
+            </div>
+          </div>
+          <div id="memory-tab-graph" class="memory-tab-panel" role="tabpanel" hidden>
+            <div class="memory-stub card">
+              <div class="card-head">
+                <strong>Graph</strong>
+                <span class="badge">Phase 2a+</span>
+              </div>
+              <p class="muted">
+                Typed edges / hypergraph walk land in Phase 2a+. No layout or multi-hop browser
+                here — sequential prev/next stays on atom detail only when useful.
+              </p>
+            </div>
+          </div>
         </section>
 
         <section id="panel-tools" class="panel">

@@ -31,6 +31,19 @@ const waitChoices = $("#wait-choices");
 const goalsList = $("#goals-list");
 const momentsList = $("#moments-list");
 const momentDetail = $("#moment-detail");
+const memoryRefreshBtn = $("#memory-refresh-btn");
+const memoryContextFlags = $("#memory-context-flags");
+const memoryContextBody = $("#memory-context-body");
+const memoryAtomsList = $("#memory-atoms-list");
+const memoryAtomDetail = $("#memory-atom-detail");
+const memoryAtomKind = $("#memory-atom-kind");
+const memoryAtomMoment = $("#memory-atom-moment");
+const memoryAtomsApply = $("#memory-atoms-apply");
+/** @type {"context" | "atoms" | "vectors" | "graph"} */
+let memoryActiveTab = "context";
+/** @type {string | null} */
+let selectedAtomId = null;
+let memoryAtomDetailLoadGen = 0;
 const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const catalogInspector = $("#catalog-inspector");
@@ -2100,6 +2113,356 @@ async function refreshMoments() {
   }
 }
 
+// ── Memory panel (PR9) ────────────────────────────────────────────────
+
+function setMemoryTab(name) {
+  memoryActiveTab = name || "context";
+  document.querySelectorAll(".memory-tab").forEach((btn) => {
+    const on = btn.dataset.memoryTab === memoryActiveTab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll(".memory-tab-panel").forEach((panel) => {
+    const id = panel.id || "";
+    const key = id.replace(/^memory-tab-/, "");
+    const on = key === memoryActiveTab;
+    panel.classList.toggle("active", on);
+    if (on) panel.removeAttribute("hidden");
+    else panel.setAttribute("hidden", "");
+  });
+}
+
+function renderMemoryFlags(mem) {
+  if (!memoryContextFlags) return;
+  memoryContextFlags.innerHTML = "";
+  const m = mem || {};
+  const rows = [
+    ["enabled", m.enabled === true ? "true" : "false", m.enabled === true],
+    ["write_atoms", m.write_atoms === true ? "true" : "false", m.write_atoms === true],
+    ["backend", m.backend || "—", null],
+    ["store", m.ok ? "ok" : m.error || "down", m.ok === true],
+    ["atoms", m.atom_count != null ? String(m.atom_count) : "—", null],
+    ["open moment", m.active_moment_id || "—", null],
+  ];
+  for (const [label, value, good] of rows) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = label;
+    const val = document.createElement("span");
+    val.className = "status-value";
+    if (good === true) val.classList.add("status-ok");
+    if (good === false) val.classList.add("status-bad");
+    val.textContent = value;
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryContextFlags.appendChild(row);
+  }
+}
+
+function renderMemoryContext(data) {
+  if (!memoryContextBody) return;
+  memoryContextBody.innerHTML = "";
+  const mem = data.memory || {};
+  renderMemoryFlags(mem);
+
+  if (!data.ok && !data.meal) {
+    const p = document.createElement("p");
+    p.className = "muted memory-empty";
+    p.textContent = data.error
+      ? `Context meal unavailable: ${data.error}`
+      : "No meal snapshot yet. Chat once with memory.enabled, or wait for a compose.";
+    memoryContextBody.appendChild(p);
+    return;
+  }
+
+  const meal = data.meal || {};
+  const head = document.createElement("div");
+  head.className = "card memory-channel-card";
+  const headTitle = document.createElement("div");
+  headTitle.className = "card-head";
+  headTitle.innerHTML = `<strong>Meal package</strong><span class="badge">${escapeHtml(
+    String(data.source || meal.source || "—")
+  )}</span>`;
+  head.appendChild(headTitle);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const bits = [
+    meal.open_moment_id ? `moment=${meal.open_moment_id}` : "moment=—",
+    meal.total_tokens != null ? `memory≈${meal.total_tokens} tok` : null,
+    meal.fixed_tokens != null ? `fixed≈${meal.fixed_tokens} tok` : null,
+    meal.budget_tokens != null ? `budget=${meal.budget_tokens}` : null,
+    meal.slid_off_count != null ? `slid_off=${meal.slid_off_count}` : null,
+    meal.recorded_at ? `at ${meal.recorded_at}` : null,
+  ].filter(Boolean);
+  meta.textContent = bits.join(" · ");
+  head.appendChild(meta);
+  memoryContextBody.appendChild(head);
+
+  // Fixed system/orient if present.
+  const fixed = meal.fixed || {};
+  for (const key of ["system", "orient"]) {
+    const block = fixed[key];
+    if (!block) continue;
+    memoryContextBody.appendChild(
+      renderMemoryChannelCard({
+        label: block.label || key,
+        channel: key,
+        token_estimate: block.token_estimate,
+        snippet: block.snippet,
+        content_chars: block.content_chars,
+      })
+    );
+  }
+
+  const items = Array.isArray(meal.items) ? meal.items : [];
+  if (!items.length && !Object.keys(fixed).length) {
+    const p = document.createElement("p");
+    p.className = "muted memory-empty";
+    p.textContent =
+      "Meal has no labeled channels yet (empty store or meal not composed).";
+    memoryContextBody.appendChild(p);
+    return;
+  }
+  for (const item of items) {
+    memoryContextBody.appendChild(renderMemoryChannelCard(item));
+  }
+}
+
+function renderMemoryChannelCard(item) {
+  const card = document.createElement("div");
+  card.className = "card memory-channel-card";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = item.label || item.channel || "channel";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  const tok =
+    item.token_estimate != null ? `≈${item.token_estimate} tok` : "—";
+  badge.textContent = `${item.channel || "—"} · ${tok}`;
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const mbits = [];
+  if (item.atom_id) mbits.push(item.atom_id);
+  if (item.t_start) mbits.push(item.t_start);
+  if (item.content_chars != null) mbits.push(`${item.content_chars} chars`);
+  if (item.meta && item.meta.atom_count != null) {
+    mbits.push(`${item.meta.atom_count} atoms`);
+  }
+  meta.textContent = mbits.join(" · ") || "—";
+  card.appendChild(meta);
+  const pre = document.createElement("pre");
+  pre.className = "memory-snippet";
+  pre.textContent = item.snippet || "(empty)";
+  card.appendChild(pre);
+  return card;
+}
+
+async function refreshMemoryContext() {
+  const data = await fetchJson("/api/memory/context");
+  renderMemoryContext(data);
+}
+
+function setAtomDetailOpen(on) {
+  const panel = document.getElementById("panel-memory");
+  if (panel) panel.classList.toggle("atom-detail-open", !!on);
+}
+
+function closeAtomDetail() {
+  memoryAtomDetailLoadGen += 1;
+  selectedAtomId = null;
+  if (memoryAtomDetail) {
+    memoryAtomDetail.hidden = true;
+    memoryAtomDetail.innerHTML = "";
+  }
+  setAtomDetailOpen(false);
+  if (memoryAtomsList) {
+    memoryAtomsList
+      .querySelectorAll(".card-selected")
+      .forEach((el) => el.classList.remove("card-selected"));
+  }
+}
+
+function renderAtomsList(atoms) {
+  if (!memoryAtomsList) return;
+  memoryAtomsList.innerHTML = "";
+  if (!atoms.length) {
+    memoryAtomsList.innerHTML = `<p class="muted empty memory-empty">No atoms match.</p>`;
+    return;
+  }
+  for (const a of atoms) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn";
+    card.dataset.atomId = a.atom_id || "";
+    if (selectedAtomId && a.atom_id === selectedAtomId) {
+      card.classList.add("card-selected");
+    }
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const strong = document.createElement("strong");
+    strong.textContent = a.kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = a.t_start || "—";
+    head.appendChild(strong);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      a.atom_id || "—",
+      a.moment_id ? `moment=${a.moment_id}` : null,
+      a.scale ? `scale=${a.scale}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const snip = document.createElement("div");
+    snip.className = "muted";
+    snip.style.fontSize = "0.85rem";
+    snip.style.marginTop = "0.35rem";
+    snip.textContent = a.text || "(empty)";
+    card.appendChild(snip);
+    card.addEventListener("click", () => {
+      loadAtomDetail(a.atom_id);
+    });
+    memoryAtomsList.appendChild(card);
+  }
+}
+
+async function loadAtomDetail(id) {
+  if (!id || !memoryAtomDetail) return;
+  const gen = ++memoryAtomDetailLoadGen;
+  selectedAtomId = id;
+  memoryAtomDetail.hidden = false;
+  setAtomDetailOpen(true);
+  memoryAtomDetail.innerHTML = `<div class="card-head"><strong>${escapeHtml(
+    id
+  )}</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">loading…</p>`;
+  const closeBtn = $("#close-atom-detail");
+  if (closeBtn) closeBtn.addEventListener("click", closeAtomDetail);
+  try {
+    const data = await fetchJson(`/api/memory/atoms/${encodeURIComponent(id)}`);
+    if (selectedAtomId !== id || gen !== memoryAtomDetailLoadGen) return;
+    if (!data.ok || !data.atom) {
+      memoryAtomDetail.innerHTML = `<div class="card-head"><strong>Atom</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">${escapeHtml(
+        data.error || "not found"
+      )}</p>`;
+      const c = $("#close-atom-detail");
+      if (c) c.addEventListener("click", closeAtomDetail);
+      return;
+    }
+    const a = data.atom;
+    const body = document.createDocumentFragment();
+    const head = document.createElement("div");
+    head.className = "card-head";
+    head.innerHTML = `<strong>${escapeHtml(a.kind || "atom")}</strong>
+      <button type="button" class="link-btn" id="close-atom-detail">close</button>`;
+    body.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      a.atom_id,
+      a.moment_id ? `moment=${a.moment_id}` : null,
+      a.t_start || null,
+      a.scale ? `scale=${a.scale}` : null,
+      a.prev_atom_id ? `prev=${a.prev_atom_id}` : null,
+      a.next_atom_id ? `next=${a.next_atom_id}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    body.appendChild(meta);
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet";
+    pre.textContent = a.content_text || "(empty)";
+    body.appendChild(pre);
+    memoryAtomDetail.innerHTML = "";
+    memoryAtomDetail.appendChild(body);
+    const c2 = $("#close-atom-detail");
+    if (c2) c2.addEventListener("click", closeAtomDetail);
+    if (memoryAtomsList) {
+      memoryAtomsList.querySelectorAll(".card-btn").forEach((el) => {
+        el.classList.toggle("card-selected", el.dataset.atomId === id);
+      });
+    }
+  } catch (err) {
+    if (selectedAtomId !== id || gen !== memoryAtomDetailLoadGen) return;
+    if (err && err.status === 404) {
+      closeAtomDetail();
+      return;
+    }
+    memoryAtomDetail.innerHTML = `<div class="card-head"><strong>Atom</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">${escapeHtml(
+      String(err.message || err)
+    )}</p>`;
+    const c3 = $("#close-atom-detail");
+    if (c3) c3.addEventListener("click", closeAtomDetail);
+  }
+}
+
+async function refreshMemoryAtoms() {
+  const params = new URLSearchParams();
+  params.set("limit", "60");
+  const kind = memoryAtomKind ? memoryAtomKind.value.trim() : "";
+  const moment = memoryAtomMoment ? memoryAtomMoment.value.trim() : "";
+  if (kind) params.set("kind", kind);
+  if (moment) params.set("moment_id", moment);
+  const data = await fetchJson(`/api/memory/atoms?${params.toString()}`);
+  if (!data.ok && !(data.atoms || []).length) {
+    if (memoryAtomsList) {
+      memoryAtomsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        data.error || "store unavailable"
+      )}</p>`;
+    }
+    return;
+  }
+  renderAtomsList(data.atoms || []);
+  if (selectedAtomId) {
+    await loadAtomDetail(selectedAtomId);
+  }
+}
+
+async function refreshMemory() {
+  if (memoryActiveTab === "atoms") {
+    await refreshMemoryAtoms();
+    return;
+  }
+  if (memoryActiveTab === "vectors" || memoryActiveTab === "graph") {
+    // Stubs — static HTML only.
+    return;
+  }
+  await refreshMemoryContext();
+}
+
+if (memoryRefreshBtn) {
+  memoryRefreshBtn.addEventListener("click", () => {
+    refreshMemory().catch((e) => panelLoadError("Memory", e));
+  });
+}
+document.querySelectorAll(".memory-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setMemoryTab(btn.dataset.memoryTab || "context");
+    refreshMemory().catch((e) => panelLoadError("Memory", e));
+  });
+});
+if (memoryAtomsApply) {
+  memoryAtomsApply.addEventListener("click", () => {
+    refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+  });
+}
+if (memoryAtomKind) {
+  memoryAtomKind.addEventListener("change", () => {
+    if (memoryActiveTab === "atoms") {
+      refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+    }
+  });
+}
+
 function renderCatalog(el, items, emptyLabel, kind) {
   el.innerHTML = "";
   if (!items.length) {
@@ -3740,6 +4103,7 @@ function refreshActivePanel() {
   const name = activePanel;
   if (name === "goals") return refreshGoals();
   if (name === "moments") return refreshMoments();
+  if (name === "memory") return refreshMemory();
   if (name === "tools") return refreshTools();
   if (name === "identity") return refreshIdentity();
   if (name === "secrets") return refreshSecrets();
@@ -3759,6 +4123,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     // Refresh panel data when opened; surface failures (parity with chat).
     if (name === "goals") refreshGoals().catch((e) => panelLoadError("Goals", e));
     if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
+    if (name === "memory") refreshMemory().catch((e) => panelLoadError("Memory", e));
     if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
     if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
     if (name === "secrets") refreshSecrets().catch((e) => panelLoadError("Secrets", e));
@@ -3775,6 +4140,7 @@ async function tick() {
     if (
       activePanel === "goals" ||
       activePanel === "moments" ||
+      activePanel === "memory" ||
       activePanel === "tools" ||
       activePanel === "identity" ||
       activePanel === "secrets"

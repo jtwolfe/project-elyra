@@ -2621,4 +2621,139 @@ body {
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
+  .memory-atoms-toolbar {
+    flex-wrap: wrap;
+  }
+  .memory-filter {
+    max-width: none;
+    flex: 1 1 8rem;
+  }
+}
+
+/* ── Memory panel (PR9) ─────────────────────────────────────────────── */
+
+#panel-memory {
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#panel-memory.active {
+  display: flex;
+}
+
+.memory-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 1.5rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-tab {
+  appearance: none;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.memory-tab:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.memory-tab.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+}
+
+.memory-tab-panel {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.memory-tab-panel.active {
+  display: flex;
+}
+
+.memory-flags {
+  padding: 0.75rem 1.5rem 0.25rem;
+  max-width: 720px;
+}
+
+.memory-context-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.memory-channel-card {
+  margin-bottom: 0.15rem;
+}
+
+.memory-channel-card .meta {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0.15rem 0 0.45rem;
+}
+
+.memory-snippet {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--text);
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.memory-atoms-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  padding: 0.65rem 1.5rem 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.memory-filter {
+  max-width: 12rem;
+}
+
+#memory-atom-moment {
+  max-width: 16rem;
+  min-width: 8rem;
+  flex: 1 1 10rem;
+}
+
+#panel-memory.atom-detail-open #memory-atoms-list {
+  flex: 0 1 36%;
+  max-height: min(40vh, 42%);
+}
+
+.memory-stub {
+  margin: 1rem 1.5rem;
+  max-width: 36rem;
+}
+
+.memory-stub p {
+  margin: 0.35rem 0 0;
+  line-height: 1.5;
+}
+
+.memory-empty {
+  padding: 0.5rem 0;
 }
