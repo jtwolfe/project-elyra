@@ -1,5 +1,16 @@
 # Operator overrides (defaults < this file < data/runtime/* < CLI).
-# Optional LanceDB MemoryStore — requires elyra[memory-lance] in the venv.
+# Phase 2 dogfood: Lance store + semantic meal + real Nemotron embedder.
 
 [memory]
 backend = "lance"
+enabled = true
+write_atoms = true
+ladder_enabled = true
+
+# Phase 2 semantic / embeddings (operator on)
+semantic_enabled = true
+embed_enabled = true
+embed_backend = "nemotron"
+embed_model_id = "nvidia/omni-embed-nemotron-3b"
+embed_device = "auto"
+parcels_enabled = true
