@@ -16,6 +16,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, MutableMapping, Sequence
 
 from elyra.memory.config import MemorySettings
+from elyra.memory.parcel import (
+    make_parent_and_parcels,
+    parcel_threshold,
+    should_split_into_parcels,
+)
 from elyra.memory.store import MemoryStore
 from elyra.memory.types import Atom, atom_replace, new_atom_id, to_iso_z, utc_now_iso
 
@@ -333,28 +338,7 @@ def _link_and_put(
         prev = None
 
     if prev is not None:
-        atom = Atom(
-            atom_id=atom.atom_id,
-            t_start=atom.t_start,
-            kind=atom.kind,
-            content_ref=atom.content_ref,
-            content_text=atom.content_text,
-            t_end=atom.t_end,
-            moment_id=atom.moment_id,
-            media_ids=atom.media_ids,
-            prev_atom_id=prev.atom_id,
-            next_atom_id=None,
-            parent_atom_id=atom.parent_atom_id,
-            scale=atom.scale,
-            window_start=atom.window_start,
-            window_end=atom.window_end,
-            source_beat_ts=atom.source_beat_ts,
-            source_beat_type=atom.source_beat_type,
-            embedding_status=atom.embedding_status,
-            qualia=atom.qualia,
-            meta=dict(atom.meta),
-            schema_version=atom.schema_version,
-        )
+        atom = atom_replace(atom, prev_atom_id=prev.atom_id, next_atom_id=None)
 
     stored = store.put_atom(atom)
     if prev is not None:
@@ -367,6 +351,112 @@ def _link_and_put(
                 stored.atom_id,
             )
     return stored
+
+
+def _put_parcel_children(
+    store: MemoryStore,
+    children: Sequence[Atom],
+    *,
+    settings: MemorySettings,
+) -> list[Atom]:
+    """Put parcel children with sequential prev/next among parcels only.
+
+    Does **not** join the experience weave (``moment_tail`` already excludes
+    ``kind=parcel``). Each put still fires write hooks for encode enqueue.
+    """
+    stored: list[Atom] = []
+    prev_id: str | None = None
+    for child in children:
+        emb_status = _embedding_status_for_promote(settings, child)
+        atom = child
+        if emb_status != atom.embedding_status:
+            atom = atom_replace(atom, embedding_status=emb_status)
+        if prev_id is not None:
+            atom = atom_replace(atom, prev_atom_id=prev_id, next_atom_id=None)
+        try:
+            row = store.put_atom(atom)
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "memory promote parcel put failed atom_id=%s parent=%s",
+                atom.atom_id,
+                atom.parent_atom_id,
+            )
+            break
+        if prev_id is not None:
+            try:
+                store.update_links(prev_id, next_atom_id=row.atom_id)
+            except Exception:  # noqa: BLE001
+                _LOG.exception(
+                    "memory promote parcel update_links failed prev=%s new=%s",
+                    prev_id,
+                    row.atom_id,
+                )
+        stored.append(row)
+        prev_id = row.atom_id
+    return stored
+
+
+def _link_and_put_with_parcels(
+    store: MemoryStore,
+    *,
+    moment_id: str,
+    settings: MemorySettings,
+    kind: str,
+    raw_text: str,
+    t_start: str,
+    media_ids: Sequence[str] = (),
+    source_beat_ts: str | None = None,
+    source_beat_type: str | None = None,
+    base_meta: Mapping[str, Any] | None = None,
+) -> Atom:
+    """Put experience atom; when parcels apply, split before any truncate.
+
+    KD21: parcels run before ``_truncate`` / store cap. On split failure,
+    falls back to Phase 1 single-atom truncate path.
+    """
+    meta = dict(base_meta or {})
+    if should_split_into_parcels(raw_text, settings):
+        try:
+            thr = parcel_threshold(settings)
+            parent, children = make_parent_and_parcels(
+                text=raw_text,
+                max_chars=thr,
+                kind=kind,
+                t_start=t_start,
+                moment_id=moment_id,
+                media_ids=media_ids,
+                source_beat_ts=source_beat_ts,
+                source_beat_type=source_beat_type,
+                base_meta=meta,
+            )
+            stored_parent = _link_and_put(
+                store, parent, moment_id=moment_id, settings=settings
+            )
+            if children:
+                _put_parcel_children(store, children, settings=settings)
+            return stored_parent
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "memory promote parcel split failed; falling back to truncate"
+            )
+
+    max_chars = _atom_max(settings)
+    body, truncated = _truncate(raw_text, max_chars)
+    if truncated:
+        meta["truncated"] = True
+    atom = Atom(
+        atom_id=new_atom_id(),
+        t_start=t_start,
+        kind=kind,
+        content_text=body,
+        content_ref="inline",
+        moment_id=moment_id,
+        media_ids=tuple(str(m) for m in (media_ids or ()) if m),
+        source_beat_ts=source_beat_ts,
+        source_beat_type=source_beat_type,
+        meta=meta,
+    )
+    return _link_and_put(store, atom, moment_id=moment_id, settings=settings)
 
 
 def _ledger_one_liner(name: str, content: str, ok: bool) -> str:
@@ -440,11 +530,10 @@ def _promote_speak(
     ok = bool(beat.get("ok"))
     content = str(beat.get("content") or "")
     text = _speak_text_from_content(content, ok, beat.get("error_reason"))
-    max_chars = _atom_max(settings)
-    text, truncated = _truncate(text, max_chars)
     media_ids = _media_ids_from_beat(beat)
     t_start = _beat_ts(beat)
     kind = "speak"
+    # Idempotency over full pre-cap body so parcel and truncate paths share keys.
     chash = content_hash(text)
     key = _idem_key(moment_id, t_start, kind, chash)
     if _key_seen(store, moment_id, key, state):
@@ -460,24 +549,21 @@ def _promote_speak(
         meta["error_reason"] = beat.get("error_reason")
     if beat.get("tool_call_id") is not None:
         meta["tool_call_id"] = beat.get("tool_call_id")
-    if truncated:
-        meta["truncated"] = True
     if not ok:
         meta["transport_ok"] = False
 
-    atom = Atom(
-        atom_id=new_atom_id(),
-        t_start=t_start,
-        kind=kind,
-        content_text=text,
-        content_ref="inline",
+    stored = _link_and_put_with_parcels(
+        store,
         moment_id=moment_id,
+        settings=settings,
+        kind=kind,
+        raw_text=text,
+        t_start=t_start,
         media_ids=media_ids,
         source_beat_ts=t_start,
         source_beat_type="tool",
-        meta=meta,
+        base_meta=meta,
     )
-    stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
     _remember_key(state, key)
     return stored
 
@@ -494,8 +580,6 @@ def _promote_ledger(
     ok = bool(beat.get("ok"))
     content = str(beat.get("content") or "")
     one = _ledger_one_liner(name, content, ok)
-    max_chars = _atom_max(settings)
-    one, truncated = _truncate(one, max_chars)
     t_start = _beat_ts(beat)
     kind = "ledger"
     chash = content_hash(one)
@@ -510,21 +594,18 @@ def _promote_ledger(
     }
     if beat.get("error_reason") is not None:
         meta["error_reason"] = beat.get("error_reason")
-    if truncated:
-        meta["truncated"] = True
 
-    atom = Atom(
-        atom_id=new_atom_id(),
-        t_start=t_start,
-        kind=kind,
-        content_text=one,
-        content_ref="inline",
+    stored = _link_and_put_with_parcels(
+        store,
         moment_id=moment_id,
+        settings=settings,
+        kind=kind,
+        raw_text=one,
+        t_start=t_start,
         source_beat_ts=t_start,
         source_beat_type="tool",
-        meta=meta,
+        base_meta=meta,
     )
-    stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
     _remember_key(state, key)
     return stored
 
@@ -551,51 +632,74 @@ def _promote_tool(
     if cap > 0 and count >= cap and ok:
         return None
 
-    max_chars = _atom_max(settings)
+    t_start = _beat_ts(beat)
+    kind = "tool"
+    # Tool OK stays density-capped (preview); only failures may parcel full body.
     if ok:
         preview = _tool_preview(settings)
         body, truncated = _truncate(content, preview)
-        preview_flag = True
-    else:
-        body, truncated = _truncate(content, max_chars)
-        preview_flag = False
+        chash = content_hash(body)
+        key = _idem_key(moment_id, t_start, kind, chash)
+        if _key_seen(store, moment_id, key, state):
+            return None
+        meta: dict[str, Any] = {
+            _META_IDEM: key,
+            _META_CONTENT_HASH: chash,
+            "tool_name": name,
+            "ok": ok,
+            "preview": True,
+        }
+        if truncated:
+            meta["truncated"] = True
+        if beat.get("error_reason") is not None:
+            meta["error_reason"] = beat.get("error_reason")
+        if beat.get("hop") is not None:
+            meta["hop"] = beat.get("hop")
+        if beat.get("tool_call_id") is not None:
+            meta["tool_call_id"] = beat.get("tool_call_id")
+        atom = Atom(
+            atom_id=new_atom_id(),
+            t_start=t_start,
+            kind=kind,
+            content_text=body,
+            content_ref="inline",
+            moment_id=moment_id,
+            source_beat_ts=t_start,
+            source_beat_type="tool",
+            meta=meta,
+        )
+        stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
+        _remember_key(state, key)
+        _inc_tool_count(state)
+        return stored
 
-    t_start = _beat_ts(beat)
-    kind = "tool"
-    chash = content_hash(body)
+    chash = content_hash(content)
     key = _idem_key(moment_id, t_start, kind, chash)
     if _key_seen(store, moment_id, key, state):
         return None
-
-    meta: dict[str, Any] = {
+    meta = {
         _META_IDEM: key,
         _META_CONTENT_HASH: chash,
         "tool_name": name,
         "ok": ok,
     }
-    if preview_flag:
-        meta["preview"] = True
-    if truncated:
-        meta["truncated"] = True
     if beat.get("error_reason") is not None:
         meta["error_reason"] = beat.get("error_reason")
     if beat.get("hop") is not None:
         meta["hop"] = beat.get("hop")
     if beat.get("tool_call_id") is not None:
         meta["tool_call_id"] = beat.get("tool_call_id")
-
-    atom = Atom(
-        atom_id=new_atom_id(),
-        t_start=t_start,
-        kind=kind,
-        content_text=body,
-        content_ref="inline",
+    stored = _link_and_put_with_parcels(
+        store,
         moment_id=moment_id,
+        settings=settings,
+        kind=kind,
+        raw_text=content,
+        t_start=t_start,
         source_beat_ts=t_start,
         source_beat_type="tool",
-        meta=meta,
+        base_meta=meta,
     )
-    stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
     _remember_key(state, key)
     _inc_tool_count(state)
     return stored
@@ -622,11 +726,9 @@ def _promote_model(
     if beat.get("echo_of_host") or beat.get("host_echo"):
         return None
 
-    max_chars = _atom_max(settings)
-    body, truncated = _truncate(content, max_chars)
     t_start = _beat_ts(beat)
     kind = "model"
-    chash = content_hash(body)
+    chash = content_hash(content)
     key = _idem_key(moment_id, t_start, kind, chash)
     if _key_seen(store, moment_id, key, state):
         return None
@@ -634,23 +736,20 @@ def _promote_model(
         _META_IDEM: key,
         _META_CONTENT_HASH: chash,
     }
-    if truncated:
-        meta["truncated"] = True
     if beat.get("hop") is not None:
         meta["hop"] = beat.get("hop")
 
-    atom = Atom(
-        atom_id=new_atom_id(),
-        t_start=t_start,
-        kind=kind,
-        content_text=body,
-        content_ref="inline",
+    stored = _link_and_put_with_parcels(
+        store,
         moment_id=moment_id,
+        settings=settings,
+        kind=kind,
+        raw_text=content,
+        t_start=t_start,
         source_beat_ts=t_start,
         source_beat_type="model",
-        meta=meta,
+        base_meta=meta,
     )
-    stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
     _remember_key(state, key)
     return stored
 
@@ -672,10 +771,8 @@ def _promote_interjection(
         store, moment_id, text=text, media_ids=media_ids, t_start=t_start
     ):
         return None
-    max_chars = _atom_max(settings)
-    body, truncated = _truncate(text, max_chars)
     kind = "observation"
-    chash = content_hash(body)
+    chash = content_hash(text)
     key = _idem_key(moment_id, t_start, kind, chash)
     if _key_seen(store, moment_id, key, state):
         return None
@@ -685,22 +782,19 @@ def _promote_interjection(
         _META_MEDIA_FP: _media_fp(media_ids),
         "obs_kind": "interjection",
     }
-    if truncated:
-        meta["truncated"] = True
 
-    atom = Atom(
-        atom_id=new_atom_id(),
-        t_start=t_start,
-        kind=kind,
-        content_text=body,
-        content_ref="inline",
+    stored = _link_and_put_with_parcels(
+        store,
         moment_id=moment_id,
+        settings=settings,
+        kind=kind,
+        raw_text=text,
+        t_start=t_start,
         media_ids=media_ids,
         source_beat_ts=t_start,
         source_beat_type="obs",
-        meta=meta,
+        base_meta=meta,
     )
-    stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
     _remember_key(state, key)
     return stored
 
@@ -823,9 +917,7 @@ def promote_wake_observation(
         ):
             return None
 
-        max_chars = _atom_max(cfg)
-        body, truncated = _truncate(text, max_chars)
-        chash = content_hash(body if body else _media_fp(mids))
+        chash = content_hash(text if text else _media_fp(mids))
         key = _wake_idem_key(moment_id, message_id, chash)
         if _key_seen(store, moment_id, key, None):
             return None
@@ -840,22 +932,19 @@ def promote_wake_observation(
             meta["wake_message_id"] = message_id
         if why_now:
             meta["why_now"] = why_now
-        if truncated:
-            meta["truncated"] = True
 
-        atom = Atom(
-            atom_id=new_atom_id(),
-            t_start=t_start,
-            kind="observation",
-            content_text=body,
-            content_ref="inline",
+        return _link_and_put_with_parcels(
+            store,
             moment_id=moment_id,
+            settings=cfg,
+            kind="observation",
+            raw_text=text,
+            t_start=t_start,
             media_ids=mids,
             source_beat_ts=t_start,
             source_beat_type="wake",
-            meta=meta,
+            base_meta=meta,
         )
-        return _link_and_put(store, atom, moment_id=moment_id, settings=cfg)
     except Exception:  # noqa: BLE001
         _LOG.exception(
             "memory promote_wake_observation failed moment_id=%s", moment_id
