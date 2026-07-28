@@ -396,3 +396,20 @@ def test_highlights_cap_15m():
     ]
     picks = select_highlights(atoms, scale="15m")
     assert len(picks) == 12
+
+
+def test_refresh_window_skips_unchanged_put(store):
+    """Unchanged summary body must not append another JSONL line (bloat)."""
+    t = datetime(2026, 7, 28, 4, 20, tzinfo=UTC)
+    store.put_atom(
+        _atom(t=to_iso_z(t), kind="speak", text="hello world highlight")
+    )
+    a1 = refresh_window(store, "15m", t)
+    assert a1 is not None
+    lines_before = store.atoms_path.read_text(encoding="utf-8").count("\n")
+    a2 = refresh_window(store, "15m", t)
+    assert a2 is not None
+    assert a2.atom_id == a1.atom_id
+    assert a2.content_text == a1.content_text
+    lines_after = store.atoms_path.read_text(encoding="utf-8").count("\n")
+    assert lines_after == lines_before

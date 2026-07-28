@@ -94,12 +94,12 @@ ladder/state.json   # round-robin scale index + last_refresh per scale
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `write_atoms` | `false` | Promote beats / wake observations into the store |
-| `enabled` | `false` | Outer meal uses labeled memory package (no full sliding glass) |
+| `write_atoms` | `true` | Promote beats / wake observations into the store |
+| `enabled` | `true` | Outer meal uses labeled memory package (no full sliding glass) |
 | `ladder_enabled` | `true` | Idle/finalize ladder when write_atoms **or** enabled and store open |
 | `backend` | `jsonl` | `jsonl` \| `lance` (lance → jsonl fall-back in Phase 1) |
 
-Dogfood stages: write-only (`write_atoms=true`, `enabled=false`) then meal (`enabled=true`). Rollback = set both false; atoms remain on disk inert.
+Defaults: write path + memory meal both on. Rollback: set `enabled=false` (glass meal) and/or `write_atoms=false`; atoms remain on disk inert.
 
 ### Integration hooks
 
@@ -338,3 +338,18 @@ Budget: residual after system+orient split by `episodic_fraction` (default 0.20)
 | [philosophical-soft-guidance.md](../philosophical-soft-guidance.md) | Judgment influences only |
 
 When behaviour changes, update **this** architecture note (and activity map) as part of done — design docs stay historical unless a decision is revised.
+
+---
+
+## 10. Follow-on packaging (PR8 / PR9 → Phase 2)
+
+Normative product sequence after Phase 1 core (detail in [design-phase-1-implementation.md](../design-phase-1-implementation.md) PR Plan):
+
+| Work | Role |
+|------|------|
+| **PR8** | Optional **Lance** backend — Protocol parity only; no glass, no ANN columns yet. |
+| **PR9** | Glass **Memory** page: **context meal inspector** (primary), light atom browser, **Vectors** and **Graph** tabs as stubs. |
+| **Phase 2** | Semantic embeddings + ANN → implement **Vectors** tab for real. |
+| **Phase 2a** | Directed traversal / typed edges → implement **Graph** tab for real. |
+
+Do not require rich vector or hypergraph visualization for Phase 1 correctness. Moments panel remains the tape debugger; Memory page is meal + store inspection.

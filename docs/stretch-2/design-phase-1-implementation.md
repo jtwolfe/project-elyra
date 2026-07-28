@@ -1431,18 +1431,78 @@ Ordered stack for `/execute-plan`. Each PR independently reviewable; defaults ke
 | **Files** | `docs/stretch-2/architecture/phase-1-temporal.md`, light touch `docs/stretch-2/README.md` / `design-phase-1-temporal.md` status pointers |
 | **Description** | Structure map, activity map, invariants, failure modes, glossary, restart/compaction notes. Satisfies Stretch 2 documentation obligation. |
 
-### PR8 — Optional Lance backend (can slip)
+### PR8 — Lance backend (recommended foundation before Phase 2)
 
 | Field | Value |
 |-------|--------|
 | **Title** | `feat(memory): optional LanceDB MemoryStore backend` |
-| **Depends on** | PR1 |
-| **Files** | `elyra/memory/lance_store.py`, `pyproject.toml` optional extra, `tests/test_memory_store_lance.py` (skip if no dep), spike note under architecture if needed |
-| **Description** | Implement Protocol on Lance; factory switch; no loop changes; no vector columns required. Not required for Phase 1 done if JSONL meets dogfood. |
+| **Depends on** | PR1 (Protocol); practically stacks after PR7 on `grok-improvement-memory` |
+| **Files** | `elyra/memory/lance_store.py`, factory switch in `store.py`, `pyproject.toml` optional extra (e.g. `elyra[memory-lance]`), `tests/test_memory_store_lance.py` (skip if no dep), short spike/architecture note if install quirks |
+| **Description** | **Storage only.** Implement `MemoryStore` Protocol on Lance for Phase 1 fields (put/get/range/moment/links/walk/health; sequential prev/next). Factory `backend=lance` with JSONL hermetic default for CI. **No** vector columns, ANN, graph product surface, meal/promote rewrites, or glass UI. Goal: prove install/restart/perf on the operator box so Phase 2 can add embeddings without rewriting persistence. |
 
-**Phase 1 done when:** PR1–PR7 merged, flags dogfoodable, success criteria from `design-phase-1-temporal.md` checked (including media parity under enabled), architecture note live. PR8 optional.
+### PR9 — Glass Memory page (context inspector + viz stubs)
 
-**Out of stack (follow-ups):** backfill CLI; glass channel UI; BUG-wake-01 **root** fix (claim-time staleness); LLM summaries; atom GC/archive.
+| Field | Value |
+|-------|--------|
+| **Title** | `feat(glass): Memory page — live context meal inspector + Vectors/Graph stubs` |
+| **Depends on** | PR6 (meal + status health); ideally after PR8 if status should report backend=lance, but **not blocked** on Lance |
+| **Files** | `elyra/runtime/web/` (nav + `Memory` panel), `elyra/runtime/api.py` (read-only inspect endpoints), thin helpers under `elyra/memory/` if needed (e.g. last-meal snapshot for glass), tests for API shape |
+| **Description** | Operator page parallel to **Moments**, focused on **what the model is fed** and store health — not a second Moments tape browser. |
+
+#### PR9 in scope (ship)
+
+1. **Nav + shell** — left-rail or panel tab **Memory** next to Moments; does not replace Moments.
+2. **Context (primary, rich enough to dogfood)** — inspect the **current / last constructed outer meal**:
+   - Channel sections with labels (`episodic/*`, `temporal/*`, orient/system as applicable).
+   - Token estimates (same heuristic as meal / context rail).
+   - Open-moment id, flags (`write_atoms`, `enabled`), store health/backend, atom counts if cheap.
+   - Readable atom/snippet list per channel (not raw JSON only).
+3. **Atoms (lightweight)** — filterable list/timeline of recent atoms (kind, moment, t_start, truncated text); drill-down to one atom. Enough to verify promote density without opening `atoms.jsonl`.
+4. **Vectors tab (stub)** — empty/disabled state with short copy: *Phase 2 — embeddings + ANN browser*. No fake scatterplot.
+5. **Graph tab (stub)** — empty/disabled state: *Phase 2a+ — typed edges / hypergraph walk*. Optional Phase 1 **read-only sequential strip** (prev/next chain for one moment) only if it stays trivial; do not brand it as the hypergraph browser.
+6. **APIs** — read-only, no secrets; fail closed if store unavailable. Prefer snapshot of last `compose_meal` / rebuild_outer package over re-running heavy composition on every poll when possible.
+
+#### PR9 out of scope
+
+- Full vector-space projection, similarity search UI, embedding heatmaps.
+- Hypergraph layout, multi-hop walk UI, keep-set editor (Phase 2a product).
+- Editing/deleting atoms from glass (v1 read-only).
+- Historical glass→atom backfill.
+- Lance install (PR8) or Nemotron (Phase 2).
+
+#### Why this packaging
+
+| Piece | Why not earlier / later |
+|-------|-------------------------|
+| Context inspector in PR9 | Phase 1 data already exists; answers “what did the model see?” (e.g. glass still shows Neil, meal does not). Highest operator value now. |
+| Lance in PR8, not PR9 | Keep storage reviewable; glass must not depend on Lance. |
+| Rich Vectors / Graph after Phase 2 / 2a | Without embeddings and typed edges, rich browsers are theater. Stubs reserve UX real estate. |
+
+### Packaging vs Stretch 2 phases (normative sequencing)
+
+```text
+PR1–PR7     Phase 1 core — SHIPPED on grok-improvement-memory
+PR8         Lance MemoryStore (Protocol parity; optional extra)
+PR9         Glass Memory page: context inspector + atom list + Vectors/Graph stubs
+            │
+            ▼
+Phase 2     Semantic / Nemotron / multi-embeddings / ANN
+            → fill **Vectors** tab (projection, neighbor inspect, semantic meal channel)
+            → vector columns + index live on Lance (PR8 foundation)
+            │
+            ▼
+Phase 2a    Directed traversal / keep-set
+            → fill **Graph** tab (typed edges, walk, temporary vs durable)
+            │
+            ▼
+Phase 3     Procedural / success-path (small meal channel; eval-first)
+```
+
+**Phase 1 “core done”** remains: PR1–PR7 + dogfoodable flags + architecture note.  
+**Phase 1 “operator complete”** (recommended before deep Phase 2 coding): **PR8 + PR9** as above.  
+**Not** Phase 1: rich vector browser, rich hypergraph browser, backfill CLI, BUG-wake-01 root fix, LLM ladder summaries, atom GC/archive.
+
+**Out of stack (still follow-ups):** glass↔atom historical backfill (explicitly low value if not needed); BUG-wake-01 claim-time staleness; LLM summaries; atom GC/archive.
 
 ---
 

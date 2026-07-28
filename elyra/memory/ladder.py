@@ -366,6 +366,13 @@ def refresh_window(
         w_end,
         prefer_children=prefer_children,
     )
+    # Append-only JSONL: skip put when body unchanged so idle ticks don't
+    # rewrite the same stable summary id thousands of times (file bloat).
+    existing = store.get_atom(atom.atom_id)
+    if existing is not None and (existing.content_text or "") == (
+        atom.content_text or ""
+    ):
+        return existing
     return store.put_atom(atom)
 
 

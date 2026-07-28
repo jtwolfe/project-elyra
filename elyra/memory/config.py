@@ -42,8 +42,8 @@ class MemorySettings:
     toml can tune them without a second type.
     """
 
-    enabled: bool = False  # meal path (PR6; unused by PR5 write path)
-    write_atoms: bool = False  # promote path
+    enabled: bool = True  # outer meal uses labeled memory package (not full glass slide)
+    write_atoms: bool = True  # promote beats/wakes into the atom store
     backend: str = "jsonl"  # jsonl | lance
     episodic_fraction: float = 0.20
     episodic_horizon_hours: float = 24.0

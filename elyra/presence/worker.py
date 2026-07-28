@@ -451,7 +451,7 @@ class PresenceWorker:
         # Dev-speed pacing (default ON): inter-hop pause for followable glass.
         self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
 
-        # Stretch 2 memory store (lazy). Defaults write_atoms=false / enabled=false
+        # Stretch 2 memory store (lazy). Defaults write_atoms=true / enabled=true
         # → never opened; meal still legacy until PR6.
         self._memory: Any | None = None
         self._memory_open_attempted = False
@@ -1164,6 +1164,7 @@ class PresenceWorker:
             refresh_due(store, max_ms=max_ms)
         except Exception:  # noqa: BLE001
             _LOG.exception("memory ladder refresh_due failed")
+        self._maybe_compact_memory_store()
 
     def _finalize_memory_ladder_15m(self) -> None:
         """Refresh the 15m window containing now after moment close (budgeted)."""
@@ -1178,6 +1179,21 @@ class PresenceWorker:
             refresh_window(store, "15m", datetime.now(UTC))
         except Exception:  # noqa: BLE001
             _LOG.exception("memory ladder 15m finalize refresh failed")
+        self._maybe_compact_memory_store()
+
+    def _maybe_compact_memory_store(self) -> None:
+        """Idle-only JSONL rewrite when dirty lines / size exceed thresholds."""
+        store = self._memory
+        if store is None:
+            return
+        maybe = getattr(store, "maybe_compact", None)
+        if not callable(maybe):
+            return
+        try:
+            if maybe():
+                _LOG.info("memory store compacted (jsonl latest-wins rewrite)")
+        except Exception:  # noqa: BLE001
+            _LOG.exception("memory store maybe_compact failed")
 
     def _promote_social_wake_unlocked(
         self,

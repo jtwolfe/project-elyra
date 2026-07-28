@@ -124,7 +124,9 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 
 ## Next steps
 
-1. Dogfood Phase 1 with `write_atoms` then `enabled` (see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)).
-2. Run storage spikes listed in `design-database-choices.md` before defaulting off jsonl.
-3. Spike Nemotron runtime checklist before Phase 2 default-on.
-4. Keep architecture manuals updated when Phase 1 behaviour changes.
+1. Dogfood Phase 1 with `write_atoms` + `enabled` (defaults on; see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)).
+2. **PR8** — Lance `MemoryStore` backend (Protocol parity; storage only; foundation for Phase 2 vectors). See [design-phase-1-implementation.md](design-phase-1-implementation.md) PR Plan.
+3. **PR9** — Glass **Memory** page: live **context meal inspector** + light atom list + **Vectors / Graph stubs** (rich browsers fill in Phase 2 / 2a). Same PR Plan section.
+4. Run storage spikes in [design-database-choices.md](design-database-choices.md); spike Nemotron checklist in [design-nemotron-runtime.md](design-nemotron-runtime.md) before Phase 2 default-on.
+5. Phase 2 semantic → fill Vectors tab; Phase 2a → fill Graph tab.
+6. Keep architecture manuals updated when behaviour changes.

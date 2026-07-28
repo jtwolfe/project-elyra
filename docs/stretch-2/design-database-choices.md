@@ -81,6 +81,11 @@ Do not scatter raw Lance or Cypher calls through `loop/` or `presence/`.
 - [ ] Confirm wheel install on operator Linux (and CI CPU)
 - [ ] Record results under `docs/stretch-2/architecture/` or a spike note linked from this file
 
+## Relation to Phase 1 PR8 / glass Memory page
+
+- **PR8** (see [design-phase-1-implementation.md](design-phase-1-implementation.md)): implement Lance as a drop-in `MemoryStore` for **current Phase 1 atom fields only** — the first concrete step on this decision. Vector columns and ANN stay Phase 2.
+- **PR9** Glass Memory page does **not** depend on Lance; it inspects meal + atoms via read APIs. Vector/Graph **tabs** stay stubs until Phase 2 / 2a fill them.
+
 ---
 
 ## Relation to philosophy doc

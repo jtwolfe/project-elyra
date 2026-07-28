@@ -169,7 +169,7 @@ class Settings:
     continuous: ContinuousSettings = field(default_factory=ContinuousSettings)
     provider: ProviderSettings = field(default_factory=ProviderSettings)
     usage: UsageSettings = field(default_factory=UsageSettings)
-    # Stretch 2 Phase 1 memory (defaults off: write_atoms=false, enabled=false).
+    # Stretch 2 Phase 1 memory (write_atoms + meal enabled on by default).
     memory: MemorySettings = field(default_factory=MemorySettings)
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"

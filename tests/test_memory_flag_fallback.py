@@ -1,8 +1,8 @@
-"""PR5 flag fallback: write_atoms/enabled defaults keep legacy behaviour.
+"""Flag fallback tests: write_atoms / enabled can be disabled.
 
-When write_atoms is false, promote is a no-op and the do-loop matches
-pre-memory behaviour (MomentStore only). Store open is skipped when both
-flags are off. Promote I/O failures never change DoLoopResult.
+Default product: write_atoms=true, enabled=true. When write_atoms is false,
+promote is a no-op (MomentStore only). Store open is skipped when both flags
+are off. Promote I/O failures never change DoLoopResult.
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ def paths(tmp_path):
     return p
 
 
-def test_defaults_write_atoms_and_enabled_false():
+def test_defaults_write_atoms_and_enabled_on():
     s = default_settings()
-    assert s.memory.write_atoms is False
-    assert s.memory.enabled is False
+    assert s.memory.write_atoms is True
+    assert s.memory.enabled is True
 
 
 def test_promote_noop_when_write_atoms_false(paths):
@@ -112,11 +112,15 @@ def test_record_beat_promotes_when_write_atoms_true(paths):
 def test_worker_does_not_open_store_when_flags_off(paths):
     client = StubChatClient()
     stop = __import__("threading").Event()
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(write_atoms=False, enabled=False, backend="jsonl"),
+    )
     worker = PresenceWorker(
         paths=paths,
         client=client,
         stop_event=stop,
-        settings=default_settings(),
+        settings=settings,
     )
     assert worker._ensure_memory_store() is None
     assert worker._memory is None
@@ -146,11 +150,15 @@ def test_worker_opens_store_when_write_atoms(paths):
 def test_worker_ladder_skipped_when_flags_off(paths):
     client = StubChatClient()
     stop = __import__("threading").Event()
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(write_atoms=False, enabled=False, backend="jsonl"),
+    )
     worker = PresenceWorker(
         paths=paths,
         client=client,
         stop_event=stop,
-        settings=default_settings(),
+        settings=settings,
     )
     # Must not raise; no store open.
     worker._idle_memory_ladder()

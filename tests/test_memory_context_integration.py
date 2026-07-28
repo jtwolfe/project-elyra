@@ -448,7 +448,7 @@ def test_memory_meal_active_when_enabled_and_healthy(paths):
     assert snap["memory"]["store_open"] is True
 
 
-def test_memory_status_block_disabled_defaults(paths):
+def test_memory_status_block_default_flags(paths):
     client = StubChatClient()
     stop = __import__("threading").Event()
     worker = PresenceWorker(
@@ -458,10 +458,11 @@ def test_memory_status_block_disabled_defaults(paths):
         settings=default_settings(),
     )
     snap = worker.status_snapshot()
-    assert snap["memory"]["enabled"] is False
-    assert snap["memory"]["write_atoms"] is False
-    assert snap["memory"]["ok"] is False
+    assert snap["memory"]["enabled"] is True
+    assert snap["memory"]["write_atoms"] is True
+    # Store opens lazily on worker run / first write path, not on snapshot alone.
     assert snap["memory"]["store_open"] is False
+    assert snap["memory"]["ok"] is False
 
 
 def test_compose_outer_no_full_glass_history(paths, media, mem_store):

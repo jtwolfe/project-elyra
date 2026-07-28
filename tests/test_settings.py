@@ -71,8 +71,8 @@ def test_default_settings_match_design():
     assert s.usage.auto_throttle_model is False
     assert s.usage.throttle_model is None
     # Memory defaults OFF (PR5: no write, no meal until dogfood / PR6).
-    assert s.memory.enabled is False
-    assert s.memory.write_atoms is False
+    assert s.memory.enabled is True
+    assert s.memory.write_atoms is True
     assert s.memory.backend == "jsonl"
     assert s.memory.episodic_fraction == 0.20
     assert s.memory.episodic_horizon_hours == 24.0
@@ -182,8 +182,8 @@ def test_settings_as_dict_round_structure():
     assert d["usage"]["account_hard_stop_percent"] == 95.0
     assert d["usage"]["credits_base_url"] == "https://cli-chat-proxy.grok.com"
     assert d["continuous"]["enabled"] is False
-    assert d["memory"]["enabled"] is False
-    assert d["memory"]["write_atoms"] is False
+    assert d["memory"]["enabled"] is True
+    assert d["memory"]["write_atoms"] is True
     assert d["memory"]["backend"] == "jsonl"
 
 
@@ -205,7 +205,7 @@ link_across_moments = false
     )
     s = load_settings(tmp_path)
     assert s.memory.write_atoms is True
-    assert s.memory.enabled is False
+    assert s.memory.enabled is False  # explicit toml override
     assert s.memory.backend == "jsonl"
     assert s.memory.episodic_fraction == 0.15
     assert s.memory.episodic_horizon_hours == 12.0
