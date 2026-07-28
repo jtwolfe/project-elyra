@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
+from typing import Any
 
 import pytest
 
-from elyra.memory.config import MemorySettings
+from elyra.memory.config import MEMORY_EMBED_BACKENDS, MEMORY_EMBED_DEVICES, MemorySettings
 from elyra.memory.embed import (
     CHANNELS,
+    EMBED_BACKENDS,
+    EMBED_DEVICE_PREFS,
     EMBED_DIM,
     MockEmbedder,
     encode_atom_inputs,
@@ -143,31 +148,48 @@ def test_open_encoder_mock_default():
     h = enc.health()
     assert h["backend"] == "mock"
     assert h["ok"] is True
+    assert h["model_id"] == MOCK_MODEL_ID
     v = enc.encode_text("ping")
     _assert_unit(v)
     enc.close()
 
 
-def test_open_encoder_respects_settings_model_id():
+def test_open_encoder_mock_model_id_not_nemotron_pin():
+    """Settings.embed_model_id is the Nemotron pin; mock vectors use MOCK_MODEL_ID."""
     cfg = MemorySettings(
         embed_backend="mock",
-        embed_model_id="custom/mock-id",
+        embed_model_id="nvidia/omni-embed-nemotron-3b",
         embed_device="cpu",
     )
     enc = open_encoder(cfg)
-    assert enc.health()["model_id"] == "custom/mock-id"
+    assert enc.health()["model_id"] == MOCK_MODEL_ID
     assert enc.health()["device"] == "cpu"
+    enc.close()
+    # Explicit model_id= override still honored.
+    enc2 = open_encoder(cfg, model_id="custom/mock-id")
+    assert enc2.health()["model_id"] == "custom/mock-id"
+    enc2.close()
+
+
+def test_open_encoder_default_settings_mock_model_id():
+    enc = open_encoder(MemorySettings(embed_backend="mock"))
+    assert enc.health()["model_id"] == MOCK_MODEL_ID
     enc.close()
 
 
 def test_open_encoder_nemotron_falls_back_to_mock():
     """PR1: nemotron requested but runtime not loaded → mock fallback."""
-    cfg = MemorySettings(embed_backend="nemotron")
+    cfg = MemorySettings(
+        embed_backend="nemotron",
+        embed_model_id="nvidia/omni-embed-nemotron-3b",
+    )
     enc = open_encoder(cfg)
     h = enc.health()
     assert h["ok"] is True
     assert h["backend"] == "mock"
     assert h.get("requested_backend") == "nemotron"
+    assert h["model_id"] == MOCK_MODEL_ID
+    assert h.get("requested_model_id") == "nvidia/omni-embed-nemotron-3b"
     assert "mock fallback" in (h.get("error") or "")
     # Still produces deterministic unit vectors.
     _assert_unit(enc.encode_text("fallback works"))
@@ -211,3 +233,94 @@ def test_mock_vector_near_orthogonal_for_distinct_seeds():
     assert abs(dot) < 0.2, f"unexpectedly aligned mock vectors: dot={dot}"
     # Self-dot ≈ 1.
     assert abs(sum(x * x for x in a) - 1.0) < 1e-6
+
+
+def test_embed_import_does_not_load_torch():
+    """KD13: package load must not pull torch (subprocess = clean modules)."""
+    code = (
+        "import sys\n"
+        "import elyra.memory\n"
+        "import elyra.memory.embed\n"
+        "assert 'torch' not in sys.modules, sorted(sys.modules)[:20]\n"
+        "print('ok')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "ok" in proc.stdout
+
+
+def test_embed_allowlists_single_source():
+    """config re-exports embed.types allowlists (same object, no drift)."""
+    assert MEMORY_EMBED_BACKENDS is EMBED_BACKENDS
+    assert MEMORY_EMBED_DEVICES is EMBED_DEVICE_PREFS
+    assert MEMORY_EMBED_BACKENDS == frozenset({"mock", "nemotron"})
+    assert MEMORY_EMBED_DEVICES == frozenset({"auto", "cuda", "rocm", "cpu"})
+
+
+class _ProtocolOnlyEmbedder:
+    """Minimal Embedder without encode_atom_inputs (fallback path)."""
+
+    def __init__(self) -> None:
+        self._inner = MockEmbedder()
+
+    def health(self) -> dict[str, Any]:
+        return self._inner.health()
+
+    def encode_text(self, text: str) -> list[float]:
+        return self._inner.encode_text(text)
+
+    def encode_image(self, path_or_bytes: bytes | str) -> list[float]:
+        return self._inner.encode_image(path_or_bytes)
+
+    def encode_audio(self, path_or_bytes: bytes | str) -> list[float]:
+        return self._inner.encode_audio(path_or_bytes)
+
+    def encode_video(self, path_or_bytes: bytes | str) -> list[float]:
+        return self._inner.encode_video(path_or_bytes)
+
+    def encode_joint(self, parts: ModalityParts) -> list[float]:
+        return self._inner.encode_joint(parts)
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def test_encode_atom_inputs_protocol_fallback_text_only():
+    enc = _ProtocolOnlyEmbedder()
+    result = encode_atom_inputs(enc, "a_proto", text="fallback text")
+    assert result.status == "ready"
+    assert result.embeddings is not None
+    assert result.embeddings.emb_text is not None
+    assert result.embeddings.emb_joint is None
+    assert result.embeddings.encoded_at  # set by helper
+    assert "T" in result.embeddings.encoded_at
+    _assert_unit(result.embeddings.emb_text)
+    enc.close()
+
+
+def test_encode_atom_inputs_protocol_fallback_multimodal_joint():
+    enc = _ProtocolOnlyEmbedder()
+    result = encode_atom_inputs(
+        enc, "a_multi", text="cap", image=b"png-bytes"
+    )
+    assert result.status == "ready"
+    emb = result.embeddings
+    assert emb is not None
+    assert emb.emb_text is not None
+    assert emb.emb_image is not None
+    assert emb.emb_joint is not None
+    assert emb.encoded_at
+    enc.close()
+
+
+def test_encode_atom_inputs_protocol_fallback_empty_skipped():
+    enc = _ProtocolOnlyEmbedder()
+    result = encode_atom_inputs(enc, "a_skip", text="  ", image=b"")
+    assert result.status == "skipped"
+    assert result.embeddings is None
+    enc.close()

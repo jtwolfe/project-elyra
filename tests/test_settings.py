@@ -369,6 +369,17 @@ def test_invalid_memory_embed_backend_and_device_raise(tmp_path):
         load_settings(tmp_path)
 
 
+def test_memory_embed_backend_device_case_normalized(tmp_path):
+    """toml values are lowercased like open_encoder/select_device."""
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nembed_backend = "Mock"\nembed_device = "CPU"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.embed_backend == "mock"
+    assert s.memory.embed_device == "cpu"
+
+
 def test_invalid_memory_semantic_fractions_raise(tmp_path):
     for field, bad in (
         ("semantic_fraction", 1.5),

@@ -55,6 +55,15 @@ def vector_l2_norm(vec: Sequence[float]) -> float:
     return math.sqrt(sum(float(x) * float(x) for x in vec))
 
 
+def _media_present(value: bytes | str | None) -> bool:
+    """True when media input has content (non-empty bytes or non-blank path)."""
+    if value is None:
+        return False
+    if isinstance(value, (bytes, bytearray)):
+        return len(value) > 0
+    return bool(str(value).strip())
+
+
 @dataclass(frozen=True)
 class ModalityParts:
     """Optional per-modality inputs for joint encode."""
@@ -65,17 +74,39 @@ class ModalityParts:
     video: bytes | str | None = None
 
     def present_modalities(self) -> tuple[str, ...]:
-        """Return non-joint channel names that have content."""
+        """Return non-joint channel names that have content.
+
+        Text requires non-whitespace content; media requires non-empty bytes
+        or a non-blank path string (empty ``b""`` is absent).
+        """
         out: list[str] = []
         if self.text is not None and str(self.text).strip():
             out.append("text")
-        if self.image is not None:
+        if _media_present(self.image):
             out.append("image")
-        if self.audio is not None:
+        if _media_present(self.audio):
             out.append("audio")
-        if self.video is not None:
+        if _media_present(self.video):
             out.append("video")
         return tuple(out)
+
+
+def _validate_channel_vector(
+    name: str, vec: tuple[float, ...] | None, dim: int
+) -> None:
+    """Raise ValueError if ``vec`` is present but wrong length or non-finite."""
+    if vec is None:
+        return
+    if len(vec) != dim:
+        raise ValueError(
+            f"emb_{name}: expected length {dim}, got {len(vec)}"
+        )
+    for i, x in enumerate(vec):
+        f = float(x)
+        if not math.isfinite(f):
+            raise ValueError(
+                f"emb_{name}: non-finite value at index {i}: {x!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -98,19 +129,41 @@ class EmbeddingSet:
     channels_present: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        # Derive channels_present if caller left it empty.
+        if self.dim < 1:
+            raise ValueError(f"dim must be >= 1, got {self.dim}")
+        # Shape / finite checks before deriving presence (PR3 upsert hand-off).
+        for name, vec in (
+            ("text", self.emb_text),
+            ("image", self.emb_image),
+            ("audio", self.emb_audio),
+            ("video", self.emb_video),
+            ("joint", self.emb_joint),
+        ):
+            _validate_channel_vector(name, vec, self.dim)
+
+        derived: list[str] = []
+        for name, vec in (
+            ("text", self.emb_text),
+            ("image", self.emb_image),
+            ("audio", self.emb_audio),
+            ("video", self.emb_video),
+            ("joint", self.emb_joint),
+        ):
+            if vec is not None:
+                derived.append(name)
+        derived_t = tuple(derived)
+
         if not self.channels_present:
-            present: list[str] = []
-            for name, vec in (
-                ("text", self.emb_text),
-                ("image", self.emb_image),
-                ("audio", self.emb_audio),
-                ("video", self.emb_video),
-                ("joint", self.emb_joint),
-            ):
-                if vec is not None:
-                    present.append(name)
-            object.__setattr__(self, "channels_present", tuple(present))
+            object.__setattr__(self, "channels_present", derived_t)
+        else:
+            # Declared channels must match non-None vectors (no phantom presence).
+            declared = tuple(c for c in self.channels_present if c in CHANNEL_SET)
+            if set(declared) != set(derived_t):
+                raise ValueError(
+                    f"channels_present {self.channels_present!r} does not match "
+                    f"non-None vectors {derived_t!r}"
+                )
+            object.__setattr__(self, "channels_present", derived_t)
 
     def channel_vector(self, channel: str) -> tuple[float, ...] | None:
         """Return the vector for ``channel`` or None."""
@@ -119,7 +172,14 @@ class EmbeddingSet:
         return getattr(self, f"emb_{channel}")
 
     def has_any_vector(self) -> bool:
-        return bool(self.channels_present)
+        """True when at least one channel vector is non-None (not declared-only)."""
+        return (
+            self.emb_text is not None
+            or self.emb_image is not None
+            or self.emb_audio is not None
+            or self.emb_video is not None
+            or self.emb_joint is not None
+        )
 
 
 @dataclass(frozen=True)

@@ -107,6 +107,33 @@ def test_embedding_set_empty_has_no_channels():
     assert emb.has_any_vector() is False
 
 
+def test_embedding_set_rejects_wrong_dim():
+    short = (1.0, 0.0, 0.0)
+    with pytest.raises(ValueError, match="emb_text: expected length"):
+        EmbeddingSet(atom_id="a_bad", emb_text=short)
+
+
+def test_embedding_set_rejects_non_finite():
+    bad = (float("nan"),) + (0.0,) * (EMBED_DIM - 1)
+    with pytest.raises(ValueError, match="non-finite"):
+        EmbeddingSet(atom_id="a_nan", emb_text=bad)
+    inf = (float("inf"),) + (0.0,) * (EMBED_DIM - 1)
+    with pytest.raises(ValueError, match="non-finite"):
+        EmbeddingSet(atom_id="a_inf", emb_text=inf)
+
+
+def test_embedding_set_has_any_vector_ignores_declared_only():
+    """Phantom channels_present without vectors is rejected / not trusted."""
+    with pytest.raises(ValueError, match="channels_present"):
+        EmbeddingSet(
+            atom_id="a_phantom",
+            channels_present=("text",),
+            emb_text=None,
+        )
+    empty = EmbeddingSet(atom_id="a_empty", channels_present=())
+    assert empty.has_any_vector() is False
+
+
 def test_l2_normalize_unit_and_zero():
     v = l2_normalize([3.0, 4.0])
     assert abs(vector_l2_norm(v) - 1.0) < 1e-9
@@ -134,6 +161,9 @@ def test_modality_parts_present():
     assert p.present_modalities() == ("text", "image")
     empty = ModalityParts(text="   ", image=None)
     assert empty.present_modalities() == ()
+    # Empty media bytes / blank path are absent (skip policy alignment).
+    blank_media = ModalityParts(text=None, image=b"", audio="", video="  ")
+    assert blank_media.present_modalities() == ()
 
 
 def test_embedding_set_from_mapping():

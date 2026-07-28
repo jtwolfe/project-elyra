@@ -353,16 +353,23 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         if path == "memory.compact_max_tokens" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         # Phase 2 embed / semantic (KD9 defaults off; validation always active).
-        if path == "memory.embed_backend" and coerced not in _MEMORY_EMBED_BACKENDS:
-            raise ValueError(
-                f"{path}: expected one of {sorted(_MEMORY_EMBED_BACKENDS)}, "
-                f"got {coerced!r}"
-            )
-        if path == "memory.embed_device" and coerced not in _MEMORY_EMBED_DEVICES:
-            raise ValueError(
-                f"{path}: expected one of {sorted(_MEMORY_EMBED_DEVICES)}, "
-                f"got {coerced!r}"
-            )
+        # Lowercase/strip string allowlist fields to match open_encoder/select_device.
+        if path == "memory.embed_backend":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_EMBED_BACKENDS:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(_MEMORY_EMBED_BACKENDS)}, "
+                    f"got {coerced!r}"
+                )
+        if path == "memory.embed_device":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_EMBED_DEVICES:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(_MEMORY_EMBED_DEVICES)}, "
+                    f"got {coerced!r}"
+                )
         if path in (
             "memory.semantic_fraction",
             "memory.episodic_fraction_with_semantic",

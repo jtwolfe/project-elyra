@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from elyra.config import ElyraPaths
+from elyra.memory.embed.types import EMBED_BACKENDS, EMBED_DEVICE_PREFS
 
 MEMORY_DIRNAME = "memory"
 ATOMS_JSONL = "atoms.jsonl"
@@ -33,9 +34,9 @@ MEMORY_JSONL_COMPACT_DIRTY = 256
 MEMORY_BACKENDS = frozenset({"jsonl", "lance"})
 _MEMORY_BACKENDS = MEMORY_BACKENDS  # alias for older call sites
 
-# Phase 2 embed allowlists (mirrored in embed/types.py for pure imports).
-MEMORY_EMBED_BACKENDS = frozenset({"mock", "nemotron"})
-MEMORY_EMBED_DEVICES = frozenset({"auto", "cuda", "rocm", "cpu"})
+# Phase 2 embed allowlists — single source: elyra.memory.embed.types.
+MEMORY_EMBED_BACKENDS = EMBED_BACKENDS
+MEMORY_EMBED_DEVICES = EMBED_DEVICE_PREFS
 
 
 @dataclass(frozen=True)

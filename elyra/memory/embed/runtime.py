@@ -8,9 +8,8 @@ Out of scope: real CUDA/ROCm probe, model load, encode queue.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from elyra.memory.config import MemorySettings
 from elyra.memory.embed.mock import MOCK_MODEL_ID, MockEmbedder
 from elyra.memory.embed.types import (
     EMBED_BACKENDS,
@@ -22,6 +21,10 @@ from elyra.memory.embed.types import (
     EncodeResult,
     ModalityParts,
 )
+from elyra.memory.types import utc_now_iso
+
+if TYPE_CHECKING:
+    from elyra.memory.config import MemorySettings
 
 
 @runtime_checkable
@@ -91,7 +94,10 @@ def open_encoder(
     Does not import torch. Safe under ``embed_enabled=false`` for tests that
     still want deterministic vectors.
     """
-    cfg = settings or MemorySettings()
+    # Lazy import breaks config ↔ embed package cycle (config re-exports types).
+    from elyra.memory.config import MemorySettings as _MemorySettings
+
+    cfg = settings or _MemorySettings()
     be: str = backend if backend is not None else cfg.embed_backend
     be = (be or "mock").strip().lower()
     if be not in EMBED_BACKENDS:
@@ -104,11 +110,19 @@ def open_encoder(
     # Mock always runs on logical cpu; resolved hardware is informational.
     mock_device = "cpu" if resolved == "unavailable" else resolved
 
-    mid = model_id if model_id is not None else cfg.embed_model_id
+    # Effective mock vectors always label as MOCK_MODEL_ID unless the caller
+    # passes model_id=… explicitly. Settings.embed_model_id is the Nemotron
+    # pin (requested), not the mock vector identity (PR3 re-encode safety).
+    requested_model = (cfg.embed_model_id or "").strip()
+    if model_id is not None:
+        effective_mid = model_id.strip() or MOCK_MODEL_ID
+    else:
+        effective_mid = MOCK_MODEL_ID
+
     if be == "mock":
         return MockEmbedder(
             dim=dim,
-            model_id=mid or MOCK_MODEL_ID,
+            model_id=effective_mid,
             device=mock_device,
         )
 
@@ -116,12 +130,13 @@ def open_encoder(
     return _UnavailableOrMockEmbedder(
         mock=MockEmbedder(
             dim=dim,
-            model_id=mid or MOCK_MODEL_ID,
+            model_id=effective_mid,
             device=mock_device,
         ),
         requested_backend=be,  # type: ignore[arg-type]
         device=resolved,
-        model_id=mid or "",
+        requested_model_id=requested_model,
+        effective_model_id=effective_mid,
     )
 
 
@@ -129,8 +144,9 @@ class _UnavailableOrMockEmbedder:
     """Nemotron-requested path before PR8: mock vectors + health note.
 
     Produces the same vectors as mock so CI and early dogfood keep working;
-    health exposes ``requested_backend`` and a non-fatal note that real
-    weights are not loaded.
+    health exposes ``requested_backend`` / ``requested_model_id`` and a
+    non-fatal note that real weights are not loaded. Effective ``model_id``
+    stays the mock id so durable rows are not mislabeled as Nemotron.
     """
 
     def __init__(
@@ -139,12 +155,14 @@ class _UnavailableOrMockEmbedder:
         mock: MockEmbedder,
         requested_backend: EmbedBackend,
         device: DeviceKind,
-        model_id: str,
+        requested_model_id: str,
+        effective_model_id: str,
     ) -> None:
         self._mock = mock
         self._requested_backend = requested_backend
         self._device = device
-        self._model_id = model_id
+        self._requested_model_id = requested_model_id
+        self._effective_model_id = effective_model_id
         self._closed = False
 
     def health(self) -> dict[str, Any]:
@@ -153,7 +171,8 @@ class _UnavailableOrMockEmbedder:
         base["backend"] = "mock"  # effective backend
         base["requested_backend"] = self._requested_backend
         base["device"] = self._device
-        base["model_id"] = self._model_id or base.get("model_id")
+        base["model_id"] = self._effective_model_id
+        base["requested_model_id"] = self._requested_model_id
         base["error"] = (
             "closed"
             if self._closed
@@ -253,6 +272,7 @@ def encode_atom_inputs(
         emb_video=emb_video,
         emb_joint=emb_joint,
         model_id=str(health.get("model_id") or ""),
+        encoded_at=utc_now_iso(),
         channels_present=tuple(channels),
     )
     return EncodeResult(
