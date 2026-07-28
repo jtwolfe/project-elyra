@@ -342,3 +342,122 @@ def test_close_rejects_ops(store):
 
     with pytest.raises(MemoryUnavailable):
         store.put_atom(_atom(t="2026-07-28T10:00:00Z"))
+
+
+def test_spill_then_shrink_reloads_short_body(paths):
+    """Issue 1: replace-to-short must force inline; reopen must not revive blob."""
+    from elyra.memory.types import atom_replace
+
+    settings = MemorySettings(atom_max_chars=50_000, inline_max_chars=32)
+    store = open_memory_store(paths, settings)
+    aid = new_atom_id()
+    long_text = "x" * 100
+    a = store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text=long_text, atom_id=aid)
+    )
+    assert a.content_ref.startswith("blob:")
+    blob_rel = a.content_ref[len("blob:") :]
+    blob_path = memory_root(paths) / blob_rel
+    assert blob_path.is_file()
+
+    # Shrink body but pass through the prior blob content_ref (stale).
+    short = store.put_atom(
+        atom_replace(a, content_text="short", content_ref=a.content_ref)
+    )
+    assert short.content_text == "short"
+    assert short.content_ref == "inline"
+    assert store.get_atom(aid).content_text == "short"
+
+    store.close()
+    store2 = open_memory_store(paths, settings)
+    again = store2.get_atom(aid)
+    assert again is not None
+    assert again.content_text == "short"
+    assert again.content_ref == "inline"
+    store2.close()
+
+
+def test_global_tail_excludes_summary(store):
+    """Issue 2: ladder summaries must not become sequential chain tips."""
+    obs = store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", kind="observation", text="exp")
+    )
+    start, end = window_bounds(
+        "15m", datetime(2026, 7, 28, 11, 0, tzinfo=UTC)
+    )
+    store.put_atom(
+        Atom(
+            atom_id=stable_summary_id("15m", start),
+            t_start="2026-07-28T11:00:00Z",
+            kind="summary",
+            scale="15m",
+            window_start=to_iso_z(start),
+            window_end=to_iso_z(end),
+            content_text="ladder",
+            moment_id=None,
+        )
+    )
+    tail = store.global_tail()
+    assert tail is not None
+    assert tail.atom_id == obs.atom_id
+    assert tail.kind == "observation"
+    assert tail.kind != "summary"
+
+
+def test_list_range_mixed_iso_offset_forms(store):
+    """Issue 3: +00:00 and Z for the same instant must both match the range."""
+    store.put_atom(
+        _atom(t="2026-07-28T10:00:00+00:00", text="plus", atom_id=new_atom_id())
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text="zee", atom_id=new_atom_id())
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T09:00:00Z", text="before", atom_id=new_atom_id())
+    )
+    rows = store.list_range("2026-07-28T10:00:00Z", "2026-07-28T11:00:00Z")
+    texts = sorted(r.content_text for r in rows)
+    assert texts == ["plus", "zee"]
+    # put normalizes stored t_start to Z
+    for r in rows:
+        assert r.t_start.endswith("Z")
+        assert "+00:00" not in r.t_start
+
+
+def test_update_links_missing_raises(store):
+    from elyra.memory import MemoryAtomNotFound
+
+    with pytest.raises(MemoryAtomNotFound):
+        store.update_links("a_does_not_exist", next_atom_id="a_other")
+
+
+def test_maybe_compact_dirty_threshold(paths):
+    settings = MemorySettings(jsonl_compact_dirty=3)
+    store = open_memory_store(paths, settings)
+    aid = new_atom_id()
+    # 1 atom, 4 lines → dirty = 3 >= threshold
+    for i in range(4):
+        store.put_atom(
+            _atom(t="2026-07-28T10:00:00Z", text=f"v{i}", atom_id=aid)
+        )
+    assert store.health()["atom_count"] == 1
+    assert store.health()["line_count"] == 4
+    assert store.needs_compact() is True
+    assert store.maybe_compact() is True
+    assert store.health()["line_count"] == 1
+    assert store.needs_compact() is False
+    assert store.maybe_compact() is False
+    assert store.get_atom(aid).content_text == "v3"
+    store.close()
+
+
+def test_default_inline_max_allows_spill(paths):
+    """Default atom_max (8000) > inline_max (4000) so mid-size bodies spill."""
+    assert MemorySettings().inline_max_chars == 4000
+    assert MemorySettings().atom_max_chars == 8000
+    store = open_memory_store(paths, MemorySettings())
+    body = "y" * 5000  # between 4000 and 8000
+    a = store.put_atom(_atom(t="2026-07-28T10:00:00Z", text=body))
+    assert a.content_ref.startswith("blob:")
+    assert a.content_text == body
+    store.close()

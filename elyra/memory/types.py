@@ -103,8 +103,10 @@ def parse_iso_z(value: datetime | str) -> datetime:
 def stable_summary_id(scale: PeriodScale | str, window_start: datetime | str) -> str:
     """Deterministic summary atom id for ``(scale, window_start)``.
 
-    Normative: ``as_`` + sha256(f\"{scale}|{window_start.isoformat()}\")[:20]
-    Uses normalized UTC ``Z`` iso for stability across callers.
+    **Sole normative source** for summary atom ids (ladder PR must call this,
+    not re-hash with raw ``datetime.isoformat()``). Key material is
+    ``f\"{scale}|{to_iso_z(window_start)}\"`` — always UTC with ``Z`` suffix
+    so ``…Z`` and ``…+00:00`` callers produce the same id.
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
@@ -169,7 +171,7 @@ class Atom:
 
     atom_id: str
     t_start: str
-    kind: str
+    kind: AtomKind | str
     content_ref: str = "inline"
     content_text: str = ""
     t_end: str | None = None
@@ -178,12 +180,12 @@ class Atom:
     prev_atom_id: str | None = None
     next_atom_id: str | None = None
     parent_atom_id: str | None = None
-    scale: str | None = None
+    scale: PeriodScale | str | None = None
     window_start: str | None = None
     window_end: str | None = None
     source_beat_ts: str | None = None
     source_beat_type: str | None = None
-    embedding_status: str = "none"
+    embedding_status: EmbeddingStatus | str = "none"
     qualia: None = None
     meta: dict[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
@@ -199,6 +201,7 @@ def validate_atom(atom: Atom) -> Atom:
     """Validate atom invariants; return ``atom`` unchanged on success.
 
     Raises ``ValueError`` on invalid kind/scale/summary windows/embedding_status.
+    Phase 1 writes require ``schema_version == SCHEMA_VERSION`` (currently 1).
     """
     if not isinstance(atom.atom_id, str) or not atom.atom_id:
         raise ValueError(f"invalid atom_id: {atom.atom_id!r}")
@@ -218,9 +221,10 @@ def validate_atom(atom: Atom) -> Atom:
     if atom.content_ref is None or not isinstance(atom.content_ref, str):
         raise ValueError("content_ref must be a string locator")
     if atom.schema_version != SCHEMA_VERSION:
-        # Accept only v1 for Phase 1 writes; loaders may migrate later.
-        if not isinstance(atom.schema_version, int) or atom.schema_version < 1:
-            raise ValueError(f"invalid schema_version: {atom.schema_version!r}")
+        raise ValueError(
+            f"unsupported schema_version: {atom.schema_version!r} "
+            f"(Phase 1 requires {SCHEMA_VERSION})"
+        )
     return atom
 
 
@@ -250,16 +254,33 @@ def atom_to_dict(atom: Atom) -> dict[str, Any]:
     }
 
 
+def _normalize_ts(value: Any) -> str | None:
+    """Normalize an optional timestamp field to UTC ``…Z``; pass through None."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, (str, datetime)):
+        return str(value)
+    try:
+        return to_iso_z(value)
+    except (TypeError, ValueError):
+        return str(value) if not isinstance(value, str) else value
+
+
 def atom_from_dict(data: Mapping[str, Any]) -> Atom:
-    """Build an Atom from a mapping (tolerant of missing optional keys)."""
+    """Build an Atom from a mapping (tolerant of missing optional keys).
+
+    Timestamp fields are normalized to UTC ``Z`` so mixed ``+00:00`` / ``Z``
+    on-disk rows compare consistently after load.
+    """
     if not isinstance(data, Mapping):
         raise TypeError("atom data must be a mapping")
     atom_id = data.get("atom_id")
     if not isinstance(atom_id, str) or not atom_id:
         raise ValueError("atom_id required")
-    t_start = data.get("t_start")
-    if not isinstance(t_start, str) or not t_start:
+    t_start_raw = data.get("t_start")
+    if not isinstance(t_start_raw, str) or not t_start_raw:
         raise ValueError("t_start required")
+    t_start = _normalize_ts(t_start_raw) or t_start_raw
     kind = data.get("kind")
     if not isinstance(kind, str) or kind not in ATOM_KINDS:
         raise ValueError(f"invalid kind: {kind!r}")
@@ -282,7 +303,7 @@ def atom_from_dict(data: Mapping[str, Any]) -> Atom:
     return Atom(
         atom_id=atom_id,
         t_start=t_start,
-        t_end=data.get("t_end"),
+        t_end=_normalize_ts(data.get("t_end")),
         moment_id=data.get("moment_id"),
         kind=kind,
         content_ref=str(data.get("content_ref") or "inline"),
@@ -292,9 +313,9 @@ def atom_from_dict(data: Mapping[str, Any]) -> Atom:
         next_atom_id=data.get("next_atom_id"),
         parent_atom_id=data.get("parent_atom_id"),
         scale=data.get("scale"),
-        window_start=data.get("window_start"),
-        window_end=data.get("window_end"),
-        source_beat_ts=data.get("source_beat_ts"),
+        window_start=_normalize_ts(data.get("window_start")),
+        window_end=_normalize_ts(data.get("window_end")),
+        source_beat_ts=_normalize_ts(data.get("source_beat_ts")),
         source_beat_type=data.get("source_beat_type"),
         embedding_status=str(emb),
         qualia=None,

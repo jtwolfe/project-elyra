@@ -43,6 +43,11 @@ _LOG = logging.getLogger(__name__)
 
 _UNSET: Any = object()
 
+# Kinds that are not part of the sequential experience weave (R7 tails).
+_CHAIN_EXCLUDE_KINDS: frozenset[str] = frozenset(
+    {"summary", "parcel", "moment_meta"}
+)
+
 
 class JsonlMemoryStore:
     """Single-writer JSONL atom store under ``data/memory/``.
@@ -211,8 +216,58 @@ class JsonlMemoryStore:
 
     # ── content spill ────────────────────────────────────────────────────
 
+    def _unlink_blob_if_any(self, content_ref: str | None) -> None:
+        """Best-effort remove a spilled blob file (orphans on shrink/delete)."""
+        if not content_ref or not content_ref.startswith("blob:"):
+            return
+        rel = content_ref[5:]
+        if not rel or ".." in Path(rel).parts:
+            return
+        path = (self.memory_dir / rel).resolve()
+        root = self.memory_dir.resolve()
+        if not path.is_relative_to(root):
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _prepare_for_put(self, atom: Atom) -> Atom:
-        """Cap content_text, spill to blob when over inline max, validate."""
+        """Cap content_text, derive content_ref from body length, validate.
+
+        Locator is always re-derived from current body length (never trust a
+        stale ``blob:`` ref when the body has shrunk under inline_max).
+        Timestamps are normalized to UTC ``Z`` for consistent range compares.
+        """
+        # Normalize timestamps so Z / +00:00 never diverge in indexes.
+        ts_changes: dict[str, Any] = {}
+        try:
+            ts_changes["t_start"] = to_iso_z(atom.t_start)
+        except (TypeError, ValueError):
+            pass
+        if atom.t_end:
+            try:
+                ts_changes["t_end"] = to_iso_z(atom.t_end)
+            except (TypeError, ValueError):
+                pass
+        if atom.window_start:
+            try:
+                ts_changes["window_start"] = to_iso_z(atom.window_start)
+            except (TypeError, ValueError):
+                pass
+        if atom.window_end:
+            try:
+                ts_changes["window_end"] = to_iso_z(atom.window_end)
+            except (TypeError, ValueError):
+                pass
+        if atom.source_beat_ts:
+            try:
+                ts_changes["source_beat_ts"] = to_iso_z(atom.source_beat_ts)
+            except (TypeError, ValueError):
+                pass
+        if ts_changes:
+            atom = atom_replace(atom, **ts_changes)
+
         max_chars = int(self._settings.atom_max_chars)
         text = atom.content_text if atom.content_text is not None else ""
         if max_chars > 0 and len(text) > max_chars:
@@ -222,13 +277,17 @@ class JsonlMemoryStore:
             atom = atom_replace(atom, content_text=text, meta=meta)
 
         inline_max = int(self._settings.inline_max_chars)
+        prev_ref = atom.content_ref or "inline"
         if inline_max > 0 and len(atom.content_text) > inline_max:
             rel = blob_relpath_for_atom(atom.atom_id)
             blob_path = self.memory_dir / rel
             blob_path.parent.mkdir(parents=True, exist_ok=True)
             blob_path.write_text(atom.content_text, encoding="utf-8")
             atom = atom_replace(atom, content_ref=f"blob:{rel}")
-        elif not atom.content_ref or atom.content_ref == "inline":
+        else:
+            # Force inline when body fits — do not keep a stale blob locator.
+            if prev_ref.startswith("blob:"):
+                self._unlink_blob_if_any(prev_ref)
             atom = atom_replace(atom, content_ref="inline")
 
         if atom.embedding_status is None or atom.embedding_status == "":
@@ -370,11 +429,13 @@ class JsonlMemoryStore:
             kind_set = set(kinds) if kinds is not None else None
             rows = sorted(
                 self._by_id.values(),
-                key=lambda a: (a.t_start, a.atom_id),
+                key=lambda a: (to_iso_z(a.t_start), a.atom_id),
             )
             out: list[Atom] = []
             for atom in rows:
-                if atom.t_start < start or atom.t_start >= end:
+                # Normalize atom times so mixed Z/+00:00 rows compare correctly.
+                at = to_iso_z(atom.t_start)
+                if at < start or at >= end:
                     continue
                 if exclude_moment_id and atom.moment_id == exclude_moment_id:
                     continue
@@ -405,39 +466,62 @@ class JsonlMemoryStore:
                     o_start = to_iso_z(overlapping[0])
                     o_end = to_iso_z(overlapping[1])
                     # Overlap if window_start < o_end and window_end > o_start
-                    ws = atom.window_start or ""
-                    we = atom.window_end or ""
+                    ws = to_iso_z(atom.window_start) if atom.window_start else ""
+                    we = to_iso_z(atom.window_end) if atom.window_end else ""
                     if not (ws < o_end and we > o_start):
                         continue
                 out.append(atom)
-            out.sort(key=lambda a: (a.window_start or "", a.atom_id))
+            out.sort(
+                key=lambda a: (
+                    to_iso_z(a.window_start) if a.window_start else "",
+                    a.atom_id,
+                )
+            )
             return out[: max(0, int(limit))]
 
     def moment_tail(self, moment_id: str) -> Atom | None:
-        """Latest atom in moment by (t_start, atom_id)."""
+        """Latest sequential atom in moment by (t_start, atom_id).
+
+        Excludes summary/parcel/moment_meta so ladder rows do not become
+        chain tips for R7 sequential linking.
+        """
         with self._lock:
             self._check_open()
             ids = self._by_moment.get(moment_id) or []
             if not ids:
                 return None
-            # Prefer chain tip: next_atom_id is None among moment atoms.
-            tails = [
+            chain = [
                 self._by_id[i]
                 for i in ids
-                if i in self._by_id and self._by_id[i].next_atom_id is None
+                if i in self._by_id
+                and self._by_id[i].kind not in _CHAIN_EXCLUDE_KINDS
             ]
-            if tails:
-                return max(tails, key=lambda a: (a.t_start, a.atom_id))
-            return self._by_id.get(ids[-1])
+            if not chain:
+                return None
+            # Prefer chain tip: next_atom_id is None among sequential atoms.
+            tails = [a for a in chain if a.next_atom_id is None]
+            pool = tails if tails else chain
+            return max(pool, key=lambda a: (to_iso_z(a.t_start), a.atom_id))
 
     def global_tail(self) -> Atom | None:
+        """Latest sequential-weave tip (excludes summary/parcel/moment_meta).
+
+        R7 sequential linking must not attach to ladder summary atoms.
+        """
         with self._lock:
             self._check_open()
             if not self._by_id:
                 return None
-            tails = [a for a in self._by_id.values() if a.next_atom_id is None]
-            pool = tails if tails else list(self._by_id.values())
-            return max(pool, key=lambda a: (a.t_start, a.atom_id))
+            chain = [
+                a
+                for a in self._by_id.values()
+                if a.kind not in _CHAIN_EXCLUDE_KINDS
+            ]
+            if not chain:
+                return None
+            tails = [a for a in chain if a.next_atom_id is None]
+            pool = tails if tails else chain
+            return max(pool, key=lambda a: (to_iso_z(a.t_start), a.atom_id))
 
     def walk_next(self, atom_id: str, *, n: int = 20) -> list[Atom]:
         """Follow next_atom_id up to n steps (including start)."""
@@ -474,7 +558,7 @@ class JsonlMemoryStore:
         return out
 
     def delete_atom(self, atom_id: str) -> bool:
-        """Remove atom (admin/tests). Appends a tombstone line."""
+        """Remove atom (admin/tests). Appends a tombstone line; unlinks blob."""
         with self._lock:
             self._check_open()
             if atom_id not in self._by_id:
@@ -492,6 +576,7 @@ class JsonlMemoryStore:
                 key = (old.scale, old.window_start)
                 if self._ladder.get(key) == atom_id:
                     del self._ladder[key]
+            self._unlink_blob_if_any(old.content_ref)
             self._append_row({"atom_id": atom_id, "_deleted": True})
             return True
 

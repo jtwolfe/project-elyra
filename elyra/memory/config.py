@@ -20,7 +20,9 @@ LADDER_DIRNAME = "ladder"
 LADDER_STATE = "state.json"
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
-MEMORY_INLINE_MAX_CHARS = 8000
+# Kept below atom_max_chars (8000) so spill is reachable under default settings
+# for bodies in (inline_max, atom_max] before cap truncates.
+MEMORY_INLINE_MAX_CHARS = 4000
 # Compaction triggers (idle path only; never mid-hop).
 MEMORY_JSONL_COMPACT_BYTES = 8 * 1024 * 1024
 MEMORY_JSONL_COMPACT_DIRTY = 256

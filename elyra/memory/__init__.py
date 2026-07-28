@@ -5,7 +5,11 @@ Promote / meal / ladder land in later PRs and are not re-exported here yet.
 """
 
 from elyra.memory.config import MemorySettings, ensure_memory_dirs, memory_root
-from elyra.memory.errors import MemoryStoreError, MemoryUnavailable
+from elyra.memory.errors import (
+    MemoryAtomNotFound,
+    MemoryStoreError,
+    MemoryUnavailable,
+)
 from elyra.memory.store import MemoryStore, open_memory_store
 from elyra.memory.types import (
     ATOM_KINDS,
@@ -21,6 +25,7 @@ from elyra.memory.types import (
 __all__ = [
     "ATOM_KINDS",
     "Atom",
+    "MemoryAtomNotFound",
     "MemorySettings",
     "MemoryStore",
     "MemoryStoreError",

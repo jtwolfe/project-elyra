@@ -63,6 +63,27 @@ def test_validate_atom_rejects_bad_kind():
         validate_atom(atom)
 
 
+def test_validate_atom_rejects_non_v1_schema():
+    atom = Atom(
+        atom_id="a_x",
+        t_start="2026-07-28T12:00:00Z",
+        kind="speak",
+        content_text="x",
+        schema_version=2,
+    )
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_atom(atom)
+
+
+def test_stable_summary_id_z_and_offset_equivalent():
+    """Helper is sole normative source; Z and +00:00 yield the same id."""
+    a = stable_summary_id("15m", "2026-07-28T12:00:00Z")
+    b = stable_summary_id("15m", "2026-07-28T12:00:00+00:00")
+    c = stable_summary_id("15m", datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    assert a == b == c
+
+
+
 def test_validate_summary_requires_windows():
     atom = Atom(
         atom_id="as_x",
