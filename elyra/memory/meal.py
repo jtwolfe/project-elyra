@@ -1,17 +1,20 @@
-"""Labeled memory meal composition, episodic policy, and in-moment slide-off.
+"""Labeled memory meal composition, episodic policy, and media expand parity.
 
 Scope: pure package assembly over MemoryStore (mock-friendly). Phase 1
 deterministic episodic selection (KD17); slide-off never deletes store atoms.
 In scope: MealItem/MealPackage, select_episodic, slide-off, compose_meal,
-compose_outer_messages (messages list; no presence wiring).
-Out of scope: media expand (PR6), promote, loop/presence drop-in.
+compose_outer_messages, expand_memory_meal_for_provider (media continuity).
+Out of scope: promote, presence/loop drop-in (rebuild_outer lives in worker).
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Mapping, Sequence
+
+_LOG = logging.getLogger(__name__)
 
 from elyra.memory.config import MemorySettings
 from elyra.memory.store import MemoryStore
@@ -1013,6 +1016,214 @@ def compose_outer_messages(
     return messages
 
 
+# ---------------------------------------------------------------------------
+# Media expand parity (PR6)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_media_ids_to_attachments(
+    media_ids: Sequence[str],
+    media_store: Any | None,
+) -> list[dict[str, Any]]:
+    """Build attachment dicts from media content ids (MediaStore when present)."""
+    out: list[dict[str, Any]] = []
+    for raw in media_ids:
+        mid = str(raw or "").strip()
+        if not mid:
+            continue
+        if media_store is None:
+            out.append({"id": mid})
+            continue
+        try:
+            meta = media_store.get(mid)
+        except Exception:  # noqa: BLE001 — inventory best-effort
+            meta = None
+        if meta is None:
+            out.append({"id": mid})
+            continue
+        if hasattr(meta, "to_dict"):
+            d = meta.to_dict()
+            if isinstance(d, dict):
+                out.append(d)
+                continue
+        out.append(
+            {
+                "id": mid,
+                "filename": getattr(meta, "filename", None) or "file",
+                "kind": getattr(meta, "kind", None) or "file",
+                "mime": getattr(meta, "mime", None) or "application/octet-stream",
+                "byte_size": getattr(meta, "byte_size", None),
+                "sandbox_relpath": getattr(meta, "sandbox_relpath", None),
+            }
+        )
+    return out
+
+
+def _meal_has_wake_id(
+    messages: Sequence[Mapping[str, Any]],
+    wake_message_id: str | None,
+) -> bool:
+    if not wake_message_id:
+        return False
+    wake = str(wake_message_id)
+    for msg in messages:
+        mid = msg.get("id")
+        if mid is not None and str(mid) == wake:
+            return True
+    return False
+
+
+def _inject_hybrid_wake_row(
+    messages: list[dict[str, Any]],
+    *,
+    glass_by_id: Mapping[str, Mapping[str, Any]],
+    wake_message_id: str,
+) -> list[dict[str, Any]]:
+    """Inject a single glass wake row when the memory meal lacks that id.
+
+    Never reintroduces full sliding glass — only the protected wake message.
+    Inserted immediately before orient (last user row without id / media stamp)
+    when present; otherwise appended.
+    """
+    row = glass_by_id.get(str(wake_message_id))
+    if row is None:
+        return messages
+    content = row.get("content")
+    if not isinstance(content, str):
+        content = "" if content is None else str(content)
+    hybrid: dict[str, Any] = {
+        "role": str(row.get("role") or "user"),
+        "content": content,
+        "id": str(wake_message_id),
+    }
+    # Prefer insert before final orient-like row (user, no glass id stamp).
+    insert_at = len(messages)
+    if messages:
+        last = messages[-1]
+        if (
+            last.get("role") == "user"
+            and last.get("id") is None
+            and not last.get("_memory_media_ids")
+        ):
+            insert_at = len(messages) - 1
+    out = list(messages)
+    out.insert(insert_at, hybrid)
+    return out
+
+
+def _seed_glass_for_memory_media(
+    messages: Sequence[Mapping[str, Any]],
+    glass_by_id: Mapping[str, Mapping[str, Any]],
+    media_store: Any | None,
+) -> tuple[list[dict[str, Any]], dict[str, Mapping[str, Any]]]:
+    """Ensure glass index can resolve atom media_ids for expand_meal_for_provider.
+
+    - Messages with ``id`` + ``_memory_media_ids``: seed attachments when glass
+      row is missing or has empty attachments.
+    - Messages with only ``_memory_media_ids``: assign a synthetic host id so
+      inventory expand can correlate (stripped before Completions).
+    """
+    glass: dict[str, Mapping[str, Any]] = dict(glass_by_id)
+    out: list[dict[str, Any]] = []
+    synth_i = 0
+    for msg in messages:
+        row = dict(msg)
+        mem_ids = list(row.get("_memory_media_ids") or [])
+        mid = row.get("id")
+        if not mem_ids:
+            out.append(row)
+            continue
+
+        atts = _resolve_media_ids_to_attachments(mem_ids, media_store)
+        if mid is not None:
+            mid_s = str(mid)
+            existing = glass.get(mid_s)
+            existing_atts = None
+            if existing is not None:
+                raw = existing.get("attachments")
+                if isinstance(raw, list) and raw:
+                    existing_atts = raw
+            if existing_atts is None and atts:
+                base = dict(existing) if existing is not None else {
+                    "id": mid_s,
+                    "role": row.get("role") or "user",
+                    "content": row.get("content")
+                    if isinstance(row.get("content"), str)
+                    else "",
+                }
+                base["attachments"] = atts
+                glass[mid_s] = base
+            out.append(row)
+            continue
+
+        # No glass id: synthetic correlation id for inventory-only expand.
+        synth_i += 1
+        synth_id = f"_memory_media_{synth_i}"
+        row["id"] = synth_id
+        glass[synth_id] = {
+            "id": synth_id,
+            "role": row.get("role") or "user",
+            "content": row.get("content")
+            if isinstance(row.get("content"), str)
+            else "",
+            "attachments": atts,
+        }
+        out.append(row)
+    return out, glass
+
+
+def expand_memory_meal_for_provider(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    glass_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+    wake_message_id: str | None = None,
+    media_store: Any | None = None,
+    provider: str = "xai",
+    expand_last_user_images: bool = False,
+    xai_files_client: Any | None = None,
+    upload_files_to_xai: bool = False,
+) -> list[dict[str, Any]]:
+    """Expand a memory outer meal for Completions (media continuity).
+
+    When ``memory.enabled`` excludes sliding glass history, vision/inventory
+    must still work via atom ``media_ids`` markers and/or the wake glass row.
+
+    * Hybrid: if no meal row carries ``id == wake_message_id``, inject **one**
+      glass wake row (never full sliding history) when present in
+      ``glass_by_id``.
+    * Seed glass attachments from ``_memory_media_ids`` when needed.
+    * Delegate MIME / vision / inventory policy to
+      :func:`elyra.media.prompt.expand_meal_for_provider`.
+    """
+    from elyra.media.prompt import expand_meal_for_provider
+
+    glass_src: Mapping[str, Mapping[str, Any]] = glass_by_id or {}
+    meal: list[dict[str, Any]] = [dict(m) for m in messages]
+
+    wake_s = str(wake_message_id) if wake_message_id else None
+    if wake_s and not _meal_has_wake_id(meal, wake_s):
+        meal = _inject_hybrid_wake_row(
+            meal, glass_by_id=glass_src, wake_message_id=wake_s
+        )
+        _LOG.debug(
+            "expand_memory_meal: hybrid wake row injected id=%r",
+            wake_s,
+        )
+
+    meal, glass = _seed_glass_for_memory_media(meal, glass_src, media_store)
+
+    return expand_meal_for_provider(
+        meal,
+        glass_by_id=glass,
+        wake_message_id=wake_message_id,
+        media_store=media_store,
+        provider=provider,
+        expand_last_user_images=expand_last_user_images,
+        xai_files_client=xai_files_client,
+        upload_files_to_xai=upload_files_to_xai,
+    )
+
+
 __all__ = [
     "EPISODIC_MAX_PRIOR_MOMENTS",
     "MealItem",
@@ -1020,6 +1231,7 @@ __all__ = [
     "build_compact_text",
     "compose_meal",
     "compose_outer_messages",
+    "expand_memory_meal_for_provider",
     "format_atom_line",
     "meal_item_to_message",
     "moment_id_short",

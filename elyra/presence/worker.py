@@ -983,6 +983,7 @@ class PresenceWorker:
                 ),
                 "dev_speed": dev_speed_status_block(self._dev_speed),
                 "context": context_block,
+                "memory": self._memory_status_block(),
             }
 
     # ------------------------------------------------------------------
@@ -1099,6 +1100,55 @@ class PresenceWorker:
         if not (mem_cfg.write_atoms or mem_cfg.enabled):
             return False
         return self._ensure_memory_store() is not None
+
+    def _memory_meal_active(self) -> bool:
+        """True when rebuild_outer should use labeled memory meal (PR6).
+
+        Requires ``memory.enabled`` and a healthy open store. Flag off or
+        store down → legacy assemble_outer_meal + expand.
+        """
+        if not self.settings.memory.enabled:
+            return False
+        store = self._ensure_memory_store()
+        if store is None:
+            return False
+        try:
+            health = store.health()
+        except Exception:  # noqa: BLE001
+            return False
+        if not isinstance(health, Mapping):
+            return False
+        return bool(health.get("ok"))
+
+    def _memory_status_block(self) -> dict[str, Any]:
+        """Lightweight memory health for ``/api/status`` (optional PR6)."""
+        mem_cfg = self.settings.memory
+        block: dict[str, Any] = {
+            "enabled": bool(mem_cfg.enabled),
+            "write_atoms": bool(mem_cfg.write_atoms),
+            "backend": str(mem_cfg.backend),
+            "store_open": self._memory is not None,
+            "ok": False,
+        }
+        if self._memory is None:
+            if self._memory_open_failed:
+                block["error"] = "open_failed"
+            elif not (mem_cfg.write_atoms or mem_cfg.enabled):
+                block["error"] = "disabled"
+            return block
+        try:
+            health = self._memory.health()
+            if isinstance(health, Mapping):
+                block["ok"] = bool(health.get("ok"))
+                for key in ("atom_count", "line_count", "backend", "error"):
+                    if key in health:
+                        block[key] = health[key]
+            else:
+                block["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            block["ok"] = False
+            block["error"] = str(exc) or type(exc).__name__
+        return block
 
     def _idle_memory_ladder(self) -> None:
         """Budgeted period-summary refresh outside the state lock (idle only)."""
@@ -1280,9 +1330,11 @@ class PresenceWorker:
             # USER inject: work-origin policy (K13/K19) — social speaker, else
             # linked goal/task created_in_context (PR4), else empty — never
             # blind "operator" fallback.
-            # Multimodal (KD20/KD25): every rebuild re-runs assemble(retain_ids)
-            # → expand_meal_for_provider → strip_meal_wire_fields. Never stash
-            # expanded parts across hops; never expand after ids are stripped.
+            # Multimodal (KD20/KD25): every rebuild re-runs assemble/compose
+            # → expand → strip_meal_wire_fields. Never stash expanded parts
+            # across hops; never expand after ids are stripped.
+            # Memory path (PR6): when enabled + store healthy use labeled meal
+            # (no full sliding glass) + expand_memory_meal_for_provider.
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
@@ -1299,28 +1351,18 @@ class PresenceWorker:
                 protect_goal_ids.add(str(payload["goal_id"]))
             if payload.get("task_id"):
                 protect_task_ids.add(str(payload["task_id"]))
-            meal = assemble_outer_meal(
-                glass_history=glass,
-                settings=self.settings,
-                paths=self.paths,
-                self_digest=self_digest,
-                user_digest=user_digest,
-                why_now=why,
-                goals=format_goals_slice(
-                    goals_list,
-                    max_tokens=loop.orient_goals_max_tokens,
-                    protect_goal_ids=protect_goal_ids or None,
-                    protect_task_ids=protect_task_ids or None,
-                ),
-                skill_catalog=format_skill_catalog(
-                    catalog,
-                    max_tokens=loop.orient_skill_catalog_max_tokens,
-                ),
-                skill_bias=format_skill_bias(wake.kind, payload, goals_list),
-                wake_content=wake_content_s,
-                wake_message_id=wake_message_id_s,
-                retain_ids=True,
+            goals_slice = format_goals_slice(
+                goals_list,
+                max_tokens=loop.orient_goals_max_tokens,
+                protect_goal_ids=protect_goal_ids or None,
+                protect_task_ids=protect_task_ids or None,
             )
+            skill_catalog_s = format_skill_catalog(
+                catalog,
+                max_tokens=loop.orient_skill_catalog_max_tokens,
+            )
+            skill_bias_s = format_skill_bias(wake.kind, payload, goals_list)
+
             from elyra.media import MediaStore
             from elyra.media.prompt import (
                 expand_meal_for_provider,
@@ -1328,12 +1370,73 @@ class PresenceWorker:
                 strip_meal_wire_fields,
             )
 
+            media_store = MediaStore(self.paths)
+            glass_by_id = index_glass(glass)
+            provider_name = self.settings.provider.name
+
+            use_memory_meal = self._memory_meal_active()
+            if use_memory_meal:
+                try:
+                    from elyra.loop.context import fill_orient, format_now
+                    from elyra.memory.meal import (
+                        compose_outer_messages,
+                        expand_memory_meal_for_provider,
+                    )
+                    from elyra.prompts.loader import load_prompt
+
+                    system_text = load_prompt("system", paths=self.paths)
+                    orient_template = load_prompt("orient", paths=self.paths)
+                    orient_body = fill_orient(
+                        orient_template,
+                        now=format_now(),
+                        self_digest=self_digest,
+                        user_digest=user_digest,
+                        why_now=why,
+                        goals=goals_slice,
+                        skill_catalog=skill_catalog_s,
+                        skill_bias=skill_bias_s,
+                    )
+                    meal = compose_outer_messages(
+                        self._memory,
+                        open_moment_id=moment_id,
+                        budget_tokens=int(loop.sliding_input_tokens),
+                        system_text=system_text,
+                        orient_text=orient_body,
+                        settings=self.settings.memory,
+                    )
+                    expanded = expand_memory_meal_for_provider(
+                        meal,
+                        glass_by_id=glass_by_id,
+                        wake_message_id=wake_message_id_s,
+                        media_store=media_store,
+                        provider=provider_name,
+                    )
+                    return strip_meal_wire_fields(expanded)
+                except Exception:  # noqa: BLE001 — fall back to legacy meal
+                    _LOG.exception(
+                        "memory meal rebuild failed; falling back to glass meal"
+                    )
+
+            meal = assemble_outer_meal(
+                glass_history=glass,
+                settings=self.settings,
+                paths=self.paths,
+                self_digest=self_digest,
+                user_digest=user_digest,
+                why_now=why,
+                goals=goals_slice,
+                skill_catalog=skill_catalog_s,
+                skill_bias=skill_bias_s,
+                wake_content=wake_content_s,
+                wake_message_id=wake_message_id_s,
+                retain_ids=True,
+            )
             expanded = expand_meal_for_provider(
                 meal,
-                glass_by_id=index_glass(glass),
+                glass_by_id=glass_by_id,
                 wake_message_id=wake_message_id_s,
-                media_store=MediaStore(self.paths),
-                provider=self.settings.provider.name,
+                media_store=media_store,
+                provider=provider_name,
             )
             return strip_meal_wire_fields(expanded)
 
