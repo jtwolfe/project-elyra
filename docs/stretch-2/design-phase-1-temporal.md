@@ -1,10 +1,12 @@
 # Phase 1 — Temporal / Episodic Memory
 
-**Status:** Design draft
+**Status:** Implemented (code on `grok-improvement-memory` PR stack; flags default off) — see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) for the shipped concept map and [design-phase-1-implementation.md](design-phase-1-implementation.md) for implementation design.
 **Branch:** `grok-improvement-memory`
 **Philosophy:** [memory-atoms.pdf](../memory-atoms.pdf)
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 **Meal composition:** [design-context-meal-composition.md](design-context-meal-composition.md)
+**Architecture (shipped):** [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)
+**Implementation design:** [design-phase-1-implementation.md](design-phase-1-implementation.md)
 
 ## Goal
 
@@ -33,7 +35,9 @@ See [design-context-meal-composition.md](design-context-meal-composition.md).
 - Native hyperedges (sequential + period membership only)
 - Final frozen token percentages for all future channels
 
-## Concept mapping (required in architecture manual when implemented)
+## Concept mapping
+
+**Shipped map:** [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) (structure map, activity map, invariants, failure modes, glossary, JSONL restart/compaction).
 
 | Essay / planning term | Phase 1 structure |
 |----------------------|-------------------|
@@ -88,14 +92,14 @@ elyra/memory/
 
 ## Success criteria
 
-- [ ] Atoms created and sequentially linked inside moments
-- [ ] Moments queryable as groups of atoms
-- [ ] Ladder refreshes at least at fine scales in tests
-- [ ] Temporal + broader episodic package usable by do-loop (drop-in path)
-- [ ] In-moment slide-off under budget without deleting durable atoms
-- [ ] Feature flag or clean fallback if store unavailable
-- [ ] Unit + integration tests; **no Nemotron dependency**
-- [ ] Architecture note: structure map + activity map for Phase 1 activities
+- [x] Atoms created and sequentially linked inside moments
+- [x] Moments queryable as groups of atoms
+- [x] Ladder refreshes at least at fine scales in tests
+- [x] Temporal + broader episodic package usable by do-loop (drop-in path)
+- [x] In-moment slide-off under budget without deleting durable atoms
+- [x] Feature flag or clean fallback if store unavailable
+- [x] Unit + integration tests; **no Nemotron dependency**
+- [x] Architecture note: structure map + activity map for Phase 1 activities → [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)
 
 ## Open questions
 

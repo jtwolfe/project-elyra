@@ -6,7 +6,7 @@
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
 | **Date** | 2026-07-28 |
-| **Status** | Draft |
+| **Status** | Implemented (PR1–PR6 code; PR7 architecture note) — see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) |
 | **Branch** | `grok-improvement-memory` (planning); runtime product work typically lands via `grok-improvement` |
 | **Philosophy** | [`docs/memory-atoms.pdf`](../docs/memory-atoms.pdf) |
 | **Baseline** | [`docs/stretch-2/inspiration-activity-model-and-storage.md`](../docs/stretch-2/inspiration-activity-model-and-storage.md) |
@@ -1168,7 +1168,7 @@ Regression: existing `test_loop_context.py` / `test_doloop.py` remain green with
 
 ### Concept-mapping architecture note (done obligation)
 
-Ship `docs/stretch-2/architecture/phase-1-temporal.md` containing:
+**Shipped:** [`docs/stretch-2/architecture/phase-1-temporal.md`](architecture/phase-1-temporal.md) containing:
 
 1. **Structure map**
 

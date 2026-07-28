@@ -83,11 +83,13 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — open moment vs episodic, slide-off, labels, dedup, re-gather |
 | [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
 | [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
-| [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design |
+| [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |
+| [design-phase-1-implementation.md](design-phase-1-implementation.md) | Phase 1 implementation design + key decisions |
+| [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) | **Phase 1 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
 | [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 design |
 | [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
 | [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
-| `architecture/` (to be created as phases ship) | **Detailed post-implement manuals** mapping code ↔ philosophy |
+| `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 shipped) |
 
 All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
@@ -99,10 +101,10 @@ In addition to engineering-principles “done”:
 
 - [ ] Behaviour implemented and tested for that phase only
 - [ ] Public memory APIs minimal and documented
-- [ ] **Concept-mapping architecture note** written or updated (structures ↔ essay)
-- [ ] Activity list updated (which §3 activities are now live)
+- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)
+- [x] Activity list updated (which §3 activities are now live) — Phase 1 map in architecture note
 - [ ] No dependency on later phases for correctness
-- [ ] Operator-visible failure modes documented
+- [x] Operator-visible failure modes documented — Phase 1 architecture note
 
 Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios.
 
@@ -122,7 +124,7 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 
 ## Next steps
 
-1. Keep Phase 1 design sharp against the inspiration data prototype and meal composition sketch.
-2. Run storage spikes listed in `design-database-choices.md`.
+1. Dogfood Phase 1 with `write_atoms` then `enabled` (see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)).
+2. Run storage spikes listed in `design-database-choices.md` before defaulting off jsonl.
 3. Spike Nemotron runtime checklist before Phase 2 default-on.
-4. Begin Phase 1 implementation only with store interface + tests + initial architecture note skeleton.
+4. Keep architecture manuals updated when Phase 1 behaviour changes.
