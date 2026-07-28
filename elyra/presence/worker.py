@@ -1330,6 +1330,7 @@ class PresenceWorker:
                 max_items=max_items,
                 max_attempts=int(mem_cfg.encode_max_attempts or 3),
                 media_store=media_store,
+                settings=mem_cfg,  # threads embed_media_max_bytes/seconds
             )
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("memory idle encode drain failed")

@@ -75,7 +75,10 @@ Env escape hatch: `ELYRA_EMBED_DEVICE` (used only when preference is `auto`).
 | Device unavailable | Mock fallback |
 | Model load fail (missing path / hub / OOM) | `NemotronEmbedder.health()["ok"]=False`; encode returns `failed`; queue marks atom failed/skipped |
 | Media oversize / unknown MIME | Skip that channel; still encode text |
+| `qwen_omni_utils` missing | Soft-skip image/audio/video channels; **never** store text-only pool under `emb_image`/`emb_joint`; media-only atom → `skipped`; text still encodes |
+| Dim ≠ 2048 | Fail closed (`EncodeResult(status=failed)`); no pad/truncate |
 | Core import | **Never** imports torch at `elyra.memory` or `elyra.memory.embed` import time |
+| `open_encoder(backend=mock)` | Does **not** probe/import torch; reports `device=cpu` |
 
 ## Media matrix (encode.py)
 

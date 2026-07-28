@@ -56,31 +56,24 @@ def is_embeddable(atom: Atom) -> bool:
 
 
 def _classify_modality(path: str, mime: str) -> str | None:
-    """Return ``image`` / ``audio`` / ``video`` or None if unsupported."""
+    """Return ``image`` / ``audio`` / ``video`` or None if unsupported.
+
+    Image: known png/jpeg/webp MIMEs/extensions, plus best-effort other ``image/*``.
+    Audio/video: spike matrix only (wav/mp3, mp4) — no blanket ``audio/*``/``video/*``.
+    """
     mime_l = (mime or "").strip().lower()
     p_lower = str(path).lower()
-    if mime_l in _IMAGE_MIMES or mime_l.startswith("image/"):
-        # Accept only known image subtypes when mime is generic-ish.
-        if mime_l.startswith("image/") and mime_l not in _IMAGE_MIMES:
-            # image/gif etc. — still try as image (spike may narrow later).
-            if any(p_lower.endswith(ext) for ext in _IMAGE_EXTS) or mime_l in {
-                "image/gif",
-                "image/bmp",
-            }:
-                return "image"
-            if mime_l in _IMAGE_MIMES or mime_l.startswith("image/"):
-                # png/jpeg/webp already covered; other image/* accepted best-effort.
-                return "image"
+    # Image: known set, extension, or any other image/* (best-effort).
+    if (
+        mime_l in _IMAGE_MIMES
+        or mime_l.startswith("image/")
+        or any(p_lower.endswith(ext) for ext in _IMAGE_EXTS)
+    ):
         return "image"
-    if mime_l in _AUDIO_MIMES or mime_l.startswith("audio/"):
+    # Audio / video: tighter matrix (known MIME or extension only).
+    if mime_l in _AUDIO_MIMES or any(p_lower.endswith(ext) for ext in _AUDIO_EXTS):
         return "audio"
-    if mime_l in _VIDEO_MIMES or mime_l.startswith("video/"):
-        return "video"
-    if any(p_lower.endswith(ext) for ext in _IMAGE_EXTS):
-        return "image"
-    if any(p_lower.endswith(ext) for ext in _AUDIO_EXTS):
-        return "audio"
-    if any(p_lower.endswith(ext) for ext in _VIDEO_EXTS):
+    if mime_l in _VIDEO_MIMES or any(p_lower.endswith(ext) for ext in _VIDEO_EXTS):
         return "video"
     return None
 

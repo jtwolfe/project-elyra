@@ -261,6 +261,7 @@ class NemotronEmbedder:
             "loaded": self._loaded,
             "dtype": self._dtype_name,
             "model_path": self._model_path or None,
+            "media_encode": bool(self._mm_info_fn) if self._loaded else None,
             "error": err,
         }
 
@@ -439,7 +440,11 @@ class NemotronEmbedder:
         return [{"role": "user", "content": content}]
 
     def _embed_messages(self, messages: list[dict[str, Any]]) -> list[float]:
-        """Run processor + model + mean-pool + L2 normalize → 2048-d list."""
+        """Run processor + model + mean-pool + L2 normalize → 2048-d list.
+
+        When messages include media types, ``process_mm_info`` must succeed —
+        never silently fall back to a text-only pool for a media encode.
+        """
         self._ensure_open()
         torch = self._torch
         model = self._model
@@ -455,17 +460,23 @@ class NemotronEmbedder:
         else:
             text_in = [texts]
 
+        wants_media = _messages_want_media(messages)
         images = None
         videos = None
         audio = None
-        if self._mm_info_fn is not None:
+        if wants_media:
+            if self._mm_info_fn is None:
+                raise RuntimeError(
+                    "qwen_omni_utils unavailable; cannot encode media"
+                )
             try:
                 audio, images, videos = self._mm_info_fn(
                     messages, use_audio_in_video=False
                 )
-            except Exception:  # noqa: BLE001
-                _LOG.debug("process_mm_info failed; text-only path", exc_info=True)
-                audio, images, videos = None, None, None
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"process_mm_info failed: {type(exc).__name__}: {exc}"
+                ) from exc
 
         text_kwargs = {
             "truncation": True,
@@ -494,6 +505,10 @@ class NemotronEmbedder:
         try:
             batch = processor(**proc_kwargs)
         except TypeError:
+            if wants_media:
+                raise RuntimeError(
+                    "processor rejected multimodal batch; cannot text-only fallback"
+                )
             # Older / simpler processors: text only.
             batch = processor(
                 text=text_in,
@@ -536,19 +551,41 @@ class NemotronEmbedder:
             pooled = torch.nn.functional.normalize(pooled, dim=-1)
             return _to_unit_list(pooled[0], self._dim)
 
+    def media_encode_available(self) -> bool:
+        """True when multimodal packing (qwen_omni_utils) is loaded."""
+        return self._mm_info_fn is not None
+
+    def _require_media_utils(self, channel: str) -> None:
+        """Raise when media encode is requested without mm utilities.
+
+        Soft-skip is handled in :meth:`encode_atom_inputs` (drop media channels).
+        Direct ``encode_image`` / ``encode_audio`` / ``encode_video`` / joint-with-
+        media fail closed so callers never store a text-only pool under a media
+        channel name.
+        """
+        self._ensure_open()
+        if self._mm_info_fn is None:
+            raise RuntimeError(
+                f"qwen_omni_utils unavailable; cannot encode {channel} "
+                "(install qwen-omni-utils for multimodal; text-only still works)"
+            )
+
     def encode_text(self, text: str) -> list[float]:
         messages = self._messages_for(text=text)
         return self._embed_messages(messages)
 
     def encode_image(self, path_or_bytes: bytes | str) -> list[float]:
+        self._require_media_utils("image")
         messages = self._messages_for(image=path_or_bytes)
         return self._embed_messages(messages)
 
     def encode_audio(self, path_or_bytes: bytes | str) -> list[float]:
+        self._require_media_utils("audio")
         messages = self._messages_for(audio=path_or_bytes)
         return self._embed_messages(messages)
 
     def encode_video(self, path_or_bytes: bytes | str) -> list[float]:
+        self._require_media_utils("video")
         messages = self._messages_for(video=path_or_bytes)
         return self._embed_messages(messages)
 
@@ -556,6 +593,9 @@ class NemotronEmbedder:
         present = parts.present_modalities()
         if not present:
             raise ValueError("encode_joint: no modalities")
+        media_channels = [c for c in present if c != "text"]
+        if media_channels:
+            self._require_media_utils("joint+" + "+".join(media_channels))
         messages = self._messages_for(
             text=parts.text if "text" in present else None,
             image=parts.image if "image" in present else None,
@@ -574,17 +614,41 @@ class NemotronEmbedder:
         video: bytes | str | None = None,
         want_joint: bool | None = None,
     ) -> EncodeResult:
-        """Encode present modalities into an EmbeddingSet (same contract as mock)."""
+        """Encode present modalities into an EmbeddingSet (same contract as mock).
+
+        When multimodal packing utilities are missing, **media channels soft-skip**
+        (never label a text-only pool as ``emb_image`` / ``emb_joint``). Text still
+        encodes. Media-only atoms without mm utils → ``skipped``.
+        """
         try:
             self._ensure_open()
+            skip_meta: list[str] = []
+            # Soft-skip media when process_mm_info is unavailable (Issue 1).
+            if not self.media_encode_available():
+                if image is not None:
+                    skip_meta.append("image:mm_utils_unavailable")
+                    image = None
+                if audio is not None:
+                    skip_meta.append("audio:mm_utils_unavailable")
+                    audio = None
+                if video is not None:
+                    skip_meta.append("video:mm_utils_unavailable")
+                    video = None
+
             parts = ModalityParts(text=text, image=image, audio=audio, video=video)
             present = parts.present_modalities()
             if not present:
+                err = (
+                    "media_mm_utils_unavailable"
+                    if skip_meta
+                    else "no modalities"
+                )
                 return EncodeResult(
                     status="skipped",
                     embeddings=None,
-                    error="no modalities",
+                    error=err,
                     channels_encoded=(),
+                    meta={"embed_media_skipped": skip_meta} if skip_meta else {},
                 )
 
             emb_text = (
@@ -605,6 +669,7 @@ class NemotronEmbedder:
                 if "video" in present
                 else None
             )
+            # Joint only over channels we actually encoded (post soft-skip).
             do_joint = want_joint if want_joint is not None else len(present) >= 2
             emb_joint: tuple[float, ...] | None = None
             channels: list[str] = list(present)
@@ -624,11 +689,15 @@ class NemotronEmbedder:
                 encoded_at=utc_now_iso(),
                 channels_present=tuple(channels),
             )
+            meta: dict[str, Any] = {}
+            if skip_meta:
+                meta["embed_media_skipped"] = skip_meta
             return EncodeResult(
                 status="ready",
                 embeddings=emb,
                 error=None,
                 channels_encoded=emb.channels_present,
+                meta=meta,
             )
         except Exception as exc:  # noqa: BLE001
             return EncodeResult(
@@ -646,16 +715,41 @@ def _media_ref(path_or_bytes: bytes | str) -> str | bytes:
     return str(path_or_bytes)
 
 
+def _messages_want_media(messages: list[dict[str, Any]]) -> bool:
+    """True when chat messages include image/audio/video content parts."""
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in (
+                    "image",
+                    "audio",
+                    "video",
+                ):
+                    return True
+        elif isinstance(content, dict) and content.get("type") in (
+            "image",
+            "audio",
+            "video",
+        ):
+            return True
+    return False
+
+
 def _to_unit_list(tensor: Any, dim: int) -> list[float]:
-    """Convert a 1-d tensor-like to a Python list of ``dim`` floats (L2-normed)."""
+    """Convert a 1-d tensor-like to a Python list of ``dim`` floats (L2-normed).
+
+    Raises ``ValueError`` on dim mismatch — never pad/truncate into a false
+    unit vector (Issue 4). Callers map this to ``EncodeResult(status=failed)``.
+    """
     try:
         flat = tensor.detach().float().cpu().flatten().tolist()
     except Exception:  # noqa: BLE001
         flat = [float(x) for x in list(tensor)]
-    if len(flat) < dim:
-        flat = flat + [0.0] * (dim - len(flat))
-    elif len(flat) > dim:
-        flat = flat[:dim]
+    if len(flat) != dim:
+        raise ValueError(
+            f"embedding dim mismatch: got {len(flat)}, expected {dim}"
+        )
     return list(l2_normalize(flat))
 
 
@@ -722,9 +816,12 @@ def open_encoder(
         )
 
     pref = device if device is not None else cfg.embed_device
-    resolved = select_device(pref if pref else "auto")
-    # Mock always runs on logical cpu when hardware is unavailable.
-    mock_device = "cpu" if resolved == "unavailable" else resolved
+    pref_s = (pref if pref else "auto").strip().lower()
+    if pref_s not in EMBED_DEVICE_PREFS:
+        raise ValueError(
+            f"embed device preference: expected one of "
+            f"{sorted(EMBED_DEVICE_PREFS)}, got {pref!r}"
+        )
 
     requested_model = (cfg.embed_model_id or "").strip()
     if model_id is not None:
@@ -732,14 +829,16 @@ def open_encoder(
     else:
         effective_mid = MOCK_MODEL_ID
 
+    # Mock path: never probe torch (Issue 5). Mock always runs on logical cpu.
     if be == "mock":
         return MockEmbedder(
             dim=dim,
             model_id=effective_mid,
-            device=mock_device,
+            device="cpu",
         )
 
-    # nemotron path
+    # nemotron path — probe device only here
+    resolved = select_device(pref_s)
     nemo_id = (
         model_id.strip()
         if model_id is not None and model_id.strip()
@@ -748,7 +847,7 @@ def open_encoder(
     real = try_open_nemotron(
         model_id=nemo_id,
         model_path=cfg.embed_model_path or "",
-        device_pref=pref if pref else "auto",
+        device_pref=pref_s,
         dim=dim,
     )
     if real is not None:
@@ -759,7 +858,7 @@ def open_encoder(
         mock=MockEmbedder(
             dim=dim,
             model_id=MOCK_MODEL_ID if model_id is None else effective_mid,
-            device=mock_device,
+            device="cpu",
         ),
         requested_backend=be,  # type: ignore[arg-type]
         device=resolved,

@@ -185,10 +185,18 @@ class EncodeQueue:
 
         Returns counters: ok, failed, skipped, remaining, dropped, processed.
         """
+        media_max_bytes = 8_000_000
+        media_max_seconds: int | None = 30
         if settings is not None:
             max_ms = int(getattr(settings, "encode_max_ms_per_tick", max_ms))
             max_items = int(getattr(settings, "encode_max_items_per_tick", max_items))
             max_attempts = int(getattr(settings, "encode_max_attempts", max_attempts))
+            media_max_bytes = int(
+                getattr(settings, "embed_media_max_bytes", media_max_bytes)
+            )
+            media_max_seconds = int(
+                getattr(settings, "embed_media_max_seconds", media_max_seconds or 30)
+            )
 
         stats: dict[str, int] = {
             "ok": 0,
@@ -230,6 +238,8 @@ class EncodeQueue:
                     media_store=media_store,
                     max_attempts=max_attempts,
                     embedder_ok=embedder_ok,
+                    media_max_bytes=media_max_bytes,
+                    media_max_seconds=media_max_seconds,
                 )
                 stats[outcome] = stats.get(outcome, 0) + 1
             except Exception:  # noqa: BLE001 — isolate per item
@@ -250,6 +260,8 @@ class EncodeQueue:
         media_store: Any | None,
         max_attempts: int,
         embedder_ok: bool,
+        media_max_bytes: int = 8_000_000,
+        media_max_seconds: int | None = 30,
     ) -> str:
         atom = store.get_atom(atom_id)
         if atom is None:
@@ -287,7 +299,13 @@ class EncodeQueue:
             # Permanent unavailability is operator-driven (embed_enabled off).
             return "skipped"
 
-        result = encode_atom(embedder, atom, media_store=media_store)
+        result = encode_atom(
+            embedder,
+            atom,
+            media_store=media_store,
+            media_max_bytes=media_max_bytes,
+            media_max_seconds=media_max_seconds,
+        )
         attempts = int(meta.get(_META_ATTEMPTS) or 0) + 1
         updates: dict[str, Any] = {_META_ATTEMPTS: attempts}
 
