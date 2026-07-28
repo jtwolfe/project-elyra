@@ -361,8 +361,11 @@ def scan_pending_into_queue(
 ) -> int:
     """Backstop: enqueue atoms with embedding_status=pending (KD16).
 
-    Skips ids already queued and those already encode-ok with matching
-    content fingerprint. Returns number newly enqueued. Never raises.
+    Includes **all** pending atoms (including ``embed_encode_ok``).
+    ``_process_one`` short-circuits re-encode when ``index is None`` and
+    encode_ok matches; when an index is present (PR3), those ids are
+    re-processed for upsert → ready. Skips ids already in the queue.
+    Returns number newly enqueued. Never raises.
     """
     enqueued = 0
     try:
@@ -377,11 +380,6 @@ def scan_pending_into_queue(
     for atom in rows:
         try:
             if queue.contains(atom.atom_id):
-                continue
-            meta = atom.meta or {}
-            if meta.get(_META_ENCODE_OK) and meta.get(
-                _META_CONTENT_FP
-            ) == content_fingerprint(atom):
                 continue
             if queue.enqueue(atom.atom_id, store=store):
                 enqueued += 1

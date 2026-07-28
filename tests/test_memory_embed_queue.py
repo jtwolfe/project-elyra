@@ -332,15 +332,53 @@ def test_scan_pending_into_queue(store):
     assert scan_pending_into_queue(store, q, limit=10) == 0
 
 
-def test_scan_skips_encode_ok_pending(store):
+def test_scan_includes_encode_ok_pending(store):
+    """Issue 9: scan re-queues encode_ok pending so a later index can upsert."""
     a = store.put_atom(_atom(text="done", status="pending"))
     q = EncodeQueue(maxsize=4)
     q.enqueue(a.atom_id)
-    q.drain(store, MockEmbedder(), max_items=1)
-    # Atom still pending with encode_ok — scan must not re-enqueue.
+    q.drain(store, MockEmbedder(), index=None, max_items=1)
+    got = store.get_atom(a.atom_id)
+    assert got is not None
+    assert got.meta.get("embed_encode_ok") is True
+    assert got.embedding_status == "pending"
+    # Idle scan must re-enqueue (process_one short-circuits when index is None).
     n = scan_pending_into_queue(store, q, limit=10)
-    assert n == 0
+    assert n == 1
+    assert q.contains(a.atom_id)
+    stats = q.drain(store, MockEmbedder(), index=None, max_items=1)
+    assert stats["ok"] == 1
+    assert store.get_atom(a.atom_id).embedding_status == "pending"
+
+
+def test_idle_scan_then_index_drain_becomes_ready(store):
+    """Issue 9: no-index drain → scan+drain with index (no manual enqueue) → ready."""
+
+    class _Idx:
+        def __init__(self) -> None:
+            self.seen: dict[str, Any] = {}
+
+        def upsert(self, atom_id: str, embeddings: Any) -> bool:
+            self.seen[atom_id] = embeddings
+            return True
+
+    a = store.put_atom(_atom(text="handoff via scan", status="pending"))
+    q = EncodeQueue(maxsize=4)
+    emb = MockEmbedder()
+    q.enqueue(a.atom_id)
+    q.drain(store, emb, index=None, max_items=1)
+    assert store.get_atom(a.atom_id).embedding_status == "pending"
+    assert store.get_atom(a.atom_id).meta.get("embed_encode_ok") is True
     assert len(q) == 0
+
+    # Idle path: scan fills queue; drain with index promotes to ready.
+    n = scan_pending_into_queue(store, q, limit=10)
+    assert n == 1
+    idx = _Idx()
+    stats = q.drain(store, emb, index=idx, max_items=2)
+    assert stats["ok"] == 1
+    assert a.atom_id in idx.seen
+    assert store.get_atom(a.atom_id).embedding_status == "ready"
 
 
 # ── encode_atom ────────────────────────────────────────────────────────────
