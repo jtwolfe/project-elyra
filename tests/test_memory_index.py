@@ -353,6 +353,202 @@ def test_memory_search_requires_ready_status(store):
     assert idx2.search(emb.emb_joint, k=5) == []
 
 
+def test_newest_migration_backup_picks_latest(tmp_path):
+    """Issue 9 helper: newest atoms-*.jsonl under bak dir."""
+    from elyra.memory.lance_store import newest_migration_backup
+
+    bak = tmp_path / "lance_migration_bak"
+    assert newest_migration_backup(bak) is None
+    bak.mkdir()
+    assert newest_migration_backup(bak) is None
+    older = bak / "atoms-20260101T000000Z.jsonl"
+    newer = bak / "atoms-20260728T120000Z.jsonl"
+    older.write_text('{"atom_id":"a"}\n', encoding="utf-8")
+    newer.write_text('{"atom_id":"b"}\n', encoding="utf-8")
+    assert newest_migration_backup(bak) == newer
+
+
+def test_recover_interrupted_migration_promotes_staging(paths):
+    """Issue 9: open-time path promotes atoms__migrating when atoms missing."""
+    import pyarrow as pa
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.lance_store import (
+        LanceMemoryStore,
+        _ATOMS_TABLE,
+        _STAGING_TABLE,
+        _atoms_schema,
+    )
+
+    class _FakeTable:
+        def __init__(self, arrow: Any) -> None:
+            self._arrow = arrow
+
+        def to_arrow(self) -> Any:
+            return self._arrow
+
+        def count_rows(self) -> int:
+            return self._arrow.num_rows
+
+        @property
+        def schema(self) -> Any:
+            return self._arrow.schema
+
+    class _FakeDB:
+        def __init__(self) -> None:
+            self.tables: dict[str, _FakeTable] = {}
+
+        def table_names(self) -> list[str]:
+            return list(self.tables.keys())
+
+        def open_table(self, name: str) -> _FakeTable:
+            return self.tables[name]
+
+        def drop_table(self, name: str) -> None:
+            self.tables.pop(name, None)
+
+        def create_table(self, name: str, data: Any) -> _FakeTable:
+            if hasattr(data, "schema"):
+                arrow = data
+            else:
+                arrow = pa.Table.from_pylist(data)
+            tbl = _FakeTable(arrow)
+            self.tables[name] = tbl
+            return tbl
+
+    # Build store without real Lance connect.
+    store = object.__new__(LanceMemoryStore)
+    store._paths = paths
+    store._settings = MemorySettings(backend="lance")
+    store._db = _FakeDB()
+    store._table = None
+    store._vector_schema_ok = False
+    store._vector_error = None
+    store._by_id = {}
+    store._emb_by_id = {}
+
+    # Staging holds one recovered row (full emb schema).
+    schema = _atoms_schema(with_vectors=True)
+    row = {name: None for name in schema.names}
+    row.update(
+        {
+            "atom_id": "recovered1",
+            "t_start": "2026-07-28T10:00:00Z",
+            "kind": "observation",
+            "content_text": "from staging",
+            "content_ref": "inline",
+            "embedding_status": "none",
+            "media_ids_json": "[]",
+            "meta_json": "{}",
+            "schema_version": 1,
+        }
+    )
+    staging_arrow = pa.Table.from_pylist([row], schema=schema)
+    store._db.tables[_STAGING_TABLE] = _FakeTable(staging_arrow)
+
+    assert _ATOMS_TABLE not in store._db.table_names()
+    assert store._recover_interrupted_migration(store._db.table_names()) is True
+    assert _ATOMS_TABLE in store._db.table_names()
+    assert _STAGING_TABLE not in store._db.table_names()
+    assert store._table is not None
+    assert store.vector_schema_ok is True
+    assert store._vector_error is None
+    assert store._table.count_rows() == 1
+
+
+def test_recover_interrupted_migration_restores_bak(paths):
+    """Issue 9: restore newest JSONL bak when staging absent."""
+    import pyarrow as pa
+
+    from elyra.memory.config import MemorySettings, memory_root
+    from elyra.memory.lance_store import LanceMemoryStore, _ATOMS_TABLE
+
+    class _FakeTable:
+        def __init__(self, arrow: Any) -> None:
+            self._arrow = arrow
+
+        def to_arrow(self) -> Any:
+            return self._arrow
+
+        def count_rows(self) -> int:
+            return self._arrow.num_rows
+
+        @property
+        def schema(self) -> Any:
+            return self._arrow.schema
+
+    class _FakeDB:
+        def __init__(self) -> None:
+            self.tables: dict[str, _FakeTable] = {}
+
+        def table_names(self) -> list[str]:
+            return list(self.tables.keys())
+
+        def open_table(self, name: str) -> _FakeTable:
+            return self.tables[name]
+
+        def drop_table(self, name: str) -> None:
+            self.tables.pop(name, None)
+
+        def create_table(self, name: str, data: Any) -> _FakeTable:
+            arrow = data if hasattr(data, "schema") else pa.Table.from_pylist(data)
+            tbl = _FakeTable(arrow)
+            self.tables[name] = tbl
+            return tbl
+
+    store = object.__new__(LanceMemoryStore)
+    store._paths = paths
+    store._settings = MemorySettings(backend="lance")
+    store._db = _FakeDB()
+    store._table = None
+    store._vector_schema_ok = False
+    store._vector_error = None
+
+    bak_dir = memory_root(paths) / "lance_migration_bak"
+    bak_dir.mkdir(parents=True, exist_ok=True)
+    bak = bak_dir / "atoms-20260728T100000Z.jsonl"
+    bak.write_text(
+        json.dumps(
+            {
+                "atom_id": "bak1",
+                "t_start": "2026-07-28T10:00:00Z",
+                "kind": "observation",
+                "content_text": "from bak",
+                "content_ref": "inline",
+                "embedding_status": "none",
+                "media_ids_json": "[]",
+                "meta_json": "{}",
+                "schema_version": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert store._recover_interrupted_migration([]) is True
+    assert _ATOMS_TABLE in store._db.table_names()
+    assert store.vector_schema_ok is True
+    assert store._table.count_rows() == 1
+
+
+def test_recover_interrupted_migration_returns_false_without_artifacts(paths):
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.lance_store import LanceMemoryStore
+
+    class _FakeDB:
+        def table_names(self) -> list[str]:
+            return []
+
+    store = object.__new__(LanceMemoryStore)
+    store._paths = paths
+    store._settings = MemorySettings(backend="lance")
+    store._db = _FakeDB()
+    store._table = None
+    store._vector_schema_ok = False
+    store._vector_error = None
+    assert store._recover_interrupted_migration([]) is False
+
+
 # ── Lance path (skip when dep missing or connect unusable) ────────────────
 
 

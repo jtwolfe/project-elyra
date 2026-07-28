@@ -58,21 +58,26 @@ Logical `Atom.schema_version` stays **1**. Vector layout epoch is **only** `vect
 Implemented in `LanceMemoryStore._migrate_vector_schema`:
 
 1. Connect to `data/memory/lance/`; open or create `atoms`.
-2. **New empty table:** create with full scalar + emb schema; set `vector_schema_version=1`.
-3. **Existing table:**
+2. **Open-time crash recovery (Issue 9):** if `atoms` is **missing** or **empty**:
+   - Prefer promote `atoms__migrating` → `atoms` (drop empty `atoms` if present).
+   - Else restore newest `data/memory/lance_migration_bak/atoms-*.jsonl`.
+   - Only create a fresh empty `atoms` when neither staging nor bak exists.
+   - If artifacts exist but restore fails → create empty scalar-capable table + `vector_error=migration_failed:interrupted_unrecoverable` (index health fail-closed).
+3. **New empty table (no artifacts):** create with full scalar + emb schema; set `vector_schema_version=1`.
+4. **Existing non-empty table:**
    - If all `_EMB_ALL_COLS` present and `meta.json.vector_schema_version >= 1` → continue.
    - Else log once: operator backup recommended (`copy data/memory/lance` before upgrade).
    - Read all rows via `table.to_arrow().to_pylist()`.
    - Write durable JSONL snapshot under `data/memory/lance_migration_bak/atoms-<ts>.jsonl`.
    - Create staging table `atoms__migrating` with target schema + rows, then drop `atoms`, create final `atoms` from the same rows, drop staging (narrows crash window vs drop-first).
    - Write `meta.json`: `vector_schema_version=1`, `emb_dim=2048`, `embed_model`, `vector_migrated_at`.
-4. **Fail-closed:** on exception → log; `vector_schema_ok=False`, `vector_error=migration_failed:…`; best-effort reopen `atoms`, else promote staging, else restore from JSONL bak; **scalar** Protocol methods still run when the table remains readable; `open_embedding_index` always returns `LanceEmbeddingIndex` so `health()["ok"]=false` with `error` surfaced (never a healthy Null masking migration failure).
-5. No dual-write to JSONL. Switching `backend=jsonl` does not keep vectors.
+5. **Fail-closed:** on exception → log; `vector_schema_ok=False`, `vector_error=migration_failed:…`; best-effort reopen `atoms`, else `_recover_interrupted_migration` (staging/bak); **scalar** Protocol methods still run when the table remains readable; `open_embedding_index` always returns `LanceEmbeddingIndex` so `health()["ok"]=false` with `error` surfaced (never a healthy Null masking migration failure).
+6. No dual-write to JSONL. Switching `backend=jsonl` does not keep vectors.
 
-**Operator restore if both Lance tables and process state are lost:**
+**Operator restore if auto-recovery cannot run:**
 
 1. Prefer a full directory copy of `data/memory/lance` taken before upgrade.
-2. Else rehydrate from the newest `data/memory/lance_migration_bak/atoms-*.jsonl` (open store again after placing rows via a one-off restore, or delete broken lance dir and restore bak then re-open — store will rebuild schema from bak on failed-migration restore path when bak path is known).
+2. Else ensure newest `data/memory/lance_migration_bak/atoms-*.jsonl` is present and re-open the store — open-time recovery promotes staging or restores bak automatically (do not leave an intentional empty `atoms` beside a bak you care about without checking logs).
 
 **Why not side table:** co-row emb columns match design default; in-process `_emb_by_id` is only a merge cache, not a second durable authority.
 

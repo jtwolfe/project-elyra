@@ -59,6 +59,8 @@ _CHAIN_EXCLUDE_KINDS: frozenset[str] = frozenset(
 )
 
 _ATOMS_TABLE = "atoms"
+# Staging name used during emb migration recreate+copy (crash recovery target).
+_STAGING_TABLE = f"{_ATOMS_TABLE}__migrating"
 
 # Physical vector layout epoch (meta.json only; Atom.schema_version stays 1).
 VECTOR_SCHEMA_VERSION = 1
@@ -127,6 +129,20 @@ def _atoms_schema(*, with_vectors: bool = True):
 def _sql_quote(value: str) -> str:
     """Single-quote a string for Lance SQL filter predicates."""
     return "'" + value.replace("'", "''") + "'"
+
+
+def newest_migration_backup(bak_dir: Path) -> Path | None:
+    """Return newest ``atoms-*.jsonl`` under ``bak_dir``, or None.
+
+    Pure helper (no Lance) so open-time recovery and tests share one path.
+    """
+    if not bak_dir.is_dir():
+        return None
+    candidates = sorted(bak_dir.glob("atoms-*.jsonl"))
+    if not candidates:
+        return None
+    # Names include UTC timestamp; lexicographic max ≈ newest.
+    return candidates[-1]
 
 
 def _vec_to_list(vec: Sequence[float] | None) -> list[float] | None:
@@ -294,14 +310,155 @@ class LanceMemoryStore:
         self._db = self._lancedb.connect(uri)
         names = list(self._db.table_names())
         if _ATOMS_TABLE not in names:
+            # Crash mid-migration: atoms dropped but staging and/or bak remain.
+            if self._recover_interrupted_migration(names):
+                return
+            if self._has_recoverable_migration_artifacts(names):
+                # Artifacts present but promote/restore failed — fail closed.
+                # Provide empty scalar-capable table so Protocol stays usable.
+                _LOG.error(
+                    "lance emb migration: atoms missing and recovery failed; "
+                    "creating empty table (vector_error set). "
+                    "Restore from data/memory/lance_migration_bak/ if needed."
+                )
+                empty = pa.Table.from_pylist(
+                    [], schema=_atoms_schema(with_vectors=True)
+                )
+                self._table = self._db.create_table(_ATOMS_TABLE, empty)
+                self._vector_schema_ok = False
+                if not self._vector_error:
+                    self._vector_error = (
+                        "migration_failed: interrupted_unrecoverable"
+                    )
+                return
+            # Fresh install — no prior data / no crash artifacts.
             empty = pa.Table.from_pylist([], schema=_atoms_schema(with_vectors=True))
             self._table = self._db.create_table(_ATOMS_TABLE, empty)
             self._vector_schema_ok = True
             self._vector_error = None
             self._mark_vector_meta(migrated=True)
+            return
+
+        self._table = self._db.open_table(_ATOMS_TABLE)
+        # Empty atoms after a failed open that created a blank table while bak
+        # / staging still held the pre-crash corpus — promote/restore first.
+        if self._atoms_table_is_empty() and self._has_recoverable_migration_artifacts(
+            list(self._db.table_names())
+        ):
+            _LOG.warning(
+                "lance emb migration: atoms table empty with staging/bak present; "
+                "attempting open-time recovery"
+            )
+            if self._recover_interrupted_migration(list(self._db.table_names())):
+                return
+            self._vector_schema_ok = False
+            if not self._vector_error:
+                self._vector_error = "migration_failed: interrupted_unrecoverable"
+            # Keep empty atoms for scalar path; index health fail-closed.
+            return
+        self._migrate_vector_schema()
+
+    def _atoms_table_is_empty(self) -> bool:
+        """True when open atoms table has zero rows (best-effort)."""
+        if self._table is None:
+            return True
+        try:
+            if hasattr(self._table, "count_rows"):
+                return int(self._table.count_rows()) == 0
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return len(self._table.to_arrow()) == 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _has_recoverable_migration_artifacts(
+        self, names: Sequence[str] | None = None
+    ) -> bool:
+        """True when staging table or a JSONL bak snapshot exists."""
+        if names is None:
+            try:
+                names = list(self._db.table_names())
+            except Exception:  # noqa: BLE001
+                names = []
+        if _STAGING_TABLE in names:
+            return True
+        return self._newest_migration_backup() is not None
+
+    def _newest_migration_backup(self) -> Path | None:
+        """Return newest ``atoms-*.jsonl`` under lance_migration_bak, if any."""
+        return newest_migration_backup(self._migration_bak_dir())
+
+    def _recover_interrupted_migration(
+        self, names: Sequence[str] | None = None
+    ) -> bool:
+        """Promote staging or restore bak into ``atoms``. Return True on success.
+
+        Used both in-process (exception path) and on open after a process kill
+        mid drop/create (Issue 9).
+        """
+        if names is None:
+            try:
+                names = list(self._db.table_names())
+            except Exception:  # noqa: BLE001
+                names = []
+        names = list(names)
+
+        # 1) Staging table is the preferred crash artifact (full Lance schema).
+        if _STAGING_TABLE in names:
+            try:
+                self._promote_staging_table()
+                return True
+            except Exception:  # noqa: BLE001
+                _LOG.exception(
+                    "lance emb migration: promote staging %s failed", _STAGING_TABLE
+                )
+
+        # 2) JSONL pre-drop snapshot.
+        bak = self._newest_migration_backup()
+        if bak is not None and bak.is_file():
+            try:
+                self._restore_from_migration_backup(bak)
+                return True
+            except Exception:  # noqa: BLE001
+                _LOG.exception(
+                    "lance emb migration: restore from bak %s failed", bak
+                )
+                self._vector_error = (
+                    f"migration_failed: restore_failed: {bak.name}"
+                )
+        return False
+
+    def _promote_staging_table(self) -> None:
+        """Copy ``atoms__migrating`` → ``atoms`` and drop staging."""
+        staging_tbl = self._db.open_table(_STAGING_TABLE)
+        rows_rec = staging_tbl.to_arrow()
+        names = list(self._db.table_names())
+        if _ATOMS_TABLE in names:
+            # Replace empty/broken atoms with staging content.
+            self._db.drop_table(_ATOMS_TABLE)
+        self._table = self._db.create_table(_ATOMS_TABLE, rows_rec)
+        try:
+            self._db.drop_table(_STAGING_TABLE)
+        except Exception:  # noqa: BLE001
+            _LOG.warning(
+                "lance emb migration: promoted staging but could not drop %s",
+                _STAGING_TABLE,
+            )
+        if self._table_has_emb_columns():
+            self._vector_schema_ok = True
+            self._vector_error = None
+            self._mark_vector_meta(migrated=True)
         else:
-            self._table = self._db.open_table(_ATOMS_TABLE)
+            # Staging without emb cols (unexpected) — still better than empty.
+            self._vector_schema_ok = False
+            self._vector_error = "migration_failed: staging_missing_emb_columns"
             self._migrate_vector_schema()
+        _LOG.warning(
+            "lance emb migration: promoted staging table %s → %s",
+            _STAGING_TABLE,
+            _ATOMS_TABLE,
+        )
 
     def _table_has_emb_columns(self) -> bool:
         if self._table is None:
@@ -364,27 +521,28 @@ class LanceMemoryStore:
             schema = _atoms_schema(with_vectors=True)
             # Prefer create-temp → drop old → create final from same rows (narrow
             # window). lancedb 0.20.x has no typed null add_columns / rename.
-            staging = f"{_ATOMS_TABLE}__migrating"
             names = list(self._db.table_names())
-            if staging in names:
+            if _STAGING_TABLE in names:
                 try:
-                    self._db.drop_table(staging)
+                    self._db.drop_table(_STAGING_TABLE)
                 except Exception:  # noqa: BLE001
                     pass
             if new_rows:
                 table_data = pa.Table.from_pylist(new_rows, schema=schema)
             else:
                 table_data = pa.Table.from_pylist([], schema=schema)
-            self._db.create_table(staging, table_data)
+            self._db.create_table(_STAGING_TABLE, table_data)
             # Staging holds a full copy; now replace atoms.
             if _ATOMS_TABLE in list(self._db.table_names()):
                 self._db.drop_table(_ATOMS_TABLE)
             # Recreate atoms from the same in-memory rows (staging is the safety net).
             self._table = self._db.create_table(_ATOMS_TABLE, table_data)
             try:
-                self._db.drop_table(staging)
+                self._db.drop_table(_STAGING_TABLE)
             except Exception:  # noqa: BLE001
-                _LOG.warning("lance emb migration: left staging table %s", staging)
+                _LOG.warning(
+                    "lance emb migration: left staging table %s", _STAGING_TABLE
+                )
             self._vector_schema_ok = True
             self._vector_error = None
             self._mark_vector_meta(migrated=True)
@@ -398,27 +556,19 @@ class LanceMemoryStore:
             _LOG.exception("lance emb migration failed")
             self._vector_schema_ok = False
             self._vector_error = f"migration_failed: {type(exc).__name__}: {exc}"
-            # Best-effort reopen or restore scalar table for Phase 1 path.
+            # Best-effort reopen or restore (shared with open-time Issue 9 path).
             try:
                 names = list(self._db.table_names())
                 if _ATOMS_TABLE in names:
                     self._table = self._db.open_table(_ATOMS_TABLE)
-                elif f"{_ATOMS_TABLE}__migrating" in names:
-                    # Promote staging if final create failed after drop.
-                    staging_tbl = self._db.open_table(f"{_ATOMS_TABLE}__migrating")
-                    rows_rec = staging_tbl.to_arrow()
-                    self._table = self._db.create_table(_ATOMS_TABLE, rows_rec)
-                    try:
-                        self._db.drop_table(f"{_ATOMS_TABLE}__migrating")
-                    except Exception:  # noqa: BLE001
-                        pass
-                    # Staging may already have emb schema — re-check.
-                    if self._table_has_emb_columns():
-                        self._vector_schema_ok = True
-                        self._vector_error = None
-                        self._mark_vector_meta(migrated=True)
-                elif bak_path is not None and bak_path.is_file():
-                    self._restore_from_migration_backup(bak_path)
+                    # If atoms was partially recreated empty, still try staging/bak.
+                    if self._atoms_table_is_empty() and self._has_recoverable_migration_artifacts(
+                        names
+                    ):
+                        if self._recover_interrupted_migration(names):
+                            return
+                elif self._recover_interrupted_migration(names):
+                    return
             except Exception:  # noqa: BLE001
                 _LOG.exception(
                     "lance reopen/restore after failed migration also failed; "
@@ -1245,4 +1395,5 @@ class LanceMemoryStore:
 __all__ = [
     "VECTOR_SCHEMA_VERSION",
     "LanceMemoryStore",
+    "newest_migration_backup",
 ]
