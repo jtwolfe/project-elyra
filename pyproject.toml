@@ -27,6 +27,7 @@ memory-lance = ["lancedb>=0.20,<0.21", "pyarrow>=14"]
 # transformers build with Qwen2.5-Omni support — see spike note.
 memory-embed = [
     "torch>=2.2",
+    "torchvision>=0.17",  # Qwen2VL video processor path (Nemotron Omni)
     "transformers>=4.51",
     "accelerate>=0.33",
     "Pillow>=10.0",
