@@ -456,6 +456,10 @@ class PresenceWorker:
         self._memory: Any | None = None
         self._memory_open_attempted = False
         self._memory_open_failed = False
+        # Phase 2 encode queue + embedder (lazy; installed with store when semantic).
+        self._encode_queue: Any | None = None
+        self._embedder: Any | None = None
+        self._embedder_open_failed = False
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
 
@@ -1010,6 +1014,8 @@ class PresenceWorker:
                             self._fire_due_unlocked()
                         # Ladder refresh OUTSIDE lock (PR5 normative placement).
                         self._idle_memory_ladder()
+                        # Corpus encode drain OUTSIDE lock (KD2 / KD16).
+                        self._idle_memory_encode()
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
@@ -1087,11 +1093,62 @@ class PresenceWorker:
             from elyra.memory.store import open_memory_store
 
             self._memory = open_memory_store(self.paths, mem_cfg)
+            self._install_encode_hooks(self._memory, mem_cfg)
             return self._memory
         except Exception:  # noqa: BLE001 — store down must not kill presence
             self._memory_open_failed = True
             self._memory = None
             _LOG.exception("memory store open failed; atoms disabled this run")
+            return None
+
+    def _install_encode_hooks(self, store: Any, mem_cfg: Any) -> None:
+        """Install store write hook + EncodeQueue (KD16). Best-effort."""
+        try:
+            from elyra.memory.embed.queue import EncodeQueue
+
+            maxsize = int(getattr(mem_cfg, "encode_queue_max", 1024) or 1024)
+            queue = EncodeQueue(maxsize=maxsize)
+            self._encode_queue = queue
+
+            def _on_written(atom: Any) -> None:
+                # Hook must never raise to put_atom (store already guards).
+                try:
+                    cfg = self.settings.memory
+                    if not cfg.semantic_enabled:
+                        return
+                    if getattr(atom, "embedding_status", None) != "pending":
+                        return
+                    queue.enqueue(atom.atom_id, store=store)
+                except Exception:  # noqa: BLE001
+                    _LOG.exception(
+                        "encode write hook failed atom_id=%s",
+                        getattr(atom, "atom_id", "?"),
+                    )
+
+            set_hook = getattr(store, "set_write_hook", None)
+            if callable(set_hook):
+                set_hook(_on_written)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("install encode hooks failed")
+
+    def _ensure_embedder(self) -> Any | None:
+        """Open embedder once when embed_enabled; never raise."""
+        mem_cfg = self.settings.memory
+        if not mem_cfg.embed_enabled:
+            return None
+        if self._embedder is not None:
+            return self._embedder
+        if self._embedder_open_failed:
+            return None
+        try:
+            from elyra.memory.embed.runtime import open_encoder
+
+            self._embedder = open_encoder(mem_cfg)
+            return self._embedder
+        except Exception:  # noqa: BLE001
+            self._embedder_open_failed = True
+            self._embedder = None
+            _LOG.exception("embedder open failed; encode drain disabled this run")
             return None
 
     def _memory_ladder_active(self) -> bool:
@@ -1201,6 +1258,54 @@ class PresenceWorker:
         except Exception:  # noqa: BLE001
             _LOG.exception("memory ladder refresh_due failed")
         self._maybe_compact_memory_store()
+
+    def _idle_memory_encode(self) -> None:
+        """Idle-only corpus encode: pending scan + queue drain (KD2 / KD16).
+
+        Outside the state lock; never runs in-moment / hop path. Drain only
+        when ``embed_enabled``; hooks still enqueue when ``semantic_enabled``.
+        PR2 never marks ``ready`` without an index (leave pending).
+        """
+        mem_cfg = self.settings.memory
+        if not mem_cfg.semantic_enabled:
+            return
+        if not mem_cfg.embed_enabled:
+            return
+        store = self._memory
+        if store is None:
+            store = self._ensure_memory_store()
+        if store is None:
+            return
+        queue = self._encode_queue
+        if queue is None:
+            # Store opened before hooks existed or install failed — re-install.
+            self._install_encode_hooks(store, mem_cfg)
+            queue = self._encode_queue
+        if queue is None:
+            return
+        try:
+            from elyra.memory.embed.queue import scan_pending_into_queue
+
+            max_items = max(1, int(mem_cfg.encode_max_items_per_tick or 4))
+            scan_pending_into_queue(
+                store,
+                queue,
+                limit=max_items * 4,
+            )
+            embedder = self._ensure_embedder()
+            if embedder is None:
+                return
+            queue.drain(
+                store,
+                embedder,
+                index=None,  # PR3 supplies EmbeddingIndex
+                max_ms=int(mem_cfg.encode_max_ms_per_tick or 100),
+                max_items=max_items,
+                max_attempts=int(mem_cfg.encode_max_attempts or 3),
+                media_store=None,  # media resolve stub OK in PR2
+            )
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("memory idle encode drain failed")
 
     def _finalize_memory_ladder_15m(self) -> None:
         """Refresh the 15m window containing now after moment close (budgeted)."""

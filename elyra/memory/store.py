@@ -1,7 +1,8 @@
 """MemoryStore Protocol and factory.
 
 Scope: swappable atom persistence interface + open_memory_store().
-In scope: Protocol methods, jsonl default, lance guarded fall-back.
+In scope: Protocol methods, jsonl default, lance guarded fall-back,
+list_atoms + write-hook registration (Phase 2 PR2).
 Out of scope: promote/meal/ladder, loop wiring.
 """
 
@@ -9,13 +10,19 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Protocol, Sequence, runtime_checkable
 
 from elyra.config import ElyraPaths
 from elyra.memory.config import MemorySettings
 from elyra.memory.types import Atom, AtomKind, PeriodScale
 
 _LOG = logging.getLogger(__name__)
+
+# Glass / admin list hard cap (design: callers clamp limit ≤ 200).
+LIST_ATOMS_MAX = 200
+
+# Write hook: called after successful put_atom; must never raise to store callers.
+AtomWriteHook = Callable[[Atom], None]
 
 
 @runtime_checkable
@@ -68,6 +75,24 @@ class MemoryStore(Protocol):
         overlapping: tuple[datetime | str, datetime | str] | None = None,
         limit: int = 50,
     ) -> list[Atom]:
+        ...
+
+    def list_atoms(
+        self,
+        *,
+        embedding_status: str | None = None,
+        kinds: Sequence[AtomKind] | None = None,
+        limit: int = 50,
+        newest_first: bool = True,
+    ) -> list[Atom]:
+        """Glass/admin listing; filter by embedding_status / kinds.
+
+        Hard-capped at LIST_ATOMS_MAX. Full-table scan is fine at dogfood scale.
+        """
+        ...
+
+    def set_write_hook(self, hook: AtomWriteHook | None) -> None:
+        """Register best-effort hook fired after successful put_atom (KD16)."""
         ...
 
     def moment_tail(self, moment_id: str) -> Atom | None:
@@ -147,6 +172,8 @@ def open_memory_store(
 
 
 __all__ = [
+    "LIST_ATOMS_MAX",
+    "AtomWriteHook",
     "MemoryStore",
     "open_memory_store",
 ]

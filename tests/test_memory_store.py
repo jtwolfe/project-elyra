@@ -516,3 +516,69 @@ def test_default_inline_max_allows_spill(paths):
     assert a.content_ref.startswith("blob:")
     assert a.content_text == body
     store.close()
+
+
+# ── list_atoms (Phase 2 PR2) ───────────────────────────────────────────────
+
+
+def test_list_atoms_filter_embedding_status(store):
+    store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text="a", embedding_status="none")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:01:00Z", text="b", embedding_status="pending")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:02:00Z", text="c", embedding_status="pending")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:03:00Z", text="d", embedding_status="skipped")
+    )
+    pending = store.list_atoms(embedding_status="pending", limit=50)
+    assert len(pending) == 2
+    assert all(a.embedding_status == "pending" for a in pending)
+    # newest_first default
+    assert pending[0].content_text == "c"
+    assert pending[1].content_text == "b"
+
+    oldest = store.list_atoms(
+        embedding_status="pending", newest_first=False, limit=50
+    )
+    assert oldest[0].content_text == "b"
+
+    none_rows = store.list_atoms(embedding_status="none")
+    assert len(none_rows) == 1
+    assert none_rows[0].content_text == "a"
+
+
+def test_list_atoms_kind_filter_and_limit(store):
+    store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", kind="observation", text="o1")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:01:00Z", kind="speak", text="s1")
+    )
+    store.put_atom(
+        _atom(t="2026-07-28T10:02:00Z", kind="observation", text="o2")
+    )
+    obs = store.list_atoms(kinds=["observation"], limit=50)
+    assert len(obs) == 2
+    assert all(a.kind == "observation" for a in obs)
+
+    capped = store.list_atoms(limit=1)
+    assert len(capped) == 1
+
+    # Hard cap: even large limit is clamped to LIST_ATOMS_MAX.
+    from elyra.memory.store import LIST_ATOMS_MAX
+
+    for i in range(5):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T11:{i:02d}:00Z",
+                text=f"x{i}",
+                atom_id=new_atom_id(),
+            )
+        )
+    all_rows = store.list_atoms(limit=10_000)
+    assert len(all_rows) <= LIST_ATOMS_MAX
+    assert len(all_rows) == store.health()["atom_count"]

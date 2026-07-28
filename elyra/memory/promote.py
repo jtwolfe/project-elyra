@@ -17,7 +17,7 @@ from typing import Any, Mapping, MutableMapping, Sequence
 
 from elyra.memory.config import MemorySettings
 from elyra.memory.store import MemoryStore
-from elyra.memory.types import Atom, new_atom_id, to_iso_z, utc_now_iso
+from elyra.memory.types import Atom, atom_replace, new_atom_id, to_iso_z, utc_now_iso
 
 _LOG = logging.getLogger(__name__)
 
@@ -290,6 +290,26 @@ def _obs_dedupe_hit(
     return False
 
 
+def _embedding_status_for_promote(
+    settings: MemorySettings,
+    atom: Atom,
+) -> str:
+    """Return embedding_status for a newly promoted atom (KD16).
+
+    When ``semantic_enabled`` and the atom is embeddable → ``pending``.
+    When semantic off or empty/non-embeddable → keep ``none``.
+    No embedder import here; enqueue is via store write hooks.
+    """
+    if not settings.semantic_enabled:
+        return "none"
+    if atom.kind == "moment_meta":
+        return "none"
+    text = (atom.content_text or "").strip()
+    if text or atom.media_ids:
+        return "pending"
+    return "none"
+
+
 def _link_and_put(
     store: MemoryStore,
     atom: Atom,
@@ -298,6 +318,11 @@ def _link_and_put(
     settings: MemorySettings,
 ) -> Atom:
     """R7 sequential linking then put_atom."""
+    # Phase 2: mark pending when semantic on (enqueue via store write hooks).
+    emb_status = _embedding_status_for_promote(settings, atom)
+    if emb_status != atom.embedding_status:
+        atom = atom_replace(atom, embedding_status=emb_status)
+
     prev: Atom | None = None
     try:
         prev = store.moment_tail(moment_id)

@@ -14,7 +14,7 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from elyra.config import ElyraPaths
 from elyra.memory.config import (
@@ -26,6 +26,7 @@ from elyra.memory.config import (
     memory_root,
 )
 from elyra.memory.errors import MemoryAtomNotFound, MemoryUnavailable
+from elyra.memory.store import LIST_ATOMS_MAX, AtomWriteHook
 from elyra.memory.types import (
     SCHEMA_VERSION,
     Atom,
@@ -71,6 +72,8 @@ class JsonlMemoryStore:
         self._line_count: int = 0
         self._closed: bool = False
         self._corrupt_lines: int = 0
+        # Phase 2 write hook (encode enqueue); best-effort, never raises out.
+        self._write_hook: AtomWriteHook | None = None
         self._ensure_layout()
         self._load()
 
@@ -350,14 +353,36 @@ class JsonlMemoryStore:
 
     # ── Protocol methods ─────────────────────────────────────────────────
 
-    def put_atom(self, atom: Atom) -> Atom:
-        """Insert or replace by atom_id. Returns stored atom (full content_text)."""
+    def set_write_hook(self, hook: AtomWriteHook | None) -> None:
+        """Register hook called after successful put_atom (KD16)."""
+        with self._lock:
+            self._write_hook = hook
+
+    def _fire_write_hook(self, atom: Atom) -> None:
+        """Best-effort write hook; must never raise to put_atom callers."""
+        hook = self._write_hook
+        if hook is None:
+            return
+        try:
+            hook(atom)
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "memory write hook failed atom_id=%s", atom.atom_id
+            )
+
+    def put_atom(self, atom: Atom, *, notify: bool = True) -> Atom:
+        """Insert or replace by atom_id. Returns stored atom (full content_text).
+
+        ``notify=False`` skips the write hook (internal encode status updates).
+        """
         with self._lock:
             self._check_open()
             prepared = self._prepare_for_put(atom)
             self._append_row(self._row_for_disk(prepared))
             self._index_put(prepared)
-            return prepared
+        if notify:
+            self._fire_write_hook(prepared)
+        return prepared
 
     def get_atom(self, atom_id: str) -> Atom | None:
         with self._lock:
@@ -412,6 +437,36 @@ class JsonlMemoryStore:
             if limit is not None:
                 out = out[: max(0, int(limit))]
             return out
+
+    def list_atoms(
+        self,
+        *,
+        embedding_status: str | None = None,
+        kinds: Sequence[AtomKind | str] | None = None,
+        limit: int = 50,
+        newest_first: bool = True,
+    ) -> list[Atom]:
+        """Glass/admin listing by embedding_status / kinds (scan ``_by_id``)."""
+        with self._lock:
+            self._check_open()
+            kind_set = set(kinds) if kinds is not None else None
+            cap = max(0, min(int(limit), LIST_ATOMS_MAX))
+            rows = list(self._by_id.values())
+            out: list[Atom] = []
+            for atom in rows:
+                if (
+                    embedding_status is not None
+                    and atom.embedding_status != embedding_status
+                ):
+                    continue
+                if kind_set is not None and atom.kind not in kind_set:
+                    continue
+                out.append(atom)
+            out.sort(
+                key=lambda a: (to_iso_z(a.t_start), a.atom_id),
+                reverse=bool(newest_first),
+            )
+            return out[:cap]
 
     def list_range(
         self,
