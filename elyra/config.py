@@ -60,6 +60,7 @@ class ElyraPaths:
             "runtime",  # continuous.json + provider.json + usage.json
             "media",  # content-addressed attachments (KD1)
             "browser",  # optional Playwright session user-data (v1 may use temp)
+            "memory",  # Stretch 2 Phase 1 atom store (JSONL / optional Lance)
         ):
             (self.data_dir / name).mkdir(parents=True, exist_ok=True)
 

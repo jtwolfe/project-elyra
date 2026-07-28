@@ -1,0 +1,336 @@
+"""Memory atom pure data types and helpers (Phase 1).
+
+Scope: Atom record, kind/scale vocabularies, id helpers, period window bounds.
+In scope: schema_version 1 fields, stable summary ids, UTC window grids.
+Out of scope: store I/O, promote, meal, ladder refresh.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import uuid
+from dataclasses import dataclass, field, fields, replace
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, Mapping
+
+SCHEMA_VERSION = 1
+
+AtomKind = Literal[
+    "observation",
+    "speak",
+    "tool",
+    "model",
+    "ledger",
+    "summary",
+    "parcel",
+    "moment_meta",
+]
+
+ATOM_KINDS: frozenset[str] = frozenset(
+    {
+        "observation",
+        "speak",
+        "tool",
+        "model",
+        "ledger",
+        "summary",
+        "parcel",
+        "moment_meta",
+    }
+)
+
+PeriodScale = Literal["15m", "1h", "6h", "1d", "1w", "1m"]
+
+PERIOD_SCALES: frozenset[str] = frozenset(
+    {"15m", "1h", "6h", "1d", "1w", "1m"}
+)
+
+# Scale order fine → coarse (ladder child preference).
+PERIOD_SCALE_ORDER: tuple[PeriodScale, ...] = (
+    "15m",
+    "1h",
+    "6h",
+    "1d",
+    "1w",
+    "1m",
+)
+
+EmbeddingStatus = Literal["none", "pending", "ready", "failed"]
+EMBEDDING_STATUSES: frozenset[str] = frozenset(
+    {"none", "pending", "ready", "failed"}
+)
+
+
+def new_atom_id() -> str:
+    """Return a new atom id: ``a_`` + uuid hex."""
+    return "a_" + uuid.uuid4().hex
+
+
+def utc_now_iso() -> str:
+    """UTC timestamp as ISO-8601 with ``Z`` suffix."""
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def ensure_utc(dt: datetime) -> datetime:
+    """Return ``dt`` as timezone-aware UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
+
+
+def to_iso_z(dt: datetime | str) -> str:
+    """Normalize datetime or ISO string to UTC ``…Z`` form."""
+    if isinstance(dt, str):
+        text = dt.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        return to_iso_z(parsed)
+    dt = ensure_utc(dt)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def parse_iso_z(value: datetime | str) -> datetime:
+    """Parse datetime or ISO string to aware UTC datetime."""
+    if isinstance(value, datetime):
+        return ensure_utc(value)
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    return ensure_utc(datetime.fromisoformat(text))
+
+
+def stable_summary_id(scale: PeriodScale | str, window_start: datetime | str) -> str:
+    """Deterministic summary atom id for ``(scale, window_start)``.
+
+    Normative: ``as_`` + sha256(f\"{scale}|{window_start.isoformat()}\")[:20]
+    Uses normalized UTC ``Z`` iso for stability across callers.
+    """
+    if scale not in PERIOD_SCALES:
+        raise ValueError(f"invalid period scale: {scale!r}")
+    start = parse_iso_z(window_start)
+    key = f"{scale}|{to_iso_z(start)}"
+    return "as_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
+
+
+def window_bounds(
+    scale: PeriodScale | str, t: datetime | str
+) -> tuple[datetime, datetime]:
+    """Return half-open ``[start, end)`` UTC window containing ``t`` for ``scale``.
+
+    Grids (KD13):
+    - 15m: floor to 15-min UTC
+    - 1h: floor hour
+    - 6h: floor to 00, 06, 12, 18 UTC
+    - 1d: UTC midnight → next
+    - 1w: Monday 00:00 UTC → +7d
+    - 1m: first of month → first of next
+    """
+    if scale not in PERIOD_SCALES:
+        raise ValueError(f"invalid period scale: {scale!r}")
+    dt = parse_iso_z(t)
+    dt = dt.replace(second=0, microsecond=0)
+
+    if scale == "15m":
+        minute = (dt.minute // 15) * 15
+        start = dt.replace(minute=minute)
+        end = start + timedelta(minutes=15)
+    elif scale == "1h":
+        start = dt.replace(minute=0)
+        end = start + timedelta(hours=1)
+    elif scale == "6h":
+        hour = (dt.hour // 6) * 6
+        start = dt.replace(hour=hour, minute=0)
+        end = start + timedelta(hours=6)
+    elif scale == "1d":
+        start = dt.replace(hour=0, minute=0)
+        end = start + timedelta(days=1)
+    elif scale == "1w":
+        # Monday = 0 in weekday().
+        start = dt.replace(hour=0, minute=0) - timedelta(days=dt.weekday())
+        end = start + timedelta(days=7)
+    else:  # 1m
+        start = dt.replace(day=1, hour=0, minute=0)
+        if start.month == 12:
+            end = start.replace(year=start.year + 1, month=1)
+        else:
+            end = start.replace(month=start.month + 1)
+
+    return start, end
+
+
+@dataclass(frozen=True)
+class Atom:
+    """Logical memory atom (schema_version 1).
+
+    ``content_text`` is always the meal/render body (KD18).
+    ``content_ref`` is a storage locator only: ``\"inline\"`` or ``\"blob:{relpath}\"``.
+    """
+
+    atom_id: str
+    t_start: str
+    kind: str
+    content_ref: str = "inline"
+    content_text: str = ""
+    t_end: str | None = None
+    moment_id: str | None = None
+    media_ids: tuple[str, ...] = ()
+    prev_atom_id: str | None = None
+    next_atom_id: str | None = None
+    parent_atom_id: str | None = None
+    scale: str | None = None
+    window_start: str | None = None
+    window_end: str | None = None
+    source_beat_ts: str | None = None
+    source_beat_type: str | None = None
+    embedding_status: str = "none"
+    qualia: None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+    schema_version: int = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        # Defensive copy so callers cannot mutate shared meta through the atom.
+        object.__setattr__(self, "meta", dict(self.meta))
+        if isinstance(self.media_ids, list):
+            object.__setattr__(self, "media_ids", tuple(self.media_ids))
+
+
+def validate_atom(atom: Atom) -> Atom:
+    """Validate atom invariants; return ``atom`` unchanged on success.
+
+    Raises ``ValueError`` on invalid kind/scale/summary windows/embedding_status.
+    """
+    if not isinstance(atom.atom_id, str) or not atom.atom_id:
+        raise ValueError(f"invalid atom_id: {atom.atom_id!r}")
+    if not isinstance(atom.t_start, str) or not atom.t_start:
+        raise ValueError("t_start is required")
+    if atom.kind not in ATOM_KINDS:
+        raise ValueError(f"invalid kind: {atom.kind!r}")
+    if atom.embedding_status not in EMBEDDING_STATUSES:
+        raise ValueError(f"invalid embedding_status: {atom.embedding_status!r}")
+    if atom.scale is not None and atom.scale not in PERIOD_SCALES:
+        raise ValueError(f"invalid scale: {atom.scale!r}")
+    if atom.kind == "summary" and atom.scale is not None:
+        if not atom.window_start or not atom.window_end:
+            raise ValueError(
+                "summary atoms with scale require window_start and window_end"
+            )
+    if atom.content_ref is None or not isinstance(atom.content_ref, str):
+        raise ValueError("content_ref must be a string locator")
+    if atom.schema_version != SCHEMA_VERSION:
+        # Accept only v1 for Phase 1 writes; loaders may migrate later.
+        if not isinstance(atom.schema_version, int) or atom.schema_version < 1:
+            raise ValueError(f"invalid schema_version: {atom.schema_version!r}")
+    return atom
+
+
+def atom_to_dict(atom: Atom) -> dict[str, Any]:
+    """Serialize atom to a JSON-ready dict (media_ids as list)."""
+    return {
+        "atom_id": atom.atom_id,
+        "t_start": atom.t_start,
+        "t_end": atom.t_end,
+        "moment_id": atom.moment_id,
+        "kind": atom.kind,
+        "content_ref": atom.content_ref,
+        "content_text": atom.content_text,
+        "media_ids": list(atom.media_ids),
+        "prev_atom_id": atom.prev_atom_id,
+        "next_atom_id": atom.next_atom_id,
+        "parent_atom_id": atom.parent_atom_id,
+        "scale": atom.scale,
+        "window_start": atom.window_start,
+        "window_end": atom.window_end,
+        "source_beat_ts": atom.source_beat_ts,
+        "source_beat_type": atom.source_beat_type,
+        "embedding_status": atom.embedding_status,
+        "qualia": atom.qualia,
+        "meta": dict(atom.meta),
+        "schema_version": atom.schema_version,
+    }
+
+
+def atom_from_dict(data: Mapping[str, Any]) -> Atom:
+    """Build an Atom from a mapping (tolerant of missing optional keys)."""
+    if not isinstance(data, Mapping):
+        raise TypeError("atom data must be a mapping")
+    atom_id = data.get("atom_id")
+    if not isinstance(atom_id, str) or not atom_id:
+        raise ValueError("atom_id required")
+    t_start = data.get("t_start")
+    if not isinstance(t_start, str) or not t_start:
+        raise ValueError("t_start required")
+    kind = data.get("kind")
+    if not isinstance(kind, str) or kind not in ATOM_KINDS:
+        raise ValueError(f"invalid kind: {kind!r}")
+
+    media_raw = data.get("media_ids") or ()
+    if isinstance(media_raw, str):
+        media_ids: tuple[str, ...] = (media_raw,)
+    else:
+        media_ids = tuple(str(x) for x in media_raw)
+
+    meta_raw = data.get("meta")
+    meta: dict[str, Any] = dict(meta_raw) if isinstance(meta_raw, Mapping) else {}
+
+    emb = data.get("embedding_status", "none")
+    if emb is None or emb == "":
+        emb = "none"
+    if emb not in EMBEDDING_STATUSES:
+        emb = "none"
+
+    return Atom(
+        atom_id=atom_id,
+        t_start=t_start,
+        t_end=data.get("t_end"),
+        moment_id=data.get("moment_id"),
+        kind=kind,
+        content_ref=str(data.get("content_ref") or "inline"),
+        content_text=str(data.get("content_text") or ""),
+        media_ids=media_ids,
+        prev_atom_id=data.get("prev_atom_id"),
+        next_atom_id=data.get("next_atom_id"),
+        parent_atom_id=data.get("parent_atom_id"),
+        scale=data.get("scale"),
+        window_start=data.get("window_start"),
+        window_end=data.get("window_end"),
+        source_beat_ts=data.get("source_beat_ts"),
+        source_beat_type=data.get("source_beat_type"),
+        embedding_status=str(emb),
+        qualia=None,
+        meta=meta,
+        schema_version=int(data.get("schema_version") or SCHEMA_VERSION),
+    )
+
+
+def atom_replace(atom: Atom, **changes: Any) -> Atom:
+    """Return a copy of ``atom`` with the given fields replaced."""
+    known = {f.name for f in fields(Atom)}
+    bad = set(changes) - known
+    if bad:
+        raise TypeError(f"unknown atom fields: {sorted(bad)}")
+    return replace(atom, **changes)
+
+
+__all__ = [
+    "ATOM_KINDS",
+    "Atom",
+    "AtomKind",
+    "EMBEDDING_STATUSES",
+    "EmbeddingStatus",
+    "PERIOD_SCALES",
+    "PERIOD_SCALE_ORDER",
+    "PeriodScale",
+    "SCHEMA_VERSION",
+    "atom_from_dict",
+    "atom_replace",
+    "atom_to_dict",
+    "ensure_utc",
+    "new_atom_id",
+    "parse_iso_z",
+    "stable_summary_id",
+    "to_iso_z",
+    "utc_now_iso",
+    "validate_atom",
+    "window_bounds",
+]
