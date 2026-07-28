@@ -34,9 +34,9 @@ _OVERFLOW_ERROR = "queue_overflow"
 
 
 class _EmbeddingIndexLike(Protocol):
-    """Minimal index surface used by drain (PR3 implements for real)."""
+    """Minimal index surface used by drain (PR3 EmbeddingIndex)."""
 
-    def upsert(self, atom_id: str, embeddings: Any) -> bool:
+    def upsert(self, embedding_set: Any) -> bool:
         ...
 
 
@@ -334,7 +334,13 @@ class EncodeQueue:
                 upsert = getattr(index, "upsert", None)
                 ok = False
                 if callable(upsert):
-                    ok = bool(upsert(atom_id, emb))
+                    # PR3 EmbeddingIndex: upsert(EmbeddingSet) -> bool|None.
+                    # PR2 test doubles: upsert(atom_id, embeddings) -> bool.
+                    try:
+                        result = upsert(emb)
+                    except TypeError:
+                        result = upsert(atom_id, emb)
+                    ok = True if result is None else bool(result)
                 if ok:
                     _mark_atom_status(
                         store, atom, status="ready", meta_updates=updates

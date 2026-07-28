@@ -464,3 +464,93 @@ def test_list_atoms_filter_embedding_status(store):
 
 def test_protocol_runtime_checkable(store):
     assert isinstance(store, MemoryStore)
+
+
+# ── Phase 2 emb columns (PR3) ─────────────────────────────────────────────
+
+
+def test_lance_health_includes_vectors_flag(store):
+    h = store.health()
+    assert h["ok"] is True
+    assert h.get("vectors") is True
+    assert h.get("vector_schema_version") == 1
+
+
+def test_lance_upsert_vectors_preserve_on_put_and_links(store):
+    """KD19 acceptance: scalar put/update_links must not wipe emb_*."""
+    from elyra.memory.embed.mock import mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+
+    a = store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text="A", atom_id="kd19_a", embedding_status="pending")
+    )
+    emb = EmbeddingSet(
+        atom_id=a.atom_id,
+        emb_text=mock_vector("t:A", dim=EMBED_DIM),
+        emb_joint=mock_vector("j:A", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert store.upsert_vectors(a.atom_id, emb) is True
+    before = store.get_vectors(a.atom_id)
+    assert before is not None
+    assert before.emb_joint is not None
+
+    b = store.put_atom(
+        _atom(
+            t="2026-07-28T10:01:00Z",
+            text="B",
+            atom_id="kd19_b",
+            prev_atom_id=a.atom_id,
+            embedding_status="pending",
+        )
+    )
+    store.update_links(a.atom_id, next_atom_id=b.atom_id)
+
+    after = store.get_vectors(a.atom_id)
+    assert after is not None
+    assert after.emb_joint == before.emb_joint
+    a2 = store.get_atom(a.atom_id)
+    assert a2.embedding_status == "ready"
+    assert a2.next_atom_id == b.atom_id
+
+
+def test_lance_meta_vector_schema_version(paths, store):
+    meta = json.loads(memory_meta_path(paths).read_text(encoding="utf-8"))
+    assert meta.get("vector_schema_version") == 1
+    assert meta.get("emb_dim") == 2048
+    assert meta.get("backend") == "lance"
+
+
+def test_lance_upsert_vectors_missing_atom_false(store):
+    from elyra.memory.embed.mock import mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+
+    emb = EmbeddingSet(
+        atom_id="missing",
+        emb_joint=mock_vector("j", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert store.upsert_vectors("missing", emb) is False
+
+
+def test_lance_search_vectors_basic(store):
+    from elyra.memory.embed.mock import mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+
+    a = store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text="s", atom_id="sv1", embedding_status="pending")
+    )
+    j = mock_vector("joint:sv1", dim=EMBED_DIM)
+    emb = EmbeddingSet(
+        atom_id=a.atom_id,
+        emb_text=mock_vector("text:sv1", dim=EMBED_DIM),
+        emb_joint=j,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert store.upsert_vectors(a.atom_id, emb) is True
+    hits = store.search_vectors(j, k=5, channel="joint")
+    assert hits and hits[0][0] == a.atom_id
+    assert hits[0][1] > 0.99

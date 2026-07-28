@@ -181,6 +181,24 @@ class EmbeddingSet:
             or self.emb_joint is not None
         )
 
+    def is_ready(self) -> bool:
+        """KD20: index may mark atom ready when joint or single-modality vector present."""
+        return embeddings_are_ready(self)
+
+
+def embeddings_are_ready(emb: EmbeddingSet) -> bool:
+    """KD20 ready rule for EmbeddingIndex upsert.
+
+    True when ``emb_joint`` is present, **or** exactly one non-joint modality
+    vector is present (single-modality atom).
+    """
+    if emb.emb_joint is not None:
+        return True
+    non_joint = [c for c in emb.channels_present if c != "joint"]
+    if len(non_joint) == 1 and emb.channel_vector(non_joint[0]) is not None:
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class EncodeResult:
@@ -250,6 +268,7 @@ __all__ = [
     "EncodeStatus",
     "ModalityParts",
     "embedding_set_from_mapping",
+    "embeddings_are_ready",
     "l2_normalize",
     "vector_l2_norm",
 ]

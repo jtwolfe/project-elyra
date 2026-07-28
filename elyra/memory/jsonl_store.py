@@ -657,6 +657,9 @@ class JsonlMemoryStore:
                     if self._by_id
                     else float(self._line_count)
                 ),
+                # Phase 2: JSONL never stores vectors / ANN (KD).
+                "vectors": False,
+                "vectors_ready": 0,
             }
 
     def close(self) -> None:

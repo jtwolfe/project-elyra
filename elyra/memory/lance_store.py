@@ -1,8 +1,9 @@
-"""Optional LanceDB MemoryStore backend (Phase 1 atom fields only).
+"""Optional LanceDB MemoryStore backend (Phase 1 scalar + Phase 2 emb columns).
 
 Scope: Protocol-complete Lance persistence under data/memory/lance/.
-In scope: put/get/range/moment/links/walk/health, blob spill, meta.json.
-Out of scope: vector columns, ANN, lance-graph, meal/promote rewrites.
+In scope: put/get/range/moment/links/walk/health, blob spill, meta.json,
+          additive emb_* columns, migration, KD19 preserve, upsert_vectors.
+Out of scope: ANN hybrid buffer (PR4), meal channel, torch.
 
 Requires optional dependency: ``pip install elyra[memory-lance]`` (lancedb).
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import uuid
@@ -26,6 +28,12 @@ from elyra.memory.config import (
     lance_root,
     memory_meta_path,
     memory_root,
+)
+from elyra.memory.embed.types import (
+    CHANNELS,
+    EMBED_DIM,
+    EmbeddingSet,
+    embeddings_are_ready,
 )
 from elyra.memory.errors import MemoryAtomNotFound, MemoryUnavailable
 from elyra.memory.store import LIST_ATOMS_MAX, AtomWriteHook
@@ -52,7 +60,10 @@ _CHAIN_EXCLUDE_KINDS: frozenset[str] = frozenset(
 
 _ATOMS_TABLE = "atoms"
 
-# Phase 1 scalar columns only — no vector / ANN fields.
+# Physical vector layout epoch (meta.json only; Atom.schema_version stays 1).
+VECTOR_SCHEMA_VERSION = 1
+
+# Phase 1 scalar columns.
 _STRING_COLS = (
     "atom_id",
     "t_start",
@@ -74,6 +85,11 @@ _STRING_COLS = (
     "meta_json",
 )
 
+# Phase 2 emb columns (co-row with scalar; null when absent).
+_EMB_VECTOR_COLS = tuple(f"emb_{c}" for c in CHANNELS)  # text/image/audio/video/joint
+_EMB_META_COLS = ("embed_model", "encoded_at")
+_EMB_ALL_COLS = _EMB_VECTOR_COLS + _EMB_META_COLS
+
 
 def _require_lancedb():
     """Import lancedb or raise ImportError (factory catches for fall-back)."""
@@ -82,11 +98,29 @@ def _require_lancedb():
     return lancedb
 
 
-def _atoms_schema():
+def _emb_vector_type():
+    """Fixed-size list float32[EMBED_DIM] (lancedb.vector / pa.list_)."""
+    import pyarrow as pa  # noqa: PLC0415
+
+    try:
+        import lancedb  # noqa: PLC0415
+
+        return lancedb.vector(EMBED_DIM)
+    except Exception:  # noqa: BLE001
+        return pa.list_(pa.float32(), EMBED_DIM)
+
+
+def _atoms_schema(*, with_vectors: bool = True):
     import pyarrow as pa  # noqa: PLC0415 — pulled in with lancedb
 
     fields = [pa.field(name, pa.utf8()) for name in _STRING_COLS]
     fields.append(pa.field("schema_version", pa.int64()))
+    if with_vectors:
+        emb_type = _emb_vector_type()
+        for name in _EMB_VECTOR_COLS:
+            fields.append(pa.field(name, emb_type, nullable=True))
+        fields.append(pa.field("embed_model", pa.utf8(), nullable=True))
+        fields.append(pa.field("encoded_at", pa.utf8(), nullable=True))
     return pa.schema(fields)
 
 
@@ -95,11 +129,37 @@ def _sql_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _vec_to_list(vec: Sequence[float] | None) -> list[float] | None:
+    if vec is None:
+        return None
+    return [float(x) for x in vec]
+
+
+def _vec_from_cell(raw: Any) -> tuple[float, ...] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple)):
+        if not raw:
+            return None
+        return tuple(float(x) for x in raw)
+    # pyarrow scalar / numpy
+    try:
+        seq = list(raw)
+    except TypeError:
+        return None
+    if not seq:
+        return None
+    return tuple(float(x) for x in seq)
+
+
 class LanceMemoryStore:
     """Single-writer Lance atom store under ``data/memory/lance/``.
 
     In-memory indexes mirror JsonlMemoryStore so Protocol behaviour matches.
     Lance is the durable source of truth (reloaded on open).
+
+    Phase 2: emb_* columns co-reside with scalar fields. Scalar put/update_links
+    **preserve** emb columns (KD19 read-merge-write via ``_emb_by_id``).
     """
 
     def __init__(
@@ -115,10 +175,14 @@ class LanceMemoryStore:
         self._by_moment: dict[str, list[str]] = {}
         # (scale, window_start) -> atom_id for kind=summary ladder index
         self._ladder: dict[tuple[str, str], str] = {}
+        # atom_id -> emb column map (lists/str); not on Atom dataclass
+        self._emb_by_id: dict[str, dict[str, Any]] = {}
         self._closed: bool = False
         self._db: Any = None
         self._table: Any = None
         self._lancedb = lancedb
+        self._vector_schema_ok: bool = False
+        self._vector_error: str | None = None
         # Phase 2 write hook (encode enqueue); best-effort, never raises out.
         self._write_hook: AtomWriteHook | None = None
         self._ensure_layout()
@@ -143,7 +207,21 @@ class LanceMemoryStore:
     def settings(self) -> MemorySettings:
         return self._settings
 
+    @property
+    def vector_schema_ok(self) -> bool:
+        """True when emb columns are available for upsert/search."""
+        return self._vector_schema_ok
+
     # ── lifecycle ────────────────────────────────────────────────────────
+
+    def _read_meta(self) -> dict[str, Any]:
+        if not self.meta_path.is_file():
+            return {}
+        try:
+            existing = json.loads(self.meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return existing if isinstance(existing, dict) else {}
 
     def _ensure_layout(self) -> None:
         ensure_memory_dirs(self._paths)
@@ -156,12 +234,7 @@ class LanceMemoryStore:
             }
             self._write_meta(meta)
         else:
-            try:
-                existing = json.loads(self.meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                existing = {}
-            if not isinstance(existing, dict):
-                existing = {}
+            existing = self._read_meta()
             changed = False
             if "schema_version" not in existing:
                 existing["schema_version"] = SCHEMA_VERSION
@@ -193,6 +266,27 @@ class LanceMemoryStore:
                 pass
             raise
 
+    def _mark_vector_meta(self, *, migrated: bool) -> None:
+        """Write vector_schema_version / emb_dim into meta.json (best-effort)."""
+        try:
+            meta = self._read_meta()
+            meta["schema_version"] = meta.get("schema_version", SCHEMA_VERSION)
+            meta["backend"] = "lance"
+            if migrated or meta.get("vector_schema_version") is None:
+                meta["vector_schema_version"] = VECTOR_SCHEMA_VERSION
+            meta["emb_dim"] = EMBED_DIM
+            if not meta.get("embed_model"):
+                meta["embed_model"] = (
+                    getattr(self._settings, "embed_model_id", None) or ""
+                )
+            if migrated and "vector_migrated_at" not in meta:
+                meta["vector_migrated_at"] = utc_now_iso()
+            if "created_at" not in meta:
+                meta["created_at"] = utc_now_iso()
+            self._write_meta(meta)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("failed to write vector fields to meta.json")
+
     def _open_db(self) -> None:
         import pyarrow as pa  # noqa: PLC0415
 
@@ -200,16 +294,101 @@ class LanceMemoryStore:
         self._db = self._lancedb.connect(uri)
         names = list(self._db.table_names())
         if _ATOMS_TABLE not in names:
-            empty = pa.Table.from_pylist([], schema=_atoms_schema())
+            empty = pa.Table.from_pylist([], schema=_atoms_schema(with_vectors=True))
             self._table = self._db.create_table(_ATOMS_TABLE, empty)
+            self._vector_schema_ok = True
+            self._vector_error = None
+            self._mark_vector_meta(migrated=True)
         else:
             self._table = self._db.open_table(_ATOMS_TABLE)
+            self._migrate_vector_schema()
+
+    def _table_has_emb_columns(self) -> bool:
+        if self._table is None:
+            return False
+        try:
+            names = set(self._table.schema.names)
+        except Exception:  # noqa: BLE001
+            return False
+        return all(c in names for c in _EMB_ALL_COLS)
+
+    def _migrate_vector_schema(self) -> None:
+        """Additive emb migration for Phase 1 tables (Gate A / KD19).
+
+        Strategy for lancedb 0.20.x: recreate+copy. ``add_columns`` only accepts
+        SQL expression maps and cannot reliably introduce fixed-size list
+        vector columns with null defaults. Fail-closed: scalar path remains
+        usable when migration throws.
+        """
+        import pyarrow as pa  # noqa: PLC0415
+
+        if self._table_has_emb_columns():
+            meta = self._read_meta()
+            if int(meta.get("vector_schema_version") or 0) >= VECTOR_SCHEMA_VERSION:
+                self._vector_schema_ok = True
+                self._vector_error = None
+                return
+            self._vector_schema_ok = True
+            self._vector_error = None
+            self._mark_vector_meta(migrated=True)
+            return
+
+        _LOG.warning(
+            "lance emb migration: Phase 1 table lacks emb columns; "
+            "recreate+copy. Backup recommended: copy data/memory/lance before upgrade."
+        )
+        try:
+            try:
+                rows = self._table.to_arrow().to_pylist()
+            except Exception:
+                rows = []
+            new_rows: list[dict[str, Any]] = []
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                nr: dict[str, Any] = {}
+                for col in _STRING_COLS:
+                    nr[col] = r.get(col)
+                nr["schema_version"] = int(r.get("schema_version") or SCHEMA_VERSION)
+                for col in _EMB_VECTOR_COLS:
+                    nr[col] = _vec_to_list(_vec_from_cell(r.get(col)))
+                nr["embed_model"] = r.get("embed_model") or None
+                nr["encoded_at"] = r.get("encoded_at") or None
+                new_rows.append(nr)
+
+            schema = _atoms_schema(with_vectors=True)
+            # Drop + recreate (lancedb 0.20.x has no typed null add_columns).
+            self._db.drop_table(_ATOMS_TABLE)
+            if new_rows:
+                table_data = pa.Table.from_pylist(new_rows, schema=schema)
+            else:
+                table_data = pa.Table.from_pylist([], schema=schema)
+            self._table = self._db.create_table(_ATOMS_TABLE, table_data)
+            self._vector_schema_ok = True
+            self._vector_error = None
+            self._mark_vector_meta(migrated=True)
+            _LOG.info(
+                "lance emb migration complete rows=%d vector_schema_version=%d",
+                len(new_rows),
+                VECTOR_SCHEMA_VERSION,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("lance emb migration failed")
+            self._vector_schema_ok = False
+            self._vector_error = f"migration_failed: {type(exc).__name__}: {exc}"
+            # Best-effort reopen scalar table for Phase 1 path.
+            try:
+                if _ATOMS_TABLE in list(self._db.table_names()):
+                    self._table = self._db.open_table(_ATOMS_TABLE)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("lance reopen after failed migration also failed")
 
     def _load(self) -> None:
         """Rebuild in-memory indexes from the Lance table."""
         self._by_id.clear()
         self._by_moment.clear()
         self._ladder.clear()
+        self._emb_by_id.clear()
         if self._table is None:
             return
         try:
@@ -225,6 +404,10 @@ class LanceMemoryStore:
                 _LOG.warning("skipping corrupt lance row atom_id=%r", row.get("atom_id"))
                 continue
             self._by_id[atom.atom_id] = atom
+            if self._vector_schema_ok:
+                emb_map = self._emb_map_from_row(row)
+                if emb_map is not None:
+                    self._emb_by_id[atom.atom_id] = emb_map
         self._rebuild_secondary_indexes()
 
     def _rebuild_secondary_indexes(self) -> None:
@@ -307,6 +490,41 @@ class LanceMemoryStore:
         }
         return atom_from_dict(data)
 
+    def _emb_map_from_row(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        """Extract emb columns from a Lance row into the side map shape."""
+        has_any = False
+        out: dict[str, Any] = {}
+        for col in _EMB_VECTOR_COLS:
+            vec = _vec_from_cell(row.get(col))
+            out[col] = list(vec) if vec is not None else None
+            if vec is not None:
+                has_any = True
+        model = row.get("embed_model")
+        encoded = row.get("encoded_at")
+        out["embed_model"] = str(model) if model else None
+        out["encoded_at"] = str(encoded) if encoded else None
+        if model or encoded:
+            has_any = True
+        return out if has_any else None
+
+    def _embedding_set_from_map(
+        self, atom_id: str, emb_map: dict[str, Any]
+    ) -> EmbeddingSet | None:
+        kwargs: dict[str, Any] = {}
+        for col in _EMB_VECTOR_COLS:
+            raw = emb_map.get(col)
+            ch = col[len("emb_") :]
+            kwargs[f"emb_{ch}"] = tuple(raw) if raw is not None else None
+        if not any(kwargs.get(f"emb_{c}") is not None for c in CHANNELS):
+            return None
+        return EmbeddingSet(
+            atom_id=atom_id,
+            dim=EMBED_DIM,
+            model_id=str(emb_map.get("embed_model") or ""),
+            encoded_at=str(emb_map.get("encoded_at") or ""),
+            **kwargs,
+        )
+
     def _row_for_disk(self, atom: Atom) -> dict[str, Any]:
         """Serialize atom for Lance; empty content_text when body is spilled."""
         content_text = atom.content_text
@@ -334,8 +552,27 @@ class LanceMemoryStore:
             "schema_version": int(atom.schema_version or SCHEMA_VERSION),
         }
 
+    def _attach_emb_columns(self, row: dict[str, Any], atom_id: str) -> dict[str, Any]:
+        """KD19: merge existing emb_* into scalar upsert row (read-merge-write)."""
+        if not self._vector_schema_ok:
+            return row
+        emb = self._emb_by_id.get(atom_id)
+        if emb:
+            for col in _EMB_VECTOR_COLS:
+                val = emb.get(col)
+                row[col] = list(val) if val is not None else None
+            row["embed_model"] = emb.get("embed_model")
+            row["encoded_at"] = emb.get("encoded_at")
+        else:
+            for col in _EMB_VECTOR_COLS:
+                row[col] = None
+            row["embed_model"] = None
+            row["encoded_at"] = None
+        return row
+
     def _upsert_row(self, atom: Atom) -> None:
         row = self._row_for_disk(atom)
+        row = self._attach_emb_columns(row, atom.atom_id)
         (
             self._table.merge_insert("atom_id")
             .when_matched_update_all()
@@ -469,6 +706,7 @@ class LanceMemoryStore:
         """Insert or replace by atom_id. Returns stored atom (full content_text).
 
         ``notify=False`` skips the write hook (internal encode status updates).
+        Scalar path preserves existing emb_* columns (KD19).
         """
         with self._lock:
             self._check_open()
@@ -491,7 +729,7 @@ class LanceMemoryStore:
         prev_atom_id: str | None | object = _UNSET,
         next_atom_id: str | None | object = _UNSET,
     ) -> Atom:
-        """Patch sequential links only."""
+        """Patch sequential links only (preserves emb_* — KD19)."""
         with self._lock:
             self._check_open()
             existing = self._by_id.get(atom_id)
@@ -508,6 +746,150 @@ class LanceMemoryStore:
             self._upsert_row(updated)
             self._index_put(updated)
             return updated
+
+    def upsert_vectors(self, atom_id: str, embeddings: EmbeddingSet) -> bool:
+        """Dedicated vector path: write emb_* + set ready when KD20 satisfied.
+
+        Does not require promote to rewrite the full scalar atom. Returns False
+        if atom missing, vectors unavailable, or embeddings not ready.
+        """
+        with self._lock:
+            self._check_open()
+            if not self._vector_schema_ok:
+                return False
+            atom = self._by_id.get(atom_id)
+            if atom is None:
+                return False
+            if embeddings.atom_id and embeddings.atom_id != atom_id:
+                _LOG.warning(
+                    "upsert_vectors atom_id mismatch store=%s set=%s",
+                    atom_id,
+                    embeddings.atom_id,
+                )
+            if int(embeddings.dim) != EMBED_DIM:
+                _LOG.warning(
+                    "upsert_vectors dim mismatch atom_id=%s dim=%s expected=%s",
+                    atom_id,
+                    embeddings.dim,
+                    EMBED_DIM,
+                )
+                return False
+            if not embeddings_are_ready(embeddings):
+                return False
+
+            emb_map: dict[str, Any] = {
+                "emb_text": _vec_to_list(embeddings.emb_text),
+                "emb_image": _vec_to_list(embeddings.emb_image),
+                "emb_audio": _vec_to_list(embeddings.emb_audio),
+                "emb_video": _vec_to_list(embeddings.emb_video),
+                "emb_joint": _vec_to_list(embeddings.emb_joint),
+                "embed_model": embeddings.model_id or None,
+                "encoded_at": embeddings.encoded_at or None,
+            }
+            self._emb_by_id[atom_id] = emb_map
+
+            meta = dict(atom.meta or {})
+            if embeddings.model_id:
+                meta["embed_model"] = embeddings.model_id
+            if embeddings.encoded_at:
+                meta["embed_encoded_at"] = embeddings.encoded_at
+            meta["embed_channels"] = list(embeddings.channels_present)
+            meta["embed_encode_ok"] = True
+            updated = atom_replace(
+                atom,
+                embedding_status="ready",
+                meta=meta,
+            )
+            try:
+                self._upsert_row(updated)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("upsert_vectors lance write failed atom_id=%s", atom_id)
+                # Roll back side map so scalar path does not re-attach stale.
+                self._emb_by_id.pop(atom_id, None)
+                return False
+            self._index_put(updated)
+            return True
+
+    def get_vectors(self, atom_id: str) -> EmbeddingSet | None:
+        """Return durable vectors for atom_id, or None."""
+        with self._lock:
+            self._check_open()
+            emb_map = self._emb_by_id.get(atom_id)
+            if not emb_map:
+                return None
+            return self._embedding_set_from_map(atom_id, emb_map)
+
+    def search_vectors(
+        self,
+        query: Sequence[float],
+        *,
+        k: int = 12,
+        channel: str = "joint",
+        t_start: datetime | str | None = None,
+        t_end: datetime | str | None = None,
+        moment_id: str | None = None,
+        kinds: Sequence[str] | None = None,
+        exclude_atom_ids: Sequence[str] | None = None,
+        exclude_moment_id: str | None = None,
+    ) -> list[tuple[str, float]]:
+        """Brute-force cosine over ready emb columns (PR3 minimal search).
+
+        Returns list of (atom_id, score) sorted by score desc. ANN / hybrid
+        buffer is PR4.
+        """
+        with self._lock:
+            self._check_open()
+            if not self._vector_schema_ok or not query:
+                return []
+            col = f"emb_{channel}" if not channel.startswith("emb_") else channel
+            if col not in _EMB_VECTOR_COLS:
+                return []
+            q = [float(x) for x in query]
+            q_norm = math.sqrt(sum(x * x for x in q))
+            if q_norm < 1e-12:
+                return []
+            q = [x / q_norm for x in q]
+
+            start_s = to_iso_z(t_start) if t_start is not None else None
+            end_s = to_iso_z(t_end) if t_end is not None else None
+            kind_set = set(kinds) if kinds is not None else None
+            exclude = set(exclude_atom_ids or ())
+
+            scored: list[tuple[str, float]] = []
+            for atom_id, emb_map in self._emb_by_id.items():
+                if atom_id in exclude:
+                    continue
+                atom = self._by_id.get(atom_id)
+                if atom is None:
+                    continue
+                if atom.embedding_status != "ready":
+                    continue
+                if kind_set is not None and atom.kind not in kind_set:
+                    continue
+                if moment_id is not None and atom.moment_id != moment_id:
+                    continue
+                if exclude_moment_id and atom.moment_id == exclude_moment_id:
+                    continue
+                at = to_iso_z(atom.t_start)
+                if start_s is not None and at < start_s:
+                    continue
+                if end_s is not None and at >= end_s:
+                    continue
+                raw = emb_map.get(col)
+                if raw is None:
+                    continue
+                vec = [float(x) for x in raw]
+                if len(vec) != len(q):
+                    continue
+                # Vectors stored L2-normalized; still normalize defensively.
+                v_norm = math.sqrt(sum(x * x for x in vec))
+                if v_norm < 1e-12:
+                    continue
+                score = sum(a * b for a, b in zip(q, vec, strict=False)) / v_norm
+                scored.append((atom_id, float(score)))
+
+            scored.sort(key=lambda p: (-p[1], p[0]))
+            return scored[: max(0, int(k))]
 
     def list_by_moment(
         self,
@@ -703,6 +1085,7 @@ class LanceMemoryStore:
             if atom_id not in self._by_id:
                 return False
             old = self._by_id.pop(atom_id)
+            self._emb_by_id.pop(atom_id, None)
             if old.moment_id and old.moment_id in self._by_moment:
                 ids = self._by_moment[old.moment_id]
                 try:
@@ -720,21 +1103,35 @@ class LanceMemoryStore:
             return True
 
     def health(self) -> dict[str, Any]:
-        """``{ok, backend, atom_count, error?}``."""
+        """``{ok, backend, atom_count, vectors, error?}``."""
         with self._lock:
             if self._closed:
                 return {
                     "ok": False,
                     "backend": "lance",
                     "atom_count": 0,
+                    "vectors": False,
                     "error": "closed",
                 }
-            return {
+            vectors_ready = sum(
+                1
+                for a in self._by_id.values()
+                if a.embedding_status == "ready" and a.atom_id in self._emb_by_id
+            )
+            out: dict[str, Any] = {
                 "ok": True,
                 "backend": "lance",
                 "atom_count": len(self._by_id),
                 "lance_dir": str(self.lance_dir),
+                "vectors": bool(self._vector_schema_ok),
+                "vector_schema_version": (
+                    VECTOR_SCHEMA_VERSION if self._vector_schema_ok else 0
+                ),
+                "vectors_ready": vectors_ready,
             }
+            if self._vector_error:
+                out["vector_error"] = self._vector_error
+            return out
 
     def close(self) -> None:
         with self._lock:
@@ -743,4 +1140,7 @@ class LanceMemoryStore:
             self._db = None
 
 
-__all__ = ["LanceMemoryStore"]
+__all__ = [
+    "VECTOR_SCHEMA_VERSION",
+    "LanceMemoryStore",
+]
