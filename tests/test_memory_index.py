@@ -1,8 +1,9 @@
-"""EmbeddingIndex + KD19 preserve + ready rule (Phase 2 PR3)."""
+"""EmbeddingIndex + KD19 preserve + KD4 hybrid recent-buffer (Phase 2 PR3/PR4)."""
 
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 from functools import lru_cache
@@ -15,10 +16,12 @@ from elyra.memory.config import MemorySettings, memory_meta_path
 from elyra.memory.embed.mock import MockEmbedder, mock_vector
 from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet, embeddings_are_ready
 from elyra.memory.index import (
+    AnnSettings,
     EmbeddingIndex,
     LanceEmbeddingIndex,
     MemoryEmbeddingIndex,
     NullEmbeddingIndex,
+    RecentBufferEntry,
     ScoredAtom,
     open_embedding_index,
 )
@@ -676,7 +679,12 @@ def test_lance_embedding_index_search_filters(paths):
         assert h["ok"] is True
         assert h["backend"] == "lance"
         assert h["vectors_ready"] >= 2
-        assert idx.optimize()["optimized"] is False
+        # PR4: optimize advances watermark (ANN create best-effort).
+        opt = idx.optimize()
+        assert opt["optimized"] is True
+        assert opt.get("last_optimize")
+        h2 = idx.health()
+        assert h2["index_stale"] is False or h2["recent_buffer"] == 0
     finally:
         store.close()
 
@@ -747,3 +755,428 @@ def test_lance_health_reports_vectors(paths):
         assert h.get("vector_schema_version") == 1
     finally:
         store.close()
+
+
+# ── PR4: recent buffer, hybrid merge, restart, optimize, stale ─────────────
+
+
+def test_recent_buffer_on_upsert_and_cap(store):
+    """Buffer holds vectors in-process; cap evicts oldest encoded_at."""
+    ann = AnnSettings(recent_buffer_max=2, full_search_below=2000)
+    idx = MemoryEmbeddingIndex(store=store, ann=ann)
+    atoms = []
+    for i, seed in enumerate(("a", "b", "c")):
+        a = store.put_atom(
+            _atom(
+                text=seed,
+                atom_id=f"buf_{seed}",
+                t_start=f"2026-07-28T10:0{i}:00Z",
+            )
+        )
+        atoms.append(a)
+        emb = EmbeddingSet(
+            atom_id=a.atom_id,
+            dim=EMBED_DIM,
+            emb_text=mock_vector(f"text:{seed}", dim=EMBED_DIM),
+            emb_joint=mock_vector(f"joint:{seed}", dim=EMBED_DIM),
+            model_id="mock",
+            encoded_at=f"2026-07-28T10:0{i}:00Z",
+        )
+        assert idx.upsert(emb) is True
+    h = idx.health()
+    assert h["recent_buffer"] == 2
+    assert h["index_stale"] is True
+    # Oldest encoded_at (a) evicted.
+    assert idx._fresh.buffer.get("buf_a") is None  # noqa: SLF001
+    assert idx._fresh.buffer.get("buf_b") is not None  # noqa: SLF001
+    assert idx._fresh.buffer.get("buf_c") is not None  # noqa: SLF001
+
+
+def test_hybrid_merge_includes_buffer_only_atom():
+    """Hybrid = main ∪ buffer; buffer-only ready atom must surface (KD4)."""
+    ann = AnnSettings(full_search_below=0, recent_buffer_max=16)  # force hybrid
+    idx = MemoryEmbeddingIndex(store=None, ann=ann)
+    main_emb = _emb_set("main1", seed="main")
+    assert idx.upsert(main_emb) is True
+
+    # Simulate unindexed recent: vector only in buffer (not main dict).
+    buf_vec = mock_vector("joint:buffer_only", dim=EMBED_DIM)
+    idx._fresh.buffer.push(  # noqa: SLF001
+        RecentBufferEntry(
+            atom_id="buf_only",
+            channel="joint",
+            vector=buf_vec,
+            encoded_at="2026-07-28T12:00:00Z",
+            t_start="2026-07-28T12:00:00Z",
+            moment_id="m1",
+            kind="observation",
+        )
+    )
+    # Drop from main to force buffer leg (ANN miss simulation).
+    idx._by_id.pop("buf_only", None)  # noqa: SLF001
+
+    hits = idx.search(buf_vec, k=5, channel="joint")
+    ids = {h.atom_id for h in hits}
+    assert "buf_only" in ids
+    assert isinstance(hits[0], ScoredAtom)
+
+
+def test_hybrid_merge_prefers_higher_score():
+    ann = AnnSettings(full_search_below=0)
+    idx = MemoryEmbeddingIndex(ann=ann)
+    emb = _emb_set("same", seed="x")
+    idx.upsert(emb)
+    # Buffer already has same id from upsert; main+buffer merge keeps best.
+    hits = idx.search(emb.emb_joint, k=3)
+    assert len(hits) == 1
+    assert hits[0].atom_id == "same"
+    assert hits[0].score > 0.99
+
+
+def test_full_search_mode_below_threshold(store):
+    ann = AnnSettings(full_search_below=100, recent_buffer_max=8)
+    idx = MemoryEmbeddingIndex(store=store, ann=ann)
+    a = store.put_atom(_atom(text="fullmode", atom_id="fm1"))
+    emb = _emb_set(a.atom_id, seed="fullmode")
+    idx.upsert(emb)
+    h = idx.health()
+    assert h["search_mode"] == "full"
+    assert h["vectors_ready"] == 1
+    hits = idx.search(emb.emb_joint, k=3)
+    assert any(x.atom_id == a.atom_id for x in hits)
+
+
+def test_optimize_trims_buffer_and_clears_stale(store):
+    ann = AnnSettings(
+        recent_buffer_max=16,
+        full_search_below=2000,
+        optimize_every_n_encodes=64,
+    )
+    idx = MemoryEmbeddingIndex(store=store, ann=ann)
+    a = store.put_atom(_atom(text="opt", atom_id="opt1"))
+    emb = EmbeddingSet(
+        atom_id=a.atom_id,
+        emb_joint=mock_vector("joint:opt", dim=EMBED_DIM),
+        emb_text=mock_vector("text:opt", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    idx.upsert(emb)
+    assert idx.health()["index_stale"] is True
+    assert idx.health()["recent_buffer"] == 1
+    result = idx.optimize()
+    assert result["optimized"] is True
+    assert result["buffer_trimmed"] >= 1
+    h = idx.health()
+    assert h["recent_buffer"] == 0
+    assert h["index_stale"] is False
+    assert h["last_optimize"]
+    # Search still works via main after buffer trim.
+    hits = idx.search(emb.emb_joint, k=3)
+    assert any(x.atom_id == a.atom_id for x in hits)
+
+
+def test_index_stale_after_n_encodes_threshold():
+    """encodes_since_optimize >= threshold ⇒ index_stale even if buffer empty."""
+    ann = AnnSettings(
+        recent_buffer_max=8,
+        optimize_every_n_encodes=3,
+        full_search_below=2000,
+    )
+    idx = MemoryEmbeddingIndex(ann=ann)
+    for i in range(3):
+        emb = EmbeddingSet(
+            atom_id=f"n{i}",
+            emb_joint=mock_vector(f"joint:n{i}", dim=EMBED_DIM),
+            model_id="mock",
+            encoded_at=f"2026-07-28T10:0{i}:00Z",
+        )
+        idx.upsert(emb)
+    # Optimize clears buffer; then force encodes counter without buffer.
+    idx.optimize()
+    assert idx.health()["recent_buffer"] == 0
+    # Manually bump counter past threshold with empty buffer.
+    idx._fresh.encodes_since_optimize = 3  # noqa: SLF001
+    assert idx.health()["index_stale"] is True
+
+
+def test_buffer_filters_moment_and_kind():
+    ann = AnnSettings(full_search_below=0)
+    idx = MemoryEmbeddingIndex(ann=ann)
+    idx._fresh.buffer.push(  # noqa: SLF001
+        RecentBufferEntry(
+            atom_id="f1",
+            channel="joint",
+            vector=mock_vector("joint:f1", dim=EMBED_DIM),
+            encoded_at="2026-07-28T10:00:00Z",
+            t_start="2026-07-28T10:00:00Z",
+            moment_id="mA",
+            kind="observation",
+        )
+    )
+    idx._fresh.buffer.push(  # noqa: SLF001
+        RecentBufferEntry(
+            atom_id="f2",
+            channel="joint",
+            vector=mock_vector("joint:f2", dim=EMBED_DIM),
+            encoded_at="2026-07-28T11:00:00Z",
+            t_start="2026-07-28T11:00:00Z",
+            moment_id="mB",
+            kind="speak",
+        )
+    )
+    q = mock_vector("joint:f1", dim=EMBED_DIM)
+    only = idx.search(q, k=10, moment_id="mA")
+    assert [h.atom_id for h in only] == ["f1"]
+    obs = idx.search(q, k=10, kinds=["observation"])
+    assert [h.atom_id for h in obs] == ["f1"]
+
+
+class _FakeLanceStore:
+    """Hermetic store stand-in for LanceEmbeddingIndex restart / hybrid tests."""
+
+    def __init__(self) -> None:
+        self._atoms: dict[str, Atom] = {}
+        self._embs: dict[str, EmbeddingSet] = {}
+
+    def put_atom(self, atom: Atom, **_kw: Any) -> Atom:
+        self._atoms[atom.atom_id] = atom
+        return atom
+
+    def get_atom(self, atom_id: str) -> Atom | None:
+        return self._atoms.get(atom_id)
+
+    def upsert_vectors(self, atom_id: str, embeddings: EmbeddingSet) -> bool:
+        if atom_id not in self._atoms:
+            return False
+        if not embeddings_are_ready(embeddings):
+            return False
+        self._embs[atom_id] = embeddings
+        a = self._atoms[atom_id]
+        meta = dict(a.meta or {})
+        meta["embed_encode_ok"] = True
+        if embeddings.encoded_at:
+            meta["embed_encoded_at"] = embeddings.encoded_at
+        from elyra.memory.types import atom_replace
+
+        self._atoms[atom_id] = atom_replace(a, embedding_status="ready", meta=meta)
+        return True
+
+    def get_vectors(self, atom_id: str) -> EmbeddingSet | None:
+        return self._embs.get(atom_id)
+
+    def search_vectors(
+        self,
+        query: Any,
+        *,
+        k: int = 12,
+        channel: str = "joint",
+        t_start: Any = None,
+        t_end: Any = None,
+        moment_id: str | None = None,
+        kinds: Any = None,
+        exclude_atom_ids: Any = None,
+        exclude_moment_id: str | None = None,
+    ) -> list[tuple[str, float]]:
+        del t_start, t_end
+        exclude = set(exclude_atom_ids or ())
+        kind_set = set(kinds) if kinds is not None else None
+        q = [float(x) for x in query]
+        qn = math.sqrt(sum(x * x for x in q)) or 1.0
+        q = [x / qn for x in q]
+        scored: list[tuple[str, float]] = []
+        for aid, emb in self._embs.items():
+            if aid in exclude:
+                continue
+            atom = self._atoms.get(aid)
+            if atom is None or atom.embedding_status != "ready":
+                continue
+            if kind_set is not None and atom.kind not in kind_set:
+                continue
+            if moment_id is not None and atom.moment_id != moment_id:
+                continue
+            if exclude_moment_id and atom.moment_id == exclude_moment_id:
+                continue
+            vec = emb.channel_vector(channel)
+            if vec is None:
+                continue
+            vn = math.sqrt(sum(float(x) * float(x) for x in vec)) or 1.0
+            score = sum(float(a) * float(b) for a, b in zip(q, vec, strict=False)) / vn
+            scored.append((aid, float(score)))
+        scored.sort(key=lambda p: (-p[1], p[0]))
+        return scored[: max(0, int(k))]
+
+    def list_atoms(
+        self,
+        *,
+        embedding_status: str | None = None,
+        kinds: Any = None,
+        limit: int = 50,
+        newest_first: bool = True,
+    ) -> list[Atom]:
+        del kinds
+        rows = list(self._atoms.values())
+        if embedding_status is not None:
+            rows = [a for a in rows if a.embedding_status == embedding_status]
+        rows.sort(key=lambda a: (a.t_start, a.atom_id), reverse=bool(newest_first))
+        return rows[: max(0, int(limit))]
+
+    def health(self) -> dict[str, Any]:
+        ready = sum(
+            1
+            for a in self._atoms.values()
+            if a.embedding_status == "ready" and a.atom_id in self._embs
+        )
+        return {
+            "ok": True,
+            "backend": "lance",
+            "vectors": True,
+            "vectors_ready": ready,
+            "vector_schema_version": 1,
+        }
+
+
+def test_restart_full_mode_search_returns_recent():
+    """KD4 restart: encode without optimize → reopen → search finds recent atom.
+
+    Uses full mode (vectors_ready < full_search_below) so durable main scan
+    recovers without in-process buffer.
+    """
+    store = _FakeLanceStore()
+    ann = AnnSettings(full_search_below=2000, recent_buffer_max=4)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
+    recent_id = None
+    for i in range(5):
+        aid = f"r{i}"
+        store.put_atom(
+            _atom(
+                text=f"body {i}",
+                atom_id=aid,
+                t_start=f"2026-07-28T10:{i:02d}:00Z",
+            )
+        )
+        emb = EmbeddingSet(
+            atom_id=aid,
+            emb_joint=mock_vector(f"joint:r{i}", dim=EMBED_DIM),
+            emb_text=mock_vector(f"text:r{i}", dim=EMBED_DIM),
+            model_id="mock",
+            encoded_at=f"2026-07-28T10:{i:02d}:00Z",
+        )
+        assert idx.upsert(emb) is True
+        recent_id = aid
+    # "Kill process": drop index (buffer lost); store keeps durable vectors.
+    del idx
+    idx2 = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
+    h = idx2.health()
+    assert h["search_mode"] == "full"
+    assert h["vectors_ready"] == 5
+    # Recent buffer not required in full mode after restart.
+    q = mock_vector("joint:r4", dim=EMBED_DIM)
+    hits = idx2.search(q, k=3)
+    assert any(x.atom_id == recent_id for x in hits)
+
+
+def test_restart_hybrid_seed_returns_recent():
+    """When above full_search_below, open seeds buffer; hybrid finds recent."""
+    store = _FakeLanceStore()
+    # full_search_below=0 → always hybrid; seed last N on open.
+    ann = AnnSettings(full_search_below=0, recent_buffer_max=8)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
+    for i in range(4):
+        aid = f"h{i}"
+        store.put_atom(
+            _atom(
+                text=f"hy {i}",
+                atom_id=aid,
+                t_start=f"2026-07-28T11:{i:02d}:00Z",
+            )
+        )
+        emb = EmbeddingSet(
+            atom_id=aid,
+            emb_joint=mock_vector(f"joint:h{i}", dim=EMBED_DIM),
+            emb_text=mock_vector(f"text:h{i}", dim=EMBED_DIM),
+            model_id="mock",
+            encoded_at=f"2026-07-28T11:{i:02d}:00Z",
+        )
+        assert idx.upsert(emb) is True
+    del idx
+    # Reopen: seed buffer from durable rows.
+    idx2 = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
+    h = idx2.health()
+    assert h["search_mode"] == "hybrid"
+    assert h["recent_buffer"] >= 1
+    assert h["seed_incomplete"] is False
+    q = mock_vector("joint:h3", dim=EMBED_DIM)
+    hits = idx2.search(q, k=5)
+    assert any(x.atom_id == "h3" for x in hits)
+
+
+def test_lance_index_stale_and_optimize_on_fake_store():
+    store = _FakeLanceStore()
+    ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2)
+    idx = LanceEmbeddingIndex(store, ann=ann)
+    store.put_atom(_atom(text="s", atom_id="st1"))
+    emb = _emb_set("st1", seed="st")
+    assert idx.upsert(emb) is True
+    assert idx.health()["index_stale"] is True
+    assert idx.health()["recent_buffer"] == 1
+    r = idx.optimize(max_ms=50)
+    assert r["optimized"] is True
+    assert idx.health()["recent_buffer"] == 0
+
+
+def test_open_embedding_index_passes_settings():
+    store = _FakeLanceStore()
+    settings = MemorySettings(
+        backend="lance",
+        ann_recent_buffer_max=7,
+        ann_full_search_below=0,
+    )
+    idx = open_embedding_index(store, settings=settings)
+    assert isinstance(idx, LanceEmbeddingIndex)
+    assert idx._fresh.ann.recent_buffer_max == 7  # noqa: SLF001
+    assert idx._fresh.ann.full_search_below == 0  # noqa: SLF001
+
+
+@lance_required
+def test_lance_restart_real_store_search_recent(paths):
+    """Acceptance on real Lance when connect works: reopen finds recent vector."""
+    settings = MemorySettings(backend="lance", write_atoms=True)
+    store = open_memory_store(paths, settings)
+    try:
+        ann = AnnSettings(full_search_below=2000, recent_buffer_max=16)
+        idx = LanceEmbeddingIndex(store, ann=ann)
+        last = None
+        for i in range(3):
+            a = store.put_atom(
+                _atom(
+                    text=f"real {i}",
+                    atom_id=f"real_{i}",
+                    t_start=f"2026-07-28T12:{i:02d}:00Z",
+                )
+            )
+            emb = EmbeddingSet(
+                atom_id=a.atom_id,
+                emb_joint=mock_vector(f"joint:real{i}", dim=EMBED_DIM),
+                emb_text=mock_vector(f"text:real{i}", dim=EMBED_DIM),
+                model_id="mock",
+                encoded_at=f"2026-07-28T12:{i:02d}:00Z",
+            )
+            assert idx.upsert(emb) is True
+            last = a.atom_id
+        store.close()
+    finally:
+        try:
+            store.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    store2 = open_memory_store(paths, settings)
+    try:
+        idx2 = open_embedding_index(store2, settings=settings)
+        assert isinstance(idx2, LanceEmbeddingIndex)
+        q = mock_vector("joint:real2", dim=EMBED_DIM)
+        hits = idx2.search(q, k=5)
+        assert any(h.atom_id == last for h in hits)
+    finally:
+        store2.close()

@@ -456,10 +456,11 @@ class PresenceWorker:
         self._memory: Any | None = None
         self._memory_open_attempted = False
         self._memory_open_failed = False
-        # Phase 2 encode queue + embedder (lazy; installed with store when semantic).
+        # Phase 2 encode queue + embedder + EmbeddingIndex (lazy; store open).
         self._encode_queue: Any | None = None
         self._embedder: Any | None = None
         self._embedder_open_failed = False
+        self._embedding_index: Any | None = None
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
 
@@ -1016,6 +1017,8 @@ class PresenceWorker:
                         self._idle_memory_ladder()
                         # Corpus encode drain OUTSIDE lock (KD2 / KD16).
                         self._idle_memory_encode()
+                        # ANN optimize OUTSIDE lock — never mid-hop (KD4).
+                        self._idle_memory_optimize()
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
@@ -1094,6 +1097,7 @@ class PresenceWorker:
 
             self._memory = open_memory_store(self.paths, mem_cfg)
             self._install_encode_hooks(self._memory, mem_cfg)
+            self._ensure_embedding_index()
             return self._memory
         except Exception:  # noqa: BLE001 — store down must not kill presence
             self._memory_open_failed = True
@@ -1169,6 +1173,29 @@ class PresenceWorker:
             self._embedder_open_failed = True
             self._embedder = None
             _LOG.exception("embedder open failed; encode drain disabled this run")
+            return None
+
+    def _ensure_embedding_index(self) -> Any | None:
+        """Open EmbeddingIndex once for the memory store (KD4 freshness).
+
+        Best-effort; Null index for JSONL. Lance path seeds buffer / full mode
+        on open. Never raises into the presence loop.
+        """
+        if self._embedding_index is not None:
+            return self._embedding_index
+        store = self._memory
+        if store is None:
+            return None
+        try:
+            from elyra.memory.index import open_embedding_index
+
+            self._embedding_index = open_embedding_index(
+                store, settings=self.settings.memory
+            )
+            return self._embedding_index
+        except Exception:  # noqa: BLE001
+            _LOG.exception("embedding index open failed")
+            self._embedding_index = None
             return None
 
     def _memory_ladder_active(self) -> bool:
@@ -1322,10 +1349,11 @@ class PresenceWorker:
                 media_store = MediaStore(self.paths)
             except Exception:  # noqa: BLE001 — media optional for encode
                 _LOG.debug("MediaStore open for encode failed", exc_info=True)
+            index = self._ensure_embedding_index()
             queue.drain(
                 store,
                 embedder,
-                index=None,  # PR3 supplies EmbeddingIndex
+                index=index,
                 max_ms=int(mem_cfg.encode_max_ms_per_tick or 100),
                 max_items=max_items,
                 max_attempts=int(mem_cfg.encode_max_attempts or 3),
@@ -1334,6 +1362,47 @@ class PresenceWorker:
             )
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("memory idle encode drain failed")
+
+    def _idle_memory_optimize(self) -> None:
+        """Idle-only ANN optimize / buffer seed (KD4). Never mid-hop.
+
+        Runs outside the state lock after encode drain. Soft ``ann_optimize_max_ms``
+        only; meal hard budget is PR6.
+        """
+        mem_cfg = self.settings.memory
+        # Index may exist for Lance even when semantic is off (vectors on disk);
+        # only schedule work when semantic path is active or index already open.
+        if not (mem_cfg.semantic_enabled or self._embedding_index is not None):
+            return
+        store = self._memory
+        if store is None and (mem_cfg.write_atoms or mem_cfg.enabled):
+            store = self._ensure_memory_store()
+        if store is None:
+            return
+        index = self._ensure_embedding_index()
+        if index is None:
+            return
+        try:
+            # Continue budgeted seed if open left it incomplete.
+            seed_fn = getattr(index, "seed_buffer", None)
+            if callable(seed_fn):
+                try:
+                    h0 = index.health() if hasattr(index, "health") else {}
+                    if isinstance(h0, dict) and h0.get("seed_incomplete"):
+                        seed_fn(max_ms=int(mem_cfg.ann_optimize_max_ms or 200))
+                except Exception:  # noqa: BLE001
+                    _LOG.debug("index seed_buffer failed", exc_info=True)
+
+            health = index.health() if hasattr(index, "health") else {}
+            if not isinstance(health, dict):
+                return
+            if not health.get("index_stale"):
+                return
+            max_ms = int(getattr(mem_cfg, "ann_optimize_max_ms", 200) or 200)
+            result = index.optimize(max_ms=max_ms)
+            _LOG.debug("memory index optimize: %s", result)
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("memory idle index optimize failed")
 
     def _finalize_memory_ladder_15m(self) -> None:
         """Refresh the 15m window containing now after moment close (budgeted)."""
