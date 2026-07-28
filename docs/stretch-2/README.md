@@ -3,6 +3,7 @@
 **Branch:** `grok-improvement-memory` (from `main`)
 **Philosophy:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
 **Planning baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
+**Soft conceptual guidance:** [philosophical-soft-guidance.md](philosophical-soft-guidance.md) (influences only — not phase goals)
 
 ## Goal
 
@@ -27,7 +28,7 @@ For a system this conceptual, “docs updated when behaviour changes” is not e
 3. Which activities from the [inspiration activity model](inspiration-activity-model-and-storage.md) are live vs background.
 4. Invariants and failure behaviour.
 
-Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual.
+Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage (IIT/Φ intuition, sheaf-like local patches, holographic reconstructability) as **influence on judgment**, not as deliverables.
 
 Other principle reminders:
 
@@ -74,6 +75,7 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | Document | Role |
 |----------|------|
 | [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
+| [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | **Soft guidance** — IIT/sheaf/holographic and reconstructive influences; not goals |
 | [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design |
 | [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 design |
@@ -97,6 +99,8 @@ In addition to engineering-principles “done”:
 - [ ] No dependency on later phases for correctness
 - [ ] Operator-visible failure modes documented
 
+Philosophical soft guidance is **not** a checklist item for phase done.
+
 ---
 
 ## Working rules
@@ -106,6 +110,7 @@ In addition to engineering-principles “done”:
 3. Background consolidation and index optimize never starve the do-loop.
 4. Promote to `main` only after operator sign-off and live smoke.
 5. Prefer clarifying the philosophy mapping over clever storage tricks that obscure it.
+6. Use [philosophical-soft-guidance.md](philosophical-soft-guidance.md) for judgment calls; do not expand phase scope from it.
 
 ---
 

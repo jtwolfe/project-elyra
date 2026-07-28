@@ -3,10 +3,13 @@
 **Status:** Foundational inspiration (not the final architecture manual)
 **Branch:** `grok-improvement-memory`
 **Philosophy source:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
+**Soft conceptual influences:** [philosophical-soft-guidance.md](philosophical-soft-guidance.md) (not requirements)
 
 This document records the **preliminary system activity model**, a **logical data prototype**, and **refined database requirements** developed during Stretch 2 planning. It is intentionally an *inspiration* and *constraint* document: implementation work must produce a larger, more detailed set of architecture docs that explain **how concrete structures map back to the concepts in the essay** (atoms, context, felt signal, weave of edges, patterns/shadows, consolidation).
 
 Do not treat this file as the complete design. Treat it as the baseline that later phase manuals must refine, not abandon without reason.
+
+For research lineage and soft judgment aids (IIT/Φ as possible *later* patch-health thinking, sheaf-like local context patches, holographic reconstructability, constructive recall), see [philosophical-soft-guidance.md](philosophical-soft-guidance.md). Those ideas **influence reasoning**; they are not storage requirements and do not extend the activity list below.
 
 ---
 
@@ -40,6 +43,8 @@ Future readers should be able to answer:
 
 Implementation docs must keep these names visible. Avoid inventing a second vocabulary that drifts from the essay without an explicit glossary entry.
 
+**Contextual / generation-context links** (atoms that influenced creation of a new atom) are especially important for reconstructability of experience; see soft guidance on local patches. They appear in the activity model as ordinary linking, not as a separate subsystem.
+
 ---
 
 ## 3. System activity model (preliminary)
@@ -53,6 +58,7 @@ Operations the storage layer and memory package must support. Rates are qualitat
 | Create atom from beat / message / tool observation / speak | Each memorable event | Must not stall do-loop |
 | Attach media refs (Stretch 1 attachments) | Same | Low |
 | Sequential prev/next link | Same | Low |
+| Link to contextual influencers when known | Same | Low |
 | Write multi-embeddings (per-modality + joint) | After create; may be async | Medium (encode cost) |
 | Split oversized content into linked parcels | Large messages | Low for split; embed async |
 | Record goal/outcome markers on trajectories | Sparse (Phase 3) | Low |
@@ -156,7 +162,7 @@ Trajectory           # Phase 3
   subspace_hint
 ```
 
-**Mapping note:** Essay *connections* and *hyperedges* appear here as `Edge` + `Hyperedge`/`HyperedgeMember`. Essay *content* and *context* appear as atom fields and moment membership. Essay *felt signal* is reserved (`qualia`) until a deliberate Phase 3+ design.
+**Mapping note:** Essay *connections* and *hyperedges* appear here as `Edge` + `Hyperedge`/`HyperedgeMember`. Essay *content* and *context* appear as atom fields and moment membership. Essay *felt signal* is reserved (`qualia`) until a deliberate Phase 3+ design. Edge type `contextual` is the natural home for generation-context / influencer links discussed in soft guidance.
 
 ---
 
@@ -187,6 +193,7 @@ Trajectory           # Phase 3
 - Distributed multi-node cluster
 - Native hypergraph type system (reification accepted)
 - Sub-millisecond ANN at multi-million scale on day one
+- Runtime Φ / IIT measures, sheaf cohomology engines, holographic encoding schemes (see soft guidance)
 
 ---
 
@@ -217,6 +224,7 @@ Preferred location as implementation grows:
 ```text
 docs/stretch-2/
   inspiration-activity-model-and-storage.md   # this file
+  philosophical-soft-guidance.md              # influences, not requirements
   design-*.md                                 # phase design (pre-implement)
   architecture/                               # post-implement detailed manuals
     phase-1-temporal.md
@@ -234,6 +242,7 @@ Design docs may stay speculative; **architecture/** manuals must describe what w
 - Update this inspiration doc when the activity model or requirements materially change.
 - Do not delete historical rationale; append a short “Superseded decisions” section if direction shifts.
 - Phase architecture manuals may be more specific; they should link back here and to [memory-atoms.pdf](../memory-atoms.pdf).
+- Soft guidance may evolve without changing storage requirements; keep the boundary clear.
 
 ---
 
