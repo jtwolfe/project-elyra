@@ -234,6 +234,125 @@ def test_jsonl_health_vectors_false(store):
     assert h.get("vectors") is False
 
 
+def test_factory_fail_closed_migration_health():
+    """Issue 1/3: migration failure must not yield healthy Null index."""
+
+    class _BrokenLance:
+        """Stub Lance-like store after failed emb migration."""
+
+        vector_schema_ok = False
+
+        def upsert_vectors(self, atom_id: str, embeddings: Any) -> bool:
+            return False
+
+        def get_atom(self, atom_id: str) -> Any:
+            return None
+
+        def search_vectors(self, *a: Any, **k: Any) -> list:
+            return []
+
+        def health(self) -> dict[str, Any]:
+            return {
+                "ok": True,  # scalar store still usable
+                "backend": "lance",
+                "atom_count": 1,
+                "vectors": False,
+                "vector_schema_version": 0,
+                "vectors_ready": 0,
+                "vector_error": "migration_failed: RuntimeError: boom",
+            }
+
+    store = _BrokenLance()
+    idx = open_embedding_index(store)
+    assert isinstance(idx, LanceEmbeddingIndex)
+    assert not isinstance(idx, NullEmbeddingIndex)
+    h = idx.health()
+    assert h["ok"] is False
+    assert h["backend"] == "lance"
+    assert h.get("vectors") is False
+    assert "migration_failed" in str(h.get("error") or "")
+    # Upsert/search fail closed
+    emb = _emb_set("a1", seed="x")
+    assert idx.upsert(emb) is False
+    assert idx.search(emb.emb_joint or mock_vector("q", dim=EMBED_DIM)) == []
+
+
+def test_lance_embedding_index_health_fail_closed_direct():
+    """Hermetic: LanceEmbeddingIndex.health ANDs vectors + vector_error."""
+
+    class _Store:
+        def health(self) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "vectors": False,
+                "vector_error": "migration_failed: OSError: disk",
+                "vectors_ready": 0,
+                "vector_schema_version": 0,
+            }
+
+        def upsert_vectors(self, *a: Any, **k: Any) -> bool:
+            return False
+
+    idx = LanceEmbeddingIndex(_Store())
+    h = idx.health()
+    assert h["ok"] is False
+    assert "migration_failed" in str(h.get("error") or "")
+
+
+def test_queue_upsert_none_does_not_mark_ready(store):
+    """Issue 2: upsert returning None must not set embedding_status=ready."""
+    from elyra.memory.embed.queue import EncodeQueue
+
+    class _NoneIdx:
+        def upsert(self, embedding_set: Any) -> None:
+            return None
+
+    atom = store.put_atom(_atom(text="none upsert", status="pending"))
+    q = EncodeQueue(maxsize=4)
+    q.enqueue(atom.atom_id)
+    stats = q.drain(store, MockEmbedder(), index=_NoneIdx(), max_items=2)
+    assert stats["ok"] == 1  # encode ok path
+    got = store.get_atom(atom.atom_id)
+    assert got is not None
+    assert got.embedding_status == "pending"
+    assert got.meta.get("embed_encode_ok") is True
+
+
+def test_queue_upsert_false_does_not_mark_ready(store):
+    """Explicit False from index also leaves pending."""
+    from elyra.memory.embed.queue import EncodeQueue
+
+    class _FalseIdx:
+        def upsert(self, embedding_set: Any) -> bool:
+            return False
+
+    atom = store.put_atom(_atom(text="false upsert", status="pending"))
+    q = EncodeQueue(maxsize=4)
+    q.enqueue(atom.atom_id)
+    q.drain(store, MockEmbedder(), index=_FalseIdx(), max_items=2)
+    got = store.get_atom(atom.atom_id)
+    assert got is not None
+    assert got.embedding_status == "pending"
+
+
+def test_memory_search_requires_ready_status(store):
+    """Issue 6: pending atom with vectors in index is not searchable."""
+    atom = store.put_atom(_atom(text="pend", status="pending", atom_id="pend1"))
+    idx = MemoryEmbeddingIndex(store=None)  # no status sync
+    emb = _emb_set(atom.atom_id, seed="pend")
+    assert idx.upsert(emb) is True
+    # Store still pending; index has vectors but atom not ready.
+    hits = idx.search(emb.emb_joint, k=5)
+    # atom is None path when store is None — still searchable without store.
+    assert len(hits) == 1
+
+    idx2 = MemoryEmbeddingIndex(store=store)
+    # Put vectors without going through upsert status path: inject into dict.
+    idx2._by_id[atom.atom_id] = emb  # noqa: SLF001 — test inject
+    assert store.get_atom(atom.atom_id).embedding_status == "pending"
+    assert idx2.search(emb.emb_joint, k=5) == []
+
+
 # ── Lance path (skip when dep missing or connect unusable) ────────────────
 
 

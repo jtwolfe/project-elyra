@@ -66,7 +66,12 @@ class EmbeddingIndex(Protocol):
         exclude_atom_ids: AbstractSet[str] | None = None,
         exclude_moment_id: str | None = None,
     ) -> list[ScoredAtom]:
-        """Return scored hits; empty if unavailable."""
+        """Return scored hits; empty if unavailable.
+
+        Candidates must have vectors in the index **and** (when a store atom
+        is available) ``embedding_status == "ready"``. Aligns Memory + Lance
+        so meal/semantic does not depend on backend-specific lag rules.
+        """
         ...
 
     def optimize(self, *, max_ms: int | None = None) -> dict[str, Any]:
@@ -104,11 +109,12 @@ def _passes_filters(
     if exclude_atom_ids and atom_id in exclude_atom_ids:
         return False
     if atom is None:
-        # Allow vector-only hits when store has no atom (rare); still apply id exclude.
+        # Vector-only (no store atom): only id exclude applies; time/moment/kind
+        # filters require atom metadata and therefore reject.
         return moment_id is None and kinds is None and t_start is None and t_end is None
-    if atom.embedding_status not in ("ready", "pending", "none"):
-        # Prefer ready; Memory index marks ready on upsert.
-        pass
+    # Search candidates require ready status when atom is known (KD20 / meal).
+    if atom.embedding_status != "ready":
+        return False
     if kinds is not None and atom.kind not in set(kinds):
         return False
     if moment_id is not None and atom.moment_id != moment_id:
@@ -234,10 +240,6 @@ class MemoryEmbeddingIndex:
                     atom = self._store.get_atom(atom_id)
                 except Exception:  # noqa: BLE001
                     atom = None
-            if atom is not None and atom.embedding_status != "ready":
-                # Still allow if we hold vectors (store lag); prefer ready.
-                if atom.embedding_status not in ("ready", "pending"):
-                    continue
             if not _passes_filters(
                 atom,
                 t_start=t_start,
@@ -400,13 +402,13 @@ class LanceEmbeddingIndex:
 def open_embedding_index(store: Any) -> EmbeddingIndex:
     """Factory: Lance store → LanceEmbeddingIndex; else NullEmbeddingIndex.
 
-    CI tests that need vectors should construct ``MemoryEmbeddingIndex(store)``
-    explicitly.
+    Always wraps Lance (even when ``vector_schema_ok`` is False) so migration
+    failure surfaces via ``health()["ok"]=False`` and ``error`` (fail-closed).
+    CI tests that need vectors without Lance should construct
+    ``MemoryEmbeddingIndex(store)`` explicitly.
     """
     cls_name = type(store).__name__
     if cls_name == "LanceMemoryStore" or hasattr(store, "upsert_vectors"):
-        if getattr(store, "vector_schema_ok", True) is False:
-            return NullEmbeddingIndex()
         return LanceEmbeddingIndex(store)
     return NullEmbeddingIndex()
 

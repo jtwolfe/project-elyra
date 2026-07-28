@@ -647,7 +647,9 @@ flowchart LR
 # elyra/memory/index.py
 @runtime_checkable
 class EmbeddingIndex(Protocol):
-    def upsert(self, embedding_set: EmbeddingSet) -> None: ...
+    def upsert(self, embedding_set: EmbeddingSet) -> bool:
+        """Persist vectors; return True only when vectors are held (KD20 ready)."""
+        ...
 
     def search(
         self,

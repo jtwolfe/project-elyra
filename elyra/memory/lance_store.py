@@ -335,8 +335,10 @@ class LanceMemoryStore:
 
         _LOG.warning(
             "lance emb migration: Phase 1 table lacks emb columns; "
-            "recreate+copy. Backup recommended: copy data/memory/lance before upgrade."
+            "recreate+copy. Operator backup: copy data/memory/lance before upgrade; "
+            "auto snapshot also written under data/memory/lance_migration_bak/."
         )
+        bak_path: Path | None = None
         try:
             try:
                 rows = self._table.to_arrow().to_pylist()
@@ -356,32 +358,131 @@ class LanceMemoryStore:
                 nr["encoded_at"] = r.get("encoded_at") or None
                 new_rows.append(nr)
 
+            # Durable pre-drop snapshot (JSONL) so a crash after drop is recoverable.
+            bak_path = self._write_migration_backup(new_rows)
+
             schema = _atoms_schema(with_vectors=True)
-            # Drop + recreate (lancedb 0.20.x has no typed null add_columns).
-            self._db.drop_table(_ATOMS_TABLE)
+            # Prefer create-temp → drop old → create final from same rows (narrow
+            # window). lancedb 0.20.x has no typed null add_columns / rename.
+            staging = f"{_ATOMS_TABLE}__migrating"
+            names = list(self._db.table_names())
+            if staging in names:
+                try:
+                    self._db.drop_table(staging)
+                except Exception:  # noqa: BLE001
+                    pass
             if new_rows:
                 table_data = pa.Table.from_pylist(new_rows, schema=schema)
             else:
                 table_data = pa.Table.from_pylist([], schema=schema)
+            self._db.create_table(staging, table_data)
+            # Staging holds a full copy; now replace atoms.
+            if _ATOMS_TABLE in list(self._db.table_names()):
+                self._db.drop_table(_ATOMS_TABLE)
+            # Recreate atoms from the same in-memory rows (staging is the safety net).
             self._table = self._db.create_table(_ATOMS_TABLE, table_data)
+            try:
+                self._db.drop_table(staging)
+            except Exception:  # noqa: BLE001
+                _LOG.warning("lance emb migration: left staging table %s", staging)
             self._vector_schema_ok = True
             self._vector_error = None
             self._mark_vector_meta(migrated=True)
             _LOG.info(
-                "lance emb migration complete rows=%d vector_schema_version=%d",
+                "lance emb migration complete rows=%d vector_schema_version=%d bak=%s",
                 len(new_rows),
                 VECTOR_SCHEMA_VERSION,
+                bak_path,
             )
         except Exception as exc:  # noqa: BLE001
             _LOG.exception("lance emb migration failed")
             self._vector_schema_ok = False
             self._vector_error = f"migration_failed: {type(exc).__name__}: {exc}"
-            # Best-effort reopen scalar table for Phase 1 path.
+            # Best-effort reopen or restore scalar table for Phase 1 path.
             try:
-                if _ATOMS_TABLE in list(self._db.table_names()):
+                names = list(self._db.table_names())
+                if _ATOMS_TABLE in names:
                     self._table = self._db.open_table(_ATOMS_TABLE)
+                elif f"{_ATOMS_TABLE}__migrating" in names:
+                    # Promote staging if final create failed after drop.
+                    staging_tbl = self._db.open_table(f"{_ATOMS_TABLE}__migrating")
+                    rows_rec = staging_tbl.to_arrow()
+                    self._table = self._db.create_table(_ATOMS_TABLE, rows_rec)
+                    try:
+                        self._db.drop_table(f"{_ATOMS_TABLE}__migrating")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    # Staging may already have emb schema — re-check.
+                    if self._table_has_emb_columns():
+                        self._vector_schema_ok = True
+                        self._vector_error = None
+                        self._mark_vector_meta(migrated=True)
+                elif bak_path is not None and bak_path.is_file():
+                    self._restore_from_migration_backup(bak_path)
             except Exception:  # noqa: BLE001
-                _LOG.exception("lance reopen after failed migration also failed")
+                _LOG.exception(
+                    "lance reopen/restore after failed migration also failed; "
+                    "restore from data/memory/lance_migration_bak/ or operator copy"
+                )
+
+    def _migration_bak_dir(self) -> Path:
+        return self.memory_dir / "lance_migration_bak"
+
+    def _write_migration_backup(self, rows: list[dict[str, Any]]) -> Path | None:
+        """Write JSONL snapshot of rows before drop. Best-effort; never raises out."""
+        try:
+            bak_dir = self._migration_bak_dir()
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            ts = utc_now_iso().replace(":", "").replace(".", "")
+            path = bak_dir / f"atoms-{ts}.jsonl"
+            with path.open("w", encoding="utf-8") as fh:
+                for row in rows:
+                    # Drop large vectors from backup if present? Keep them for fidelity.
+                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            _LOG.info("lance emb migration backup written path=%s rows=%d", path, len(rows))
+            return path
+        except Exception:  # noqa: BLE001
+            _LOG.exception("lance emb migration backup write failed")
+            return None
+
+    def _restore_from_migration_backup(self, bak_path: Path) -> None:
+        """Best-effort rebuild atoms table from JSONL backup (scalar+emb schema)."""
+        import pyarrow as pa  # noqa: PLC0415
+
+        rows: list[dict[str, Any]] = []
+        with bak_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        schema = _atoms_schema(with_vectors=True)
+        # Ensure all emb keys exist for from_pylist.
+        for r in rows:
+            for col in _EMB_VECTOR_COLS:
+                r.setdefault(col, None)
+            r.setdefault("embed_model", None)
+            r.setdefault("encoded_at", None)
+            r.setdefault("schema_version", SCHEMA_VERSION)
+        table_data = (
+            pa.Table.from_pylist(rows, schema=schema)
+            if rows
+            else pa.Table.from_pylist([], schema=schema)
+        )
+        if _ATOMS_TABLE in list(self._db.table_names()):
+            self._db.drop_table(_ATOMS_TABLE)
+        self._table = self._db.create_table(_ATOMS_TABLE, table_data)
+        self._vector_schema_ok = True
+        self._vector_error = None
+        self._mark_vector_meta(migrated=True)
+        _LOG.warning(
+            "lance emb migration restored atoms from backup path=%s rows=%d",
+            bak_path,
+            len(rows),
+        )
 
     def _load(self) -> None:
         """Rebuild in-memory indexes from the Lance table."""
@@ -766,6 +867,7 @@ class LanceMemoryStore:
                     atom_id,
                     embeddings.atom_id,
                 )
+                return False
             if int(embeddings.dim) != EMBED_DIM:
                 _LOG.warning(
                     "upsert_vectors dim mismatch atom_id=%s dim=%s expected=%s",

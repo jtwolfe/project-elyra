@@ -554,3 +554,22 @@ def test_lance_search_vectors_basic(store):
     hits = store.search_vectors(j, k=5, channel="joint")
     assert hits and hits[0][0] == a.atom_id
     assert hits[0][1] > 0.99
+
+
+def test_lance_upsert_vectors_atom_id_mismatch_false(store):
+    """Issue 5: EmbeddingSet.atom_id must match path atom_id."""
+    from elyra.memory.embed.mock import mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+
+    a = store.put_atom(
+        _atom(t="2026-07-28T10:00:00Z", text="m", atom_id="match_me", embedding_status="pending")
+    )
+    emb = EmbeddingSet(
+        atom_id="other_id",
+        emb_joint=mock_vector("j", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert store.upsert_vectors(a.atom_id, emb) is False
+    assert store.get_vectors(a.atom_id) is None
+    assert store.get_atom(a.atom_id).embedding_status == "pending"

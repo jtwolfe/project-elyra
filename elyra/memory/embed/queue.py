@@ -334,13 +334,15 @@ class EncodeQueue:
                 upsert = getattr(index, "upsert", None)
                 ok = False
                 if callable(upsert):
-                    # PR3 EmbeddingIndex: upsert(EmbeddingSet) -> bool|None.
+                    # PR3 EmbeddingIndex: upsert(EmbeddingSet) -> bool (True if ready).
                     # PR2 test doubles: upsert(atom_id, embeddings) -> bool.
+                    # Only explicit truthy confirms vectors were held (KD20);
+                    # None / False must NOT mark embedding_status=ready.
                     try:
                         result = upsert(emb)
                     except TypeError:
                         result = upsert(atom_id, emb)
-                    ok = True if result is None else bool(result)
+                    ok = bool(result)
                 if ok:
                     _mark_atom_status(
                         store, atom, status="ready", meta_updates=updates
