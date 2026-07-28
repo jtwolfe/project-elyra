@@ -129,17 +129,22 @@ class MockEmbedder:
         return list(mock_vector(seed, dim=self._dim))
 
     def encode_joint(self, parts: ModalityParts) -> list[float]:
-        """Joint vector from sorted present modality seeds (order-stable)."""
+        """Joint vector from sorted present modality seeds (order-stable).
+
+        Uses ``parts.present_modalities()`` so empty ``b""`` / blank paths are
+        excluded — same presence policy as per-channel encode and skip.
+        """
         self._ensure_open()
+        present = parts.present_modalities()
         seeds: list[str] = []
-        if parts.text is not None and str(parts.text).strip():
+        if "text" in present:
             seeds.append(f"text|{parts.text}")
-        if parts.image is not None:
-            seeds.append(_seed_for_path_or_bytes("image", parts.image))
-        if parts.audio is not None:
-            seeds.append(_seed_for_path_or_bytes("audio", parts.audio))
-        if parts.video is not None:
-            seeds.append(_seed_for_path_or_bytes("video", parts.video))
+        if "image" in present:
+            seeds.append(_seed_for_path_or_bytes("image", parts.image))  # type: ignore[arg-type]
+        if "audio" in present:
+            seeds.append(_seed_for_path_or_bytes("audio", parts.audio))  # type: ignore[arg-type]
+        if "video" in present:
+            seeds.append(_seed_for_path_or_bytes("video", parts.video))  # type: ignore[arg-type]
         if not seeds:
             # Empty joint → deterministic zero-content unit vector.
             return list(mock_vector("joint|empty", dim=self._dim))

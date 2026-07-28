@@ -102,6 +102,26 @@ def test_mock_joint_order_stable():
     assert enc.encode_joint(a) != enc.encode_joint(c)
 
 
+def test_encode_joint_ignores_empty_media():
+    """Empty media must not pollute joint seeds (align with present_modalities)."""
+    enc = MockEmbedder()
+    full = ModalityParts(text="hi", image=b"png", audio=None, video=None)
+    empty_audio = ModalityParts(text="hi", image=b"png", audio=b"", video=None)
+    blank_path = ModalityParts(text="hi", image=b"png", audio="  ", video="")
+    j_full = enc.encode_joint(full)
+    assert j_full == enc.encode_joint(empty_audio)
+    assert j_full == enc.encode_joint(blank_path)
+    # Real empty-optional via encode_atom_inputs joint matches content-only.
+    r = enc.encode_atom_inputs("a_j", text="hi", image=b"png", audio=b"")
+    assert r.status == "ready"
+    assert r.embeddings is not None
+    assert set(r.channels_encoded) == {"text", "image", "joint"}
+    assert list(r.embeddings.emb_joint) == j_full
+    # Non-empty audio still changes the joint.
+    with_audio = ModalityParts(text="hi", image=b"png", audio=b"wav")
+    assert enc.encode_joint(with_audio) != j_full
+
+
 def test_encode_atom_inputs_text_only_no_joint():
     enc = MockEmbedder()
     result = enc.encode_atom_inputs("a_1", text="only text")
