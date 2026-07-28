@@ -339,7 +339,7 @@ class _FreshnessState:
     def mark_upsert(self) -> None:
         self.encodes_since_optimize += 1
 
-    def is_stale(self) -> bool:
+    def is_stale(self, *, vectors_ready: int = 0) -> bool:
         if len(self.buffer) > 0:
             return True
         if self.seed_incomplete:
@@ -357,24 +357,30 @@ class _FreshnessState:
         # Never optimized but have encodes → schedule optimize.
         if self.last_optimize_at is None and self.encodes_since_optimize > 0:
             return True
+        # KD4 open step (3): schedule idle optimize if no ANN index exists.
+        if not self.ann_index_built and int(vectors_ready) > 0:
+            return True
         return False
 
     def use_full_search(self, vectors_ready: int) -> bool:
+        """Full/unindexed until above threshold **and** ANN index built (KD4)."""
         if self.ann.force_full:
             return True
         if vectors_ready < max(0, int(self.ann.full_search_below)):
             return True
-        if self.seed_incomplete and self.is_stale():
+        # Hybrid only when corpus is large enough *and* ANN is built.
+        if not self.ann_index_built:
+            return True
+        if self.seed_incomplete and self.is_stale(vectors_ready=vectors_ready):
             return True
         return False
 
     def mark_optimized(self, *, watermark: str, ann_built: bool = False) -> int:
         """Advance watermark and drop buffer entries now covered by the index.
 
-        Watermark is raised to at least the newest buffered ``encoded_at`` so
-        synthetic / clock-skew timestamps still clear on optimize (KD4: drop
-        entries older than optimize watermark when safe). Concurrent upserts
-        after this call may re-populate the buffer.
+        Only call when optimize actually succeeded (ANN built or exhaustive
+        main explicitly marked built). Watermark is raised to at least the
+        newest buffered ``encoded_at`` so synthetic timestamps still clear.
         """
         wm = watermark or ""
         for entry in self.buffer.items():
@@ -392,7 +398,7 @@ class _FreshnessState:
     def health_fields(self, *, vectors_ready: int) -> dict[str, Any]:
         return {
             "vectors_ready": int(vectors_ready),
-            "index_stale": self.is_stale(),
+            "index_stale": self.is_stale(vectors_ready=vectors_ready),
             "recent_buffer": len(self.buffer),
             "search_mode": (
                 "full" if self.use_full_search(vectors_ready) else "hybrid"
@@ -547,16 +553,19 @@ class MemoryEmbeddingIndex:
         self._lock = threading.RLock()
         self._by_id: dict[str, EmbeddingSet] = {}
         self._fresh = _FreshnessState(ann or ann_settings_from(settings))
+        # Dict main is always exhaustive → treat as "index built" for hybrid policy.
+        self._fresh.ann_index_built = True
         # On open with existing store vectors: apply full vs seed policy.
         self._apply_open_policy()
 
     def _apply_open_policy(self) -> None:
         with self._lock:
             n = len(self._by_id)
-            if self._fresh.use_full_search(n):
+            thr = max(0, int(self._fresh.ann.full_search_below))
+            if self._fresh.ann.force_full or n < thr:
                 self._fresh.seed_incomplete = False
                 return
-            # Hybrid: seed buffer from in-memory sets (and store if needed).
+            # Above threshold: seed for hybrid readiness.
             self._seed_buffer_unlocked(limit=self._fresh.ann.recent_buffer_max)
 
     def _seed_buffer_unlocked(self, *, limit: int) -> int:
@@ -583,7 +592,8 @@ class MemoryEmbeddingIndex:
             if entry is not None:
                 self._fresh.buffer.push(entry)
                 seeded += 1
-        self._fresh.seed_incomplete = False
+        target = min(max(0, int(limit)), len(items))
+        self._fresh.seed_incomplete = bool(target > 0 and seeded < target)
         return seeded
 
     def seed_buffer(self, *, max_ms: int | None = None) -> dict[str, Any]:
@@ -806,76 +816,127 @@ class LanceEmbeddingIndex:
             return 0
 
     def _apply_open_policy(self) -> None:
-        """KD4 open/restart: full mode below threshold, else seed buffer."""
+        """KD4 open/restart: full below threshold; seed when above threshold.
+
+        Search stays full until ANN is built (see ``use_full_search``), but the
+        buffer is still seeded once corpus ≥ ``full_search_below`` so hybrid is
+        ready after the first successful optimize.
+        """
         with self._lock:
             n = self._vectors_ready_count()
-            if self._fresh.use_full_search(n):
+            thr = max(0, int(self._fresh.ann.full_search_below))
+            if self._fresh.ann.force_full or n < thr:
                 self._fresh.seed_incomplete = False
                 _LOG.debug(
                     "LanceEmbeddingIndex open: full search mode vectors_ready=%s",
                     n,
                 )
                 return
-            # Hybrid path: seed last N ready by encoded_at.
+            # Above threshold: seed last N ready by encoded_at (not glass list).
             try:
                 seeded = self._seed_buffer_unlocked(
                     limit=self._fresh.ann.recent_buffer_max
                 )
-                self._fresh.seed_incomplete = False
                 _LOG.debug(
-                    "LanceEmbeddingIndex open: hybrid seed n=%s buffer=%s",
+                    "LanceEmbeddingIndex open: seed n=%s buffer=%s ann_built=%s",
                     seeded,
                     len(self._fresh.buffer),
+                    self._fresh.ann_index_built,
                 )
             except Exception:  # noqa: BLE001
                 self._fresh.seed_incomplete = True
                 _LOG.exception("LanceEmbeddingIndex seed on open failed")
 
     def _seed_buffer_unlocked(self, *, limit: int) -> int:
-        """Seed buffer from durable ready rows ordered by encoded_at desc."""
+        """Seed buffer from durable ready rows ordered by encoded_at desc.
+
+        Prefers ``store.list_ready_embeddings_for_seed`` (bypasses glass
+        ``LIST_ATOMS_MAX``). Falls back to get_vectors scan only if needed.
+        Marks ``seed_incomplete`` when fewer than ``min(limit, vectors_ready)``.
+        """
         limit = max(0, int(limit))
         if limit == 0:
+            self._fresh.seed_incomplete = False
             return 0
-        # list_atoms sorts by t_start; over-fetch then order by encoded_at.
-        fetch = max(limit, min(limit * 4, 1024))
-        atoms: list[Atom] = []
-        try:
-            list_fn = getattr(self._store, "list_atoms", None)
-            if callable(list_fn):
-                atoms = list(
-                    list_fn(
-                        embedding_status="ready",
-                        limit=fetch,
-                        newest_first=True,
-                    )
-                    or []
-                )
-        except Exception:  # noqa: BLE001
-            _LOG.exception("seed list_atoms failed")
-            atoms = []
 
         ranked: list[tuple[str, EmbeddingSet, Atom]] = []
-        get_vectors = getattr(self._store, "get_vectors", None)
-        for atom in atoms:
-            emb = None
-            if callable(get_vectors):
+        seed_fn = getattr(self._store, "list_ready_embeddings_for_seed", None)
+        if callable(seed_fn):
+            try:
+                ranked = list(seed_fn(limit=limit) or [])
+            except Exception:  # noqa: BLE001
+                _LOG.exception("list_ready_embeddings_for_seed failed")
+                ranked = []
+
+        if not ranked:
+            # Fallback: scan via get_vectors when dedicated API missing.
+            # Still avoid glass list_atoms (LIST_ATOMS_MAX starvation).
+            get_vectors = getattr(self._store, "get_vectors", None)
+            list_fn = getattr(self._store, "list_atoms", None)
+            # Prefer emb side-map iteration if store exposes it for tests.
+            emb_map = getattr(self._store, "_embs", None) or getattr(
+                self._store, "_emb_by_id", None
+            )
+            if isinstance(emb_map, dict) and callable(get_vectors):
+                for atom_id in list(emb_map.keys()):
+                    try:
+                        emb = get_vectors(atom_id)
+                        atom = self._store.get_atom(atom_id)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if emb is None or atom is None:
+                        continue
+                    if getattr(atom, "embedding_status", None) != "ready":
+                        continue
+                    if not embeddings_are_ready(emb):
+                        continue
+                    ranked.append((atom_id, emb, atom))
+                ranked.sort(
+                    key=lambda t: (t[1].encoded_at or "", t[0]),
+                    reverse=True,
+                )
+                ranked = ranked[:limit]
+            elif callable(list_fn) and callable(get_vectors):
+                # Last resort: page list_atoms but warn — may under-seed.
+                _LOG.warning(
+                    "ANN seed falling back to list_atoms (may hit LIST_ATOMS_MAX)"
+                )
                 try:
-                    emb = get_vectors(atom.atom_id)
+                    atoms = list(
+                        list_fn(
+                            embedding_status="ready",
+                            limit=limit,
+                            newest_first=True,
+                        )
+                        or []
+                    )
                 except Exception:  # noqa: BLE001
-                    emb = None
-            if emb is None or not embeddings_are_ready(emb):
-                continue
-            ranked.append((atom.atom_id, emb, atom))
-        ranked.sort(
-            key=lambda t: (t[1].encoded_at or "", t[0]),
-            reverse=True,
-        )
+                    atoms = []
+                for atom in atoms:
+                    try:
+                        emb = get_vectors(atom.atom_id)
+                    except Exception:  # noqa: BLE001
+                        emb = None
+                    if emb is None or not embeddings_are_ready(emb):
+                        continue
+                    ranked.append((atom.atom_id, emb, atom))
+                ranked.sort(
+                    key=lambda t: (t[1].encoded_at or "", t[0]),
+                    reverse=True,
+                )
+                ranked = ranked[:limit]
+
         seeded = 0
         for _aid, emb, atom in ranked[:limit]:
             entry = _entry_from_emb_and_atom(emb, atom)
             if entry is not None:
                 self._fresh.buffer.push(entry)
                 seeded += 1
+
+        n_ready = self._vectors_ready_count()
+        target = min(limit, n_ready) if n_ready > 0 else limit
+        # Incomplete when we could not fill buffer up to policy target.
+        self._fresh.seed_incomplete = bool(target > 0 and seeded < target)
         return seeded
 
     def seed_buffer(self, *, max_ms: int | None = None) -> dict[str, Any]:
@@ -883,12 +944,11 @@ class LanceEmbeddingIndex:
         t0 = time.monotonic()
         with self._lock:
             n = self._seed_buffer_unlocked(limit=self._fresh.ann.recent_buffer_max)
-            # Soft budget only — seed is capped by buffer max.
             elapsed_ms = (time.monotonic() - t0) * 1000.0
             if max_ms is not None and elapsed_ms > float(max_ms):
-                self._fresh.seed_incomplete = len(self._fresh.buffer) == 0
-            else:
-                self._fresh.seed_incomplete = False
+                # Soft budget exceeded with empty buffer → still incomplete.
+                if len(self._fresh.buffer) == 0:
+                    self._fresh.seed_incomplete = True
             return {
                 "ok": True,
                 "backend": "lance",
@@ -1029,13 +1089,16 @@ class LanceEmbeddingIndex:
 
         Never call mid-hop. Soft max_ms only — ANN create may exceed; caller
         (worker idle tick) owns scheduling.
+
+        Buffer is cleared **only** when ANN create succeeds (safe to drop
+        recent entries). Failed optimize leaves buffer + ``index_stale`` intact.
         """
         t0 = time.monotonic()
         budget = max_ms
         if budget is None:
             budget = self._fresh.ann.optimize_max_ms
         ann_built = False
-        note = "watermark advanced"
+        note = "ann not built"
         # Best-effort create IVF / auto vector index on emb_joint.
         try:
             create = getattr(self._store, "create_vector_index", None)
@@ -1063,17 +1126,36 @@ class LanceEmbeddingIndex:
                         note = f"create_index skipped: {exc!s}"[:160]
                 except Exception as exc:  # noqa: BLE001
                     note = f"create_index skipped: {exc!s}"[:160]
+            else:
+                note = "no create_vector_index / create_index on store"
         except Exception as exc:  # noqa: BLE001
             note = f"optimize ann attempt failed: {exc!s}"[:160]
             _LOG.debug("LanceEmbeddingIndex.optimize ann: %s", exc)
 
-        watermark = to_iso_z(datetime.now(UTC))
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
         with self._lock:
-            removed = self._fresh.mark_optimized(
-                watermark=watermark, ann_built=ann_built or self._fresh.ann_index_built
-            )
             n = self._vectors_ready_count()
-            elapsed_ms = (time.monotonic() - t0) * 1000.0
+            if not ann_built:
+                # Failed optimize: do not clear buffer or claim freshness.
+                return {
+                    "ok": True,
+                    "backend": "lance",
+                    "optimized": False,
+                    "vectors_ready": n,
+                    "buffer_trimmed": 0,
+                    "recent_buffer": len(self._fresh.buffer),
+                    "last_optimize": self._fresh.last_optimize_at,
+                    "ann_index_built": self._fresh.ann_index_built,
+                    "index_stale": self._fresh.is_stale(vectors_ready=n),
+                    "elapsed_ms": elapsed_ms,
+                    "max_ms": budget,
+                    "note": note,
+                }
+
+            watermark = to_iso_z(datetime.now(UTC))
+            removed = self._fresh.mark_optimized(
+                watermark=watermark, ann_built=True
+            )
             return {
                 "ok": True,
                 "backend": "lance",
@@ -1083,6 +1165,7 @@ class LanceEmbeddingIndex:
                 "recent_buffer": len(self._fresh.buffer),
                 "last_optimize": self._fresh.last_optimize_at,
                 "ann_index_built": self._fresh.ann_index_built,
+                "index_stale": self._fresh.is_stale(vectors_ready=n),
                 "elapsed_ms": elapsed_ms,
                 "max_ms": budget,
                 "note": note,

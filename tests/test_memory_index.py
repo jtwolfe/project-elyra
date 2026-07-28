@@ -679,12 +679,17 @@ def test_lance_embedding_index_search_filters(paths):
         assert h["ok"] is True
         assert h["backend"] == "lance"
         assert h["vectors_ready"] >= 2
-        # PR4: optimize advances watermark (ANN create best-effort).
+        # Optimize may succeed (create_index) or fail — must not claim fresh on fail.
         opt = idx.optimize()
-        assert opt["optimized"] is True
-        assert opt.get("last_optimize")
         h2 = idx.health()
-        assert h2["index_stale"] is False or h2["recent_buffer"] == 0
+        if opt.get("optimized"):
+            assert opt.get("last_optimize")
+            assert h2["ann_index_built"] is True
+            assert h2["recent_buffer"] == 0
+        else:
+            # Failed ANN create: buffer/stale retained (Issue 3).
+            assert h2["ann_index_built"] is False
+            assert h2["index_stale"] is True or h2["recent_buffer"] >= 0
     finally:
         store.close()
 
@@ -933,11 +938,17 @@ def test_buffer_filters_moment_and_kind():
 
 
 class _FakeLanceStore:
-    """Hermetic store stand-in for LanceEmbeddingIndex restart / hybrid tests."""
+    """Hermetic store stand-in for LanceEmbeddingIndex restart / hybrid tests.
 
-    def __init__(self) -> None:
+    Mirrors real Lance: glass ``list_atoms`` is hard-capped at LIST_ATOMS_MAX;
+    ANN seed uses ``list_ready_embeddings_for_seed`` (no glass cap).
+    """
+
+    def __init__(self, *, create_index_ok: bool = False) -> None:
         self._atoms: dict[str, Atom] = {}
         self._embs: dict[str, EmbeddingSet] = {}
+        self._create_index_ok = create_index_ok
+        self.create_vector_index_calls = 0
 
     def put_atom(self, atom: Atom, **_kw: Any) -> Atom:
         self._atoms[atom.atom_id] = atom
@@ -964,6 +975,12 @@ class _FakeLanceStore:
 
     def get_vectors(self, atom_id: str) -> EmbeddingSet | None:
         return self._embs.get(atom_id)
+
+    def create_vector_index(self, channel: str = "joint", max_ms: int | None = None) -> None:
+        del channel, max_ms
+        self.create_vector_index_calls += 1
+        if not self._create_index_ok:
+            raise RuntimeError("create_vector_index disabled for test")
 
     def search_vectors(
         self,
@@ -1014,12 +1031,31 @@ class _FakeLanceStore:
         limit: int = 50,
         newest_first: bool = True,
     ) -> list[Atom]:
+        """Glass path: hard-capped at LIST_ATOMS_MAX (matches real Lance)."""
+        from elyra.memory.store import LIST_ATOMS_MAX
+
         del kinds
         rows = list(self._atoms.values())
         if embedding_status is not None:
             rows = [a for a in rows if a.embedding_status == embedding_status]
         rows.sort(key=lambda a: (a.t_start, a.atom_id), reverse=bool(newest_first))
-        return rows[: max(0, int(limit))]
+        cap = max(0, min(int(limit), LIST_ATOMS_MAX))
+        return rows[:cap]
+
+    def list_ready_embeddings_for_seed(
+        self, *, limit: int = 256
+    ) -> list[tuple[str, EmbeddingSet, Atom]]:
+        """ANN seed path: no LIST_ATOMS_MAX; order by encoded_at desc."""
+        ranked: list[tuple[str, EmbeddingSet, Atom]] = []
+        for aid, emb in self._embs.items():
+            atom = self._atoms.get(aid)
+            if atom is None or atom.embedding_status != "ready":
+                continue
+            if not embeddings_are_ready(emb):
+                continue
+            ranked.append((aid, emb, atom))
+        ranked.sort(key=lambda t: (t[1].encoded_at or "", t[0]), reverse=True)
+        return ranked[: max(0, int(limit))]
 
     def health(self) -> dict[str, Any]:
         ready = sum(
@@ -1077,9 +1113,13 @@ def test_restart_full_mode_search_returns_recent():
 
 
 def test_restart_hybrid_seed_returns_recent():
-    """When above full_search_below, open seeds buffer; hybrid finds recent."""
-    store = _FakeLanceStore()
-    # full_search_below=0 → always hybrid; seed last N on open.
+    """Above full_search_below: open seeds buffer; search finds recent.
+
+    Until ANN is built, search_mode stays full (KD4); buffer is still seeded
+    so hybrid is ready after a successful optimize.
+    """
+    store = _FakeLanceStore(create_index_ok=True)
+    # full_search_below=0 → above threshold immediately; seed last N on open.
     ann = AnnSettings(full_search_below=0, recent_buffer_max=8)
     idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
     for i in range(4):
@@ -1100,19 +1140,30 @@ def test_restart_hybrid_seed_returns_recent():
         )
         assert idx.upsert(emb) is True
     del idx
-    # Reopen: seed buffer from durable rows.
+    # Reopen: seed buffer from durable rows (even while full until ANN built).
     idx2 = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
     h = idx2.health()
-    assert h["search_mode"] == "hybrid"
+    assert h["ann_index_built"] is False
+    assert h["search_mode"] == "full"  # full until index built
     assert h["recent_buffer"] >= 1
     assert h["seed_incomplete"] is False
+    assert h["index_stale"] is True  # no ANN yet with vectors
     q = mock_vector("joint:h3", dim=EMBED_DIM)
     hits = idx2.search(q, k=5)
     assert any(x.atom_id == "h3" for x in hits)
+    # Successful optimize → hybrid mode.
+    r = idx2.optimize()
+    assert r["optimized"] is True
+    h2 = idx2.health()
+    assert h2["ann_index_built"] is True
+    assert h2["search_mode"] == "hybrid"
+    assert h2["recent_buffer"] == 0
+    assert h2["index_stale"] is False
 
 
-def test_lance_index_stale_and_optimize_on_fake_store():
-    store = _FakeLanceStore()
+def test_lance_optimize_failed_keeps_buffer_and_stale():
+    """Failed ANN create must not clear buffer or claim freshness (Issue 3)."""
+    store = _FakeLanceStore(create_index_ok=False)
     ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2)
     idx = LanceEmbeddingIndex(store, ann=ann)
     store.put_atom(_atom(text="s", atom_id="st1"))
@@ -1121,8 +1172,96 @@ def test_lance_index_stale_and_optimize_on_fake_store():
     assert idx.health()["index_stale"] is True
     assert idx.health()["recent_buffer"] == 1
     r = idx.optimize(max_ms=50)
+    assert r["optimized"] is False
+    assert r["buffer_trimmed"] == 0
+    assert idx.health()["recent_buffer"] == 1
+    assert idx.health()["index_stale"] is True
+    assert idx.health()["ann_index_built"] is False
+
+
+def test_lance_optimize_success_trims_buffer():
+    store = _FakeLanceStore(create_index_ok=True)
+    ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2)
+    idx = LanceEmbeddingIndex(store, ann=ann)
+    store.put_atom(_atom(text="s", atom_id="st1"))
+    emb = _emb_set("st1", seed="st")
+    assert idx.upsert(emb) is True
+    r = idx.optimize(max_ms=50)
     assert r["optimized"] is True
+    assert store.create_vector_index_calls >= 1
     assert idx.health()["recent_buffer"] == 0
+    assert idx.health()["ann_index_built"] is True
+    assert idx.health()["index_stale"] is False
+
+
+def test_use_full_search_until_ann_built():
+    """Issue 2: hybrid only when above threshold AND ann_index_built."""
+    store = _FakeLanceStore(create_index_ok=True)
+    ann = AnnSettings(full_search_below=2, recent_buffer_max=8)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
+    for i in range(3):
+        store.put_atom(
+            _atom(text=f"u{i}", atom_id=f"u{i}", t_start=f"2026-07-28T10:0{i}:00Z")
+        )
+        idx.upsert(
+            EmbeddingSet(
+                atom_id=f"u{i}",
+                emb_joint=mock_vector(f"joint:u{i}", dim=EMBED_DIM),
+                model_id="mock",
+                encoded_at=f"2026-07-28T10:0{i}:00Z",
+            )
+        )
+    h = idx.health()
+    assert h["vectors_ready"] >= 2
+    assert h["ann_index_built"] is False
+    assert h["search_mode"] == "full"
+    idx.optimize()
+    assert idx.health()["search_mode"] == "hybrid"
+    assert idx.health()["ann_index_built"] is True
+
+
+def test_seed_fills_beyond_list_atoms_max():
+    """Issue 1: seed fills ann_recent_buffer_max even when > LIST_ATOMS_MAX."""
+    from elyra.memory.store import LIST_ATOMS_MAX
+
+    store = _FakeLanceStore()
+    n = LIST_ATOMS_MAX + 40  # 240 > 200 glass cap
+    buf_max = LIST_ATOMS_MAX + 30  # 230 — would starve via list_atoms
+    # Put many ready vectors with distinct encoded_at.
+    for i in range(n):
+        aid = f"seed_{i:04d}"
+        store.put_atom(
+            _atom(
+                text=aid,
+                atom_id=aid,
+                # t_start order differs from encoded_at on purpose
+                t_start=f"2026-01-01T00:00:{i % 60:02d}Z" if i < 60 else f"2026-01-02T00:{i % 60:02d}:00Z",
+            )
+        )
+        store.upsert_vectors(
+            aid,
+            EmbeddingSet(
+                atom_id=aid,
+                emb_joint=mock_vector(f"joint:{aid}", dim=EMBED_DIM),
+                emb_text=mock_vector(f"text:{aid}", dim=EMBED_DIM),
+                model_id="mock",
+                encoded_at=f"2026-07-28T{i // 60:02d}:{i % 60:02d}:00Z",
+            ),
+        )
+    # Glass list_atoms is capped.
+    assert len(store.list_atoms(embedding_status="ready", limit=1000)) == LIST_ATOMS_MAX
+    # Seed API is not.
+    seeded_rows = store.list_ready_embeddings_for_seed(limit=buf_max)
+    assert len(seeded_rows) == buf_max
+
+    ann = AnnSettings(full_search_below=0, recent_buffer_max=buf_max)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
+    h = idx.health()
+    assert h["recent_buffer"] == buf_max
+    assert h["seed_incomplete"] is False
+    # Newest by encoded_at must be present (not truncated by t_start glass window).
+    newest = f"seed_{n - 1:04d}"
+    assert idx._fresh.buffer.get(newest) is not None  # noqa: SLF001
 
 
 def test_open_embedding_index_passes_settings():

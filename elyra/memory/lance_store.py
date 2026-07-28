@@ -1197,6 +1197,35 @@ class LanceMemoryStore:
             )
             return out[:cap]
 
+    def list_ready_embeddings_for_seed(
+        self, *, limit: int = 256
+    ) -> list[tuple[str, EmbeddingSet, Atom]]:
+        """ANN recent-buffer seed: ready vectors by ``encoded_at`` desc.
+
+        Internal EmbeddingIndex path — **not** glass ``list_atoms``. Bypasses
+        ``LIST_ATOMS_MAX`` so seed can fill ``ann_recent_buffer_max`` (default
+        256). Ordered by emb ``encoded_at`` (not ``t_start``).
+        """
+        with self._lock:
+            self._check_open()
+            cap = max(0, int(limit))
+            if cap == 0 or not self._vector_schema_ok:
+                return []
+            ranked: list[tuple[str, EmbeddingSet, Atom]] = []
+            for atom_id, emb_map in self._emb_by_id.items():
+                atom = self._by_id.get(atom_id)
+                if atom is None or atom.embedding_status != "ready":
+                    continue
+                emb = self._embedding_set_from_map(atom_id, emb_map)
+                if emb is None or not embeddings_are_ready(emb):
+                    continue
+                ranked.append((atom_id, emb, atom))
+            ranked.sort(
+                key=lambda t: (t[1].encoded_at or "", t[0]),
+                reverse=True,
+            )
+            return ranked[:cap]
+
     def list_range(
         self,
         t_start: datetime | str,
