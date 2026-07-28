@@ -19,6 +19,9 @@ search = ["ddgs>=9.0"]
 # Optional Playwright browser primitives (host builtins). Also run:
 #   playwright install chromium
 browser = ["playwright>=1.49"]
+# Optional LanceDB MemoryStore backend (Phase 1 fields; no ANN required).
+# CI stays on jsonl; enable with memory.backend = "lance".
+memory-lance = ["lancedb>=0.20,<0.21", "pyarrow>=14"]
 
 [project.scripts]
 elyra = "elyra.cli:main"

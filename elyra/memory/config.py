@@ -19,6 +19,7 @@ META_JSON = "meta.json"
 ATOMS_BLOB_DIRNAME = "atoms"
 LADDER_DIRNAME = "ladder"
 LADDER_STATE = "state.json"
+LANCE_DIRNAME = "lance"
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
 # Kept below atom_max_chars (8000) so spill is reachable under default settings
@@ -76,6 +77,11 @@ def memory_meta_path(paths: ElyraPaths) -> Path:
     return memory_root(paths) / META_JSON
 
 
+def lance_root(paths: ElyraPaths) -> Path:
+    """Return ``{data_dir}/memory/lance`` (LanceDB table root)."""
+    return memory_root(paths) / LANCE_DIRNAME
+
+
 def atoms_blob_root(paths: ElyraPaths) -> Path:
     return memory_root(paths) / ATOMS_BLOB_DIRNAME
 
@@ -105,6 +111,7 @@ __all__ = [
     "ATOMS_JSONL",
     "LADDER_DIRNAME",
     "LADDER_STATE",
+    "LANCE_DIRNAME",
     "MEMORY_BACKENDS",
     "MEMORY_DIRNAME",
     "MEMORY_INLINE_MAX_CHARS",
@@ -117,6 +124,7 @@ __all__ = [
     "blob_relpath_for_atom",
     "ensure_memory_dirs",
     "ladder_dir",
+    "lance_root",
     "memory_meta_path",
     "memory_root",
 ]

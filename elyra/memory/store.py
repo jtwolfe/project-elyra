@@ -102,20 +102,28 @@ def open_memory_store(
 ) -> MemoryStore:
     """Factory. backend=jsonl always available.
 
-    backend=lance requires optional dependency; falls back to jsonl + log if
-    missing (no lance implementation in Phase 1 PR1 — always jsonl for now).
+    backend=lance requires optional ``lancedb`` (``elyra[memory-lance]``);
+    falls back to jsonl + warning on ImportError.
     """
     cfg = settings or MemorySettings()
     backend = (cfg.backend or "jsonl").strip().lower()
     if backend == "lance":
-        # Phase 1 optional path — not implemented yet; hermetic fall-back.
-        _LOG.warning(
-            "memory backend=lance requested but not available; using jsonl"
-        )
+        try:
+            # Import lancedb first so missing extra is a clean ImportError
+            # before constructing LanceMemoryStore.
+            import lancedb  # noqa: F401, PLC0415
+            from elyra.memory.lance_store import LanceMemoryStore  # noqa: PLC0415
+        except ImportError:
+            _LOG.warning(
+                "memory backend=lance requested but lancedb not installed; "
+                "using jsonl (pip install elyra[memory-lance])"
+            )
+        else:
+            return LanceMemoryStore(paths, cfg)
     elif backend not in ("jsonl", "lance"):
         _LOG.warning("unknown memory backend %r; using jsonl", backend)
 
-    from elyra.memory.jsonl_store import JsonlMemoryStore
+    from elyra.memory.jsonl_store import JsonlMemoryStore  # noqa: PLC0415
 
     return JsonlMemoryStore(paths, cfg)
 
