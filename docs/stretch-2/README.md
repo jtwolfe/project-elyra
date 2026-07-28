@@ -4,6 +4,7 @@
 **Philosophy:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
 **Planning baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 **Soft conceptual guidance:** [philosophical-soft-guidance.md](philosophical-soft-guidance.md) (influences only — not phase goals)
+**Context meal (provisional):** [design-context-meal-composition.md](design-context-meal-composition.md)
 
 ## Goal
 
@@ -28,7 +29,7 @@ For a system this conceptual, “docs updated when behaviour changes” is not e
 3. Which activities from the [inspiration activity model](inspiration-activity-model-and-storage.md) are live vs background.
 4. Invariants and failure behaviour.
 
-Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage (IIT/Φ intuition, sheaf-like local patches, holographic reconstructability) as **influence on judgment**, not as deliverables.
+Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage (IIT/Φ intuition, sheaf-like local patches, holographic reconstructability) as **influence on judgment**, not as deliverables. [Context meal composition](design-context-meal-composition.md) describes how temporal and supporting channels are budgeted into a labeled package and how in-moment slide-off works — percentages remain provisional.
 
 Other principle reminders:
 
@@ -50,6 +51,8 @@ Other principle reminders:
 | **Procedural** | Process context (goal → outcome) | Trajectories; success-weighted edges; derived traversal prior |
 
 **Phase 2a — Directed traversal:** model-managed walk around seeds; **temporary** context flags; only confirmed keeps enter durable context.
+
+How these channels are **composed, deduplicated, labeled, and slid off** under token pressure: [design-context-meal-composition.md](design-context-meal-composition.md).
 
 ---
 
@@ -76,6 +79,7 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 |----------|------|
 | [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
 | [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | **Soft guidance** — IIT/sheaf/holographic and reconstructive influences; not goals |
+| [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — channel mix, construction, slide-off, labels, dedup |
 | [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design |
 | [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 design |
@@ -99,7 +103,7 @@ In addition to engineering-principles “done”:
 - [ ] No dependency on later phases for correctness
 - [ ] Operator-visible failure modes documented
 
-Philosophical soft guidance is **not** a checklist item for phase done.
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal package + slide-off path exist, not final budget ratios.
 
 ---
 
@@ -111,12 +115,13 @@ Philosophical soft guidance is **not** a checklist item for phase done.
 4. Promote to `main` only after operator sign-off and live smoke.
 5. Prefer clarifying the philosophy mapping over clever storage tricks that obscure it.
 6. Use [philosophical-soft-guidance.md](philosophical-soft-guidance.md) for judgment calls; do not expand phase scope from it.
+7. Treat [design-context-meal-composition.md](design-context-meal-composition.md) as the living sketch for meal budgets; refine with measurements.
 
 ---
 
 ## Next steps
 
-1. Keep Phase 1 design sharp against the inspiration data prototype.
+1. Keep Phase 1 design sharp against the inspiration data prototype and meal composition sketch.
 2. Run storage spikes listed in `design-database-choices.md`.
 3. Write Nemotron runtime design when Phase 2 approaches.
 4. Begin Phase 1 implementation only with store interface + tests + initial architecture note skeleton.
