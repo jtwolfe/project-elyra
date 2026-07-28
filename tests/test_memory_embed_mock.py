@@ -198,7 +198,17 @@ def test_open_encoder_default_settings_mock_model_id():
 
 
 def test_open_encoder_nemotron_falls_back_to_mock():
-    """PR1: nemotron requested but runtime not loaded → mock fallback."""
+    """When torch/transformers missing: nemotron → mock fallback.
+
+    When deps are present (operator box with elyra[memory-embed]), open returns
+    a real NemotronEmbedder instead — covered by test_memory_embed_nemotron.
+    """
+    from elyra.memory.embed.runtime import (
+        NemotronEmbedder,
+        torch_available,
+        transformers_available,
+    )
+
     cfg = MemorySettings(
         embed_backend="nemotron",
         embed_model_id="nvidia/omni-embed-nemotron-3b",
@@ -206,13 +216,18 @@ def test_open_encoder_nemotron_falls_back_to_mock():
     enc = open_encoder(cfg)
     h = enc.health()
     assert h["ok"] is True
-    assert h["backend"] == "mock"
-    assert h.get("requested_backend") == "nemotron"
-    assert h["model_id"] == MOCK_MODEL_ID
-    assert h.get("requested_model_id") == "nvidia/omni-embed-nemotron-3b"
-    assert "mock fallback" in (h.get("error") or "")
-    # Still produces deterministic unit vectors.
-    _assert_unit(enc.encode_text("fallback works"))
+    if torch_available() and transformers_available():
+        assert h["backend"] == "nemotron"
+        assert isinstance(enc, NemotronEmbedder)
+        assert h["model_id"] == "nvidia/omni-embed-nemotron-3b"
+        # Do not call encode_text here (would try to load weights).
+    else:
+        assert h["backend"] == "mock"
+        assert h.get("requested_backend") == "nemotron"
+        assert h["model_id"] == MOCK_MODEL_ID
+        assert h.get("requested_model_id") == "nvidia/omni-embed-nemotron-3b"
+        assert "mock fallback" in (h.get("error") or "")
+        _assert_unit(enc.encode_text("fallback works"))
     enc.close()
 
 
@@ -221,11 +236,30 @@ def test_open_encoder_invalid_backend():
         open_encoder(backend="openai")
 
 
-def test_select_device_stub():
+def test_select_device_probe():
+    """PR8: real probe; without torch → unavailable for auto/cuda/rocm."""
     assert select_device("cpu") == "cpu"
-    assert select_device("auto") == "unavailable"
-    assert select_device("cuda") == "unavailable"
-    assert select_device("rocm") == "unavailable"
+    # Without torch (hermetic CI), auto/cuda/rocm → unavailable.
+    # With torch-only CPU, auto → cpu (covered in nemotron tests when present).
+    from elyra.memory.embed.runtime import probe_devices, torch_available
+
+    caps = probe_devices()
+    if not torch_available() or not caps.get("torch_available"):
+        assert select_device("auto") == "unavailable"
+        assert select_device("cuda") == "unavailable"
+        assert select_device("rocm") == "unavailable"
+    else:
+        # Torch present: auto prefers cuda → rocm → cpu.
+        auto = select_device("auto")
+        assert auto in ("cuda", "rocm", "cpu")
+        if caps.get("cuda"):
+            assert select_device("cuda") == "cuda"
+        else:
+            assert select_device("cuda") == "unavailable"
+        if caps.get("rocm"):
+            assert select_device("rocm") == "rocm"
+        else:
+            assert select_device("rocm") == "unavailable"
     with pytest.raises(ValueError, match="embed device"):
         select_device("tpu")
 
