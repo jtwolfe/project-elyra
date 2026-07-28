@@ -3,12 +3,15 @@
 **Status:** Design draft (highest care)
 **Depends on:** Phases 1–2a stable enough to record real trajectories
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
+**Meal channel:** [design-context-meal-composition.md](design-context-meal-composition.md) (procedural prior, small share)
 
 ## Goal
 
 Record **goal → outcome** trajectories. When a similar goal is later solved more efficiently while prior pathway material was in context, **up-weight** participating edges inside the relevant semantic + episodic subspace. That weighted weave is **process context** — the derived traversal prior discussed in planning (not a second vector ANN index).
 
 Aligns with the essay’s edge-strength dynamics and learning-from-patterns ideas: procedures are pathways over instances, not stored skill blobs detached from experience.
+
+In the meal, procedural material is a **small supporting channel**, never a replacement for the open moment.
 
 ## Why delicate
 

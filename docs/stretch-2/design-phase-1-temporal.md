@@ -10,17 +10,24 @@
 
 Replace (or evolve) the sliding meal / context window with a durable episodic structure:
 
-- **Moments** contain **atoms** (instances, not abstracted facts).
+- **Moments** are **groups of atoms** bound to a do-loop / presence interval.
 - Atoms are linked **sequentially** in time.
 - A **rolling ladder of summary atoms** consolidates experience at fixed scales: 15m, 1h, 6h, 1d, 1w, 1m.
 
 This is the essay’s temporal scaffold and consolidation idea in product form. It supplies **primary temporal context** for the do-loop and must work **without** embeddings or success-path logic.
 
-Phase 1 is also the first landing of **meal composition**: a labeled temporal package plus **in-moment slide-off** under budget pressure. Supporting channels (semantic, procedural, directed-keep) are omitted until later phases; see [design-context-meal-composition.md](design-context-meal-composition.md).
+Phase 1 is also the first landing of **meal composition**:
+
+- **Current temporal** = open moment (its atoms / working material).
+- **Broader episodic** = prior moments and summaries, as relevant and as budget allows.
+- **Slide-off** under pressure inside a long moment.
+- **Re-gather** between moments; optional every *N* hops if a moment runs long.
+
+See [design-context-meal-composition.md](design-context-meal-composition.md).
 
 ## Non-goals
 
-- Nemotron / vector indexes
+- Nemotron / vector indexes ([design-nemotron-runtime.md](design-nemotron-runtime.md) is Phase 2)
 - Success-path weighting
 - Directed multi-hop traversal product
 - Native hyperedges (sequential + period membership only)
@@ -31,6 +38,7 @@ Phase 1 is also the first landing of **meal composition**: a labeled temporal pa
 | Essay / planning term | Phase 1 structure |
 |----------------------|-------------------|
 | Memory atom | `Atom` record (content + time + moment + sequential links) |
+| Moment as lived interval | Group of atoms (+ ephemeral beats until promoted) |
 | Context (time) | `t_start` / `t_end`, moment membership, period windows |
 | Consolidation | Period summary atoms refreshed up the ladder |
 | Weave (temporal only) | `prev_atom_id` / `next_atom_id`; later phases add edge table types |
@@ -45,7 +53,7 @@ Minimum fields for Phase 1: id, timestamps, content ref, moment id, prev/next, k
 
 ### Moment
 
-Existing do-loop container; relationship to atoms made explicit and queryable.
+A **group of atoms** for one do-loop. Existing presence/do-loop container; relationship to atoms made explicit and queryable.
 
 ### Summary atom
 
@@ -57,10 +65,11 @@ On period boundaries (or timers): collect children → produce summary → store
 
 ### Temporal meal package + slide-off
 
-- Build a **labeled** temporal section (moment working set, sequential neighbours, near summaries) for `loop/context.py`.
-- When the open moment exceeds budget, **slide off** oldest low-value in-moment detail; optionally replace with a short in-moment compact summary.
+- Build **labeled** sections: open moment + broader episodic (prior moments / summaries as relevant).
+- Re-gather on moment boundaries; consider hop-periodic re-gather for long moments.
+- When over budget, **slide off** oldest low-value open-moment detail; optionally replace with a short in-moment compact summary.
 - Do not delete durable atoms as part of slide-off.
-- Dedup within the temporal package (same atom once).
+- Dedup within the package (same atom once).
 
 Details and diagrams: [design-context-meal-composition.md](design-context-meal-composition.md).
 
@@ -72,7 +81,7 @@ elyra/memory/
   store.py      # persistence interface
   temporal.py   # sequential + range queries
   ladder.py     # summary refresh
-  meal.py       # compose temporal (later multi-channel) package + slide-off helpers
+  meal.py       # compose temporal/episodic (later multi-channel) package + slide-off helpers
 ```
 
 `loop/context.py` consumes the meal package; it does not own storage.
@@ -80,8 +89,9 @@ elyra/memory/
 ## Success criteria
 
 - [ ] Atoms created and sequentially linked inside moments
+- [ ] Moments queryable as groups of atoms
 - [ ] Ladder refreshes at least at fine scales in tests
-- [ ] Temporal context package usable by do-loop (drop-in path)
+- [ ] Temporal + broader episodic package usable by do-loop (drop-in path)
 - [ ] In-moment slide-off under budget without deleting durable atoms
 - [ ] Feature flag or clean fallback if store unavailable
 - [ ] Unit + integration tests; **no Nemotron dependency**
@@ -92,5 +102,6 @@ elyra/memory/
 - Summary generation: template-first vs LLM-first
 - Pruning/archival of fine-scale atoms under coarse summaries
 - Backfill of historical moments into atoms
-- Default meal token budget and slide-off trigger (tokens vs turns)
+- Default meal token budget, flex bands, and slide-off trigger
+- Default *N* for hop re-gather (or moment-boundary-only at first)
 - Whether in-moment compact summaries are template-only or LLM-assisted

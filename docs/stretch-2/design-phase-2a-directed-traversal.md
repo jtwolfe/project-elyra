@@ -3,12 +3,15 @@
 **Status:** Design draft
 **Depends on:** Phase 1 + Phase 2 seeds
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
+**Meal channel:** [design-context-meal-composition.md](design-context-meal-composition.md) (directed-keep)
 
 ## Goal
 
 Realise **model-managed retrieval**: walk the weave around semantic/temporal seeds, inspect neighbours, and **keep** only what should enter durable context.
 
-Critical invariant from planning: traversal material is **temporary** until explicitly selected. Temporary atoms must not flow into period-summary consolidation as ordinary experience.
+Critical invariant from planning: traversal material is **temporary** until explicitly selected. Temporary atoms must not flow into period-summary consolidation as ordinary experience, and must not appear in the meal as unlabeled durable history.
+
+Confirmed keeps may enter the meal via the **directed-keep** channel (deduped against open moment and episodic).
 
 ## Concept mapping
 

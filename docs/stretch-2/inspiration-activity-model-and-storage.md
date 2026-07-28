@@ -4,12 +4,13 @@
 **Branch:** `grok-improvement-memory`
 **Philosophy source:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
 **Soft conceptual influences:** [philosophical-soft-guidance.md](philosophical-soft-guidance.md) (not requirements)
+**Meal composition (provisional):** [design-context-meal-composition.md](design-context-meal-composition.md)
 
 This document records the **preliminary system activity model**, a **logical data prototype**, and **refined database requirements** developed during Stretch 2 planning. It is intentionally an *inspiration* and *constraint* document: implementation work must produce a larger, more detailed set of architecture docs that explain **how concrete structures map back to the concepts in the essay** (atoms, context, felt signal, weave of edges, patterns/shadows, consolidation).
 
 Do not treat this file as the complete design. Treat it as the baseline that later phase manuals must refine, not abandon without reason.
 
-For research lineage and soft judgment aids (IIT/Φ as possible *later* patch-health thinking, sheaf-like local context patches, holographic reconstructability, constructive recall), see [philosophical-soft-guidance.md](philosophical-soft-guidance.md). Those ideas **influence reasoning**; they are not storage requirements and do not extend the activity list below.
+For research lineage and soft judgment aids (IIT/Φ as possible *later* patch-health thinking, sheaf-like local context patches, holographic reconstructability, constructive recall), see [philosophical-soft-guidance.md](philosophical-soft-guidance.md). Those ideas **influence reasoning**; they are not storage requirements and do not turn the lists below into phase commitments beyond what phase design docs state.
 
 ---
 
@@ -41,9 +42,9 @@ Future readers should be able to answer:
 | **Consolidation** | Offline/background compression into higher-scale structure (our period-summary ladder) |
 | **Multimodal content** | One atom may hold or reference text, image, audio, video in combination |
 
-Implementation docs must keep these names visible. Avoid inventing a second vocabulary that drifts from the essay without an explicit glossary entry.
+**Moment (planning sense):** a **group of atoms** bound to a do-loop / presence interval. Context meals are re-gathered between moments; long moments may re-gather supporting slices every *N* hops (see meal composition doc).
 
-**Contextual / generation-context links** (atoms that influenced creation of a new atom) are especially important for reconstructability of experience; see soft guidance on local patches. They appear in the activity model as ordinary linking, not as a separate subsystem.
+**Contextual / generation-context links** (atoms that influenced creation of a new atom) are especially important for reconstructability; see soft guidance on local patches. They appear below as ordinary linking, not as a separate subsystem.
 
 ---
 
@@ -72,8 +73,21 @@ Operations the storage layer and memory package must support. Rates are qualitat
 | Sequential walk | Meal, traversal | Low |
 | Refresh period summary (15m → 1h → … → 1m) | Timers / rest | Background |
 | Fetch active ladder summaries for “now” | Meal build | Low |
+| Query prior moments for broader episodic fill | Meal build | Low–medium |
 
-### 3.3 Semantic
+### 3.3 Meal composition (working set)
+
+| Activity | When | Latency posture |
+|----------|------|-----------------|
+| Compose labeled meal (open moment + broader episodic + supports) | Model call | Low–medium |
+| Dedup atoms across channels | Meal build | Low |
+| Slide-off open-moment working set under budget | Long moment / pressure | Low |
+| Re-gather meal on moment boundary | Moment open/close | Low–medium |
+| Optional re-gather every N hops | Long moment | Low–medium |
+
+Details: [design-context-meal-composition.md](design-context-meal-composition.md). Shares are flexible under test.
+
+### 3.4 Semantic
 
 | Activity | When | Latency posture |
 |----------|------|-----------------|
@@ -82,7 +96,7 @@ Operations the storage layer and memory package must support. Rates are qualitat
 | Cross-modal query | Occasional | Medium |
 | Index optimize / refresh | Schedule | Background |
 
-### 3.4 Directed traversal
+### 3.5 Directed traversal
 
 | Activity | When | Latency posture |
 |----------|------|-----------------|
@@ -92,7 +106,7 @@ Operations the storage layer and memory package must support. Rates are qualitat
 | Temporary candidate buffer | Traversal session | In-memory |
 | Promote keep-set; discard temporary | End of traversal | Low |
 
-### 3.5 Procedural
+### 3.6 Procedural
 
 | Activity | When | Latency posture |
 |----------|------|-----------------|
@@ -101,7 +115,7 @@ Operations the storage layer and memory package must support. Rates are qualitat
 | Rank by success × semantic × temporal prior | Meal / traversal | Medium |
 | Offline evaluation on synthetic sets | CI / research | Batch |
 
-### 3.6 Operational
+### 3.7 Operational
 
 - Restart-safe data under `ELYRA_HOME`
 - Hermetic tests without mandatory external servers
@@ -225,6 +239,8 @@ Preferred location as implementation grows:
 docs/stretch-2/
   inspiration-activity-model-and-storage.md   # this file
   philosophical-soft-guidance.md              # influences, not requirements
+  design-context-meal-composition.md          # provisional meal + slide-off
+  design-nemotron-runtime.md                  # Phase 2 embed runtime
   design-*.md                                 # phase design (pre-implement)
   architecture/                               # post-implement detailed manuals
     phase-1-temporal.md

@@ -140,6 +140,7 @@ These appear in the essay or early design talk; they remain **intentionally soft
 |----------|----------------|
 | [memory-atoms.pdf](../memory-atoms.pdf) | Authoritative philosophical essay |
 | [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | Operational baseline (activities, data prototype, storage needs) |
+| [design-context-meal-composition.md](design-context-meal-composition.md) | Product design for labeled meals and slide-off — may *reflect* reconstructive / patch ideas without implementing them as philosophy runtime |
 | [design-phase-*.md](README.md) | Concrete phase design; this file does not override them |
 | Architecture manuals (future) | May cite this note when explaining *why* a shape was chosen |
 

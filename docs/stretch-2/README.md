@@ -29,7 +29,7 @@ For a system this conceptual, “docs updated when behaviour changes” is not e
 3. Which activities from the [inspiration activity model](inspiration-activity-model-and-storage.md) are live vs background.
 4. Invariants and failure behaviour.
 
-Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage (IIT/Φ intuition, sheaf-like local patches, holographic reconstructability) as **influence on judgment**, not as deliverables. [Context meal composition](design-context-meal-composition.md) describes how temporal and supporting channels are budgeted into a labeled package and how in-moment slide-off works — percentages remain provisional.
+Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage as **influence on judgment**, not as deliverables. [Context meal composition](design-context-meal-composition.md) describes labeled packages and slide-off — percentages remain provisional and flexible under test.
 
 Other principle reminders:
 
@@ -46,13 +46,14 @@ Other principle reminders:
 
 | Regime | Role in context meal | Primary structures |
 |--------|----------------------|--------------------|
-| **Temporal / Episodic** | Drop-in for sliding recent history | Moments → atoms; sequential links; rolling period-summary ladder (15m, 1h, 6h, 1d, 1w, 1m) |
-| **Semantic** | Supporting context (“reminds me of”) | Nemotron multi-embeddings (per-modality + joint); bonded subatoms; parcels for oversized content; ANN |
-| **Procedural** | Process context (goal → outcome) | Trajectories; success-weighted edges; derived traversal prior |
+| **Current temporal** | Open moment (group of atoms) | Sequential atoms inside the active moment |
+| **Broader episodic** | Prior moments + ladder summaries as relevant | Period summaries; other moments |
+| **Semantic** | Supporting (“reminds me of”) | Nemotron multi-embeddings; bonded channels; parcels; ANN |
+| **Procedural** | Supporting process prior | Trajectories; success-weighted edges |
 
-**Phase 2a — Directed traversal:** model-managed walk around seeds; **temporary** context flags; only confirmed keeps enter durable context.
+**Phase 2a — Directed traversal:** model-managed walk; **temporary** until confirmed; keeps enter meal via directed-keep channel only.
 
-How these channels are **composed, deduplicated, labeled, and slid off** under token pressure: [design-context-meal-composition.md](design-context-meal-composition.md).
+Composition, dedup, labels, slide-off, re-gather: [design-context-meal-composition.md](design-context-meal-composition.md).
 
 ---
 
@@ -60,7 +61,7 @@ How these channels are **composed, deduplicated, labeled, and slid off** under t
 
 | Phase | Focus | Care |
 |-------|--------|------|
-| **1** | Temporal / episodic foundation | Must stand alone without vectors |
+| **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors |
 | **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy |
 | **2a** | Directed traversal | Temporary context hygiene |
 | **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on |
@@ -79,14 +80,14 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 |----------|------|
 | [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
 | [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | **Soft guidance** — IIT/sheaf/holographic and reconstructive influences; not goals |
-| [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — channel mix, construction, slide-off, labels, dedup |
+| [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — open moment vs episodic, slide-off, labels, dedup, re-gather |
 | [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
+| [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design |
 | [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 design |
 | [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
 | [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
 | `architecture/` (to be created as phases ship) | **Detailed post-implement manuals** mapping code ↔ philosophy |
-| [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable embedding runtime (when written) |
 
 All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
@@ -103,7 +104,7 @@ In addition to engineering-principles “done”:
 - [ ] No dependency on later phases for correctness
 - [ ] Operator-visible failure modes documented
 
-Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal package + slide-off path exist, not final budget ratios.
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios.
 
 ---
 
@@ -115,7 +116,7 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 4. Promote to `main` only after operator sign-off and live smoke.
 5. Prefer clarifying the philosophy mapping over clever storage tricks that obscure it.
 6. Use [philosophical-soft-guidance.md](philosophical-soft-guidance.md) for judgment calls; do not expand phase scope from it.
-7. Treat [design-context-meal-composition.md](design-context-meal-composition.md) as the living sketch for meal budgets; refine with measurements.
+7. Treat [design-context-meal-composition.md](design-context-meal-composition.md) as the living sketch for meal budgets; refine with measurements and flex.
 
 ---
 
@@ -123,5 +124,5 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 
 1. Keep Phase 1 design sharp against the inspiration data prototype and meal composition sketch.
 2. Run storage spikes listed in `design-database-choices.md`.
-3. Write Nemotron runtime design when Phase 2 approaches.
+3. Spike Nemotron runtime checklist before Phase 2 default-on.
 4. Begin Phase 1 implementation only with store interface + tests + initial architecture note skeleton.

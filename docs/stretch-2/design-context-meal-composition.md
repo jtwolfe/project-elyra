@@ -10,35 +10,48 @@ Describe how the **context meal** for a model call is assembled once atomized me
 
 Stretch 1 used a sliding recent window. Stretch 2 evolves that into a **composed, labeled package**: temporal spine plus supporting channels, deduplicated, with retrieval provenance at least partially visible to the model.
 
-This document is for **in-implementation reasoning and tuning**. Channel shares below are a starting sketch — measure and adjust; do not hard-code them as product law.
+This document is for **in-implementation reasoning and tuning**. Channel shares below are a starting sketch — measure and adjust with real token accounting; allow **flex** during testing. Do not hard-code illustrative ratios as product law.
 
 ---
 
 ## Principles
 
-1. **Temporal spine first** — current moment, recent sequential atoms, and near-scale period summaries dominate so “when” is not lost.
-2. **Supporting channels add; they do not replace** — semantic, broader episodic, procedural, and directed-keep ride on top of the spine.
-3. **Deduplicate** — the same atom must not appear multiple times via different channels.
-4. **Label sources** — the model should see *why* a block is present (`temporal`, `semantic`, `episodic-summary`, `procedural`, `directed-keep`, `orient`, etc.).
-5. **Slide-off is meal management, not forgetting** — durable atoms stay in the store; only the working set for the call shrinks or folds.
-6. **Under pressure, cut supports before the spine** — protect recent in-moment tail and temporal package.
+1. **Temporal spine first** — the **open moment** (its atoms / working beats) dominates so “what is happening now” is not lost.
+2. **Broader episodic is prior experience** — other moments and their summaries, included as they fit and as they are relevant — not a second copy of the current moment.
+3. **Supporting channels add; they do not replace** — semantic, procedural, and directed-keep ride on top of temporal structure.
+4. **Deduplicate** — the same atom must not appear multiple times via different channels.
+5. **Label sources** — the model should see *why* a block is present (`temporal`, `episodic`, `semantic`, `procedural`, `directed-keep`, `orient`, etc.).
+6. **Slide-off is meal management, not forgetting** — durable atoms stay in the store; only the working set for the call shrinks or folds.
+7. **Under pressure, cut supports before the spine** — protect the open-moment tail and essential temporal package before coarser episodic or semantic fill.
+8. **Re-gather on boundaries** — context is re-composed between moments; within a long moment, optionally re-gather every *N* hops so the meal stays coherent without waiting for moment close.
+
+---
+
+## Moments and atoms (meal-facing view)
+
+- A **moment** is a **group of atoms** (and any still-ephemeral working beats not yet promoted) bound to one do-loop / presence interval.
+- An **atom** is the durable instance unit in the store.
+- **Current temporal** ≈ atoms and working material of the *open* moment (plus any sequential glue still in that moment).
+- **Broader episodic** ≈ *other* moments and period-summary atoms (15m → 1m ladder), selected by relevance and remaining budget — “what else has been going on that still matters.”
+
+Promotion of beats → atoms remains a Phase 1 implementation detail; the meal must tolerate both.
 
 ---
 
 ## Illustrative channel mix (non-normative)
 
-Token shares of the *memory-related* portion of the meal (excluding thin system instructions). Adjust with real budgets (e.g. ~50k meal under a larger model window).
+Token shares of the *memory-related* portion of the meal (excluding thin system instructions). Ranges need not sum to a neat 100%; treat them as **relative flex targets** refined in testing.
 
 | Channel | Illustrative share | What it is | When it appears |
 |---------|-------------------|------------|-----------------|
-| **Current temporal** | ~40–50% | Open moment beats/atoms, sequential neighbours, near ladder summaries (e.g. 15m / 1h) | Phase 1+ |
+| **Current temporal** | ~40–50% | Open moment: its atoms / working beats | Phase 1+ |
+| **Broader episodic** | ~10%+ as fits | Prior moments and summaries of moments (ladder), relevance-filtered | Phase 1+ |
 | **Semantic** | ~10–15% | ANN / similarity neighbours (bonded channels as available) | Phase 2+ |
-| **Broader episodic** | ~10% | Coarser ladder summaries (6h → 1m) for horizon | Phase 1+ |
 | **Procedural** | ~5–10% | Success-path / process prior in subspace | Phase 3+ |
 | **Directed-keep / curated** | ~10% | Model-selected keeps from traversal (durable only after confirm) | Phase 2a+ |
 | **Orient / self / goals** | fixed residual | Identity, active goals, thin orient | Always |
 
-Phase 1 ships temporal + orient only; empty channels are simply omitted, not zero-filled with noise.
+Phase 1 ships current temporal + broader episodic (as budget allows) + orient; empty later channels are omitted, not zero-filled with noise.
 
 ---
 
@@ -50,47 +63,58 @@ flowchart TD
     S[Thin system + orient / self / goals]
   end
 
-  subgraph temporal [Temporal spine]
-    M[Open moment working beats]
-    Seq[Recent sequential atoms]
-    Near[Near period summaries]
+  subgraph temporal [Current temporal — open moment]
+    M[Open moment atoms / working beats]
+  end
+
+  subgraph episodic [Broader episodic]
+    Prior[Prior moments as relevant]
+    Ladder[Period summary atoms as relevant]
   end
 
   subgraph support [Supporting — as phases land]
     Sem[Semantic neighbours]
-    Epi[Broader episodic summaries]
     Proc[Procedural prior]
     Keep[Directed-keep set]
   end
 
-  Store[(Memory store)] --> Seq
-  Store --> Near
+  Store[(Memory store)] --> M
+  Store --> Prior
+  Store --> Ladder
   Store --> Sem
-  Store --> Epi
   Store --> Proc
   Trav[Traversal session] -->|confirmed keeps only| Keep
-  Moment[Open moment] --> M
+  Open[Open moment] --> M
 
   S --> Merge[Dedup by atom id / content key]
   M --> Merge
-  Seq --> Merge
-  Near --> Merge
+  Prior --> Merge
+  Ladder --> Merge
   Sem --> Merge
-  Epi --> Merge
   Proc --> Merge
   Keep --> Merge
 
-  Merge --> Budget[Apply token budgets — protect spine]
+  Merge --> Budget[Apply flexible token budgets — protect open moment]
   Budget --> Labels[Section labels for model]
   Labels --> Meal[Context meal]
   Meal --> LLM[Model call]
 ```
 
+### When the meal is rebuilt
+
+| Trigger | Behaviour |
+|---------|-----------|
+| **New moment** | Full re-gather: orient + open moment (empty or seeding) + broader episodic + any active supports |
+| **Every N hops** (optional, long moment) | Re-gather supporting and broader episodic slices; slide-off may run on the open-moment working set |
+| **Budget pressure** | Slide-off path (below) without waiting for moment close |
+
+*N* and exact triggers are tuned in implementation; start simple (moment boundaries + budget) before hop-periodic re-gather.
+
 ### Dedup
 
 - Prefer a single inclusion per `atom_id` (or stable content key for non-atom beats).
 - If an atom qualifies for multiple channels, keep **one** copy and optionally note secondary reasons in the label (e.g. `temporal+semantic`) rather than repeating body text.
-- Directed-keep that is already in the temporal spine should not be pasted twice.
+- Directed-keep already in the open moment should not be pasted twice.
 
 ### Source labels
 
@@ -99,7 +123,9 @@ Lightweight, stable section markers the model can learn, for example:
 ```text
 [context:temporal/moment]
 ...
-[context:temporal/summary 1h]
+[context:episodic/summary 1h]
+...
+[context:episodic/prior-moment]
 ...
 [context:semantic]
 ...
@@ -112,39 +138,39 @@ Exact markup is an implementation choice; clarity to the model matters more than
 
 ## In-moment slide-off
 
-As a **moment** (one do-loop) grows, the meal can exceed budget even when durable memory is stable. Slide-off manages the **in-moment working set**.
+As a **moment** (one do-loop, a group of atoms over time) grows, the meal can exceed budget even when durable memory is stable. Slide-off manages the **open-moment working set** inside the meal.
 
 ```mermaid
 flowchart LR
-  A[Moment grows — new beats / tool turns] --> B{Over meal budget?}
-  B -->|no| C[Append to working set]
+  A[Moment grows — new atoms / beats / tool turns] --> B{Over meal budget?}
+  B -->|no| C[Append to open-moment working set]
   B -->|yes| D[Dedup against memory package already in meal]
-  D --> E[Rank in-moment turns for retention]
+  D --> E[Rank open-moment material for retention]
   E --> F[Slide off oldest low-value detail]
   F --> G[Optional compact summary of slid-off span]
   G --> H[Retain: recent tail + critical tool results + labeled memory package]
   H --> C
 ```
 
-### Retention bias (in-moment)
+### Retention bias (open moment)
 
 Prefer to keep:
 
 - Latest user/operator intent
 - Recent assistant commitments
 - Failed/successful tool results still relevant to the open goal
-- Anything already promoted into durable atoms (referenced by id, not full replay)
+- Anything already durable as atoms (prefer reference by id over full replay when already in episodic package)
 
 Prefer to slide off:
 
-- Verbose intermediate tool noise already reflected in a later summary or atom
+- Verbose intermediate tool noise already reflected in a later atom or summary
 - Repeated identical errors
 - Early exploration that was superseded
 
 ### What slide-off must not do
 
 - Delete or rewrite durable atoms in the store
-- Drop the labeled temporal memory package before in-moment noise
+- Drop the labeled memory package before open-moment noise
 - Promote temporary traversal candidates into durable context
 - Silently merge inferred gaps into memory as facts
 
@@ -162,7 +188,7 @@ Agent CLIs (including Grok Build’s auto-compact / recap-style flows, and simil
 - keep a recent tail,
 - rehydrate critical instructions or skills.
 
-**Elyra mapping:** treat that as inspiration for **in-moment slide-off + optional compact**, then **re-inject** the structured, labeled memory package (spine + supports). Do not replace the whole meal with one opaque narrative that erases provenance.
+**Elyra mapping:** treat that as inspiration for **in-moment slide-off + optional compact**, then **re-inject** the structured, labeled memory package (open moment + broader episodic + supports). Do not replace the whole meal with one opaque narrative that erases provenance.
 
 **Follow-up:** when integrating Grok Build, inspect local compact behaviour (trigger threshold, preservation rules, prompt) and record concrete lessons here or in an architecture note. Public notes indicate auto-compact, `/recap`/`/summarize`, and iterative compaction prompt tuning — useful parallels, not a spec to copy blindly.
 
@@ -172,8 +198,8 @@ Agent CLIs (including Grok Build’s auto-compact / recap-style flows, and simil
 
 | Phase | Meal behaviour |
 |-------|----------------|
-| **1** | Temporal spine + orient; slide-off of in-moment working set; drop-in replacement path for current sliding meal |
-| **2** | Add semantic channel; extend dedup across temporal+semantic |
+| **1** | Open-moment temporal + broader episodic as relevant; slide-off; re-gather on moment boundary (optional N-hop later); drop-in path for current sliding meal |
+| **2** | Add semantic channel; extend dedup; see [design-nemotron-runtime.md](design-nemotron-runtime.md) |
 | **2a** | Add directed-keep channel; temporary traversal buffer never enters meal as durable unlabeled history |
 | **3** | Add procedural prior; keep share small and scoped |
 
@@ -183,8 +209,8 @@ Agent CLIs (including Grok Build’s auto-compact / recap-style flows, and simil
 
 ## Open questions
 
-- Exact default percentages under the live meal token budget
-- Trigger: token threshold vs turn count vs both
+- Default meal token budget and flex bands under live accounting
+- Trigger: token threshold vs turn count vs both; default *N* for hop re-gather
 - Whether compact of slid-off spans is template-only or LLM-assisted
 - How glass/UI surfaces meal composition for the operator
 - How much secondary-reason labeling (`temporal+semantic`) helps vs clutters
@@ -200,4 +226,4 @@ Agent CLIs (including Grok Build’s auto-compact / recap-style flows, and simil
 
 ---
 
-*Provisional. Refine with spikes and live token accounting; keep temporal-first and labeled.*
+*Provisional. Refine with spikes and live token accounting; keep open-moment-first and labeled.*
