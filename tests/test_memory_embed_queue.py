@@ -17,7 +17,11 @@ from elyra.memory.embed.encode import (
     is_embeddable,
 )
 from elyra.memory.embed.mock import MockEmbedder
-from elyra.memory.embed.queue import EncodeQueue, scan_pending_into_queue
+from elyra.memory.embed.queue import (
+    EncodeQueue,
+    catchup_none_atoms_for_encode,
+    scan_pending_into_queue,
+)
 from elyra.memory.promote import promote_beat, promote_wake_observation
 from elyra.memory.store import open_memory_store
 from elyra.memory.types import Atom, new_atom_id
@@ -330,6 +334,43 @@ def test_scan_pending_into_queue(store):
     assert q.contains(p2.atom_id)
     # Second scan dedupes
     assert scan_pending_into_queue(store, q, limit=10) == 0
+
+
+def test_catchup_none_atoms_for_encode(store):
+    """OQ4: historical none experience atoms become pending; summaries skipped."""
+    exp = store.put_atom(
+        _atom(text="old chat", status="none", t_start="2026-07-28T10:00:00Z")
+    )
+    store.put_atom(
+        _atom(
+            text="ladder body",
+            status="none",
+            kind="summary",
+            t_start="2026-07-28T10:01:00Z",
+        )
+    )
+    store.put_atom(
+        _atom(text="already", status="pending", t_start="2026-07-28T10:02:00Z")
+    )
+    # Outside horizon
+    store.put_atom(
+        _atom(text="ancient", status="none", t_start="2020-01-01T00:00:00Z")
+    )
+    n = catchup_none_atoms_for_encode(
+        store,
+        limit=10,
+        horizon_hours=168.0,
+        now_iso="2026-07-28T12:00:00Z",
+    )
+    assert n == 1
+    assert store.get_atom(exp.atom_id).embedding_status == "pending"
+    # Second call: no more none experience in horizon
+    assert (
+        catchup_none_atoms_for_encode(
+            store, limit=10, horizon_hours=168.0, now_iso="2026-07-28T12:00:00Z"
+        )
+        == 0
+    )
 
 
 def test_scan_includes_encode_ok_pending(store):

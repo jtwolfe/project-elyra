@@ -417,7 +417,83 @@ def scan_pending_into_queue(
     return enqueued
 
 
+# Ladder rewrites always set summary embedding_status="none"; encoding them
+# would thrash. Catch-up targets experience atoms only.
+_CATCHUP_SKIP_KINDS: frozenset[str] = frozenset(
+    {"summary", "moment_meta", "parcel"}
+)
+
+
+def catchup_none_atoms_for_encode(
+    store: Any,
+    *,
+    limit: int = 32,
+    horizon_hours: float = 168.0,
+    now_iso: str | None = None,
+) -> int:
+    """Mark embeddable historical ``none`` atoms as ``pending`` (OQ4).
+
+    Bounded by ``limit`` per call and optional ``horizon_hours`` on ``t_start``.
+    Never raises. Returns number flipped to pending.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from elyra.memory.types import parse_iso_z, to_iso_z
+
+    flipped = 0
+    try:
+        # Over-fetch then filter; list_atoms has a hard cap but dogfood scale is small.
+        rows = store.list_atoms(
+            embedding_status="none",
+            limit=max(0, min(int(limit) * 4, 200)),
+            newest_first=True,
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.exception("list_atoms none catch-up failed")
+        return 0
+
+    if now_iso:
+        try:
+            now_dt = parse_iso_z(now_iso)
+        except Exception:  # noqa: BLE001
+            now_dt = datetime.now(tz=UTC)
+    else:
+        now_dt = datetime.now(tz=UTC)
+    horizon = max(0.0, float(horizon_hours))
+    cutoff = now_dt - timedelta(hours=horizon) if horizon > 0 else None
+
+    for atom in rows:
+        if flipped >= max(0, int(limit)):
+            break
+        try:
+            if (atom.embedding_status or "none") != "none":
+                continue
+            if atom.kind in _CATCHUP_SKIP_KINDS:
+                continue
+            if not is_embeddable(atom):
+                continue
+            if cutoff is not None:
+                try:
+                    t0 = parse_iso_z(atom.t_start)
+                except Exception:  # noqa: BLE001
+                    continue
+                if t0 < cutoff:
+                    continue
+            marked = _mark_atom_status(store, atom, status="pending")
+            if marked is not None:
+                flipped += 1
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "none catch-up failed atom_id=%s",
+                getattr(atom, "atom_id", "?"),
+            )
+    if flipped:
+        _LOG.info("embed catch-up marked %d none→pending atoms", flipped)
+    return flipped
+
+
 __all__ = [
     "EncodeQueue",
+    "catchup_none_atoms_for_encode",
     "scan_pending_into_queue",
 ]

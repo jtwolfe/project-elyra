@@ -383,6 +383,7 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         if path in (
             "memory.semantic_horizon_hours",
             "memory.embed_media_max_seconds",
+            "memory.embed_catchup_horizon_hours",
         ) and coerced <= 0:
             raise ValueError(f"{path}: expected float/int > 0, got {coerced!r}")
         if path == "memory.encode_queue_max" and coerced < 1:
@@ -401,6 +402,8 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.ann_optimize_max_ms",
             "memory.parcel_threshold_chars",
             "memory.embed_media_max_bytes",
+            "memory.embed_catchup_max",
+            "memory.embed_catchup_per_tick",
         ) and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         filtered[k] = coerced

@@ -461,6 +461,7 @@ class PresenceWorker:
         self._embedder: Any | None = None
         self._embedder_open_failed = False
         self._embedding_index: Any | None = None
+        self._embed_catchup_marked: int = 0  # process-life OQ4 none→pending count
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
 
@@ -1331,9 +1332,31 @@ class PresenceWorker:
         if queue is None:
             return
         try:
-            from elyra.memory.embed.queue import scan_pending_into_queue
+            from elyra.memory.embed.queue import (
+                catchup_none_atoms_for_encode,
+                scan_pending_into_queue,
+            )
 
             max_items = max(1, int(mem_cfg.encode_max_items_per_tick or 4))
+            # OQ4: historical atoms written before semantic_on stay ``none``;
+            # flip a budgeted batch to pending so drain can fill vectors.
+            # Process-lifetime budget: stop once catchup_max marked this run.
+            catchup_budget = int(getattr(mem_cfg, "embed_catchup_max", 500) or 0)
+            already = int(getattr(self, "_embed_catchup_marked", 0) or 0)
+            if catchup_budget > 0 and already < catchup_budget:
+                per_tick = int(
+                    getattr(mem_cfg, "embed_catchup_per_tick", 32) or 32
+                )
+                room = min(per_tick, catchup_budget - already)
+                n = catchup_none_atoms_for_encode(
+                    store,
+                    limit=room,
+                    horizon_hours=float(
+                        getattr(mem_cfg, "embed_catchup_horizon_hours", 168.0)
+                        or 168.0
+                    ),
+                )
+                self._embed_catchup_marked = already + int(n or 0)
             scan_pending_into_queue(
                 store,
                 queue,
