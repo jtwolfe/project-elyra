@@ -1,10 +1,11 @@
 # Architecture — Phase 2 Semantic Memory
 
-**Status:** **Shipped** (2026-07-28) — Phase 2 implementation on the `execute-plan` stack / `grok-improvement-memory` (PR1–PR6 core; see caveats). Defaults: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off** (zero behaviour change until dogfood).
-**Package:** `elyra/memory/` (`embed/`, `index.py`, `parcel.py`; meal + Lance extensions)
+**Status:** **Shipped** (2026-07-28) — Phase 2 implementation on the `execute-plan` stack / `grok-improvement-memory` (**PR1–PR9**: meal semantic + Vectors glass + optional Nemotron; see caveats). Defaults: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off** (zero behaviour change until dogfood).
+**Package:** `elyra/memory/` (`embed/`, `index.py`, `parcel.py`; meal + Lance extensions; glass Vectors APIs)
 **Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
 **Design (planning):** [design-phase-2-semantic.md](../design-phase-2-semantic.md), [design-phase-2-implementation.md](../design-phase-2-implementation.md)
 **Runtime contract:** [design-nemotron-runtime.md](../design-nemotron-runtime.md)
+**Spikes:** [architecture/spikes/lance-emb-migration.md](spikes/lance-emb-migration.md), [architecture/spikes/nemotron-runtime.md](spikes/nemotron-runtime.md)
 **Meal sketch:** [design-context-meal-composition.md](../design-context-meal-composition.md)
 **Baseline activities:** [inspiration-activity-model-and-storage.md](../inspiration-activity-model-and-storage.md) §3
 **Phase 1 manual:** [architecture/phase-1-temporal.md](phase-1-temporal.md)
@@ -16,11 +17,12 @@ This is the **post-implement concept-mapping manual** for Phase 2. It describes 
 
 | Item | State |
 |------|--------|
-| Core encode + ANN + parcels + meal semantic channel | **Shipped** (PR1–PR6 on execute-plan stack) |
+| Encode + ANN + parcels + meal semantic + Vectors glass | **Shipped** (PR1–PR7 on execute-plan stack; PR9 this note) |
+| Optional Nemotron runtime | **Shipped** (PR8) — real load when deps present; mock fallback when not |
 | Feature flags | **Default off** — dogfood must opt in; Gate B before product default-on |
-| Glass **Vectors** tab | **Stub remains** — overview still `tabs.vectors.stub=true`; rich health/neighbor UI was PR7 and is not required for meal correctness |
+| Glass **Vectors** tab | **Live** (`tabs.vectors.stub=false`, phase `"2"`) — health, embedding-status list, neighbor inspect (KD18) |
 | Glass **Graph** tab | **Stub** — Phase **2a** (directed traversal); **out of scope** for Phase 2 |
-| Real Omni-Embed-Nemotron weights | **Mock-first** — `embed_backend=nemotron` falls back to mock until optional real runtime / Gate B spike green |
+| Product default-on semantic | **Not** done — Gate B + operator sign-off still required |
 | Default `backend` | CI / factory default remains **jsonl** (no ANN); durable vectors require `backend=lance` + `elyra[memory-lance]` |
 
 ---
@@ -34,7 +36,7 @@ Phase 2 adds **associative / semantic** structure as a *supporting* context chan
 | Embedding status vocabulary | `elyra/memory/types.py` — `none` / `pending` / `ready` / `failed` / `skipped` |
 | Bonded multi-channel vectors (pure) | `elyra/memory/embed/types.py` — `EmbeddingSet`, `CHANNELS`, `EMBED_DIM=2048` |
 | Mock encoder (CI / dogfood without GPU) | `elyra/memory/embed/mock.py` — deterministic 2048-d L2 unit vectors |
-| Portable open path | `elyra/memory/embed/runtime.py` — `open_encoder`; mock always; nemotron → mock fallback until real load |
+| Portable open path | `elyra/memory/embed/runtime.py` — `open_encoder`; mock; optional `NemotronEmbedder` (PR8) with mock fallback |
 | Encode helpers + content fingerprint | `elyra/memory/embed/encode.py` |
 | Async encode queue + drain | `elyra/memory/embed/queue.py` — FIFO, dedupe, `encode_queue_max` backpressure |
 | Store write hooks + `list_atoms` | `elyra/memory/store.py` Protocol; jsonl + lance implementations |
@@ -46,11 +48,13 @@ Phase 2 adds **associative / semantic** structure as a *supporting* context chan
 | Budget split v2 | `elyra/memory/tokens.py` — `split_memory_budget_v2` + temporal floor |
 | Settings knobs | `elyra/memory/config.py` / `Settings.memory` |
 | Idle drain + optimize + meal wiring | `elyra/presence/worker.py` |
-| Glass Memory page | Context/Atoms live; **Vectors / Graph stubs** (Phase 2 / 2a) |
+| Glass Vectors tab + APIs (PR7) | Live health / status list / neighbors; `tabs.vectors.stub=false` |
+| Glass Memory page | Context + Atoms + **Vectors live**; **Graph stub** (Phase 2a) |
+| Inspect DTOs for vectors | `elyra/memory/inspect.py` — encoder/index health, vector rows, neighbor hits |
 
-**Not shipped in Phase 2 (by design):** directed multi-hop / temporary keep-set (Phase 2a), success-path / trajectory weights (Phase 3), historical glass→atom backfill, full hypergraph Graph UI, default-on semantic without Gate B, multi-channel ranking fusion (joint-primary only).
+**Not shipped in Phase 2 (by design):** directed multi-hop / temporary keep-set (Phase 2a), success-path / trajectory weights (Phase 3), historical glass→atom backfill, full hypergraph Graph UI, default-on semantic without Gate B, multi-channel ranking fusion (joint-primary only), optional 2D vector projection (KD18 non-gate).
 
-**Deferred polish / follow-ups:** fill Vectors tab (health + neighbors APIs), real Nemotron load path + spike notes under `architecture/spikes/`, Gate B before flipping defaults.
+**Deferred / follow-ups:** Gate B dogfood before flipping semantic defaults; Phase 2a Graph tab; optional 2D projection polish.
 
 ---
 
@@ -338,11 +342,21 @@ Budget: residual after system+orient. When semantic off → Phase 1 `split_memor
 | Tab | Phase 2 state |
 |-----|----------------|
 | **Context** | Live (Phase 1) — meal labels include semantic when channel non-empty |
-| **Atoms** | Live (Phase 1) — `list_atoms` available for status filters in backend |
-| **Vectors** | **Stub** — reserved for encoder/index health + neighbor inspect (design PR7). Not a gate for meal semantic correctness |
+| **Atoms** | Live (Phase 1) — atom browser |
+| **Vectors** | **Live (PR7 / KD18)** — encoder + index health, embedding-status list, neighbor inspect |
 | **Graph** | **Stub** — Phase **2a** directed traversal / typed edges. **Out of scope** for Phase 2 |
 
-`GET /api/memory` overview still reports `tabs.vectors: {stub: true, phase: "2"}` and `tabs.graph: {stub: true, phase: "2a"}`.
+Overview: `GET /api/memory` reports `tabs.vectors: {stub: false, phase: "2"}` and `tabs.graph: {stub: true, phase: "2a"}`.
+
+### Vectors APIs (read-only)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/memory/vectors` | Encoder health (device, model, backend, queue depth) + index health (`vectors_ready`, `index_stale`, recent buffer) |
+| `GET /api/memory/vectors/atoms?status=…&limit=50` | Atoms filtered by `embedding_status` via `list_atoms` (default 50, max 200) |
+| `GET /api/memory/vectors/neighbors?atom_id=…` or `?q=…` | Top-k scored neighbours; fail soft to empty when encoder/index unavailable |
+
+**Invariants:** read-only; no secrets; **no raw 2048-d vector dumps** in responses by default; Graph remains stub. Optional 2D projection is **not** a Phase 2 gate.
 
 ---
 
@@ -376,9 +390,10 @@ Budget: residual after system+orient. When semantic off → Phase 1 `split_memor
 | `tests/test_memory_parcel.py` | Split before truncate; parent on chain; default off parity |
 | `tests/test_memory_meal_semantic.py` | Budget v2 floor; dedup; timeout omit; parcel→parent |
 | `tests/test_memory_semantic_integration.py` | Flags off = Phase 1 parity; semantic on + mock + fake index |
+| `tests/test_memory_vectors_api.py` | Vectors overview + atoms status + neighbors; `stub:false`; fail closed |
 | Phase 1 suite | Still green with semantic defaults off |
 
-Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unavailable.
+Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unavailable. Optional Nemotron path behind markers / missing-deps mock fallback.
 
 ---
 
@@ -389,6 +404,8 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unava
 | [design-phase-2-implementation.md](../design-phase-2-implementation.md) | Implementation design, KDs, PR plan (PR1–PR9) |
 | [design-phase-2-semantic.md](../design-phase-2-semantic.md) | Short phase outline (points here + implementation design) |
 | [design-nemotron-runtime.md](../design-nemotron-runtime.md) | Portable encode contract; Gate B checklist |
+| [spikes/lance-emb-migration.md](spikes/lance-emb-migration.md) | Lance emb migration spike (Gate A) |
+| [spikes/nemotron-runtime.md](spikes/nemotron-runtime.md) | Nemotron runtime spike notes |
 | [design-database-choices.md](../design-database-choices.md) | Lance ANN, interface rule |
 | [design-context-meal-composition.md](../design-context-meal-composition.md) | Supporting channel + cut order |
 | [architecture/phase-1-temporal.md](phase-1-temporal.md) | Phase 1 shipped manual |
@@ -404,10 +421,9 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 
 | Work | Role |
 |------|------|
-| **PR7 (optional polish)** | Glass Vectors tab: encoder/index health, status list, neighbor inspect |
-| **PR8 / Gate B** | Real Nemotron runtime + spike notes; dogfood before default-on |
-| **Default-on** | Only after Gate B + operator sign-off (`semantic_enabled` / `embed_enabled`) |
+| **Gate B / default-on** | Dogfood mock → Nemotron → `semantic_enabled`; flip defaults only after operator sign-off |
+| **Optional 2D projection** | Non-gate polish for Vectors tab (KD18) |
 | **Phase 2a** | Directed traversal → implement **Graph** tab for real |
 | **Phase 3** | Procedural / success-path (evaluation-first) |
 
-Do not require rich vector visualization or hypergraph UI for Phase 2 meal correctness. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.
+Phase 2 ship surface is meal semantic + ANN + **Vectors glass gate (KD18)** + architecture note. Graph/hypergraph UI is Phase 2a. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.

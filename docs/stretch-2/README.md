@@ -68,17 +68,17 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 ### Phase 2 close-out (2026-07-28)
 
-**Operator-complete on execute-plan stack / `grok-improvement-memory`:** multi-embeddings (mock encoder + Lance `emb_*`), async encode queue + store write hooks + idle drain, ANN hybrid recent-buffer + idle optimize, opt-in parcels, meal **semantic** channel (`select_semantic`, budget v2, timeout omit), architecture note.
+**Operator-complete on execute-plan stack / `grok-improvement-memory` (PR1–PR9):** multi-embeddings (mock + optional Nemotron + Lance `emb_*`), async encode queue + store write hooks + idle drain, ANN hybrid recent-buffer + idle optimize, opt-in parcels, meal **semantic** channel (`select_semantic`, budget v2, timeout omit), glass **Vectors** tab (health + status list + neighbors; `tabs.vectors.stub=false`), architecture note.
 
 **Defaults stay safe:** `semantic_enabled` / `embed_enabled` / `parcels_enabled` **false** until dogfood. Durable ANN needs `backend=lance` + `elyra[memory-lance]`. JSONL remains hermetic CI (no production ANN).
 
-**Caveats / follow-ups (not Phase 2 reopen blockers for core path):**
+**Caveats / follow-ups (not Phase 2 reopen blockers):**
 
 | Topic | Notes |
 |-------|--------|
-| Glass **Vectors** tab | Still a **stub** (health/neighbor UI polish); meal semantic works without it — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
-| Glass **Graph** tab | Phase **2a** — out of scope |
-| Real Nemotron weights | Mock-first; `embed_backend=nemotron` falls back until Gate B / optional runtime |
+| Glass **Vectors** tab | **Filled (PR7 / KD18)** — live health, embedding status, neighbor inspect; optional 2D projection non-gate — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
+| Glass **Graph** tab | Phase **2a** — out of scope (stub remains) |
+| Nemotron runtime | **Landed (PR8)** — real load when deps present; mock fallback when not; Gate B before product default-on |
 | Default-on semantic | Only after Gate B spike checklist + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
 
 **Docs:** [design-phase-2-implementation.md](design-phase-2-implementation.md) (implementation design), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped map).
@@ -136,13 +136,13 @@ All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 In addition to engineering-principles “done”:
 
 - [x] Behaviour implemented and tested for that phase only — **Phase 1** + **Phase 2** (semantic flags default off; dogfood opt-in); 2a/3 open
-- [x] Public memory APIs minimal and documented — Phase 1 store Protocol + glass inspect; Phase 2 index/embed surfaces + meal semantic
+- [x] Public memory APIs minimal and documented — Phase 1 store Protocol + glass inspect; Phase 2 index/embed + meal semantic + Vectors APIs (`/api/memory/vectors*`)
 - [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md); Phase 2: [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)
 - [x] Activity list updated (which §3 activities are now live) — Phase 1 + Phase 2 maps in architecture notes
 - [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors; **Phase 2** meal works with semantic off or omitted
 - [x] Operator-visible failure modes documented — Phase 1 + Phase 2 architecture notes
 
-Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 done means semantic path exists with safe defaults — not Vectors UI completeness or product default-on.
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 done means semantic path + **Vectors glass gate (KD18)** + architecture note with safe defaults — **not** product default-on and **not** Graph/2a.
 
 ---
 
@@ -161,7 +161,6 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 ## Next steps
 
 1. Dogfood Phase 1 with `write_atoms` + `enabled` (defaults on; see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)).
-2. Dogfood Phase 2 ladder (mock → optional Nemotron → `semantic_enabled`) with `backend=lance`; flags stay off until Gate B — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md).
-3. Optional polish: fill glass **Vectors** tab (health + neighbors); real Nemotron runtime after spike.
-4. Phase 2a directed traversal → fill **Graph** tab; Phase 3 procedural eval-first.
-5. Keep architecture manuals updated when behaviour changes.
+2. Dogfood Phase 2 ladder (mock → Nemotron → `semantic_enabled`) with `backend=lance`; flags stay off until Gate B — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md).
+3. Phase 2a directed traversal → fill **Graph** tab; Phase 3 procedural eval-first.
+4. Keep architecture manuals updated when behaviour changes.
