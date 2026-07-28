@@ -130,6 +130,9 @@ def meal_package_to_inspect(
         else None,
         "channels_present": list(package.channels_present),
         "channel_token_totals": channel_totals,
+        "semantic_omitted_reason": getattr(
+            package, "semantic_omitted_reason", None
+        ),
         "fixed": fixed_block,
         "items": items,
         "channels": by_channel,

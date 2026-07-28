@@ -1652,13 +1652,23 @@ class PresenceWorker:
                         skill_bias=skill_bias_s,
                     )
                     budget = int(loop.sliding_input_tokens)
+                    mem_cfg = self.settings.memory
+                    # Semantic select: pass index (cheap open) + warm embedder
+                    # only (KD12 — no cold model load inside rebuild_outer).
+                    meal_index = None
+                    meal_embedder = None
+                    if mem_cfg.semantic_enabled:
+                        meal_index = self._ensure_embedding_index()
+                        meal_embedder = self._embedder
                     package = compose_meal(
                         self._memory,
                         open_moment_id=moment_id,
                         budget_tokens=budget,
                         system_text=system_text,
                         orient_text=orient_body,
-                        settings=self.settings.memory,
+                        settings=mem_cfg,
+                        index=meal_index,
+                        embedder=meal_embedder,
                     )
                     self._record_last_meal_snapshot(
                         package,
@@ -1673,8 +1683,10 @@ class PresenceWorker:
                         budget_tokens=budget,
                         system_text=system_text,
                         orient_text=orient_body,
-                        settings=self.settings.memory,
+                        settings=mem_cfg,
                         package=package,
+                        index=meal_index,
+                        embedder=meal_embedder,
                     )
                     expanded = expand_memory_meal_for_provider(
                         meal,

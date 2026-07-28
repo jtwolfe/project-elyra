@@ -1,15 +1,17 @@
 """Labeled memory meal composition, episodic policy, and media expand parity.
 
 Scope: pure package assembly over MemoryStore (mock-friendly). Phase 1
-deterministic episodic selection (KD17); slide-off never deletes store atoms.
-In scope: MealItem/MealPackage, select_episodic, slide-off, compose_meal,
-compose_outer_messages, expand_memory_meal_for_provider (media continuity).
+deterministic episodic selection (KD17); Phase 2 supporting semantic channel
+(KD1/KD10/KD11/KD20); slide-off never deletes store atoms.
+In scope: MealItem/MealPackage, select_episodic, select_semantic, slide-off,
+compose_meal, compose_outer_messages, expand_memory_meal_for_provider.
 Out of scope: promote, presence/loop drop-in (rebuild_outer lives in worker).
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Mapping, Sequence
@@ -22,7 +24,7 @@ from elyra.memory.tokens import (
     DEFAULT_MEAL_BUDGET_TOKENS,
     EPISODIC_SUMMARY_SHARE,
     estimate_tokens,
-    split_memory_budget,
+    split_memory_budget_v2,
 )
 from elyra.memory.types import (
     PERIOD_SCALE_ORDER,
@@ -60,14 +62,25 @@ _RAW_RANGE_LIMIT = 500
 _COMPACT_LINE_CHARS = 80
 _COMPACT_HEADER_LABEL = "temporal/compact"
 
+# Semantic query seed (design select_semantic step 1).
+_SEMANTIC_SEED_KINDS = frozenset({"observation", "speak", "model"})
+_SEMANTIC_SEED_MAX_CHARS = 2000
+
+# semantic_omitted_reason values (observability).
+SEMANTIC_OMIT_ENCODER = "encoder"
+SEMANTIC_OMIT_TIMEOUT = "timeout"
+SEMANTIC_OMIT_EMPTY_SEED = "empty_seed"
+SEMANTIC_OMIT_NO_INDEX = "no_index"
+SEMANTIC_OMIT_MIN_SCORE = "min_score"
+
 
 @dataclass(frozen=True)
 class MealItem:
     """One labeled row or section fragment in the meal package."""
 
     atom_id: str | None  # None for ephemeral compact / multi-atom blocks
-    channel: str  # temporal | episodic | orient | system | chain
-    label: str  # e.g. "temporal/moment", "episodic/summary 1h"
+    channel: str  # temporal | episodic | semantic | orient | system | chain
+    label: str  # e.g. "temporal/moment", "episodic/summary 1h", "semantic"
     role: str  # user | assistant | system
     content: str
     token_estimate: int
@@ -88,6 +101,7 @@ class MealPackage:
     compact_text: str | None  # in-meal only glue for slid-off span
     channels_present: tuple[str, ...]
     open_moment_id: str | None
+    semantic_omitted_reason: str | None = None
 
 
 def moment_id_short(moment_id: str | None) -> str:
@@ -841,6 +855,271 @@ def _temporal_items(
 
 
 # ---------------------------------------------------------------------------
+# Semantic selection (Phase 2 — supporting channel; KD1 / KD2 / KD10–12 / KD20)
+# ---------------------------------------------------------------------------
+
+
+def _now_ms() -> float:
+    return time.monotonic() * 1000.0
+
+
+def _embedder_is_warm(embedder: Any) -> bool:
+    """True when embedder is healthy and already loaded (no cold load — KD12)."""
+    if embedder is None:
+        return False
+    try:
+        health = embedder.health()
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(health, Mapping) or not health.get("ok"):
+        return False
+    if hasattr(embedder, "is_loaded") and not bool(getattr(embedder, "is_loaded")):
+        return False
+    if hasattr(embedder, "loaded") and not bool(getattr(embedder, "loaded")):
+        return False
+    return True
+
+
+def build_semantic_query_seed(
+    open_moment_atoms: Sequence[Atom],
+    *,
+    max_chars: int = _SEMANTIC_SEED_MAX_CHARS,
+) -> str:
+    """Build query text from open-moment seed (latest obs/speak/model, ≤2k)."""
+    candidates = [
+        a
+        for a in open_moment_atoms
+        if a.kind in _SEMANTIC_SEED_KINDS and (a.content_text or "").strip()
+    ]
+    candidates.sort(key=lambda a: (to_iso_z(a.t_start), a.atom_id))
+    chunks: list[str] = []
+    total = 0
+    # Prefer latest: walk reverse, then reverse for chronological concat.
+    for atom in reversed(candidates):
+        if total >= max_chars:
+            break
+        body = (atom.content_text or "").strip()
+        remain = max_chars - total
+        piece = body[:remain]
+        if not piece:
+            continue
+        chunks.append(piece)
+        total += len(piece)
+    chunks.reverse()
+    return "\n".join(chunks)
+
+
+def _atom_ids_in_meal_items(items: Sequence[MealItem]) -> set[str]:
+    """Collect atom_ids referenced by meal items (incl. multi-atom blocks)."""
+    ids: set[str] = set()
+    for item in items:
+        if item.atom_id:
+            ids.add(item.atom_id)
+        meta = item.meta or {}
+        for aid in meta.get("atom_ids") or []:
+            if aid:
+                ids.add(str(aid))
+    return ids
+
+
+def _map_parcel_to_parent(
+    store: MemoryStore,
+    hit_atom: Atom,
+) -> tuple[Atom | None, bool]:
+    """Map parcel hit → parent atom; return (atom, via_parcel)."""
+    if hit_atom.kind == "parcel" and hit_atom.parent_atom_id:
+        try:
+            parent = store.get_atom(hit_atom.parent_atom_id)
+        except Exception:  # noqa: BLE001
+            parent = None
+        if parent is not None:
+            return parent, True
+        return None, True
+    return hit_atom, False
+
+
+def _semantic_label(*, via_parcel: bool, score: float | None) -> str:
+    base = "semantic/parcel→parent" if via_parcel else "semantic"
+    if score is None:
+        return base
+    return f"{base} score={score:.2f}"
+
+
+def select_semantic(
+    store: MemoryStore,
+    *,
+    index: Any | None,
+    embedder: Any | None,
+    open_moment_atoms: Sequence[Atom],
+    open_moment_id: str | None,
+    cap_tokens: int,
+    settings: MemorySettings | None = None,
+    now: datetime | str | None = None,
+    exclude_atom_ids: set[str] | None = None,
+    deadline_ms: int | None = None,
+) -> tuple[list[MealItem], str | None]:
+    """Select supporting semantic neighbours under a hard wall-clock budget.
+
+    Returns ``(items, omitted_reason)``. On timeout / missing encoder / empty
+    seed the channel is omitted (empty items + reason) — never blocks unbounded
+    (KD2). Temporal/episodic winners are passed via ``exclude_atom_ids`` (KD11).
+    Parcel hits map to parent atoms (label ``semantic/parcel→parent``).
+    """
+    cfg = settings or MemorySettings()
+    cap = max(0, int(cap_tokens))
+    if cap <= 0:
+        return [], None
+
+    t0 = _now_ms()
+    max_ms = (
+        int(deadline_ms)
+        if deadline_ms is not None
+        else int(cfg.semantic_select_max_ms)
+    )
+    if max_ms < 0:
+        max_ms = 0
+
+    def over_deadline() -> bool:
+        return (_now_ms() - t0) > max_ms
+
+    if index is None:
+        return [], SEMANTIC_OMIT_NO_INDEX
+
+    if not _embedder_is_warm(embedder):
+        return [], SEMANTIC_OMIT_ENCODER
+
+    seed = build_semantic_query_seed(open_moment_atoms)
+    if not seed.strip():
+        return [], SEMANTIC_OMIT_EMPTY_SEED
+
+    if over_deadline():
+        return [], SEMANTIC_OMIT_TIMEOUT
+
+    # Query encode under remaining deadline and encode_query_max_ms sub-budget.
+    encode_budget = min(
+        max(0, int(cfg.encode_query_max_ms)),
+        max(0, max_ms - int(_now_ms() - t0)),
+    )
+    t_enc0 = _now_ms()
+    try:
+        query_vec = embedder.encode_text(seed)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("semantic query encode failed")
+        return [], SEMANTIC_OMIT_ENCODER
+    enc_elapsed = _now_ms() - t_enc0
+    if enc_elapsed > encode_budget or over_deadline():
+        return [], SEMANTIC_OMIT_TIMEOUT
+    if not query_vec:
+        return [], SEMANTIC_OMIT_ENCODER
+
+    if over_deadline():
+        return [], SEMANTIC_OMIT_TIMEOUT
+
+    if now is None:
+        from elyra.memory.types import utc_now_iso
+
+        now = utc_now_iso()
+    now_dt = parse_iso_z(now)
+    horizon_start = now_dt - timedelta(hours=float(cfg.semantic_horizon_hours))
+
+    exclude: set[str] = set(exclude_atom_ids or ())
+    for a in open_moment_atoms:
+        exclude.add(a.atom_id)
+
+    try:
+        hits = index.search(
+            query_vec,
+            k=int(cfg.semantic_top_k),
+            channel="joint",
+            t_start=horizon_start,
+            t_end=now_dt,
+            exclude_atom_ids=exclude,
+            exclude_moment_id=open_moment_id,
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.exception("semantic index.search failed")
+        return [], SEMANTIC_OMIT_NO_INDEX
+
+    if over_deadline():
+        return [], SEMANTIC_OMIT_TIMEOUT
+
+    min_score = float(cfg.semantic_min_score)
+    # 0.0 = off (accept all scores).
+    apply_min = min_score > 0.0
+
+    raw_hit_count = 0
+    below_min = 0
+    packed: list[MealItem] = []
+    seen_ids: set[str] = set(exclude)
+    used = 0
+
+    for hit in hits or []:
+        if over_deadline():
+            # Partial pack is OK only if we already have items; else timeout omit.
+            if not packed:
+                return [], SEMANTIC_OMIT_TIMEOUT
+            break
+        raw_hit_count += 1
+        score = getattr(hit, "score", None)
+        if apply_min and score is not None and float(score) < min_score:
+            below_min += 1
+            continue
+
+        atom_id = getattr(hit, "atom_id", None)
+        atom = getattr(hit, "atom", None)
+        if atom is None and atom_id:
+            try:
+                atom = store.get_atom(str(atom_id))
+            except Exception:  # noqa: BLE001
+                atom = None
+        if atom is None:
+            continue
+
+        parent, via_parcel = _map_parcel_to_parent(store, atom)
+        if parent is None:
+            continue
+        if parent.atom_id in seen_ids:
+            continue  # temporal/episodic win (KD11) or already packed
+        # Skip parcel-kind if somehow still parcel (parent missing path).
+        if parent.kind in _RAW_EXCLUDE_KINDS and parent.kind != "parcel":
+            continue
+        # Do not include moment_meta / summary as semantic body.
+        if parent.kind in ("moment_meta", "summary"):
+            continue
+
+        score_f = float(score) if score is not None else None
+        label = _semantic_label(via_parcel=via_parcel, score=score_f)
+        body = format_atom_line(parent)
+        item = _item_from_parts(
+            atom_id=parent.atom_id,
+            channel="semantic",
+            label=label,
+            content=body,
+            t_start=parent.t_start,
+            meta={
+                "score": score_f,
+                "via_parcel": via_parcel,
+                "hit_atom_id": atom.atom_id,
+                "kind": parent.kind,
+                "moment_id": parent.moment_id,
+            },
+        )
+        if used + item.token_estimate > cap and packed:
+            continue
+        if used + item.token_estimate > cap and not packed:
+            # Single hit larger than cap: skip rather than exceed.
+            continue
+        packed.append(item)
+        seen_ids.add(parent.atom_id)
+        used += item.token_estimate
+
+    if not packed and raw_hit_count > 0 and apply_min and below_min == raw_hit_count:
+        return [], SEMANTIC_OMIT_MIN_SCORE
+
+    return packed, None
+
+
+# ---------------------------------------------------------------------------
 # Compose
 # ---------------------------------------------------------------------------
 
@@ -855,11 +1134,18 @@ def compose_meal(
     now: datetime | str | None = None,
     settings: MemorySettings | None = None,
     open_moment_atoms: Sequence[Atom] | None = None,
+    index: Any | None = None,
+    embedder: Any | None = None,
 ) -> MealPackage:
-    """Compose labeled temporal + episodic package under ``budget_tokens``.
+    """Compose labeled temporal + episodic [+ semantic] package under budget.
 
     Does not load prompts; pass ``system_text`` / ``orient_text`` for fixed cost.
     Does **not** mutate the store (slide-off is meal-only).
+
+    When ``settings.semantic_enabled`` is false, Phase 1 budget math and
+    channels only (golden parity). When true, ``split_memory_budget_v2`` and
+    optional ``select_semantic`` (pass ``index`` / warm ``embedder``).
+    Message order (KD10): episodic → semantic → temporal.
     """
     cfg = settings or MemorySettings()
     if now is None:
@@ -868,11 +1154,15 @@ def compose_meal(
         now = utc_now_iso()
     now_dt = parse_iso_z(now)
 
-    _fixed, episodic_cap, temporal_cap = split_memory_budget(
+    _fixed, semantic_cap, episodic_cap, temporal_cap = split_memory_budget_v2(
         budget_tokens,
         system_text=system_text,
         orient_text=orient_text,
+        semantic_enabled=bool(cfg.semantic_enabled),
+        semantic_fraction=cfg.semantic_fraction,
         episodic_fraction=cfg.episodic_fraction,
+        episodic_fraction_with_semantic=cfg.episodic_fraction_with_semantic,
+        temporal_min_fraction=cfg.temporal_min_fraction,
     )
 
     # Open moment atoms.
@@ -917,8 +1207,27 @@ def compose_meal(
     )
     temporal_items = _temporal_items(kept, compact, open_moment_id)
 
-    # Message order packing: episodic then temporal (compact inside temporal).
-    items = list(episodic_items) + list(temporal_items)
+    # Semantic supporting channel (Phase 2).
+    semantic_items: list[MealItem] = []
+    semantic_omitted: str | None = None
+    if cfg.semantic_enabled:
+        # Temporal + episodic win over semantic (KD11).
+        exclude = open_ids | _atom_ids_in_meal_items(episodic_items)
+        exclude |= _atom_ids_in_meal_items(temporal_items)
+        semantic_items, semantic_omitted = select_semantic(
+            store,
+            index=index,
+            embedder=embedder,
+            open_moment_atoms=temporal_atoms,
+            open_moment_id=open_moment_id,
+            cap_tokens=semantic_cap,
+            settings=cfg,
+            now=now_dt,
+            exclude_atom_ids=exclude,
+        )
+
+    # Message order (KD10): episodic → semantic → temporal (compact in temporal).
+    items = list(episodic_items) + list(semantic_items) + list(temporal_items)
     total = sum(i.token_estimate for i in items)
     channels = tuple(dict.fromkeys(i.channel for i in items))
 
@@ -929,6 +1238,7 @@ def compose_meal(
         compact_text=compact,
         channels_present=channels,
         open_moment_id=open_moment_id,
+        semantic_omitted_reason=semantic_omitted,
     )
 
 
@@ -985,8 +1295,10 @@ def compose_outer_messages(
     settings: MemorySettings | None = None,
     open_moment_atoms: Sequence[Atom] | None = None,
     package: MealPackage | None = None,
+    index: Any | None = None,
+    embedder: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Build outer message list: system → episodic → temporal → orient.
+    """Build outer message list: system → episodic → semantic → temporal → orient.
 
     Chain (tool hops) is owned by doloop and is **not** included here.
     Pass prebuilt ``package`` to avoid re-compose when caller already has one.
@@ -1001,6 +1313,8 @@ def compose_outer_messages(
             now=now,
             settings=settings,
             open_moment_atoms=open_moment_atoms,
+            index=index,
+            embedder=embedder,
         )
 
     messages: list[dict[str, Any]] = []
@@ -1226,9 +1540,15 @@ def expand_memory_meal_for_provider(
 
 __all__ = [
     "EPISODIC_MAX_PRIOR_MOMENTS",
+    "SEMANTIC_OMIT_EMPTY_SEED",
+    "SEMANTIC_OMIT_ENCODER",
+    "SEMANTIC_OMIT_MIN_SCORE",
+    "SEMANTIC_OMIT_NO_INDEX",
+    "SEMANTIC_OMIT_TIMEOUT",
     "MealItem",
     "MealPackage",
     "build_compact_text",
+    "build_semantic_query_seed",
     "compose_meal",
     "compose_outer_messages",
     "expand_memory_meal_for_provider",
@@ -1236,5 +1556,6 @@ __all__ = [
     "meal_item_to_message",
     "moment_id_short",
     "select_episodic",
+    "select_semantic",
     "slide_off_temporal",
 ]
