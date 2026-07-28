@@ -82,7 +82,7 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | `architecture/` (to be created as phases ship) | **Detailed post-implement manuals** mapping code ↔ philosophy |
 | [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable embedding runtime (when written) |
 
-Canonical tree: **`docs/stretch-2/`**. Older pointer folder `docs/stretch-2-memory/` should redirect readers here.
+All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
 ---
 
