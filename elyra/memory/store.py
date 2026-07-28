@@ -102,8 +102,17 @@ def open_memory_store(
 ) -> MemoryStore:
     """Factory. backend=jsonl always available.
 
-    backend=lance requires optional ``lancedb`` (``elyra[memory-lance]``);
-    falls back to jsonl + warning on ImportError.
+    backend=lance requires optional ``lancedb`` (``elyra[memory-lance]``).
+
+    Soft fall-back to jsonl + warning on:
+    - ``ImportError`` (extra not installed)
+    - construction / connect / open failures (OSError, RuntimeError, …)
+
+    Native crashes (e.g. segfault in ``lancedb.connect`` on unsupported
+    Python builds) are **fatal by design** — they cannot be caught in-process.
+    Prefer a supported Python for the wheel, or set ``backend=jsonl``.
+    Soft fall-back is logged loudly so operators notice dual-path risk
+    (atoms may already exist under ``memory/lance/`` vs ``atoms.jsonl``).
     """
     cfg = settings or MemorySettings()
     backend = (cfg.backend or "jsonl").strip().lower()
@@ -113,13 +122,22 @@ def open_memory_store(
             # before constructing LanceMemoryStore.
             import lancedb  # noqa: F401, PLC0415
             from elyra.memory.lance_store import LanceMemoryStore  # noqa: PLC0415
+
+            return LanceMemoryStore(paths, cfg)
         except ImportError:
             _LOG.warning(
                 "memory backend=lance requested but lancedb not installed; "
                 "using jsonl (pip install elyra[memory-lance])"
             )
-        else:
-            return LanceMemoryStore(paths, cfg)
+        except Exception as exc:
+            # Soft fall-back for non-segfault open failures (disk, schema, …).
+            # Segfaults remain fatal (uncatchable). See docstring.
+            _LOG.warning(
+                "memory backend=lance open failed (%s: %s); using jsonl. "
+                "Existing lance table data (if any) is not migrated.",
+                type(exc).__name__,
+                exc,
+            )
     elif backend not in ("jsonl", "lance"):
         _LOG.warning("unknown memory backend %r; using jsonl", backend)
 

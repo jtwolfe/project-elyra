@@ -115,7 +115,8 @@ class JsonlMemoryStore:
             if "schema_version" not in existing:
                 existing["schema_version"] = SCHEMA_VERSION
                 changed = True
-            if "backend" not in existing:
+            # Record active backend when this store opens (e.g. lance→jsonl fall-back).
+            if existing.get("backend") != "jsonl":
                 existing["backend"] = "jsonl"
                 changed = True
             if "created_at" not in existing:

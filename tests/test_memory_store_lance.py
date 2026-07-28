@@ -381,26 +381,42 @@ def test_close_rejects_ops(store):
         store.put_atom(_atom(t="2026-07-28T10:00:00Z"))
 
 
-def test_factory_import_error_falls_back_to_jsonl(paths, monkeypatch):
-    """When lancedb cannot be imported, factory opens JsonlMemoryStore."""
-    import builtins
+def test_spill_then_shrink_reloads_short_body(paths):
+    """Blob → short body must force inline; reopen must not revive blob."""
+    from elyra.memory.types import atom_replace
 
-    from elyra.memory.jsonl_store import JsonlMemoryStore
+    settings = MemorySettings(
+        backend="lance", atom_max_chars=50_000, inline_max_chars=32
+    )
+    store = open_memory_store(paths, settings)
+    try:
+        aid = new_atom_id()
+        long_text = "x" * 100
+        a = store.put_atom(
+            _atom(t="2026-07-28T10:00:00Z", text=long_text, atom_id=aid)
+        )
+        assert a.content_ref.startswith("blob:")
+        blob_rel = a.content_ref[len("blob:") :]
+        blob_path = memory_root(paths) / blob_rel
+        assert blob_path.is_file()
 
-    real_import = builtins.__import__
+        short = store.put_atom(
+            atom_replace(a, content_text="short", content_ref=a.content_ref)
+        )
+        assert short.content_text == "short"
+        assert short.content_ref == "inline"
+        assert store.get_atom(aid).content_text == "short"
+    finally:
+        store.close()
 
-    def _block_lancedb(name, *args, **kwargs):
-        if name == "lancedb" or name.startswith("lancedb."):
-            raise ImportError("simulated missing lancedb")
-        if name == "elyra.memory.lance_store" or name.endswith(".lance_store"):
-            raise ImportError("simulated missing lancedb")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", _block_lancedb)
-    s = open_memory_store(paths, MemorySettings(backend="lance"))
-    assert isinstance(s, JsonlMemoryStore)
-    assert s.health()["backend"] == "jsonl"
-    s.close()
+    store2 = open_memory_store(paths, settings)
+    try:
+        again = store2.get_atom(aid)
+        assert again is not None
+        assert again.content_text == "short"
+        assert again.content_ref == "inline"
+    finally:
+        store2.close()
 
 
 def test_protocol_runtime_checkable(store):

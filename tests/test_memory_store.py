@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -375,6 +376,60 @@ def test_spill_then_shrink_reloads_short_body(paths):
     assert again.content_text == "short"
     assert again.content_ref == "inline"
     store2.close()
+
+
+def test_factory_lance_import_error_falls_back_to_jsonl(paths, monkeypatch):
+    """Always-run: backend=lance with missing lancedb opens JsonlMemoryStore.
+
+    Lives in the JSONL suite so CI without a working lance wheel still covers
+    the soft fall-back path (lance suite may skip entirely).
+    """
+    import builtins
+
+    from elyra.memory.jsonl_store import JsonlMemoryStore
+
+    real_import = builtins.__import__
+
+    def _block_lancedb(name, *args, **kwargs):
+        if name == "lancedb" or name.startswith("lancedb."):
+            raise ImportError("simulated missing lancedb")
+        if name == "elyra.memory.lance_store" or name.endswith(".lance_store"):
+            raise ImportError("simulated missing lancedb")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _block_lancedb)
+    s = open_memory_store(paths, MemorySettings(backend="lance"))
+    assert isinstance(s, JsonlMemoryStore)
+    assert s.health()["backend"] == "jsonl"
+    # meta.json must reflect the live backend after fall-back.
+    meta = json.loads(memory_meta_path(paths).read_text(encoding="utf-8"))
+    assert meta["backend"] == "jsonl"
+    s.close()
+
+
+def test_factory_lance_open_failure_falls_back_to_jsonl(paths, monkeypatch):
+    """backend=lance with import ok but construct failure soft-falls to jsonl."""
+    import types
+
+    from elyra.memory.jsonl_store import JsonlMemoryStore
+
+    class _Boom:
+        def __init__(self, *args, **kwargs):
+            raise OSError("simulated lance open failure")
+
+    fake = types.ModuleType("elyra.memory.lance_store")
+    fake.LanceMemoryStore = _Boom  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "elyra.memory.lance_store", fake)
+    # Ensure ``import lancedb`` succeeds even when the package is absent.
+    if "lancedb" not in sys.modules:
+        monkeypatch.setitem(sys.modules, "lancedb", types.ModuleType("lancedb"))
+
+    s = open_memory_store(paths, MemorySettings(backend="lance"))
+    assert isinstance(s, JsonlMemoryStore)
+    assert s.health()["backend"] == "jsonl"
+    meta = json.loads(memory_meta_path(paths).read_text(encoding="utf-8"))
+    assert meta["backend"] == "jsonl"
+    s.close()
 
 
 def test_global_tail_excludes_summary(store):
