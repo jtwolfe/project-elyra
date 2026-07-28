@@ -1386,6 +1386,59 @@ class PresenceWorker:
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("memory idle encode drain failed")
 
+    def rebuild_vector_index(self, *, max_ms: int | None = None) -> dict[str, Any]:
+        """Operator-triggered ANN index rebuild (glass Vectors button).
+
+        ANN here means **approximate nearest-neighbor** vector index (Lance),
+        not re-loading Nemotron. Rebuilds the search index over **already
+        stored** vectors; does not re-encode atoms. Best-effort; never raises.
+        """
+        mem_cfg = self.settings.memory
+        store = self._memory
+        if store is None and (mem_cfg.write_atoms or mem_cfg.enabled or mem_cfg.semantic_enabled):
+            store = self._ensure_memory_store()
+        if store is None:
+            return {
+                "ok": False,
+                "error": "store_unavailable",
+                "optimized": False,
+            }
+        index = self._ensure_embedding_index()
+        if index is None:
+            return {
+                "ok": False,
+                "error": "index_unavailable",
+                "optimized": False,
+            }
+        try:
+            seed_fn = getattr(index, "seed_buffer", None)
+            if callable(seed_fn):
+                try:
+                    seed_fn(max_ms=int(mem_cfg.ann_optimize_max_ms or 200))
+                except Exception:  # noqa: BLE001
+                    _LOG.debug("index seed_buffer on rebuild failed", exc_info=True)
+            # Operator button: allow longer than idle soft budget (default 5s).
+            budget = max_ms
+            if budget is None:
+                idle = int(getattr(mem_cfg, "ann_optimize_max_ms", 200) or 200)
+                budget = max(idle, 5000)
+            result = index.optimize(max_ms=int(budget))
+            if not isinstance(result, dict):
+                result = {"ok": True, "optimized": bool(result), "result": result}
+            health = index.health() if hasattr(index, "health") else {}
+            out = dict(result)
+            out["health"] = health if isinstance(health, dict) else {}
+            out.setdefault("ok", True)
+            _LOG.info("memory vector index rebuild: %s", out)
+            return out
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("memory vector index rebuild failed")
+            return {
+                "ok": False,
+                "error": str(exc) or type(exc).__name__,
+                "optimized": False,
+            }
+
     def _idle_memory_optimize(self) -> None:
         """Idle-only ANN optimize / buffer seed (KD4). Never mid-hop.
 

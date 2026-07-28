@@ -324,12 +324,24 @@
               <button type="button" id="memory-vectors-apply" class="btn-secondary btn-sm">
                 Apply
               </button>
+              <button
+                type="button"
+                id="memory-vectors-rebuild"
+                class="btn-secondary btn-sm"
+                title="Rebuild approximate nearest-neighbor search index over stored vectors (does not re-run Nemotron)"
+              >
+                Rebuild ANN index
+              </button>
             </div>
+            <p class="muted status-helper memory-vectors-hint">
+              ANN = approximate nearest-neighbor <strong>search index</strong> (cosine over embeddings),
+              not the neural net. Rebuild speeds large corpora; small stores use full scan either way.
+            </p>
             <div id="memory-vectors-list" class="list-panel list-panel-auto">loading…</div>
             <div class="memory-neighbors-panel card">
               <div class="card-head">
                 <strong>Neighbor inspect</strong>
-                <span class="badge">ANN</span>
+                <span class="badge">cosine</span>
               </div>
               <div class="memory-neighbors-toolbar">
                 <label class="status-label" for="memory-neighbor-atom">Atom id</label>

@@ -145,6 +145,24 @@ class _ApiHarness:
             except json.JSONDecodeError:
                 return exc.code, body
 
+    def post(self, path: str, payload: dict[str, Any] | None = None) -> tuple[int, Any]:
+        data = json.dumps(payload if payload is not None else {}).encode("utf-8")
+        req = urllib.request.Request(
+            self.base + path,
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/json", "Content-Length": str(len(data))},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            try:
+                return exc.code, json.loads(body)
+            except json.JSONDecodeError:
+                return exc.code, body
+
 
 def test_memory_overview_vectors_live(paths):
     h = _ApiHarness(paths)
@@ -256,6 +274,37 @@ def test_neighbors_requires_seed(paths):
         assert code == 400
         assert body["ok"] is False
         assert body["neighbors"] == []
+    finally:
+        h.close()
+
+
+def test_vectors_rebuild_endpoint(paths):
+    """POST /api/memory/vectors/rebuild rebuilds ANN index (not re-encode)."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+        ),
+    )
+    try:
+        # Index may be Null on JSONL — rebuild still returns a structured body.
+        code, body = h.post("/api/memory/vectors/rebuild", {})
+        assert code == 200, body
+        assert "ok" in body
+        assert "memory" in body
+        # optimized may be False on Null index; must not 500.
+        assert body.get("error") in (None, "index_unavailable", "store_unavailable") or (
+            body.get("ok") is True or body.get("optimized") is False
+        )
+        # Bad max_ms
+        code, bad = h.post("/api/memory/vectors/rebuild", {"max_ms": "nope"})
+        assert code == 400
+        assert bad["ok"] is False
     finally:
         h.close()
 

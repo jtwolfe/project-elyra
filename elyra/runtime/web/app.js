@@ -43,11 +43,14 @@ const memoryVectorsHealth = $("#memory-vectors-health");
 const memoryVectorsList = $("#memory-vectors-list");
 const memoryVectorStatus = $("#memory-vector-status");
 const memoryVectorsApply = $("#memory-vectors-apply");
+const memoryVectorsRebuild = $("#memory-vectors-rebuild");
 const memoryNeighborAtom = $("#memory-neighbor-atom");
 const memoryNeighborQ = $("#memory-neighbor-q");
 const memoryNeighborK = $("#memory-neighbor-k");
 const memoryNeighborsRun = $("#memory-neighbors-run");
 const memoryNeighborsList = $("#memory-neighbors-list");
+/** @type {boolean} */
+let memoryVectorsRebuildInFlight = false;
 /** @type {"context" | "atoms" | "vectors" | "graph"} */
 let memoryActiveTab = "context";
 /** @type {string | null} */
@@ -2479,6 +2482,11 @@ function renderVectorsHealth(data) {
       [
         idx.index_stale ? "stale" : "fresh",
         idx.search_mode ? `mode=${idx.search_mode}` : null,
+        idx.ann_index_built === true
+          ? "ann=built"
+          : idx.ann_index_built === false
+            ? "ann=off"
+            : null,
         idx.recent_buffer != null ? `buf=${idx.recent_buffer}` : null,
         idx.last_optimize ? `opt=${idx.last_optimize}` : null,
       ]
@@ -2710,6 +2718,11 @@ if (memoryVectorsApply) {
     refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
   });
 }
+if (memoryVectorsRebuild) {
+  memoryVectorsRebuild.addEventListener("click", () => {
+    rebuildVectorIndex().catch((e) => panelLoadError("Memory vectors rebuild", e));
+  });
+}
 if (memoryVectorStatus) {
   memoryVectorStatus.addEventListener("change", () => {
     if (memoryActiveTab === "vectors") {
@@ -2721,6 +2734,45 @@ if (memoryNeighborsRun) {
   memoryNeighborsRun.addEventListener("click", () => {
     runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
   });
+}
+
+/**
+ * Rebuild approximate nearest-neighbor index over stored embeddings.
+ * Does not re-run Nemotron / re-encode atoms.
+ */
+async function rebuildVectorIndex() {
+  if (memoryVectorsRebuildInFlight) return;
+  memoryVectorsRebuildInFlight = true;
+  if (memoryVectorsRebuild) {
+    memoryVectorsRebuild.disabled = true;
+    memoryVectorsRebuild.textContent = "Rebuilding…";
+  }
+  try {
+    const data = await fetchJson("/api/memory/vectors/rebuild", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const note =
+      (data && (data.note || data.error)) ||
+      (data && data.optimized === false
+        ? "optimize finished without a durable ANN (full scan still works)"
+        : "index rebuild requested");
+    if (typeof showNotice === "function") {
+      showNotice(
+        data && data.ok !== false
+          ? `Vector index: ${note}`
+          : `Vector index rebuild: ${note}`
+      );
+    }
+    await refreshMemoryVectors();
+  } finally {
+    memoryVectorsRebuildInFlight = false;
+    if (memoryVectorsRebuild) {
+      memoryVectorsRebuild.disabled = false;
+      memoryVectorsRebuild.textContent = "Rebuild ANN index";
+    }
+  }
 }
 
 function renderCatalog(el, items, emptyLabel, kind) {

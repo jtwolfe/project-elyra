@@ -479,6 +479,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_reset(body)
             return
 
+        if path == "/api/memory/vectors/rebuild":
+            self._post_memory_vectors_rebuild(body)
+            return
+
         if path == "/api/users":
             self._post_users(body)
             return
@@ -964,6 +968,77 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 },
             },
         )
+
+    def _post_memory_vectors_rebuild(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/vectors/rebuild — rebuild ANN vector index.
+
+        ANN = approximate nearest-neighbor **search index** over stored
+        embeddings (not re-running Nemotron). Optional body: ``max_ms`` int.
+        """
+        from elyra.memory.inspect import index_health_block
+
+        flags = self._memory_flags_block()
+        max_ms = body.get("max_ms") if isinstance(body, dict) else None
+        budget: int | None = None
+        if max_ms is not None:
+            try:
+                budget = int(max_ms)
+            except (TypeError, ValueError):
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "max_ms must be an int",
+                        "memory": flags,
+                    },
+                )
+                return
+            if budget < 0:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "max_ms must be >= 0",
+                        "memory": flags,
+                    },
+                )
+                return
+
+        rebuild = getattr(self.worker, "rebuild_vector_index", None)
+        if not callable(rebuild):
+            self._json(
+                501,
+                {
+                    "ok": False,
+                    "error": "rebuild_vector_index not available",
+                    "memory": flags,
+                },
+            )
+            return
+        try:
+            result = rebuild(max_ms=budget)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("POST /api/memory/vectors/rebuild failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "memory": flags,
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        # Attach fresh index health for glass.
+        try:
+            _emb, _q, index = self._vectors_worker_handles()
+            result["index"] = index_health_block(index)
+        except Exception:  # noqa: BLE001
+            result.setdefault("index", {})
+        result["memory"] = flags
+        # 200 even on optimized:false so glass can show note without throwing.
+        self._json(200, result)
 
     def _get_memory_vectors_atoms(self, qs: dict[str, list[str]]) -> None:
         """GET /api/memory/vectors/atoms — embedding status list (read-only)."""
