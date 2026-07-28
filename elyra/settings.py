@@ -1,7 +1,7 @@
 """Settings from defaults, optional elyra.toml, and CLI overrides.
 
-Scope: load/merge loop, wait, tools, goals, continuous, provider, usage
-(and common CLI) knobs.
+Scope: load/merge loop, wait, tools, goals, continuous, provider, usage,
+memory (and common CLI) knobs.
 In scope: tomllib, frozen defaults, precedence defaults < toml < CLI, type checks.
 Out of scope: runtime wiring, argv parsing, ELYRA_HOME (see config).
 """
@@ -18,10 +18,12 @@ import tomllib
 
 from elyra.llm.constants import MODEL_CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
+from elyra.memory.config import MEMORY_BACKENDS, MemorySettings
 
 _CLOSE_GATES = frozenset({"soft", "hard"})
 _PROVIDER_NAMES = frozenset({"xai", "local"})
 _CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
+_MEMORY_BACKENDS = MEMORY_BACKENDS
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,8 @@ class Settings:
     continuous: ContinuousSettings = field(default_factory=ContinuousSettings)
     provider: ProviderSettings = field(default_factory=ProviderSettings)
     usage: UsageSettings = field(default_factory=UsageSettings)
+    # Stretch 2 Phase 1 memory (defaults off: write_atoms=false, enabled=false).
+    memory: MemorySettings = field(default_factory=MemorySettings)
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"
     api_port: int = 8787
@@ -230,6 +234,10 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
         )
     if "usage" in data and isinstance(data["usage"], Mapping):
         kwargs["usage"] = _replace_section(settings.usage, data["usage"], "usage")
+    if "memory" in data and isinstance(data["memory"], Mapping):
+        kwargs["memory"] = _replace_section(
+            settings.memory, data["memory"], "memory"
+        )
 
     # get_type_hints resolves postponed annotations (str -> real types).
     top_types = get_type_hints(Settings)
@@ -308,6 +316,35 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(
                 f"{path}: expected None or non-empty str, got {coerced!r}"
             )
+        # Memory (Phase 1): backend allowlist + fraction/horizon/budget floors.
+        if path == "memory.backend" and coerced not in _MEMORY_BACKENDS:
+            raise ValueError(
+                f"{path}: expected one of {sorted(_MEMORY_BACKENDS)}, "
+                f"got {coerced!r}"
+            )
+        if path == "memory.episodic_fraction":
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path == "memory.episodic_horizon_hours" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        if path == "memory.ladder_max_ms_per_tick" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.max_tool_atoms_per_moment" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.atom_max_chars" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.model_promote_min_chars" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.protect_tail_atoms" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.tool_ok_preview_chars" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.regather_every_n_hops" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.compact_max_tokens" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         filtered[k] = coerced
 
     # Cross-field usage constraints use the post-merge effective values.

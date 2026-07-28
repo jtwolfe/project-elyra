@@ -1,8 +1,9 @@
 """Memory path roots and Phase 1 settings helpers.
 
-Scope: data/memory layout constants, MemorySettings defaults used by the store.
-In scope: path helpers, frozen MemorySettings (not yet wired into Settings).
-Out of scope: elyra.toml / Settings.memory merge (later PR), promote flags in loop.
+Scope: data/memory layout constants, MemorySettings defaults used by the store
+and nested under ``Settings.memory`` (elyra.toml / CLI merge in settings.py).
+In scope: path helpers, frozen MemorySettings, backend allowlist.
+Out of scope: promote/meal/ladder runtime wiring (presence / doloop).
 """
 
 from __future__ import annotations
@@ -27,19 +28,26 @@ MEMORY_INLINE_MAX_CHARS = 4000
 MEMORY_JSONL_COMPACT_BYTES = 8 * 1024 * 1024
 MEMORY_JSONL_COMPACT_DIRTY = 256
 
-_MEMORY_BACKENDS = frozenset({"jsonl", "lance"})
+# Valid ``MemorySettings.backend`` values (settings validation + factory).
+MEMORY_BACKENDS = frozenset({"jsonl", "lance"})
+_MEMORY_BACKENDS = MEMORY_BACKENDS  # alias for older call sites
 
 
 @dataclass(frozen=True)
 class MemorySettings:
-    """Phase 1 memory knobs (store/factory defaults; Settings wiring is later)."""
+    """Phase 1 memory knobs (defaults both false — no write, no meal).
 
-    enabled: bool = False  # meal path
+    Nested under ``Settings.memory``; loaded from ``[memory]`` in elyra.toml.
+    Store-only knobs (inline/compact) remain on this dataclass so factory and
+    toml can tune them without a second type.
+    """
+
+    enabled: bool = False  # meal path (PR6; unused by PR5 write path)
     write_atoms: bool = False  # promote path
     backend: str = "jsonl"  # jsonl | lance
     episodic_fraction: float = 0.20
     episodic_horizon_hours: float = 24.0
-    ladder_enabled: bool = True
+    ladder_enabled: bool = True  # runs if write_atoms or enabled
     ladder_max_ms_per_tick: int = 50
     regather_every_n_hops: int = 0  # 0 = off
     atom_max_chars: int = 8000
@@ -49,7 +57,7 @@ class MemorySettings:
     protect_tail_atoms: int = 12
     tool_ok_preview_chars: int = 240
     max_tool_atoms_per_moment: int = 48
-    # Store-only knobs (not all on Settings surface yet).
+    # Store-only knobs.
     inline_max_chars: int = MEMORY_INLINE_MAX_CHARS
     jsonl_compact_bytes: int = MEMORY_JSONL_COMPACT_BYTES
     jsonl_compact_dirty: int = MEMORY_JSONL_COMPACT_DIRTY
@@ -97,6 +105,7 @@ __all__ = [
     "ATOMS_JSONL",
     "LADDER_DIRNAME",
     "LADDER_STATE",
+    "MEMORY_BACKENDS",
     "MEMORY_DIRNAME",
     "MEMORY_INLINE_MAX_CHARS",
     "MEMORY_JSONL_COMPACT_BYTES",

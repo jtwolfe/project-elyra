@@ -1,7 +1,8 @@
 """Durable episodic memory atoms (Stretch 2 Phase 1).
 
-Public surface is intentionally narrow: types, errors, store Protocol/factory.
-Promote / meal / ladder land in later PRs and are not re-exported here yet.
+Public surface is intentionally narrow: types, errors, store Protocol/factory,
+MemorySettings. Promote / ladder / meal modules are importable but not all
+re-exported; write path wiring lives in doloop + presence (PR5).
 """
 
 from elyra.memory.config import MemorySettings, ensure_memory_dirs, memory_root

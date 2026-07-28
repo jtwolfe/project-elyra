@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
@@ -101,6 +101,63 @@ RunDoLoopFn = Callable[..., DoLoopResult]
 # Goal / task statuses that count as open work for outer moment_continue (K18).
 _OPEN_GOAL_STATUSES = frozenset({"open", "review"})
 _OPEN_TASK_STATUSES = frozenset({"ready", "in_progress", "blocked"})
+
+
+def _media_ids_from_wake(
+    wake: WakeItem,
+    *,
+    paths: ElyraPaths | None = None,
+) -> tuple[str, ...]:
+    """Resolve Stretch-1 media content ids for a social wake (best-effort).
+
+    Prefers payload ``media_ids`` / attachment ids; falls back to glass row
+    attachments for ``message_id`` when present.
+    """
+    payload = wake.payload or {}
+    raw = payload.get("media_ids")
+    if raw is None:
+        raw = payload.get("attachment_ids")
+    ids: list[str] = []
+    if isinstance(raw, str) and raw.strip():
+        ids.append(raw.strip())
+    elif isinstance(raw, (list, tuple)):
+        for x in raw:
+            if x:
+                ids.append(str(x))
+    # Attachment dicts may be embedded on the wake payload.
+    atts = payload.get("attachments")
+    if isinstance(atts, (list, tuple)):
+        for att in atts:
+            if isinstance(att, Mapping):
+                aid = att.get("id") or att.get("media_id")
+                if aid:
+                    ids.append(str(aid))
+            elif isinstance(att, str) and att.strip():
+                ids.append(att.strip())
+    # Glass row lookup when only message_id is known.
+    if not ids and payload.get("message_id") and paths is not None:
+        try:
+            from elyra.messages import get_message
+
+            row = get_message(str(payload["message_id"]), paths=paths)
+            if isinstance(row, dict):
+                glass_atts = row.get("attachments") or []
+                if isinstance(glass_atts, (list, tuple)):
+                    for att in glass_atts:
+                        if isinstance(att, dict):
+                            aid = att.get("id")
+                            if aid:
+                                ids.append(str(aid))
+        except Exception:  # noqa: BLE001
+            _LOG.exception("wake media_ids glass lookup failed")
+    # De-dupe preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for mid in ids:
+        if mid not in seen:
+            seen.add(mid)
+            out.append(mid)
+    return tuple(out)
 
 
 def _why_now(wake: WakeItem) -> str:
@@ -393,6 +450,12 @@ class PresenceWorker:
         )
         # Dev-speed pacing (default ON): inter-hop pause for followable glass.
         self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
+
+        # Stretch 2 memory store (lazy). Defaults write_atoms=false / enabled=false
+        # → never opened; meal still legacy until PR6.
+        self._memory: Any | None = None
+        self._memory_open_attempted = False
+        self._memory_open_failed = False
 
         self._phase: str = PHASE_IDLE
         self._busy = False
@@ -931,6 +994,7 @@ class PresenceWorker:
         _LOG.info("presence worker started")
         try:
             self._startup_recover()
+            self._ensure_memory_store()
             self._started = True
             while not self._stop.is_set():
                 wake: WakeItem | None = None
@@ -941,6 +1005,8 @@ class PresenceWorker:
                         # Still fire due timers/waits while idle.
                         with self._lock:
                             self._fire_due_unlocked()
+                        # Ladder refresh OUTSIDE lock (PR5 normative placement).
+                        self._idle_memory_ladder()
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
@@ -996,6 +1062,113 @@ class PresenceWorker:
             self._timers.check_timeouts()
         except Exception:  # noqa: BLE001
             _LOG.exception("timer/wait poll failed")
+
+    def _ensure_memory_store(self) -> Any | None:
+        """Open MemoryStore once when write_atoms or enabled; never raise.
+
+        Defaults both false → returns None without opening (legacy path).
+        On open failure: log once, leave ``self._memory`` None for the life of
+        the worker (promote/ladder become no-ops).
+        """
+        mem_cfg = self.settings.memory
+        if not (mem_cfg.write_atoms or mem_cfg.enabled):
+            return None
+        if self._memory is not None:
+            return self._memory
+        if self._memory_open_failed:
+            return None
+        if self._memory_open_attempted and self._memory is None:
+            return None
+        self._memory_open_attempted = True
+        try:
+            from elyra.memory.store import open_memory_store
+
+            self._memory = open_memory_store(self.paths, mem_cfg)
+            return self._memory
+        except Exception:  # noqa: BLE001 — store down must not kill presence
+            self._memory_open_failed = True
+            self._memory = None
+            _LOG.exception("memory store open failed; atoms disabled this run")
+            return None
+
+    def _memory_ladder_active(self) -> bool:
+        """True when ladder should run on idle / finalize (PR5 placement)."""
+        mem_cfg = self.settings.memory
+        if not mem_cfg.ladder_enabled:
+            return False
+        if not (mem_cfg.write_atoms or mem_cfg.enabled):
+            return False
+        return self._ensure_memory_store() is not None
+
+    def _idle_memory_ladder(self) -> None:
+        """Budgeted period-summary refresh outside the state lock (idle only)."""
+        if not self._memory_ladder_active():
+            return
+        store = self._memory
+        if store is None:
+            return
+        try:
+            from elyra.memory.ladder import refresh_due
+
+            max_ms = int(self.settings.memory.ladder_max_ms_per_tick)
+            refresh_due(store, max_ms=max_ms)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("memory ladder refresh_due failed")
+
+    def _finalize_memory_ladder_15m(self) -> None:
+        """Refresh the 15m window containing now after moment close (budgeted)."""
+        if not self._memory_ladder_active():
+            return
+        store = self._memory
+        if store is None:
+            return
+        try:
+            from elyra.memory.ladder import refresh_window
+
+            refresh_window(store, "15m", datetime.now(UTC))
+        except Exception:  # noqa: BLE001
+            _LOG.exception("memory ladder 15m finalize refresh failed")
+
+    def _promote_social_wake_unlocked(
+        self,
+        wake: WakeItem,
+        moment_id: str,
+        why: str,
+    ) -> None:
+        """Promote social wake observation after open_moment (caller holds lock).
+
+        Best-effort: never raises; no-op when write_atoms false or store down.
+        Non-social wakes must not call this (R6 / BUG-wake-01 density).
+        """
+        mem_cfg = self.settings.memory
+        if not mem_cfg.write_atoms:
+            return
+        store = self._ensure_memory_store()
+        if store is None:
+            return
+        payload = wake.payload or {}
+        content = payload.get("content")
+        content_s = str(content) if content is not None else None
+        message_id = payload.get("message_id")
+        message_id_s = str(message_id) if message_id is not None else None
+        media_ids = _media_ids_from_wake(wake, paths=self.paths)
+        try:
+            from elyra.memory.promote import promote_wake_observation
+
+            promote_wake_observation(
+                store,
+                moment_id,
+                content=content_s,
+                message_id=message_id_s,
+                media_ids=media_ids,
+                why_now=why,
+                settings=mem_cfg,
+            )
+        except Exception:  # noqa: BLE001 — never abort claim/open
+            _LOG.exception(
+                "memory promote_wake_observation failed moment_id=%s",
+                moment_id,
+            )
 
     def _claim_and_open(self) -> tuple[WakeItem, str] | None:
         """Under lock: fire due work, claim one wake, open moment, set phase.
@@ -1058,6 +1231,9 @@ class PresenceWorker:
             # User-band claim resets continuous streak (design C runtime state).
             if wake.kind in SOCIAL_WAKE_KINDS:
                 self._continuous.streak = 0
+                # Promote social wake observation while still under lock is fine
+                # (best-effort; failures never abort open). Call after open_moment.
+                self._promote_social_wake_unlocked(wake, moment_id, why)
 
             self._phase = PHASE_IN_MOMENT
             self._busy = True
@@ -1164,6 +1340,7 @@ class PresenceWorker:
         registry = self._ensure_registry()
         with self._lock:
             hop_delay = effective_hop_delay_seconds(self._dev_speed)
+        mem = self._ensure_memory_store()
         result = self._run_do_loop(
             client=self.client,
             registry=registry,
@@ -1177,6 +1354,8 @@ class PresenceWorker:
             continuous_enabled=cont_on,
             hop_delay_seconds=hop_delay,
             drain_interjections=self._drain_interjections,
+            memory_store=mem,
+            memory_settings=self.settings.memory,
         )
         return result, list(ctx.skills_used)
 
@@ -1250,6 +1429,10 @@ class PresenceWorker:
             self._active_moment_id = None
             if result and result.error:
                 self._worker_error = result.error
+
+        # After close (outside long critical sections): refresh 15m window for
+        # the just-ended moment when atom writes or meal are active.
+        self._finalize_memory_ladder_15m()
 
     def _maybe_enqueue_moment_continue_unlocked(
         self,

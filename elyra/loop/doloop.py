@@ -494,17 +494,56 @@ def enforce_in_turn_budget(
     return outer_prefix, chain_messages, did_reouter
 
 
-def _append_beat(
+def _record_beat(
     moments: Any | None,
     moment_id: str,
     beat: dict[str, Any],
+    *,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> None:
-    if moments is None or not moment_id:
-        return
-    try:
-        moments.append_beat(moment_id, beat)
-    except Exception:  # noqa: BLE001 — beat persistence must not kill the loop
-        _LOG.exception("append_beat failed moment_id=%s type=%s", moment_id, beat.get("type"))
+    """Append a moment tape beat, then optionally promote to memory atoms.
+
+    Promote is best-effort: failures are logged and never raised. When
+    ``write_atoms`` is false or store/settings are None, behaviour matches the
+    legacy append-only path.
+    """
+    if moments is not None and moment_id:
+        try:
+            moments.append_beat(moment_id, beat)
+        except Exception:  # noqa: BLE001 — beat persistence must not kill the loop
+            _LOG.exception(
+                "append_beat failed moment_id=%s type=%s",
+                moment_id,
+                beat.get("type"),
+            )
+            return
+    if (
+        memory_store is not None
+        and memory_settings is not None
+        and getattr(memory_settings, "write_atoms", False)
+    ):
+        try:
+            from elyra.memory.promote import promote_beat
+
+            promote_beat(
+                memory_store,
+                moment_id,
+                beat,
+                settings=memory_settings,
+                moment_tool_counts=promote_state,
+            )
+        except Exception:  # noqa: BLE001 — never raise into do-loop
+            _LOG.exception(
+                "memory promote failed moment_id=%s type=%s",
+                moment_id,
+                beat.get("type"),
+            )
+
+
+# Back-compat alias (tests / callers that still import the old name).
+_append_beat = _record_beat
 
 
 def _obs_user_message(text: str) -> dict[str, Any]:
@@ -578,6 +617,10 @@ def _drain_interjections(
     drain: Callable[[], Sequence[Any]] | None,
     moments: Any | None,
     moment_id: str,
+    *,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> None:
     if drain is None:
         return
@@ -596,10 +639,13 @@ def _drain_interjections(
         if not text:
             continue
         chain.append(_obs_user_message(text))
-        _append_beat(
+        _record_beat(
             moments,
             moment_id,
             {"type": "obs", "kind": "interjection", "content": text},
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
         )
 
 
@@ -622,6 +668,8 @@ def run_do_loop(
     drain_interjections: Callable[[], Sequence[Any]] | None = None,
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
 ) -> DoLoopResult:
     """Run the multi-hop model↔tools loop until a stop reason fires.
 
@@ -657,6 +705,10 @@ def run_do_loop(
         (dev speed mode). 0 disables. Does not invent work or wakes.
     moments:
         Optional MomentStore-like object with ``append_beat(moment_id, beat)``.
+    memory_store / memory_settings:
+        Optional Stretch 2 atom store + knobs. When ``write_atoms`` is true,
+        memorable beats are dual-written via promote. Defaults None preserve
+        legacy append-only behaviour (all existing tests).
 
     Free-text inject order (K8 extended)::
 
@@ -669,6 +721,10 @@ def run_do_loop(
     """
     loop = _loop_settings(settings)
     cont = _continuous_settings(settings)
+    # Resolve memory settings from full Settings when caller only passed store.
+    mem_settings = memory_settings
+    if mem_settings is None and isinstance(settings, Settings):
+        mem_settings = settings.memory
     now = clock or _now_factory
     t0 = started_at if started_at is not None else now()
     moment_id = ctx.moment_id or ""
@@ -677,6 +733,15 @@ def run_do_loop(
         if continuous_enabled is not None
         else bool(cont.enabled)
     )
+    promote_state: Any | None = None
+    if (
+        memory_store is not None
+        and mem_settings is not None
+        and getattr(mem_settings, "write_atoms", False)
+    ):
+        from elyra.memory.promote import PromoteState
+
+        promote_state = PromoteState()
 
     if outer_prefix is not None:
         initial_outer = [dict(m) for m in outer_prefix]
@@ -729,13 +794,16 @@ def run_do_loop(
             loop=loop,
             rebuild_outer=rebuild_outer,
             drain_interjections=drain_interjections,
+            memory_store=memory_store,
+            memory_settings=mem_settings,
+            promote_state=promote_state,
         )
     except UsageHardStopError as exc:
         # Dedicated catch BEFORE broad Exception so hard-stop is policy, not error.
         # Continuous will not auto-chain (policy ∉ MOMENT_CONTINUE_STOP_ALLOWLIST).
         err_detail = f"usage_hard_stop:{exc.level}:{exc.reason}"
         _LOG.warning("do-loop usage hard stop: %s", err_detail)
-        _append_beat(
+        _record_beat(
             moments,
             moment_id,
             {
@@ -743,6 +811,9 @@ def run_do_loop(
                 "stop_reason": STOP_POLICY,
                 "error": err_detail,
             },
+            memory_store=memory_store,
+            memory_settings=mem_settings,
+            promote_state=promote_state,
         )
         return DoLoopResult(
             stop_reason=STOP_POLICY,
@@ -765,10 +836,13 @@ def run_do_loop(
         )
     except Exception as exc:  # noqa: BLE001 — surface as stop error
         _LOG.exception("do-loop uncaught error")
-        _append_beat(
+        _record_beat(
             moments,
             moment_id,
             {"type": "stop", "stop_reason": STOP_ERROR, "error": str(exc)},
+            memory_store=memory_store,
+            memory_settings=mem_settings,
+            promote_state=promote_state,
         )
         return DoLoopResult(
             stop_reason=STOP_ERROR,
@@ -819,7 +893,20 @@ def _run_loop_body(
     loop: LoopSettings,
     rebuild_outer: Callable[[], list[dict[str, Any]]] | None,
     drain_interjections: Callable[[], Sequence[Any]] | None,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> DoLoopResult:
+    def rb(beat: dict[str, Any]) -> None:
+        _record_beat(
+            moments,
+            moment_id,
+            beat,
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
+        )
+
     while True:
         # Dev-speed pacing: pause before hop 2+ so glass is followable.
         if hop_delay_seconds > 0 and state.hop > 0:
@@ -839,7 +926,15 @@ def _run_loop_body(
             time_continue_declined=declined,
         )
         if pre is not None:
-            return _finish(state, pre, moments, moment_id)
+            return _finish(
+                state,
+                pre,
+                moments,
+                moment_id,
+                memory_store=memory_store,
+                memory_settings=memory_settings,
+                promote_state=promote_state,
+            )
 
         # Continue inject (only when not already declined by precheck).
         if should_inject_continue(
@@ -853,11 +948,7 @@ def _run_loop_body(
             state.chain_messages.append(_obs_user_message(host_line))
             state.continue_injects += 1
             state.last_activity = t
-            _append_beat(
-                moments,
-                moment_id,
-                {"type": "obs", "kind": "continue", "content": host_line},
-            )
+            rb({"type": "obs", "kind": "continue", "content": host_line})
 
         state.outer_prefix, state.chain_messages, did_re = enforce_in_turn_budget(
             state.outer_prefix,
@@ -936,7 +1027,7 @@ def _run_loop_body(
                 "r_markers": hygiene.original_reasoning_markers,
                 "flood": hygiene.any_flood,
             }
-        _append_beat(moments, moment_id, model_beat)
+        rb(model_beat)
 
         if result.tool_calls:
             # Tool path is not a free-text stop; clear last free-text flood flag.
@@ -951,9 +1042,21 @@ def _run_loop_body(
                 tool_cap=tool_cap,
                 now=now,
                 drain_interjections=drain_interjections,
+                memory_store=memory_store,
+                memory_settings=memory_settings,
+                promote_state=promote_state,
             )
             if stop is not None:
-                return _finish(state, stop, moments, moment_id, arm=state.arm_wait)
+                return _finish(
+                    state,
+                    stop,
+                    moments,
+                    moment_id,
+                    arm=state.arm_wait,
+                    memory_store=memory_store,
+                    memory_settings=memory_settings,
+                    promote_state=promote_state,
+                )
             continue
 
         # Free-text hop (no tool_calls) — candidate no_tools stop site.
@@ -969,6 +1072,9 @@ def _run_loop_body(
             hop_was_flood=hop_was_flood,
             moments=moments,
             moment_id=moment_id,
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
         )
 
         # Free-text inject order (K8 extended): skill_commit → no_speak →
@@ -988,15 +1094,13 @@ def _run_loop_body(
             state.skill_commit_sent = True
             state.pending_skill_commit = None
             state.skill_commit_injects += 1
-            _append_beat(
-                moments,
-                moment_id,
+            rb(
                 {
                     "type": "obs",
                     "kind": "skill_commit",
                     "content": host_line,
                     "skill": skill_name,
-                },
+                }
             )
             continue
 
@@ -1010,14 +1114,12 @@ def _run_loop_body(
         ):
             state.no_speak_nudge_sent = True
             state.chain_messages.append(_obs_user_message(NO_SPEAK_NUDGE))
-            _append_beat(
-                moments,
-                moment_id,
+            rb(
                 {
                     "type": "obs",
                     "kind": "no_speak_nudge",
                     "content": NO_SPEAK_NUDGE,
-                },
+                }
             )
             continue
 
@@ -1039,14 +1141,12 @@ def _run_loop_body(
             host_line = answer_speak_host_message()
             state.answer_speak_nudge_sent = True
             state.chain_messages.append(_obs_user_message(host_line))
-            _append_beat(
-                moments,
-                moment_id,
+            rb(
                 {
                     "type": "obs",
                     "kind": "answer_speak_nudge",
                     "content": host_line,
-                },
+                }
             )
             continue
 
@@ -1088,18 +1188,24 @@ def _run_loop_body(
             host_line = work_continue_host_message()
             state.chain_messages.append(_obs_user_message(host_line))
             state.work_continue_injects += 1
-            _append_beat(
-                moments,
-                moment_id,
+            rb(
                 {
                     "type": "obs",
                     "kind": "work_continue",
                     "content": host_line,
-                },
+                }
             )
             continue
 
-        return _finish(state, stop_for_no_tools(), moments, moment_id)
+        return _finish(
+                state,
+                stop_for_no_tools(),
+                moments,
+                moment_id,
+                memory_store=memory_store,
+                memory_settings=memory_settings,
+                promote_state=promote_state,
+            )
 
 
 def _skill_name_from_load(
@@ -1129,6 +1235,9 @@ def _handle_tool_batch(
     tool_cap: int,
     now: Callable[[], datetime],
     drain_interjections: Callable[[], Sequence[Any]] | None,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> str | None:
     """Execute tool_calls serially. Returns stop_reason or None to continue."""
     state.chain_messages.append(assistant_message_from_result(result))
@@ -1238,7 +1347,7 @@ def _handle_tool_batch(
                 "content": content,
             }
         )
-        _append_beat(
+        _record_beat(
             moments,
             moment_id,
             {
@@ -1250,9 +1359,12 @@ def _handle_tool_batch(
                 "ends_moment": tr.ends_moment,
                 "content": content[:tool_cap],
             },
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
         )
         if skipped:
-            _append_beat(
+            _record_beat(
                 moments,
                 moment_id,
                 {
@@ -1265,6 +1377,9 @@ def _handle_tool_batch(
                     "prior_error_reason": prior_error,
                     "content": content[:tool_cap],
                 },
+                memory_store=memory_store,
+                memory_settings=memory_settings,
+                promote_state=promote_state,
             )
             _LOG.info(
                 "skip-identical moment_id=%s tool=%s streak=%s skip_count=%s fp=%s",
@@ -1314,7 +1429,15 @@ def _handle_tool_batch(
             return reason or "policy"
 
     # Safe point: full batch complete without ends_moment.
-    _drain_interjections(state.chain_messages, drain_interjections, moments, moment_id)
+    _drain_interjections(
+        state.chain_messages,
+        drain_interjections,
+        moments,
+        moment_id,
+        memory_store=memory_store,
+        memory_settings=memory_settings,
+        promote_state=promote_state,
+    )
 
     # Post-batch thrash HOST (tool path — NOT free-text order). Last-fp only (v1).
     thrash_dec = should_inject_thrash_host(
@@ -1342,7 +1465,7 @@ def _handle_tool_batch(
             state.thrash_streak,
             state.thrash_last_fp,
         )
-        _append_beat(
+        _record_beat(
             moments,
             moment_id,
             {
@@ -1353,6 +1476,9 @@ def _handle_tool_batch(
                 "streak": state.thrash_streak,
                 "thrash_kind": thrash_dec.kind,
             },
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
         )
 
     # Phase C: arm thrash lesson request once after thrash HOST is in play
@@ -1365,7 +1491,7 @@ def _handle_tool_batch(
         # Count further identical fails of the thrashing fingerprint only.
         state.lesson_synth_fp = state.thrash_last_fp
         _LOG.info("thrash lesson request moment_id=%s", moment_id)
-        _append_beat(
+        _record_beat(
             moments,
             moment_id,
             {
@@ -1373,6 +1499,9 @@ def _handle_tool_batch(
                 "kind": "thrash_lesson",
                 "content": lesson_req,
             },
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
         )
 
     # Phase C: HOST-synthesized lesson after K additional *identical* fails.
@@ -1391,6 +1520,9 @@ def _handle_tool_batch(
             moments=moments,
             moment_id=moment_id,
             synthesized=True,
+            memory_store=memory_store,
+            memory_settings=memory_settings,
+            promote_state=promote_state,
         )
 
     return None
@@ -1414,6 +1546,9 @@ def _store_and_pin_lesson(
     moments: Any | None,
     moment_id: str,
     synthesized: bool = False,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> None:
     """Store compact lesson, set pin HOST, mark captured. No auto-stop."""
     body = (lesson or "").strip()
@@ -1434,7 +1569,7 @@ def _store_and_pin_lesson(
         synthesized,
         len(state.lessons),
     )
-    _append_beat(
+    _record_beat(
         moments,
         moment_id,
         {
@@ -1443,6 +1578,9 @@ def _store_and_pin_lesson(
             "content": pin,
             "synthesized": synthesized,
         },
+        memory_store=memory_store,
+        memory_settings=memory_settings,
+        promote_state=promote_state,
     )
 
 
@@ -1453,6 +1591,9 @@ def _maybe_capture_free_text_lesson(
     hop_was_flood: bool,
     moments: Any | None,
     moment_id: str,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> None:
     """Capture non-flood free-text as lesson after request; do not force stop."""
     if not state.lesson_request_sent or state.lesson_captured:
@@ -1471,6 +1612,9 @@ def _maybe_capture_free_text_lesson(
         moments=moments,
         moment_id=moment_id,
         synthesized=False,
+        memory_store=memory_store,
+        memory_settings=memory_settings,
+        promote_state=promote_state,
     )
 
 
@@ -1481,8 +1625,11 @@ def _finish(
     moment_id: str,
     *,
     arm: WaitArm | None = None,
+    memory_store: Any | None = None,
+    memory_settings: Any | None = None,
+    promote_state: Any | None = None,
 ) -> DoLoopResult:
-    _append_beat(
+    _record_beat(
         moments,
         moment_id,
         {
@@ -1497,6 +1644,9 @@ def _finish(
             "thrash_host_injects": state.thrash_host_sent,
             "thrash_skips": state.thrash_skip_count,
         },
+        memory_store=memory_store,
+        memory_settings=memory_settings,
+        promote_state=promote_state,
     )
     return DoLoopResult(
         stop_reason=stop_reason,

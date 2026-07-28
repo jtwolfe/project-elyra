@@ -70,6 +70,16 @@ def test_default_settings_match_design():
     assert s.usage.credits_stale_after_s == 3600.0
     assert s.usage.auto_throttle_model is False
     assert s.usage.throttle_model is None
+    # Memory defaults OFF (PR5: no write, no meal until dogfood / PR6).
+    assert s.memory.enabled is False
+    assert s.memory.write_atoms is False
+    assert s.memory.backend == "jsonl"
+    assert s.memory.episodic_fraction == 0.20
+    assert s.memory.episodic_horizon_hours == 24.0
+    assert s.memory.ladder_enabled is True
+    assert s.memory.ladder_max_ms_per_tick == 50
+    assert s.memory.link_across_moments is True
+    assert s.memory.max_tool_atoms_per_moment == 48
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert not hasattr(s, "context_tokens")
@@ -172,6 +182,99 @@ def test_settings_as_dict_round_structure():
     assert d["usage"]["account_hard_stop_percent"] == 95.0
     assert d["usage"]["credits_base_url"] == "https://cli-chat-proxy.grok.com"
     assert d["continuous"]["enabled"] is False
+    assert d["memory"]["enabled"] is False
+    assert d["memory"]["write_atoms"] is False
+    assert d["memory"]["backend"] == "jsonl"
+
+
+def test_load_settings_memory_toml(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+write_atoms = true
+enabled = false
+backend = "jsonl"
+episodic_fraction = 0.15
+episodic_horizon_hours = 12
+ladder_max_ms_per_tick = 25
+max_tool_atoms_per_moment = 10
+link_across_moments = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.write_atoms is True
+    assert s.memory.enabled is False
+    assert s.memory.backend == "jsonl"
+    assert s.memory.episodic_fraction == 0.15
+    assert s.memory.episodic_horizon_hours == 12.0
+    assert s.memory.ladder_max_ms_per_tick == 25
+    assert s.memory.max_tool_atoms_per_moment == 10
+    assert s.memory.link_across_moments is False
+    # Untouched memory defaults preserved
+    assert s.memory.ladder_enabled is True
+    assert s.memory.atom_max_chars == 8000
+
+
+def test_cli_overrides_memory_win_over_toml(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nwrite_atoms = true\nepisodic_fraction = 0.3\n",
+        encoding="utf-8",
+    )
+    base = load_settings(tmp_path)
+    merged = merge_cli_overrides(
+        base,
+        {"memory": {"write_atoms": False, "enabled": True}},
+    )
+    assert merged.memory.write_atoms is False
+    assert merged.memory.enabled is True
+    assert merged.memory.episodic_fraction == 0.3  # from toml
+
+
+def test_invalid_memory_backend_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nbackend = "sqlite"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.backend"):
+        load_settings(tmp_path)
+
+
+def test_invalid_memory_episodic_fraction_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nepisodic_fraction = 1.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.episodic_fraction"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nepisodic_fraction = -0.1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.episodic_fraction"):
+        load_settings(tmp_path)
+
+
+def test_invalid_memory_horizon_and_ladder_ms_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nepisodic_horizon_hours = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.episodic_horizon_hours"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nladder_max_ms_per_tick = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ladder_max_ms_per_tick"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nmax_tool_atoms_per_moment = -5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.max_tool_atoms_per_moment"):
+        load_settings(tmp_path)
 
 
 def test_load_settings_provider_and_usage_toml(tmp_path):
