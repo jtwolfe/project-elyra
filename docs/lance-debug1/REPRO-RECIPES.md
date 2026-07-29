@@ -5,9 +5,10 @@ Step-by-step operator recipes. Prefer quarantine for R1; never run deny-list ops
 | Recipe | Class | Proves | Scripts |
 |--------|-------|--------|---------|
 | **R1** | R1 | H1 / H1a / H1b (offline smoking gun) | `quarantine_copy.sh`, `env_check.py`, `api_matrix.py` |
-| R2 | R2 + R1 | Process thin vs disk full (glass + snapshot) | glass HTTP + R1 on snapshot (P03) |
+| **R2** | R2 + R1 | Process thin vs disk full (glass + snapshot) | glass HTTP + R1 on snapshot (P03) |
 | **R3** | **W1** | H2 / H5 (load inherits thin set) | `load_parity.py` (+ prior api_matrix) |
 | R3b | R1 | H3 / H10 residual (optional if H1a+H1b) | `version_sample.py` |
+| R4 | R1 | H8/H9 cascade disconfirm (optional) | `consumer_compare.py` |
 
 Normative design: [design-inspection-plan.md](design-inspection-plan.md). Safety: [SAFETY.md](SAFETY.md).
 
@@ -75,11 +76,23 @@ python docs/lance-debug1/scripts/api_matrix.py --uri /tmp/tiny-lance --out /tmp/
 
 ## Recipe R2 — Process restart thin world (glass + offline; P03)
 
-1. Restart Elyra; before heavy promote, capture glass `GET /api/memory` atom_count.
-2. Take quarantine snapshot (idle preferred) and run **R1** on the snapshot.
+1. Restart Elyra; **before heavy promote**, capture glass payloads.
+2. Take quarantine snapshot (idle preferred) and run **R1** on the snapshot (**not** dual live connect).
 3. Compare glass process count ≈ `n_arrow` ≪ snapshot `n_full`.
+4. Note glass Atoms **newest-first** kinds may be haiku tools while bare `to_arrow` kinds are table-order prefix (summary+tool) — split expectation.
 
-Details: [procedures/P03-inprocess-vs-oop.md](procedures/P03-inprocess-vs-oop.md) (adjacency PR4).
+```bash
+BASE="${ELYRA_GLASS_BASE:-http://127.0.0.1:8787}"
+RUN=docs/lance-debug1/evidence/$(date +%Y-%m-%d)-run-01
+mkdir -p "$RUN/glass"
+curl -sS "$BASE/api/memory" | tee "$RUN/glass/overview.json"
+curl -sS "$BASE/api/memory/atoms?limit=200" | tee "$RUN/glass/atoms.json"
+curl -sS "$BASE/api/memory/vectors" | tee "$RUN/glass/vectors.json"
+curl -sS "$BASE/api/memory/context" | tee "$RUN/glass/context.json"
+# then R1 quarantine + api_matrix as in Recipe R1
+```
+
+Details: [procedures/P03-inprocess-vs-oop.md](procedures/P03-inprocess-vs-oop.md), [adjacency/glass.md](adjacency/glass.md).
 
 ---
 
@@ -122,10 +135,31 @@ Details: [procedures/P08-version-sampling.md](procedures/P08-version-sampling.md
 
 ---
 
+## Recipe R4 — Consumer thin vs full (optional R1; P06/P09)
+
+**When:** After R1; documents H8/H9 cascade. Does **not** block provisional H1a+H2 dossier. **No** product `_load` patch.
+
+```bash
+export PYTHONPATH=.
+python docs/lance-debug1/scripts/consumer_compare.py \
+  --uri "$LANCE_DEBUG_URI" \
+  --weave-report \
+  --out "$RUN/consumer-compare.json"
+```
+
+**Expect:** full corpus has kinds/neighbors absent from thin set (`h8_primary_disconfirmed`); weave `one_endpoint_outside_thin` often &gt; 0 (H9 cascade signal). Split: thin kind hist = table prefix, not glass newest-first haiku.
+
+Details: [procedures/P06-graph-traverse-meal.md](procedures/P06-graph-traverse-meal.md), [procedures/P09-promote-weave-links.md](procedures/P09-promote-weave-links.md), [adjacency/](adjacency/), [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md).
+
+---
+
 ## Related
 
 - [procedures/P01-offline-api-matrix.md](procedures/P01-offline-api-matrix.md)
 - [procedures/P02-load-path-parity.md](procedures/P02-load-path-parity.md)
+- [procedures/P03-inprocess-vs-oop.md](procedures/P03-inprocess-vs-oop.md)–[P07](procedures/P07-glass-serialization.md), [P09](procedures/P09-promote-weave-links.md)
 - [procedures/P08-version-sampling.md](procedures/P08-version-sampling.md)
+- [adjacency/glass.md](adjacency/glass.md) (curl notes)
 - [scripts/README.md](scripts/README.md)
 - [HYPOTHESES.md](HYPOTHESES.md)
+- [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md)

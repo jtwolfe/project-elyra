@@ -10,7 +10,7 @@ Hermetic helpers colocated with the inspection package. **Not** product entrypoi
 | `quarantine_copy.sh` | copy → enables W1 | PR2 | Full memory-root copy + canonical marker |
 | `load_parity.py` | **W1** | PR3 | Open store on quarantine; compare to api_matrix |
 | `version_sample.py` | R1 | PR3 | `list_versions` / read-only checkout only |
-| `consumer_compare.py` | R1 | PR4 | Optional GraphView thin vs full row sets |
+| `consumer_compare.py` | R1 | PR4 | Optional GraphView thin vs full + weave report |
 | `fixtures/` | R0 + fixture create | PR2 | Tiny synthetic tables for CI probes |
 
 ---
@@ -97,4 +97,28 @@ python docs/lance-debug1/scripts/version_sample.py \
 
 See [../procedures/P02-load-path-parity.md](../procedures/P02-load-path-parity.md), [../procedures/P08-version-sampling.md](../procedures/P08-version-sampling.md), [../VERSION-ARCHAEOLOGY.md](../VERSION-ARCHAEOLOGY.md), [../API-COMPARISON.md](../API-COMPARISON.md).
 
-Later PRs add `consumer_compare.py`; do not invent product entrypoints under top-level `scripts/`.
+---
+
+## PR4 available
+
+```bash
+export PYTHONPATH=.
+export LANCE_DEBUG_URI=/tmp/lance-q-YYYYMMDD/data/memory/lance
+RUN=docs/lance-debug1/evidence/$(date +%Y-%m-%d)-run-01
+
+# Optional R1: GraphView thin vs full row sets + optional weave (P06/P09)
+python docs/lance-debug1/scripts/consumer_compare.py \
+  --uri "$LANCE_DEBUG_URI" \
+  --weave-report \
+  --out "$RUN/consumer-compare.json"
+```
+
+| Script | Key rules |
+|--------|-----------|
+| `consumer_compare.py` | R1 only (no store open); ephemeral dict stores; structural GraphView; `--weave-report` for H9 edge cross-thin counts; no live data open by default |
+
+Procedures: [P03](../procedures/P03-inprocess-vs-oop.md)–[P07](../procedures/P07-glass-serialization.md), [P09](../procedures/P09-promote-weave-links.md).  
+Adjacency: [../adjacency/](../adjacency/). Glass curls: [../adjacency/glass.md](../adjacency/glass.md).  
+Matrix: [../EVIDENCE-MATRIX.md](../EVIDENCE-MATRIX.md).
+
+Do not invent product entrypoints under top-level `scripts/`.

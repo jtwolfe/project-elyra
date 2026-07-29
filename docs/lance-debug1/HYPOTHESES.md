@@ -87,6 +87,7 @@ Status values: `untested` | `supported` | `refuted` | `partial` | `blocked`.
 
 - Default expectation: D/E/F/G symptoms are **downstream of B** (thin load) unless disproven.
 - H11/H12 stay cross-linked to known-bugs; not Lance root without R1 (H1a/H1b).
+- **Procedure checks (PR4):** [procedures/P05](procedures/P05-embed-index-adjacency.md)–[P07](procedures/P07-glass-serialization.md), [P09](procedures/P09-promote-weave-links.md); writeups under [adjacency/](adjacency/); matrix [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md). Status flips only after dogfood evidence (PR5).
 
 ### H10 — Migration residual / historical collapse
 

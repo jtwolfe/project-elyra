@@ -1,6 +1,6 @@
 # Lance debug package 1 (`docs/lance-debug1`)
 
-**Status:** PR3 ready — `load_parity` (W1) + `version_sample` (R1) + P02/P08 + VERSION-ARCHAEOLOGY / API-COMPARISON templates; dogfood evidence not yet sealed.
+**Status:** PR4 ready — adjacency procedures P03–P07/P09 + `adjacency/*` + EVIDENCE-MATRIX + optional `consumer_compare.py` + glass curl notes; dogfood evidence seal still PR5.
 
 | Field | Value |
 |-------|--------|
@@ -48,11 +48,13 @@ docs/lance-debug1/
 ├── TO-ARROW-CALLERS.md          # Every to_arrow / head / count_rows site
 ├── API-COMPARISON.md            # Template: offline + process comparison (PR3)
 ├── VERSION-ARCHAEOLOGY.md       # Version sampling plan + H10 residual (PR3)
-├── procedures/                  # P01–P02, P08 filled; others stubs until later PRs
+├── procedures/                  # P01–P09 filled (P08 optional polish)
+├── adjacency/                   # Embed / graph / meal / glass / promote-weave (PR4)
+├── EVIDENCE-MATRIX.md           # Observation × hypothesis × bucket (PR4)
 ├── evidence/                    # Run dirs + templates
-├── scripts/                     # Hermetic helpers (api_matrix, load_parity, …)
-├── REPRO-RECIPES.md             # R1 offline smoking gun (PR2); R2/R3 notes
-└── (later) EVIDENCE-MATRIX.md, adjacency/, BUG-DOSSIER.md
+├── scripts/                     # Hermetic helpers (api_matrix, load_parity, consumer_compare, …)
+├── REPRO-RECIPES.md             # R1–R3b + R2 glass path
+└── (later) BUG-DOSSIER.md
 ```
 
 ---
@@ -68,14 +70,14 @@ docs/lance-debug1/
 | [FAULT-BUCKETS.md](FAULT-BUCKETS.md) | Buckets A–G | PR1 |
 | [CODE-PATH-MAP.md](CODE-PATH-MAP.md) | Call graph + fresh line pins | PR1 |
 | [TO-ARROW-CALLERS.md](TO-ARROW-CALLERS.md) | `to_arrow` / related call matrix | PR1 |
-| [procedures/](procedures/) | P01–P09 (P01 PR2; P02/P08 PR3) | PR1 stubs; fill PR2–PR4 |
+| [procedures/](procedures/) | P01–P09 (P01–P04/P05–P07/P09 ready; P08 optional) | PR1–PR4 |
 | [evidence/](evidence/) | Templates + per-run evidence | PR1 templates; fill PR5 |
-| [scripts/](scripts/) | Probe helpers (`env_check`, `api_matrix`, `load_parity`, …) | PR1+ |
+| [scripts/](scripts/) | Probe helpers (`env_check`, `api_matrix`, `load_parity`, `consumer_compare`, …) | PR1+ |
 | [API-COMPARISON.md](API-COMPARISON.md) | Structured API comparison results | PR3 |
-| [REPRO-RECIPES.md](REPRO-RECIPES.md) | Step-by-step repros (R1) | PR2 |
-| `EVIDENCE-MATRIX.md` | Observation × hypothesis × bucket | PR4 |
+| [REPRO-RECIPES.md](REPRO-RECIPES.md) | Step-by-step repros (R1–R3b) | PR2+ |
+| [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md) | Observation × hypothesis × bucket | PR4 |
 | [VERSION-ARCHAEOLOGY.md](VERSION-ARCHAEOLOGY.md) | Version sampling plan/results + H10 residual | PR3 |
-| `adjacency/` | Embed / graph / meal / glass cascade | PR4 |
+| [adjacency/](adjacency/) | Embed / graph / meal / glass / promote-weave cascade | PR4 |
 | `BUG-DOSSIER.md` | Final bug description (exit; **not** a fix auth) | PR5 |
 
 ---
@@ -87,10 +89,10 @@ docs/lance-debug1/
 | Scaffold + safety + hypotheses + buckets | **Done (PR1)** |
 | P01 `api_matrix` + quarantine_copy + env_check | **Done (PR2)** |
 | P02 load_parity + P08 version_sample | **Done (PR3)** |
-| Adjacency P03–P07, P09 | Pending PR4 |
+| Adjacency P03–P07, P09 + EVIDENCE-MATRIX + consumer_compare | **Done (PR4)** |
 | Dogfood evidence + BUG-DOSSIER | Pending PR5 |
 
-**Hypothesis sequencing (critical path):** H1a → H1b → H2 first. If high-confidence, provisional root-cause may be drafted early; H4/P08 demoted if default-limit proven.
+**Hypothesis sequencing (critical path):** H1a → H1b → H2 first. If high-confidence, provisional root-cause may be drafted early; H4/P08 demoted if default-limit proven. **Adjacency (H6–H9, H11–H12)** documents cascade for the dossier and must not block that provisional statement.
 
 ---
 
@@ -102,7 +104,7 @@ docs/lance-debug1/
 4. Update [HYPOTHESES.md](HYPOTHESES.md) statuses only from procedure evidence.
 5. Never patch `elyra/memory/**` in lance-debug1 PRs. Merging the dossier does **not** authorize `_load` changes.
 
-### Scripts (PR2 + PR3)
+### Scripts (PR2–PR4)
 
 ```bash
 # Optional: refresh TO-ARROW-CALLERS pins from this worktree
@@ -130,9 +132,15 @@ python docs/lance-debug1/scripts/load_parity.py \
 python docs/lance-debug1/scripts/version_sample.py \
   --uri "$LANCE_DEBUG_URI" --samples 5 \
   --out "$RUN/version-sample.json"
+
+# Optional R1 consumer thin vs full + weave (PR4; P06/P09)
+python docs/lance-debug1/scripts/consumer_compare.py \
+  --uri "$LANCE_DEBUG_URI" --weave-report \
+  --out "$RUN/consumer-compare.json"
 ```
 
-See [scripts/README.md](scripts/README.md) and [REPRO-RECIPES.md](REPRO-RECIPES.md).
+Glass R2 curl notes: [adjacency/glass.md](adjacency/glass.md).  
+See [scripts/README.md](scripts/README.md), [REPRO-RECIPES.md](REPRO-RECIPES.md), [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md).
 
 ---
 
