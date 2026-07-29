@@ -208,10 +208,10 @@ class LanceMemoryStore:
         self._open_db()
         self._load()
         # KD-R11: eager joint-copy repair on open (bounded; no encoder).
+        # Sole open-cap owner for Lance — index does not re-run open repair.
         try:
-            open_cap = int(
-                getattr(self._settings, "joint_repair_max_per_open", 500) or 500
-            )
+            raw = getattr(self._settings, "joint_repair_max_per_open", None)
+            open_cap = 500 if raw is None else int(raw)
             if open_cap > 0 and self._vector_schema_ok:
                 self.repair_joint_copies(limit=open_cap)
         except Exception:  # noqa: BLE001
@@ -1155,6 +1155,10 @@ class LanceMemoryStore:
                     candidates.append((atom_id, fixed))
             for atom_id, fixed in candidates[:cap]:
                 # Inline upsert without re-acquiring lock (already held).
+                atom = self._by_id.get(atom_id)
+                if atom is None:
+                    continue
+                prev_map = self._emb_by_id.get(atom_id)
                 emb_map: dict[str, Any] = {
                     "emb_text": _vec_to_list(fixed.emb_text),
                     "emb_image": _vec_to_list(fixed.emb_image),
@@ -1164,9 +1168,6 @@ class LanceMemoryStore:
                     "embed_model": fixed.model_id or None,
                     "encoded_at": fixed.encoded_at or None,
                 }
-                atom = self._by_id.get(atom_id)
-                if atom is None:
-                    continue
                 self._emb_by_id[atom_id] = emb_map
                 meta = dict(atom.meta or {})
                 if fixed.model_id:
@@ -1186,9 +1187,11 @@ class LanceMemoryStore:
                     _LOG.exception(
                         "repair_joint_copies write failed atom_id=%s", atom_id
                     )
-                    # Roll back emb map change if disk write fails.
-                    # Leave previous map if we can reconstruct — drop joint only.
-                    emb_map["emb_joint"] = None
+                    # Align with upsert_vectors: restore previous emb map.
+                    if prev_map is None:
+                        self._emb_by_id.pop(atom_id, None)
+                    else:
+                        self._emb_by_id[atom_id] = prev_map
                     continue
                 self._index_put(updated)
                 repaired += 1

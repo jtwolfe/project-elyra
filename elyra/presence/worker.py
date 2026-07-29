@@ -1472,12 +1472,16 @@ class PresenceWorker:
                     remaining = int(store_fn() or 0)
             if remaining <= 0:
                 return
-            limit = int(getattr(mem_cfg, "joint_repair_max_per_tick", 64) or 64)
+            # 0 is a valid disable; only None/missing falls back to default 64.
+            raw_tick = getattr(mem_cfg, "joint_repair_max_per_tick", None)
+            limit = 64 if raw_tick is None else max(0, int(raw_tick))
+            if limit <= 0:
+                return
             repair_fn = getattr(index, "repair_joint_copies", None)
             if not callable(repair_fn):
                 repair_fn = getattr(store, "repair_joint_copies", None)
             if callable(repair_fn):
-                result = repair_fn(limit=max(0, limit))
+                result = repair_fn(limit=limit)
                 _LOG.debug("memory joint repair: %s", result)
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("memory idle joint repair failed")

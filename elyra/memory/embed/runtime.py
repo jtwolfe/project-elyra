@@ -995,8 +995,12 @@ def encode_atom_inputs(
                 want_joint=want_joint,
                 single_modality_joint=single_modality_joint,
             )
-        except TypeError:
-            # Older embedders without single_modality_joint kwarg.
+        except TypeError as exc:
+            # Only retry without the kwarg when the signature rejects it —
+            # do not mask TypeErrors from the embedder body.
+            msg = str(exc)
+            if "single_modality_joint" not in msg and "unexpected keyword" not in msg:
+                raise
             return encode_fn(
                 atom_id,
                 text=text,

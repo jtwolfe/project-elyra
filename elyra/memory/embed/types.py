@@ -233,7 +233,9 @@ def joint_vector_for_modalities(
         return None
     if len(present) == 1:
         sole = present[0]
-        vec = modality_vectors[sole]
+        vec = modality_vectors.get(sole)
+        if vec is None:
+            return None
         return tuple(float(x) for x in vec)
     return tuple(float(x) for x in encode_joint_fn(parts))
 

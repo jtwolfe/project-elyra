@@ -411,6 +411,20 @@ joint_repair_max_per_tick = 8
     with pytest.raises(ValueError, match="memory.joint_repair_max_per_tick"):
         load_settings(tmp_path)
 
+    # Zero is a valid disable (must not be rewritten to defaults by load).
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+joint_repair_max_per_open = 0
+joint_repair_max_per_tick = 0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s0 = load_settings(tmp_path)
+    assert s0.memory.joint_repair_max_per_open == 0
+    assert s0.memory.joint_repair_max_per_tick == 0
+
 
 def test_memory_embed_backend_device_case_normalized(tmp_path):
     """toml values are lowercased like open_encoder/select_device."""

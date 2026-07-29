@@ -1040,13 +1040,15 @@ def select_semantic(
         channel_req = str(
             getattr(cfg, "semantic_search_channel", None) or "auto"
         ).strip().lower() or "auto"
-        concrete, _channel_reason = resolve_search_channel(
+        # PR-R2: channel_reason → semantic_select_meta on MealPackage.
+        concrete, channel_reason = resolve_search_channel(
             channel_req,
             vectors_by_channel=health.get("vectors_by_channel") or {},
             joint_repair_remaining=int(
                 health.get("joint_repair_remaining") or 0
             ),
         )
+        _ = channel_reason  # retained for PR-R2 meta wiring
         hits = index.search(
             query_vec,
             k=int(cfg.semantic_top_k),

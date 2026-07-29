@@ -99,6 +99,19 @@ def empty_vectors_by_channel() -> dict[str, int]:
     return {c: 0 for c in CHANNELS}
 
 
+def _int_setting(obj: Any | None, name: str, default: int) -> int:
+    """Read int setting; only missing/None falls back to default (0 is valid)."""
+    if obj is None:
+        return default
+    raw = getattr(obj, name, None)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _count_vectors_by_channel_from_sets(
     emb_sets: Sequence[EmbeddingSet],
 ) -> dict[str, int]:
@@ -656,17 +669,14 @@ class MemoryEmbeddingIndex:
         self._fresh.ann_index_built = True
         self._joint_repair_last_batch = 0
         self._settings = settings
-        open_cap = joint_repair_max_per_open
-        if open_cap is None and settings is not None:
-            open_cap = int(
-                getattr(settings, "joint_repair_max_per_open", 500) or 500
-            )
-        if open_cap is None:
-            open_cap = 500
-        self._joint_repair_max_per_open = max(0, int(open_cap))
+        if joint_repair_max_per_open is None:
+            open_cap = _int_setting(settings, "joint_repair_max_per_open", 500)
+        else:
+            open_cap = int(joint_repair_max_per_open)
+        self._joint_repair_max_per_open = max(0, open_cap)
         # On open with existing store vectors: apply full vs seed policy.
         self._apply_open_policy()
-        # KD-R11: eager joint-copy repair on open (bounded).
+        # KD-R11: eager joint-copy repair on open (bounded; 0 disables).
         if self._joint_repair_max_per_open > 0:
             self.repair_joint_copies(limit=self._joint_repair_max_per_open)
 
@@ -721,10 +731,21 @@ class MemoryEmbeddingIndex:
                 "seed_incomplete": self._fresh.seed_incomplete,
             }
 
+    def _require_joint_for_upsert(self) -> bool:
+        """OQ-R4: new encodes require joint when single-mod joint flag is on."""
+        if self._settings is None:
+            return False
+        return bool(
+            getattr(self._settings, "embed_joint_for_single_modality", False)
+        )
+
     def upsert(self, embedding_set: EmbeddingSet) -> bool:
         if not isinstance(embedding_set, EmbeddingSet):
             return False
-        if not embeddings_are_ready(embedding_set):
+        require_joint = self._require_joint_for_upsert()
+        if not embeddings_are_ready(
+            embedding_set, require_joint=require_joint
+        ):
             return False
         atom: Atom | None = None
         with self._lock:
@@ -783,6 +804,7 @@ class MemoryEmbeddingIndex:
         """Copy sole modality → emb_joint for ready rows missing joint (KD-R11).
 
         No encoder. Re-pushes buffer entries as joint. Idempotent.
+        On store persist failure, rolls back in-memory state (no false remaining=0).
         """
         cap = max(0, int(limit))
         repaired = 0
@@ -794,8 +816,8 @@ class MemoryEmbeddingIndex:
                     fixed = joint_copy_embedding_set(emb)
                     if fixed is None:
                         continue
-                    self._by_id[atom_id] = fixed
                     atom = None
+                    persist_ok = True
                     if self._store is not None:
                         try:
                             atom = self._store.get_atom(atom_id)
@@ -805,8 +827,11 @@ class MemoryEmbeddingIndex:
                         upsert = getattr(self._store, "upsert_vectors", None)
                         if callable(upsert):
                             try:
-                                upsert(atom_id, fixed)
+                                ok = upsert(atom_id, fixed)
+                                if ok is False:
+                                    persist_ok = False
                             except Exception:  # noqa: BLE001
+                                persist_ok = False
                                 _LOG.debug(
                                     "MemoryEmbeddingIndex repair upsert failed %s",
                                     atom_id,
@@ -831,7 +856,11 @@ class MemoryEmbeddingIndex:
                                 except TypeError:
                                     self._store.put_atom(updated)
                             except Exception:  # noqa: BLE001
-                                pass
+                                persist_ok = False
+                    if not persist_ok:
+                        # Do not advance _by_id / buffer / repaired on durable fail.
+                        continue
+                    self._by_id[atom_id] = fixed
                     entry = _entry_from_emb_and_atom(fixed, atom)
                     if entry is not None:
                         self._fresh.buffer.push(entry)
@@ -1023,20 +1052,14 @@ class LanceEmbeddingIndex:
         self._fresh = _FreshnessState(ann or ann_settings_from(settings))
         self._settings = settings
         self._joint_repair_last_batch = 0
-        open_cap = joint_repair_max_per_open
-        if open_cap is None and settings is not None:
-            open_cap = int(
-                getattr(settings, "joint_repair_max_per_open", 500) or 500
+        # Open repair is owned by LanceMemoryStore (single open-cap owner).
+        # Index only seeds buffer so joint entries from store open are visible.
+        if joint_repair_max_per_open is None:
+            self._joint_repair_max_per_open = max(
+                0, _int_setting(settings, "joint_repair_max_per_open", 500)
             )
-        if open_cap is None:
-            open_cap = 500
-        self._joint_repair_max_per_open = max(0, int(open_cap))
-        # KD-R11: repair before seed so buffer gets joint channel entries.
-        if self._joint_repair_max_per_open > 0:
-            try:
-                self.repair_joint_copies(limit=self._joint_repair_max_per_open)
-            except Exception:  # noqa: BLE001
-                _LOG.exception("LanceEmbeddingIndex joint repair on open failed")
+        else:
+            self._joint_repair_max_per_open = max(0, int(joint_repair_max_per_open))
         if seed_on_open:
             self._apply_open_policy()
 
@@ -1075,20 +1098,28 @@ class LanceEmbeddingIndex:
         return 0
 
     def repair_joint_copies(self, *, limit: int = 64) -> dict[str, Any]:
-        """Eager joint-copy repair via store; re-push buffer as joint (KD-R11)."""
+        """Eager joint-copy repair via store; re-push buffer as joint (KD-R11).
+
+        Idle/explicit path only — open repair is owned by the store so the
+        ``joint_repair_max_per_open`` cap is not applied twice.
+        """
         cap = max(0, int(limit))
         repaired = 0
-        store_result: dict[str, Any] = {}
+        store_result: dict[str, Any] = {"ok": True}
+        store_ok = True
         repair_fn = getattr(self._store, "repair_joint_copies", None)
         if callable(repair_fn) and cap > 0:
             try:
                 store_result = dict(repair_fn(limit=cap) or {})
                 repaired = int(store_result.get("repaired") or 0)
+                if store_result.get("ok") is False:
+                    store_ok = False
             except Exception:  # noqa: BLE001
                 _LOG.exception("store.repair_joint_copies failed")
                 store_result = {"ok": False, "repaired": 0}
+                store_ok = False
 
-        # Re-push repaired (and any still-eligible) ready vectors into buffer.
+        # Re-push repaired ready vectors into buffer as joint channel.
         if repaired > 0:
             get_vectors = getattr(self._store, "get_vectors", None)
             list_seed = getattr(self._store, "list_ready_embeddings_for_seed", None)
@@ -1127,13 +1158,17 @@ class LanceEmbeddingIndex:
         remaining = self._joint_repair_remaining()
         self._joint_repair_last_batch = repaired
         return {
-            "ok": True,
+            "ok": store_ok,
             "backend": "lance",
             "repaired": repaired,
             "joint_repair_remaining": remaining,
             "joint_repair_last_batch": repaired,
             "vectors_by_channel": self._vectors_by_channel(),
-            **{k: v for k, v in store_result.items() if k not in ("ok", "repaired")},
+            **{
+                k: v
+                for k, v in store_result.items()
+                if k not in ("ok", "repaired")
+            },
         }
 
     def _resolve_channel(self, channel: str) -> str | None:
@@ -1292,10 +1327,20 @@ class LanceEmbeddingIndex:
                 "elapsed_ms": elapsed_ms,
             }
 
+    def _require_joint_for_upsert(self) -> bool:
+        if self._settings is None:
+            return False
+        return bool(
+            getattr(self._settings, "embed_joint_for_single_modality", False)
+        )
+
     def upsert(self, embedding_set: EmbeddingSet) -> bool:
         if not isinstance(embedding_set, EmbeddingSet):
             return False
-        if not embeddings_are_ready(embedding_set):
+        require_joint = self._require_joint_for_upsert()
+        if not embeddings_are_ready(
+            embedding_set, require_joint=require_joint
+        ):
             return False
         try:
             ok = bool(

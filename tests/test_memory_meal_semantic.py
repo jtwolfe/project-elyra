@@ -609,3 +609,113 @@ def test_compose_meal_semantic_timeout_still_returns_meal(store):
 
 def test_estimate_tokens_unchanged():
     assert estimate_tokens("abcd") == 1
+
+
+class _ChannelRecordingIndex:
+    """Records the concrete channel passed to search (KD-R16)."""
+
+    def __init__(
+        self,
+        hits: list[ScoredAtom],
+        *,
+        vectors_by_channel: dict[str, int] | None = None,
+        joint_repair_remaining: int = 0,
+    ):
+        self.hits = hits
+        self.last_channel: str | None = None
+        self.vectors_by_channel = vectors_by_channel or {
+            "text": 1,
+            "joint": 0,
+            "image": 0,
+            "audio": 0,
+            "video": 0,
+        }
+        self.joint_repair_remaining = joint_repair_remaining
+
+    def search(self, query: Sequence[float], **kwargs: Any) -> list[ScoredAtom]:
+        del query
+        self.last_channel = kwargs.get("channel")
+        return list(self.hits)
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "vectors_by_channel": dict(self.vectors_by_channel),
+            "joint_repair_remaining": self.joint_repair_remaining,
+        }
+
+
+def test_select_semantic_auto_repair_pending_uses_text(store):
+    """KD-R16: auto while joint_repair_remaining > 0 resolves to text."""
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="cats on the roof",
+        moment_id="m_past",
+        atom_id="a_past",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_past", score=0.9, channel="text", atom=past)
+    idx = _ChannelRecordingIndex(
+        [hit],
+        vectors_by_channel={"text": 1, "joint": 0, "image": 0, "audio": 0, "video": 0},
+        joint_repair_remaining=3,
+    )
+    emb = MockEmbedder()
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=500,
+        semantic_search_channel="auto",
+    )
+    items, reason = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="thinking of cats")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert idx.last_channel == "text"
+
+
+def test_select_semantic_auto_post_repair_uses_joint(store):
+    """KD-R16: auto after repair complete with joint coverage → joint."""
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="cats on the roof",
+        moment_id="m_past",
+        atom_id="a_past",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_past", score=0.9, channel="joint", atom=past)
+    idx = _ChannelRecordingIndex(
+        [hit],
+        vectors_by_channel={"text": 1, "joint": 1, "image": 0, "audio": 0, "video": 0},
+        joint_repair_remaining=0,
+    )
+    emb = MockEmbedder()
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=500,
+        semantic_search_channel="auto",
+    )
+    items, reason = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="thinking of cats")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert idx.last_channel == "joint"

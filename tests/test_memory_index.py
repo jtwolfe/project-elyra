@@ -1462,3 +1462,94 @@ def test_embeddings_are_ready_require_joint_oq_r4():
         encoded_at="2026-07-28T10:00:00Z",
     )
     assert embeddings_are_ready(with_joint, require_joint=True)
+
+
+def test_joint_repair_open_cap_zero_disables():
+    """Settings/constructor open cap 0 must not rewrite to default 500."""
+    settings = MemorySettings(joint_repair_max_per_open=0)
+    idx = MemoryEmbeddingIndex(
+        store=None,
+        settings=settings,
+        joint_repair_max_per_open=None,  # read from settings
+    )
+    assert idx._joint_repair_max_per_open == 0
+    emb = EmbeddingSet(
+        atom_id="a_zero",
+        emb_text=mock_vector("text:z", dim=EMBED_DIM),
+        emb_joint=None,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    # No settings require_joint when we pass settings with flag True —
+    # use require_joint=False path: construct without flag enforcement for
+    # this legacy fixture via direct _by_id inject + repair call with limit 0.
+    with idx._lock:
+        idx._by_id["a_zero"] = emb
+    result = idx.repair_joint_copies(limit=0)
+    assert result["repaired"] == 0
+    assert result["joint_repair_remaining"] == 1
+    assert idx.get("a_zero").emb_joint is None
+
+
+def test_memory_repair_rolls_back_when_upsert_vectors_fails():
+    """Durable upsert failure must not claim joint filled in memory."""
+
+    class _FailUpsertStore:
+        def get_atom(self, atom_id: str):
+            return _atom(text="x", status="ready", atom_id=atom_id)
+
+        def upsert_vectors(self, atom_id: str, embeddings: EmbeddingSet) -> bool:
+            raise RuntimeError("disk full")
+
+        def put_atom(self, atom, notify=True):
+            return atom
+
+    store = _FailUpsertStore()
+    idx = MemoryEmbeddingIndex(store=store, joint_repair_max_per_open=0)
+    emb = EmbeddingSet(
+        atom_id="a_fail",
+        emb_text=mock_vector("text:fail", dim=EMBED_DIM),
+        emb_joint=None,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    with idx._lock:
+        idx._by_id["a_fail"] = emb
+    result = idx.repair_joint_copies(limit=10)
+    assert result["repaired"] == 0
+    assert result["joint_repair_remaining"] == 1
+    got = idx.get("a_fail")
+    assert got is not None
+    assert got.emb_joint is None
+    assert got.emb_text is not None
+
+
+def test_search_auto_empty_corpus_returns_empty():
+    idx = MemoryEmbeddingIndex(store=None, joint_repair_max_per_open=0)
+    hits = idx.search(mock_vector("q", dim=EMBED_DIM), k=5, channel="auto")
+    assert hits == []
+    h = idx.health()
+    assert h["joint_repair_remaining"] == 0
+    assert h["vectors_by_channel"]["joint"] == 0
+
+
+def test_upsert_require_joint_when_flag_on():
+    """OQ-R4: with embed_joint_for_single_modality, sole-without-joint not ready."""
+    settings = MemorySettings(embed_joint_for_single_modality=True)
+    idx = MemoryEmbeddingIndex(settings=settings, joint_repair_max_per_open=0)
+    sole = EmbeddingSet(
+        atom_id="a_req",
+        emb_text=mock_vector("t", dim=EMBED_DIM),
+        emb_joint=None,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert idx.upsert(sole) is False
+    with_joint = EmbeddingSet(
+        atom_id="a_req",
+        emb_text=mock_vector("t", dim=EMBED_DIM),
+        emb_joint=mock_vector("t", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert idx.upsert(with_joint) is True

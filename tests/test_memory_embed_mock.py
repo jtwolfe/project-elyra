@@ -390,6 +390,9 @@ def test_encode_atom_inputs_protocol_fallback_multimodal_joint():
     assert emb.emb_text is not None
     assert emb.emb_image is not None
     assert emb.emb_joint is not None
+    # Multi-mod joint is true fusion — not a copy of either sole modality.
+    assert emb.emb_joint != emb.emb_text
+    assert emb.emb_joint != emb.emb_image
     assert emb.encoded_at
     enc.close()
 

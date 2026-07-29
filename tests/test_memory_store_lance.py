@@ -573,3 +573,84 @@ def test_lance_upsert_vectors_atom_id_mismatch_false(store):
     assert store.upsert_vectors(a.atom_id, emb) is False
     assert store.get_vectors(a.atom_id) is None
     assert store.get_atom(a.atom_id).embedding_status == "pending"
+
+
+def test_lance_repair_joint_copies_fills_joint_without_encoder(store):
+    """KD-R11: ready text-only row gets emb_joint via repair (no encoder)."""
+    from elyra.memory.embed.mock import mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+
+    a = store.put_atom(
+        _atom(
+            t="2026-07-28T10:00:00Z",
+            text="legacy text",
+            atom_id="rep1",
+            embedding_status="pending",
+        )
+    )
+    text_v = mock_vector("text:rep1", dim=EMBED_DIM)
+    # Write sole-modality ready without joint via low-level emb map + status.
+    emb = EmbeddingSet(
+        atom_id=a.atom_id,
+        emb_text=text_v,
+        emb_joint=None,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    # embeddings_are_ready allows sole; upsert_vectors uses that.
+    assert store.upsert_vectors(a.atom_id, emb) is True
+    got = store.get_vectors(a.atom_id)
+    assert got is not None
+    assert got.emb_joint is None
+    assert store.joint_repair_remaining() >= 1
+
+    result = store.repair_joint_copies(limit=64)
+    assert result["repaired"] >= 1
+    assert result["joint_repair_remaining"] == 0
+    fixed = store.get_vectors(a.atom_id)
+    assert fixed is not None
+    assert fixed.emb_joint is not None
+    assert fixed.emb_joint == fixed.emb_text
+    hits = store.search_vectors(text_v, k=5, channel="joint")
+    assert any(aid == a.atom_id for aid, _ in hits)
+    counts = store.vectors_by_channel()
+    assert counts.get("joint", 0) >= 1
+    assert counts.get("text", 0) >= 1
+
+
+def test_lance_open_cap_zero_disables_open_repair(paths):
+    """joint_repair_max_per_open=0 must disable open repair (not rewrite to 500)."""
+    from elyra.memory.embed.mock import mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+
+    settings = MemorySettings(
+        write_atoms=True,
+        backend="lance",
+        joint_repair_max_per_open=0,
+    )
+    store = open_memory_store(paths, settings)
+    try:
+        a = store.put_atom(
+            _atom(
+                t="2026-07-28T10:00:00Z",
+                text="no open repair",
+                atom_id="nor1",
+                embedding_status="pending",
+            )
+        )
+        emb = EmbeddingSet(
+            atom_id=a.atom_id,
+            emb_text=mock_vector("text:nor1", dim=EMBED_DIM),
+            emb_joint=None,
+            model_id="mock",
+            encoded_at="2026-07-28T10:00:00Z",
+        )
+        assert store.upsert_vectors(a.atom_id, emb) is True
+        # Explicit repair with limit 0 is no-op.
+        r = store.repair_joint_copies(limit=0)
+        assert r["repaired"] == 0
+        assert store.get_vectors(a.atom_id).emb_joint is None
+        # Settings-level open cap stays 0 on the store settings object.
+        assert store.settings.joint_repair_max_per_open == 0
+    finally:
+        store.close()
