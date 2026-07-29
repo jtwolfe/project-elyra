@@ -1,7 +1,7 @@
 # Radeon VII / ROCm stack inventory (dev)
 
-**Branch:** `execute-plan/859daddb-pr-3-operator-rocm-venv-switch-freezes`  
-**Recorded:** 2026-07-29T11:24:25Z (baseline) · **updated:** 2026-07-29T12:09:00Z (post ROCm switch)  
+**Branch:** `execute-plan/859daddb-pr-4-nemotron-gpu-encode-notes-bug-dogfood`  
+**Recorded:** 2026-07-29T11:24:25Z (baseline) · **updated:** 2026-07-29T12:09:00Z (post ROCm switch) · **PR4 docs:** 2026-07-29  
 **Host:** LuxPrimata  
 **Purpose:** Hardware + package + venv baseline for an isolated Radeon VII embed shim.  
 **Policy:** Python ML libs stay in the **project venv** (not system `python-pytorch-rocm`). Host ROCm is system packages only.

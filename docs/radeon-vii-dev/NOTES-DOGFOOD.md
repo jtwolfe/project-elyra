@@ -166,7 +166,7 @@ rocBLAS error: Cannot read .../torch/lib/rocblas/library/TensileLibrary.dat:
 
 ### Required dogfood template (mirrored → `docs/known-bugs.md`)
 
-### Dogfood — venv ROCm smoke (2026-07-29)
+#### Dogfood — venv ROCm smoke (2026-07-29)
 
 | Field | Value |
 |-------|--------|
@@ -210,7 +210,7 @@ Do **not** check Gate B from this session. HIP probe green alone is insufficient
 
 ### Cross-links
 
-- Full A5 error text: [§ A5 hard stop](#a5-hard-stop--exact-error) above; freezes/`post-rocm-host-stack.txt`
+- Full A5 error text: [§ A5 hard stop](#a5-hard-stop--exact-error) above; `freezes/post-rocm-host-stack.txt`
 - Bug entry: [docs/known-bugs.md](../known-bugs.md) **BUG-mem-gpu-01**
 - Inventory: [STACK-INVENTORY.md](STACK-INVENTORY.md)
 
