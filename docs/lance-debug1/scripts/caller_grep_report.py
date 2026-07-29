@@ -21,11 +21,11 @@ _LINE_RE = re.compile(
 )
 
 # Paths relative to repo root to search (memory product surface).
+# Single source of truth for _iter_py_files.
 _DEFAULT_GLOBS = (
     "elyra/memory/**/*.py",
     "elyra/presence/worker.py",
     "elyra/runtime/api.py",
-    "elyra/memory/store.py",
 )
 
 
@@ -35,17 +35,18 @@ def _repo_root_from_script() -> Path:
 
 
 def _iter_py_files(root: Path) -> list[Path]:
+    """Expand _DEFAULT_GLOBS under root; return sorted unique .py paths."""
+    seen: set[Path] = set()
     files: list[Path] = []
-    candidates = [
-        root / "elyra" / "memory",
-        root / "elyra" / "presence" / "worker.py",
-        root / "elyra" / "runtime" / "api.py",
-    ]
-    for c in candidates:
-        if c.is_file() and c.suffix == ".py":
-            files.append(c)
-        elif c.is_dir():
-            files.extend(sorted(c.rglob("*.py")))
+    for pattern in _DEFAULT_GLOBS:
+        for path in sorted(root.glob(pattern)):
+            if not path.is_file() or path.suffix != ".py":
+                continue
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            files.append(path)
     return files
 
 

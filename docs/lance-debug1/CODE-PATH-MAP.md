@@ -22,7 +22,7 @@ flowchart TB
 
   subgraph live [Live process writes]
     PRO["promote_beat / _link_and_put\npromote.py"]
-    PUT["put_atom → _upsert_row\nmerge_insert:841"]
+    PUT["put_atom → _upsert_row\nmerge_insert:845"]
     UV["upsert_vectors\n:1018"]
     HOOK["write_hook → EncodeQueue"]
     PRO --> PUT --> HOOK
