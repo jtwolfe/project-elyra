@@ -3,7 +3,9 @@
 **Package:** `docs/lance-debug1`  
 **Sealed run:** `2026-07-29-run-01`  
 **Status:** Definitive inspection dossier (exit artifact of plan `60b09de2`)  
-**Authorization:** Merging this document does **NOT** authorize changes to `elyra/memory/**` or `_load`. Fix directions are non-normative inputs to a later fix design.
+**Authorization (historical):** Merging this document alone did **not** authorize product changes; it was input to a later fix design.
+
+> **Product fix (2026-07-29):** Design and implementation are in **[design-fix-load-truncation.md](design-fix-load-truncation.md)**; code landed in `elyra/memory` as **`fcb5130`** (full-table materialize helper + `_load` / migrate / promote; dual-count health). Known-bugs: **BUG-mem-lance-01** Fixed (restart required). **Do not rewrite** the sealed evidence bag below — this dossier remains the pre-fix inspection record.
 
 ---
 

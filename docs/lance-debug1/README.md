@@ -1,24 +1,26 @@
 # Lance debug package 1 (`docs/lance-debug1`)
 
-**Status:** **Complete** — dogfood evidence sealed (`2026-07-29-run-01`) + [BUG-DOSSIER.md](BUG-DOSSIER.md). Inspection only; **no product fix authorized**.
+**Status:** **Inspection complete** — dogfood evidence sealed (`2026-07-29-run-01`) + [BUG-DOSSIER.md](BUG-DOSSIER.md). **Product fix landed** in `elyra/memory` (`fcb5130`; design [design-fix-load-truncation.md](design-fix-load-truncation.md)). This package remains historical evidence; do not rewrite the sealed bag.
 
 | Field | Value |
 |-------|--------|
-| **Intent** | Inspection and fault isolation only — **no product fix** |
-| **Isolation** | All work product lives under `docs/lance-debug1/`; do not modify `elyra/memory/**` |
+| **Intent** | Inspection and fault isolation (historical) — product fix is **outside** this package |
+| **Isolation** | Evidence bag under `docs/lance-debug1/`; product code in `elyra/memory/**` |
 | **Primary mechanism** | Bare `Table.to_arrow()` = default query limit **10** (H1 / H1a / H1b) → thin `_load` (H2) |
 | **Sealed run** | [evidence/2026-07-29-run-01/](evidence/2026-07-29-run-01/) — n_full=**386**, n_arrow=**10**, process=**10** |
-| **Origin** | `/design` run `ed40fbd4` (2026-07-29); plan `60b09de2` |
-| **Normative design** | [design-inspection-plan.md](design-inspection-plan.md) |
-| **Exit artifact** | [BUG-DOSSIER.md](BUG-DOSSIER.md) |
+| **Product fix** | [design-fix-load-truncation.md](design-fix-load-truncation.md) → `fcb5130` full-table materialize helper + `_load` / migrate / promote; **restart required** |
+| **Known-bugs** | [BUG-mem-lance-01](../known-bugs.md) **Fixed** (restart required) |
+| **Origin** | `/design` run `ed40fbd4` (2026-07-29); plan `60b09de2` (inspect); plan `1c062b32` (fix + docs) |
+| **Normative inspection design** | [design-inspection-plan.md](design-inspection-plan.md) |
+| **Exit artifact (inspection)** | [BUG-DOSSIER.md](BUG-DOSSIER.md) |
 
 ---
 
 ## Purpose
 
-Live dogfood shows a **disk vs process discrepancy**: on-disk `atoms.lance` holds a large corpus while after restart `LanceMemoryStore` rebuilds indexes from a thin row set (~default-limit 10). This package isolates that fault with hypotheses, safety rules, offline/in-process probes, and a sealed evidence bag — then produces `BUG-DOSSIER.md` as input to a **later** fix design.
+Live dogfood showed a **disk vs process discrepancy**: on-disk `atoms.lance` holds a large corpus while after restart `LanceMemoryStore` rebuilt indexes from a thin row set (~default-limit 10). This package isolated that fault with hypotheses, safety rules, offline/in-process probes, and a sealed evidence bag — then produced `BUG-DOSSIER.md` as input to the product fix design.
 
-**Out of scope here:** changing `_load`, product defaults, stretch-2 architecture docs, or implementing emergency patches inside these PRs.
+**Product fix (landed):** [design-fix-load-truncation.md](design-fix-load-truncation.md) — explicit full-table materialize (`head` / `to_lance`) wired through `_load`, migrate, promote, and empty-check; dual-count health. **Operator:** restart presence/glass after deploy. **Out of scope for this package itself:** rewriting sealed evidence JSON or re-authorizing new product patches from the dossier alone.
 
 ---
 
@@ -41,7 +43,8 @@ Full rules: **[SAFETY.md](SAFETY.md)**. Canonical quarantine marker is **only** 
 ```text
 docs/lance-debug1/
 ├── README.md                    # This index
-├── design-inspection-plan.md    # Normative design (keep)
+├── design-inspection-plan.md    # Normative inspection design (historical)
+├── design-fix-load-truncation.md  # Product fix design (implemented)
 ├── SAFETY.md
 ├── OBSERVED-FACTS.md            # Snapshot-labeled facts (not absolute pass constants)
 ├── HYPOTHESES.md                # H1 / H1a / H1b – H12 (statuses sealed PR5)
@@ -80,7 +83,8 @@ docs/lance-debug1/
 | [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md) | Observation × hypothesis × bucket | PR4; filled PR5 |
 | [VERSION-ARCHAEOLOGY.md](VERSION-ARCHAEOLOGY.md) | Version sampling + H10 residual | PR3; filled PR5 |
 | [adjacency/](adjacency/) | Embed / graph / meal / glass / promote-weave cascade | PR4 |
-| **[BUG-DOSSIER.md](BUG-DOSSIER.md)** | Final bug description (exit; **not** a fix auth) | **PR5** |
+| **[BUG-DOSSIER.md](BUG-DOSSIER.md)** | Final bug description (inspection exit) | **PR5** |
+| [design-fix-load-truncation.md](design-fix-load-truncation.md) | Product fix design | design → **implemented** `fcb5130` |
 
 ---
 
@@ -92,9 +96,11 @@ docs/lance-debug1/
 | P01 `api_matrix` + quarantine_copy + env_check | **Done (PR2)** |
 | P02 load_parity + P08 version_sample | **Done (PR3)** |
 | Adjacency P03–P07, P09 + EVIDENCE-MATRIX + consumer_compare | **Done (PR4)** |
-| Dogfood evidence + BUG-DOSSIER | **Done (PR5)** — Complete |
+| Dogfood evidence + BUG-DOSSIER | **Done (PR5)** — inspection complete |
+| Product fix (`elyra/memory` full-table load) | **Landed** `fcb5130` — [design-fix-load-truncation.md](design-fix-load-truncation.md); known-bugs **BUG-mem-lance-01** Fixed |
+| Docs closeout | **This README + known-bugs** (plan `1c062b32` PR2) |
 
-**Hypothesis sequencing (critical path):** H1a → H1b → H2 first — **sealed supported** on `2026-07-29-run-01`. H4 demoted; H5 refuted; H10 residual only. Adjacency cascade documented; H8 primary refuted.
+**Hypothesis sequencing (critical path):** H1a → H1b → H2 first — **sealed supported** on `2026-07-29-run-01`. H4 demoted; H5 refuted; H10 residual closed in product by wiring migrate/promote through the same helper. Adjacency cascade documented; H8 primary refuted.
 
 ---
 
@@ -104,7 +110,7 @@ docs/lance-debug1/
 2. Prefer **quarantine full memory root** for any W1 or heavy R1; marker only at `$QUARANTINE_ROOT/.lance-debug1-quarantine`.
 3. Capture evidence under `evidence/YYYY-MM-DD-run-NN/` using templates; use **relative** equality (`to_arrow ≪ count_rows`, process ≈ `to_arrow`), not fixed atom totals from design snapshots.
 4. Update [HYPOTHESES.md](HYPOTHESES.md) statuses only from procedure evidence.
-5. Never patch `elyra/memory/**` in lance-debug1 PRs. Merging the dossier does **not** authorize `_load` changes.
+5. Do not rewrite sealed `evidence/**` JSON. Product changes live under `elyra/memory/**` via the fix design, not by editing the dossier.
 
 ### Scripts (PR2–PR4)
 
@@ -148,8 +154,7 @@ See [scripts/README.md](scripts/README.md), [REPRO-RECIPES.md](REPRO-RECIPES.md)
 
 ## Related (read-only cross-links)
 
-- `docs/known-bugs.md` — BUG-wake-02, BUG-mem-gpu-01 (adjacent; not Lance root)
+- `docs/known-bugs.md` — **BUG-mem-lance-01** (Fixed); **BUG-wake-02**, **BUG-mem-gpu-01** (still open adjacency; not Lance row-loss root)
+- [design-fix-load-truncation.md](design-fix-load-truncation.md) — product fix design (implemented)
 - `docs/stretch-2/architecture/phase-2-semantic.md` — semantic architecture (reference)
-- `docs/stretch-2/architecture/spikes/lance-emb-migration.md` — migration also uses `to_arrow`
-
-Stretch-2 product docs are **not** updated until a deliberate promotion PR after the dossier is accepted.
+- `docs/stretch-2/architecture/spikes/lance-emb-migration.md` — historical migration notes (pre-fix `to_arrow` risk)

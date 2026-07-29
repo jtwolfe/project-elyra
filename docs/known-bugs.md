@@ -179,6 +179,7 @@ Same class can apply without restart if a long wait expires while glass still sh
 ### Related
 
 - **BUG-wake-01** — stale timer/`task_ready` storms (complement: cancel when work already done).
+- **BUG-mem-lance-01** — thin post-restart process maps from bare `to_arrow` (**Fixed**); wake-02 is still open adjacency after load is full.
 - Continuous / rest skills: honest idle vs invented busywork.
 - Memory meal seed: `empty_seed` on timeout wakes does **not** prevent glass history from steering the model.
 
@@ -558,6 +559,51 @@ Architecture: [architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-
 
 ---
 
+## BUG-mem-lance-01 — LanceMemoryStore full load truncated by bare `to_arrow` (default limit ~10)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **Fixed (2026-07-29, `fcb5130`)** — **restart required** so process maps rebuild from full disk |
+| **Severity now** | Low residual (code fixed; live process still thin until restart) |
+| **Severity later** | High if regressed — glass / meal / graph / traverse operate on ~10-atom prefix after every restart |
+| **Area** | `elyra/memory/lance_store.py` (`_load`, migrate, promote, empty-check, health dual-count) |
+| **Dogfood** | 2026-07-29 sealed run `docs/lance-debug1/evidence/2026-07-29-run-01/`: `count_rows`/`head`/`to_lance` = **386**; bare `to_arrow` = **10**; process `atom_count` ≈ 10 after open |
+| **Fix ownership** | [design-fix-load-truncation.md](lance-debug1/design-fix-load-truncation.md); inspection dossier [BUG-DOSSIER.md](lance-debug1/BUG-DOSSIER.md); product fix commit `fcb5130` |
+
+### Symptom
+
+After process restart, Glass Memory / vectors / context meal / graph / directed traversal saw only a **thin** in-memory corpus (~**10** atoms) while on-disk `atoms.lance` held the full table (hundreds of rows). Mid-session `put_atom` looked fine (merge_insert); the drop appeared only on reopen.
+
+### Root chain (pre-fix)
+
+Bare `lancedb.Table.to_arrow()` on **0.20.x** is a **default-limit query of ~10 rows**, not a full-table scan. Product `_load` (and residual migrate/promote full-intent sites) treated it as full materialization → thin `_by_id` / emb maps. Disk and promote writes were intact.
+
+### Resolution (code)
+
+| Piece | Fix |
+|-------|-----|
+| **Helper** | `_materialize_table_arrow` / `_materialize_table_rows`: `head(count_rows)` primary; `to_lance().to_table()` fallback; **never** bare `to_arrow` for full-table intent; parity assert; `MemoryUnavailable` on failure |
+| **`_load`** | Full materialize + load logging + `_disk_atom_count_at_load` |
+| **Migrate / promote / empty-check** | Same helper; migrate fail-closed (no `rows=[]` wipe) |
+| **Health** | Open-store dual-count: `disk_atom_count`, `atom_count_parity` |
+| **Tests** | Reopen N=25; Phase-1 migrate N=15; FakeTable `head`; materialize unit paths |
+
+Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-load-truncation.md). Package status: [lance-debug1/README.md](lance-debug1/README.md).
+
+### Residual / operator note
+
+- **Restart** presence/glass after deploy so process maps rebuild from full disk. Phase-2 corpora need no data migration.
+- Confirm on live dogfood: `health.atom_count` ≈ `disk_atom_count`, `atom_count_parity=true`; sample `get_atom` beyond the old 10-row prefix.
+
+### Still-open adjacency (not fixed by this)
+
+| ID | Relation |
+|----|----------|
+| **BUG-wake-02** | Post-restart “resume old thread” sanitation / recency — consumer of residual glass after restart; **not** Lance row-loss root. Still **Open**. |
+| **BUG-mem-gpu-01** | Nemotron/embed on ROCm vs CPU — encode latency / device; **not** missing-row root. Still **Open**. |
+
+---
+
 ## BUG-mem-gpu-01 — Nemotron / embed path not on Radeon VII ROCm GPU (CPU fallback)
 
 | Field | Value |
@@ -583,6 +629,10 @@ Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presen
 2. Vectors health: requested vs effective device honesty (optional polish).
 3. Do **not** block meal/channel product path on GPU presence.
 4. Gate B checklist before product default-on of semantic flags.
+
+### Related
+
+- **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
 
 ---
 

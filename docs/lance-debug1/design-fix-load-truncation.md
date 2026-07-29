@@ -5,7 +5,7 @@
 | **Document** | Lance memory load bug — product fix |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-29 |
-| **Status** | Draft rev.2 (normative for fix PRs; review issues addressed) |
+| **Status** | **Implemented** (rev.2; product fix landed `fcb5130`; docs closeout BUG-mem-lance-01) |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement-memory` / project-elyra |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
