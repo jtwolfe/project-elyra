@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Optional active session id (defaults to the sole active session)."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Optional abandon reason (abandoned | timed_out | …)."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

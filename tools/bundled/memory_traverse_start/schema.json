@@ -1,0 +1,31 @@
+{
+  "type": "object",
+  "properties": {
+    "goal": {
+      "type": "string",
+      "description": "Short walk goal (required). Also used as seed_query when seed_query omitted."
+    },
+    "seed_query": {
+      "type": "string",
+      "description": "Optional semantic seed text (defaults to goal when omitted)."
+    },
+    "seed_atom_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional explicit durable atom ids to seed (point lookups)."
+    },
+    "budgets": {
+      "type": "object",
+      "description": "Optional lower budget overrides (clamped to settings max).",
+      "properties": {
+        "max_steps": { "type": "integer" },
+        "max_nodes": { "type": "integer" },
+        "max_depth": { "type": "integer" },
+        "max_keep": { "type": "integer" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["goal"],
+  "additionalProperties": false
+}

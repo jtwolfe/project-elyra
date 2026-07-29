@@ -2503,6 +2503,10 @@ class PresenceWorker:
                 "users": self._users,
                 # install_skill / growth tools reload the held catalog
                 "skills": self._ensure_skills(),
+                # Phase 2a directed traversal: thin tools resolve these ports.
+                # graph_view is a factory (fresh view per call; warm embedder only).
+                "graph_view": self.graph_view,
+                "traversal": self._traversal,
             },
         )
 

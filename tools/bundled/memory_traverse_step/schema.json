@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Optional active session id (defaults to the sole active session)."
+    },
+    "expand_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Frontier atom ids to expand this step (capped by traverse_max_expand_per_step)."
+    },
+    "keep_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Provisional keep atom ids (must already be considered)."
+    },
+    "scratchpad": {
+      "type": "string",
+      "description": "Optional model-owned notes (capped by traverse_scratchpad_chars)."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
