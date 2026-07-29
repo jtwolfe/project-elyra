@@ -77,6 +77,10 @@ elyra start --stub-llm   # stub LLM + UI (hermetic)
 # http://127.0.0.1:8787/
 ```
 
+**New terminal (everyday):** `cd` to repo → `source .venv/bin/activate` → `elyra start` → UI `http://127.0.0.1:8787/`.
+
+**Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): see **[radeon-vii-dev/README.md](radeon-vii-dev/README.md)** § *New terminal session — start Elyra*.
+
 Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
 Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
 

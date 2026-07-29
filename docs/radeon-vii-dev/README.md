@@ -36,25 +36,82 @@ See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package basel
 | [scripts/README.md](scripts/README.md) | Smoke scripts overview (G1–G9, exit codes, prereqs) |
 | `freezes/*.txt` | Operator freezes (post-swap; LuxPrimata/ROCm-only) |
 | `scripts/01_*.py` … | Standalone probes (land in scripts PR) |
-| [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) | PR3 switch + PR4 A6–A7 block + dogfood template (encode re-opens after A5 green) |
+| [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) | Switch / inject / A5–A7 dogfood + product-path notes |
+| **This README § New terminal** | **How to start Elyra on LuxPrimata from a fresh shell** |
 
 ---
 
-## Critical operator warning
+## New terminal session — start Elyra (LuxPrimata)
 
-Live `elyra.toml` already has:
+**Everyday** (venv + ROCm torch already set up on this host):
+
+```bash
+cd /home/jim/Workspace/project-elyra   # or your clone path
+source .venv/bin/activate             # project 3.12 venv — not system Python 3.14
+export ROCM_PATH=/opt/rocm            # good habit for ROCm / torch
+
+# Only after a torch reinstall (or if A5 matmul fails again):
+# python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py
+
+elyra start
+# UI: http://127.0.0.1:8787/
+```
+
+Use the **activated project `.venv`** so `elyra` is the editable install (a global `elyra` on PATH can point at the wrong Python).
+
+**First-time / rebuilt venv only:**
+
+```bash
+cd /home/jim/Workspace/project-elyra
+./scripts/setup_venv.sh && source .venv/bin/activate
+pip install -e '.[sandbox]'              # guest isolation (usual dogfood)
+./scripts/setup-microsandbox.sh --doctor-only
+# Optional: pip install -e '.[search]' / '.[browser]' / memory-embed extras as needed
+
+# ROCm torch must match host ROCm — see VENV-ROCM-SWITCH.md
+# Then inject gfx906 Tensile (VII only):
+python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py
+
+elyra start
+```
+
+**Hermetic / no real LLM:**
+
+```bash
+elyra start --stub-llm
+# ELYRA_SANDBOX=0   # host-stub without sandbox if required
+```
+
+**Current dogfood pin** (this branch / host; may be committed on `grok-improv-radeonvii`):
 
 ```toml
 embed_enabled = true
 embed_backend = "nemotron"
-embed_device = "auto"
+embed_model_id = "nvidia/omni-embed-nemotron-3b"
+embed_device = "rocm"    # GPU Nemotron after Tensile inject; flip to "cpu" to disarm
 ```
 
-As soon as HIP torch reports `rocm=True`, the presence worker will open **real Nemotron on ROCm** on the next embedder ensure. This phase’s *acceptance* is **scripts-only**, but product path arming is a side effect that **must be controlled**:
+**If GPU path breaks after torch reinstall:**
 
-1. **Stop** Elyra / presence before any venv torch change.
-2. **Pin** `embed_device = "cpu"` (or `embed_enabled = false`) in `elyra.toml` **before uninstall** — **local / uncommitted**.
-3. Keep the pin until A1–A7 are green and you deliberately choose worker dogfood.
+```bash
+source .venv/bin/activate
+export ROCM_PATH=/opt/rocm
+python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py
+python docs/radeon-vii-dev/scripts/02_matmul_smoke.py   # must PASS before trusting embed
+```
+
+Groups: ideally `render` + `video` + re-login; on LuxPrimata kfd/render often worked without group membership.  
+Generic project run notes: [docs/README.md](../README.md) §Run. Full venv switch: [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md).
+
+---
+
+## Critical operator warning (bring-up / torch swap)
+
+With HIP torch and `embed_device=rocm` (or `auto` when ROCm probes true), the presence worker will open **real Nemotron on ROCm** on embedder ensure. During **venv torch uninstall/install**:
+
+1. **Stop** Elyra / presence before any torch change.
+2. Temporarily pin `embed_device = "cpu"` (or `embed_enabled = false`) **before uninstall**.
+3. Re-inject gfx906 Tensile after ROCm torch reinstall; restore `rocm` only when A5 is green.
 
 Full procedure: [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md).
 
