@@ -1,10 +1,12 @@
 # Radeon VII / ROCm stack inventory (dev)
 
-**Branch:** `grok-improv-radeonvii`  
-**Recorded:** 2026-07-29T11:24:25Z  
+**Branch:** `execute-plan/859daddb-pr-3-operator-rocm-venv-switch-freezes`  
+**Recorded:** 2026-07-29T11:24:25Z (baseline) · **updated:** 2026-07-29T12:09:00Z (post ROCm switch)  
 **Host:** LuxPrimata  
 **Purpose:** Hardware + package + venv baseline for an isolated Radeon VII embed shim.  
 **Policy:** Python ML libs stay in the **project venv** (not system `python-pytorch-rocm`). Host ROCm is system packages only.
+
+> **PR3 status (2026-07-29):** Project `.venv` switched to `torch==2.13.0+rocm7.2`. **A1–A4 green; A5 HARD FAIL** — official rocm7.2 wheel rocBLAS has **no gfx906** TensileLibrary (available: gfx908/90a/942/950 + RDNA3/4). See [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md). `03` not run. BUG-mem-gpu-01 remains **Open**.
 
 ---
 
@@ -129,20 +131,22 @@ omarchy pkg add rocm-hip-sdk
 
 | Field | Value |
 |-------|--------|
-| Path | `.venv` |
+| Path | `.venv` (`/home/jim/Workspace/project-elyra/.venv`) |
 | Python | **3.12.8** |
-| torch | **2.13.0+cu130** (CUDA build — **not** ROCm) |
-| torchvision | **0.28.0+cu130** |
-| torch.version.hip | `None` |
-| cuda.is_available | `False` |
+| torch | **2.13.0+rocm7.2** (was `2.13.0+cu130` pre-PR3) |
+| torchvision | **0.28.0+rocm7.2** |
+| torch.version.hip | **`7.2.53211`** |
+| cuda.is_available | **`True`** |
+| get_device_name(0) | `AMD Radeon Graphics` (rocminfo: AMD Radeon VII / **gfx906**) |
 | transformers | **5.14.1** |
 | accelerate | **1.14.0** |
 | safetensors | **0.8.0** |
 | numpy | **2.5.1** |
-| triton | **3.7.1** (CUDA-oriented) |
+| triton | **triton-rocm 3.7.1** (ROCm wheel dep; CUDA `triton` removed) |
 | flash_attn | not installed |
+| residual nvidia-\* / cuda-\* pip | **none** (purged) |
 
-### pip freeze subset
+### pip freeze subset (post-ROCm)
 
 ```
 accelerate==1.14.0
@@ -152,30 +156,43 @@ tokenizers==0.22.2
 torch==2.13.0
 torchvision==0.28.0
 transformers==5.14.1
-triton==3.7.1
+# local labels: torch 2.13.0+rocm7.2, torchvision 0.28.0+rocm7.2, triton-rocm==3.7.1
 ```
+
+Full artifacts: [freezes/](freezes/) (`pre-rocm-*`, `mid-swap-*`, `post-rocm-*`).
 
 ### torch detail
 
 ```
-2.13.0+cu130
-cuda 13.0
-hip None
-avail False
+2.13.0+rocm7.2
+cuda meta None
+hip 7.2.53211
+avail True
+name AMD Radeon Graphics
 ```
 
-### Elyra probe (current)
+### A5 compute gate (2026-07-29)
 
-- `probe_devices`: torch available; **cuda=False, rocm=False, cpu=True**
-- `select_device(auto)` → **cpu**
-- `elyra.toml`: `embed_backend=nemotron`, `embed_device=auto`
+| Check | Result |
+|-------|--------|
+| HIP / is_available / probe | **PASS** (A1–A4) |
+| fp16 matmul on `cuda:0` | **FAIL** — rocBLAS: no TensileLibrary for **gfx906** |
+| Wheel Tensile lazy arches | gfx1030, 1100–1102, 1150–1151, 1200–1201, **908, 90a, 942, 950** — **no 906** |
+| Action | **Hard stop** — no model load / no Tier B for ISA |
+
+### Elyra probe (post-switch)
+
+- `probe_devices`: torch available; **cuda=False, rocm=True, cpu=True**
+- `select_device(auto)` → **rocm** (library level; ignores toml)
+- `elyra.toml` on main project during bring-up: `embed_device=cpu` (**local uncommitted pin** — do not commit as swap safety)
+- Product worker must keep pin until a deliberate dogfood plan exists; GPU matmul is currently unusable on this wheel
 
 ### pyproject `memory-embed` constraints
 
 | Requirement | Constraint | Current venv | Notes |
 |-------------|------------|--------------|--------|
-| torch | `>=2.2` | 2.13.0 | OK version; **wrong backend** (cu130) |
-| torchvision | `>=0.17` | 0.28.0 | OK; must match torch build family |
+| torch | `>=2.2` | 2.13.0+rocm7.2 | Version OK; **backend ROCm** but **gfx906 kernels missing** in wheel rocBLAS |
+| torchvision | `>=0.17` | 0.28.0+rocm7.2 | Matches torch family |
 | transformers | `>=4.51` | 5.14.1 | OK for Nemotron path |
 | accelerate | `>=0.33` | 1.14.0 | OK |
 | Pillow | `>=10.0` | (check if needed) | optional path |
@@ -233,11 +250,13 @@ If `rocm7.2` wheel install fails or `is_available` stays false:
 | # | Item | Priority |
 |---|------|----------|
 | 1 | Add user to `render` + `video`, re-login | Medium (kfd is world-RW today; still best practice) |
-| 2 | Swap venv torch/torchvision to **rocm7.2** wheels | **High** — required for GPU encode |
-| 3 | Re-run Elyra `probe_devices` → expect `rocm=True` | High |
-| 4 | Install Tier B only if dynamic linker errors | Low–Med |
-| 5 | Isolated Radeon VII shim (attn sdpa/eager first, health honesty) | After torch HIP works |
-| 6 | Optional: tiny matmul + single Nemotron encode bench | Validation |
+| 2 | ~~Swap venv torch/torchvision to **rocm7.2** wheels~~ | **Done (PR3)** — install OK; A5 ISA fail |
+| 3 | ~~Re-run Elyra `probe_devices` → expect `rocm=True`~~ | **Done** — `rocm=True` |
+| 4 | **gfx906 kernel path** — older wheel index experiment, or source/Tensile with gfx906; **not** Tier B cargo-cult | **Critical** for any GPU encode |
+| 5 | Install Tier B only if dynamic linker / missing `librocblas` errors (not for ISA) | Low — not applicable to current A5 |
+| 6 | Keep product `embed_device=cpu` pin until compute works | **High** safety |
+| 7 | Isolated Radeon VII shim only after A5 green | Blocked on A5 |
+| 8 | `03_nemotron_encode` + BUG-mem-gpu-01 update after A5 green | Blocked on A5 |
 
 ---
 
@@ -247,10 +266,11 @@ If `rocm7.2` wheel install fails or `is_available` stays false:
 |-------|--------|
 | Hardware Radeon VII / gfx906 | **OK** — seen by rocminfo |
 | Host ROCm 7.2.4 Tier A | **OK** — installed and tools work |
-| Host Tier B (BLAS/MIOpen) | **Not installed** — OK for wheel path until proven needed |
-| Venv ROCm torch | **Not yet** — still CUDA 13.0 build |
-| Embed path effective device | **CPU** |
+| Host Tier B (BLAS/MIOpen) | **Not installed** — not used for ISA miss |
+| Venv ROCm torch | **Installed** `2.13.0+rocm7.2` — HIP OK |
+| A5 matmul / gfx906 kernels | **FAIL** — no rocBLAS Tensile for gfx906 in wheel |
+| Embed path effective device | **CPU** (local pin); library `auto` would choose **rocm** |
 
 ---
 
-*Generated for branch `grok-improv-radeonvii`. Update this file after venv torch swap.*
+*Updated after LuxPrimata operator switch (PR3). See NOTES-DOGFOOD.md for A5 evidence.*

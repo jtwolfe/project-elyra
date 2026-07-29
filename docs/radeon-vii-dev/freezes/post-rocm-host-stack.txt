@@ -1,0 +1,65 @@
+# post-rocm-host-stack.txt
+# host: LuxPrimata
+# recorded: 2026-07-29T12:09:48Z
+# phase: after torch 2.13.0+rocm7.2 install; A1-A4 green; A5 FAIL (gfx906 rocBLAS missing)
+
+## torch after switch
+torch 2.13.0+rocm7.2
+cuda None
+hip 7.2.53211
+is_available True
+name AMD Radeon Graphics
+
+## product probe
+{'torch_available': True, 'cuda': False, 'rocm': True, 'cpu': True, 'error': None}
+auto rocm
+rocm rocm
+
+## pacman -Q rocm/hip
+comgr 2:7.2.4-1
+hip-runtime-amd 7.2.4-1
+hsa-rocr 7.2.4-1
+rocm-cmake 7.2.4-1
+rocm-core 7.2.4-1
+rocm-device-libs 2:7.2.4-1
+rocm-hip-runtime 7.2.4-1
+rocm-language-runtime 7.2.4-1
+rocm-llvm 2:7.2.4-1
+rocm-smi-lib 7.2.0-2
+rocminfo 7.2.4-1
+starship 1.26.0-1
+
+## rocminfo Marketing / gfx
+  Marketing Name:          AMD Ryzen 5 1600X Six-Core Processor
+  Vendor Name:             CPU                                
+--
+  Name:                    gfx906                             
+  Uuid:                    GPU-2284206172df8893               
+  Marketing Name:          AMD Radeon VII                     
+  Vendor Name:             AMD                                
+--
+      Name:                    amdgcn-amd-amdhsa--gfx906:sramecc+:xnack-
+      Machine Models:          HSA_MACHINE_MODEL_LARGE            
+
+## rocBLAS TensileLibrary_lazy_* arches present in wheel
+TensileLibrary_lazy_gfx1030.dat
+TensileLibrary_lazy_gfx1100.dat
+TensileLibrary_lazy_gfx1101.dat
+TensileLibrary_lazy_gfx1102.dat
+TensileLibrary_lazy_gfx1150.dat
+TensileLibrary_lazy_gfx1151.dat
+TensileLibrary_lazy_gfx1200.dat
+TensileLibrary_lazy_gfx1201.dat
+TensileLibrary_lazy_gfx908.dat
+TensileLibrary_lazy_gfx90a.dat
+TensileLibrary_lazy_gfx942.dat
+TensileLibrary_lazy_gfx950.dat
+
+## A5 matmul result
+FAIL: rocBLAS Cannot read TensileLibrary for GPU arch gfx906; process aborted (exit 134)
+Available lazy TensileLibrary arches: gfx1030,1100,1101,1102,1150,1151,1200,1201,908,90a,942,950 — NO gfx906
+
+## elyra.toml pin (local uncommitted)
+16:embed_enabled = true
+17:embed_backend = "nemotron"
+19:embed_device = "cpu"
