@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="528" viewBox="0 0 864 528">
+<rect width="100%" height="100%" fill="#0F1419"/>
+<text x="432.0" y="28" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="16" fill="#E7ECF3">sin(x)</text>
+<rect x="64" y="48" width="776" height="424" fill="none" stroke="#243041"/>
+<line x1="64" y1="467.37" x2="840" y2="467.37" stroke="#243041" stroke-width="1"/>
+<text x="56" y="471.37" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">-1</text>
+<line x1="64" y1="370.29" x2="840" y2="370.29" stroke="#243041" stroke-width="1"/>
+<text x="56" y="374.29" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">-0.5</text>
+<line x1="64" y1="273.21" x2="840" y2="273.21" stroke="#243041" stroke-width="1"/>
+<text x="56" y="277.21" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0</text>
+<line x1="64" y1="176.12" x2="840" y2="176.12" stroke="#243041" stroke-width="1"/>
+<text x="56" y="180.12" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0.5</text>
+<line x1="64" y1="79.04" x2="840" y2="79.04" stroke="#243041" stroke-width="1"/>
+<text x="56" y="83.04" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">1</text>
+<line x1="99.27" y1="48" x2="99.27" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="99.27" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0</text>
+<line x1="323.94" y1="48" x2="323.94" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="323.94" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">2</text>
+<line x1="548.61" y1="48" x2="548.61" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="548.61" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">4</text>
+<line x1="773.27" y1="48" x2="773.27" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="773.27" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">6</text>
+<text x="452.0" y="512" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#E7ECF3">x</text>
+<text x="16" y="260.0" text-anchor="middle" transform="rotate(-90 16 260.0)" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#E7ECF3">y</text>
+<polyline fill="none" stroke="#0072B2" stroke-width="2.5" points="99.27,273.21 106.40,260.90 113.52,248.64 120.65,236.48 127.78,224.47 134.90,212.65 142.03,201.08 149.15,189.79 156.28,178.85 163.40,168.28 170.53,158.13 177.66,148.45 184.78,139.27 191.91,130.63 199.03,122.56 206.16,115.10 213.29,108.27 220.41,102.11 227.54,96.63 234.66,91.87 241.79,87.83 248.91,84.54 256.04,82.01 263.17,80.25 270.29,79.27 277.42,79.06 284.54,79.64 291.67,80.99 298.80,83.12 305.92,86.01 313.05,89.66 320.17,94.04 327.30,99.15 334.42,104.95 341.55,111.43 348.68,118.56 355.80,126.32 362.93,134.66 370.05,143.57 377.18,152.99 384.30,162.90 391.43,173.25 398.56,184.00 405.68,195.11 412.81,206.54 419.93,218.23 427.06,230.15 434.19,242.24 441.31,254.45 448.44,266.74 455.56,279.05 462.69,291.35 469.81,303.56 476.94,315.66 484.07,327.59 491.19,339.29 498.32,350.73 505.44,361.86 512.57,372.63 519.70,383.01 526.82,392.94 533.95,402.39 541.07,411.32 548.20,419.69 555.32,427.47 562.45,434.64 569.58,441.15 576.70,446.99 583.83,452.13 590.95,456.55 598.08,460.24 605.20,463.17 612.33,465.33 619.46,466.73 626.58,467.34 633.71,467.17 640.83,466.23 647.96,464.51 655.09,462.01 662.21,458.76 669.34,454.76 676.46,450.04 683.59,444.60 690.71,438.47 697.84,431.67 704.97,424.24 712.09,416.20 719.22,407.59 726.34,398.43 733.47,388.78 740.60,378.65 747.72,368.11 754.85,357.18 761.97,345.91 769.10,334.35 776.22,322.55 783.35,310.54 790.48,298.39 797.60,286.13 804.73,273.83"/>
+</svg>

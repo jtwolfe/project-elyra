@@ -1,0 +1,9 @@
+[project]
+name = "elyra-graph"
+version = "0.1.0"
+description = "Sandbox graphing toolkit for Elyra (Phase 0 scaffold)"
+requires-python = ">=3.11"
+dependencies = ["numpy", "matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

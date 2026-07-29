@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="528" viewBox="0 0 864 528">
+<rect width="100%" height="100%" fill="#0F1419"/>
+<text x="432.0" y="28" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="16" fill="#E7ECF3">Area</text>
+<rect x="64" y="48" width="776" height="424" fill="none" stroke="#243041"/>
+<line x1="64" y1="467.34" x2="840" y2="467.34" stroke="#243041" stroke-width="1"/>
+<text x="56" y="471.34" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0</text>
+<line x1="64" y1="370.20" x2="840" y2="370.20" stroke="#243041" stroke-width="1"/>
+<text x="56" y="374.20" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0.25</text>
+<line x1="64" y1="273.06" x2="840" y2="273.06" stroke="#243041" stroke-width="1"/>
+<text x="56" y="277.06" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0.5</text>
+<line x1="64" y1="175.93" x2="840" y2="175.93" stroke="#243041" stroke-width="1"/>
+<text x="56" y="179.93" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0.75</text>
+<line x1="64" y1="78.79" x2="840" y2="78.79" stroke="#243041" stroke-width="1"/>
+<text x="56" y="82.79" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">1</text>
+<line x1="99.27" y1="48" x2="99.27" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="99.27" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">0</text>
+<line x1="342.53" y1="48" x2="342.53" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="342.53" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">10</text>
+<line x1="585.79" y1="48" x2="585.79" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="585.79" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">20</text>
+<line x1="829.05" y1="48" x2="829.05" y2="472" stroke="#243041" stroke-width="1"/>
+<text x="829.05" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#A0AEC0">30</text>
+<text x="452.0" y="512" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#E7ECF3">x</text>
+<text x="16" y="260.0" text-anchor="middle" transform="rotate(-90 16 260.0)" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#E7ECF3">y</text>
+<polygon fill="#0072B2" fill-opacity="0.35" stroke="#0072B2" stroke-width="2" points="99.27,467.34 123.60,371.21 147.92,281.06 172.25,202.49 196.58,140.38 220.90,98.61 245.23,79.76 269.55,85.01 293.88,114.03 318.21,165.02 342.53,234.80 366.86,319.05 391.18,412.51 415.51,425.30 439.84,331.04 464.16,245.26 488.49,173.28 512.82,119.59 537.14,87.52 561.47,79.06 585.79,94.75 610.12,133.60 634.45,193.20 658.77,269.85 683.10,358.77 707.42,454.45 731.75,383.76 756.08,292.47 780.40,212.07 804.73,147.53 804.73,467.34 99.27,467.34"/>
+</svg>

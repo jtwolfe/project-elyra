@@ -1,0 +1,36 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:18.436272+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "bar",
+  "path": "/workspace/tmp/graphing_tool/out/bars.svg",
+  "request": {
+    "backend": "auto",
+    "color": null,
+    "data_columns": [
+      "cat",
+      "n"
+    ],
+    "data_rows": 4,
+    "kind": "bar",
+    "out": "/workspace/tmp/graphing_tool/out/bars.svg",
+    "size": null,
+    "theme": "presentation",
+    "title": "Counts",
+    "x": "cat",
+    "y": "n"
+  },
+  "request_sha256": "09ed258904159d64e0498f61d939f226dfdca6961c13f90c126de6b2b84cde35",
+  "theme": "presentation",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

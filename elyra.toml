@@ -16,5 +16,5 @@ semantic_enabled = true
 embed_enabled = true
 embed_backend = "nemotron"
 embed_model_id = "nvidia/omni-embed-nemotron-3b"
-embed_device = "auto"
+embed_device = "rocm"
 parcels_enabled = true

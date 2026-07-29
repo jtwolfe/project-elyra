@@ -1,0 +1,37 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:06.775710+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "line",
+  "path": "/workspace/tmp/graphing_tool/out/test/q.svg",
+  "request": {
+    "backend": "auto",
+    "color": null,
+    "data_columns": [
+      "x",
+      "y"
+    ],
+    "data_rows": 100,
+    "kind": "line",
+    "out": "/workspace/tmp/graphing_tool/out/test/q.svg",
+    "theme": "elyra_dark",
+    "title": "sin(x)",
+    "x": "x",
+    "xlabel": "x",
+    "y": "y",
+    "ylabel": "y"
+  },
+  "request_sha256": "a9543e5f84034a232e9954942c9ae8ad94d6a643aa94eb17509599de157e7709",
+  "theme": "elyra_dark",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:18.389179+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "line",
+  "path": "/workspace/tmp/graphing_tool/out/multi_line.svg",
+  "request": {
+    "backend": "auto",
+    "color": "series",
+    "data_columns": [
+      "series",
+      "x",
+      "y"
+    ],
+    "data_rows": 400,
+    "kind": "line",
+    "out": "/workspace/tmp/graphing_tool/out/multi_line.svg",
+    "theme": "elyra_light",
+    "title": "Sine vs Cosine",
+    "x": "x",
+    "xlabel": "t",
+    "y": "y",
+    "ylabel": "amplitude"
+  },
+  "request_sha256": "9cfbe7efab172c6f982c3b3d6ea9441b542d58ac0b5f5bca7988fa3acb72cda8",
+  "theme": "elyra_light",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

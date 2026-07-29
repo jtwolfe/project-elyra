@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elyra_graph/plot_request.schema.json",
+  "title": "PlotRequest",
+  "type": "object",
+  "required": ["kind", "data", "out"],
+  "properties": {
+    "kind": {"type": "string"},
+    "data": {},
+    "x": {"type": ["string", "null"]},
+    "y": {"type": ["string", "null"]},
+    "color": {"type": ["string", "null"]},
+    "out": {"type": "string", "minLength": 1},
+    "backend": {"type": "string", "default": "mpl"},
+    "theme": {"type": "string"},
+    "palette": {"type": "string"},
+    "title": {"type": "string"},
+    "xlabel": {"type": "string"},
+    "ylabel": {"type": "string"},
+    "figsize": {
+      "type": "array",
+      "items": {"type": "number"},
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "dpi": {"type": "integer", "minimum": 36, "maximum": 600},
+    "meta": {"type": "boolean", "default": true}
+  },
+  "additionalProperties": true
+}
