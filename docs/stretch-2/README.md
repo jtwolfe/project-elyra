@@ -63,7 +63,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 |-------|--------|------|--------|
 | **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors | **Done** (2026-07-28) — see caveats below |
 | **2** | Semantic / Nemotron / vector search | Portability + freshness + product-path honesty | **Code rectified (PR-R1–R5, 2026-07-29)** on ship stack (PR1–PR9); **operator smoke dogfood pending**; flags default **off** — see close-out |
-| **2a** | Directed traversal | Temporary context hygiene | Planned — after rectified seeds |
+| **2a** | Directed traversal | Temporary context hygiene | **Code shipped (PR-A1–A5, 2026-07-29)**; architecture note PR-A6; **operator smoke dogfood pending**; flags default **off** — see close-out |
 | **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on | Planned |
 
 ### Phase 2 close-out (updated 2026-07-29)
@@ -91,11 +91,42 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 |-------|--------|
 | Operator smoke / full dogfood | Still needed on rectified path (mock → Nemotron ladder) |
 | Glass **Vectors** tab | Live + honest (PR7 + PR-R5) — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
-| Glass **Graph** tab | Phase **2a** — out of scope (stub remains) |
+| Glass **Graph** tab | **Live (Phase 2a PR-A5)** — [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md); was stub in Phase 2 |
 | Nemotron / GPU | Runtime landed (PR8); **BUG-mem-gpu-01** open (ROCm / device); Gate B before product default-on |
 | Default-on semantic | Only after rectified dogfood + Gate B + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
 
 **Docs:** [design-phase-2-rectification.md](design-phase-2-rectification.md) (normative fix plan), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped + rectified map), [design-phase-2-implementation.md](design-phase-2-implementation.md) (historical PR1–PR9), [known-bugs.md](../known-bugs.md) (**BUG-mem-p2-01**, **BUG-mem-gpu-01**).
+
+### Phase 2a close-out (updated 2026-07-29)
+
+**Ship stack (PR-A1–A5, 2026-07-29):** GraphView + weights v1, TraversalSession (budgets + dual sticky snapshots), meal **directed_keep** channel, traverse tools + `memory-traverse` skill, glass **Graph** tab.
+
+**Docs (PR-A6):** [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) (structure / activity / invariants / failure maps; KD-A1–A19 as shipped).
+
+| PR | What |
+|----|------|
+| **A1** | `GraphView` neighbourhood, edge projection, weight model v1 |
+| **A2** | `TraversalSession` start/step/finish/abandon; idle TTL + expand_ms + steps (no multi-hop wall) |
+| **A3** | Meal `directed_keep` + `split_memory_budget_v3` (next `compose_meal` only) |
+| **A4** | `memory_traverse_*` tools + `memory-traverse` skill playbook |
+| **A5** | Glass Graph tab — considered vs kept, budgets, walk summary |
+| **A6** | Architecture note + program docs (this README + sketch concept map) |
+
+**Honesty:** execute-plan complete ≠ product target. **Temporary state is session-only** (no temporary Atom rows). Flags `directed_traversal_enabled` / `directed_keep_enabled` default **off** (OQ-A1: keep follows traversal when traversal is on). **Operator smoke dogfood verification is still pending** before claiming Phase 2a product-complete or default-on. Prefer Phase 2 rectified semantic smoke before rich multi-hop dogfood; structural JSONL walks work without ANN.
+
+**Defaults stay safe:** traversal/keep **false**. Structural walks need an open memory store; soft semantic hops need `backend=lance` + warm encoder (same as Phase 2). JSONL remains hermetic CI structural path.
+
+**Caveats / follow-ups:**
+
+| Topic | Notes |
+|-------|--------|
+| Operator smoke / full dogfood | Still needed (structural + Lance multi-hop) |
+| Meal timing | Glass immediate; outer meal on **next** `compose_meal` only (KD-A16) — skill teaches honesty |
+| Restart | Sessions in-process only; sticky keep lost on restart (OQ-A2) |
+| Default-on traversal | Only after dogfood + operator sign-off |
+| Phase 3 | Success-path weights later — not 2a |
+
+**Docs:** [design-phase-2a-implementation.md](design-phase-2a-implementation.md) (normative design + KD-A*), [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) (shipped map), [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) (intent sketch).
 
 ### Phase 1 close-out (2026-07-28)
 
@@ -138,9 +169,11 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Historical** Phase 2 implementation design + PR plan (PR1–PR9) |
 | [design-phase-2-rectification.md](design-phase-2-rectification.md) | **Phase 2 product-path rectification** design + PR-R1–R6 |
 | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped + rectified: structure ↔ essay, activities, invariants) |
-| [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
+| [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a intent sketch (points at implementation + architecture) |
+| [design-phase-2a-implementation.md](design-phase-2a-implementation.md) | **Normative** Phase 2a implementation design + PR-A1–A6 |
+| [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) | **Phase 2a architecture manual** (shipped: structure ↔ essay, activities, invariants) |
 | [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
-| `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 + Phase 2 shipped) |
+| `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 + Phase 2 + Phase 2a shipped) |
 
 All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
@@ -150,14 +183,14 @@ All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
 In addition to engineering-principles “done”:
 
-- [x] Behaviour implemented and tested for that phase only — **Phase 1** + **Phase 2** code (semantic flags default off; dogfood opt-in; rectification PR-R1–R5 hermetic coverage); 2a/3 open
-- [x] Public memory APIs minimal and documented — Phase 1 store Protocol + glass inspect; Phase 2 index/embed + meal semantic + Vectors APIs (`/api/memory/vectors*`)
-- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md); Phase 2: [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (includes rectification)
-- [x] Activity list updated (which §3 activities are now live) — Phase 1 + Phase 2 maps in architecture notes
-- [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors; **Phase 2** meal works with semantic off or omitted
-- [x] Operator-visible failure modes documented — Phase 1 + Phase 2 architecture notes
+- [x] Behaviour implemented and tested for that phase only — **Phase 1** + **Phase 2** code + **Phase 2a** code (semantic + traversal flags default off; dogfood opt-in; PR-R1–R5 + PR-A1–A5 hermetic coverage); Phase 3 open
+- [x] Public memory APIs minimal and documented — Phase 1 store Protocol + glass inspect; Phase 2 index/embed + meal semantic + Vectors APIs; Phase 2a Graph APIs (`/api/memory/graph*`) + traverse tools
+- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md); Phase 2: [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md); Phase 2a: [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md)
+- [x] Activity list updated (which §3 activities are now live) — Phase 1 + Phase 2 + Phase 2a maps in architecture notes
+- [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors; **Phase 2** meal works with semantic off or omitted; **Phase 2a** structural walks work without ANN / with flags off inert
+- [x] Operator-visible failure modes documented — Phase 1 + Phase 2 + Phase 2a architecture notes
 
-Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 **code** done means semantic path + Vectors glass + rectification stack + architecture note with safe defaults — **not** product default-on, **not** Graph/2a, and **not** a substitute for operator smoke dogfood.
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 **code** done means semantic path + Vectors glass + rectification stack + architecture note with safe defaults — **not** product default-on and **not** a substitute for operator smoke dogfood. Phase 2a **code** done means directed walk + directed_keep + Graph glass + architecture note with flags **off** — **not** product default-on and **not** a substitute for operator smoke dogfood.
 
 ---
 
@@ -176,6 +209,7 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 ## Next steps
 
 1. **Smoke dogfood Phase 2 rectification** (flags on, `backend=lance`): neighbors/meal under `auto`, joint repair completes, rebuild notes honest — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md), [design-phase-2-rectification.md](design-phase-2-rectification.md).
-2. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on — [design-nemotron-runtime.md](design-nemotron-runtime.md).
-3. **Phase 2a** directed traversal → fill **Graph** tab (depends on rectified semantic seeds); then Phase 3 procedural eval-first.
-4. Keep architecture manuals updated when behaviour changes. Do not start 2a on empty joint search.
+2. **Smoke dogfood Phase 2a** (flags on): structural walk on JSONL; full multi-hop with Lance + semantic seeds; finish → glass considered/kept → next meal directed_keep — [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md).
+3. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on of semantic — [design-nemotron-runtime.md](design-nemotron-runtime.md).
+4. **Phase 3** procedural / success-path evaluation-first (uses edges/sessions from 2a).
+5. Keep architecture manuals updated when behaviour changes. Do not claim 2a product-complete on empty joint search or without dogfood.
