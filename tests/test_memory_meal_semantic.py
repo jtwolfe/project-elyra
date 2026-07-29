@@ -206,6 +206,48 @@ class _FixedHitIndex:
         return {"ok": True}
 
 
+class _FilteringHitIndex:
+    """Predetermined hits that honor exclude_atom_ids / exclude_moment_id.
+
+    Models product MemoryEmbeddingIndex / Lance filter behaviour so pack-side
+    and probe-side dedup paths can be tested without Lance.
+    """
+
+    def __init__(self, hits: list[ScoredAtom]):
+        self.hits = hits
+        self.last_kwargs: dict[str, Any] = {}
+        self.search_calls = 0
+
+    def search(self, query: Sequence[float], **kwargs: Any) -> list[ScoredAtom]:
+        del query
+        self.search_calls += 1
+        self.last_kwargs = dict(kwargs)
+        exclude = set(kwargs.get("exclude_atom_ids") or ())
+        exclude_moment = kwargs.get("exclude_moment_id")
+        out: list[ScoredAtom] = []
+        for hit in self.hits:
+            if hit.atom_id in exclude:
+                continue
+            atom = hit.atom
+            if exclude_moment and atom is not None and atom.moment_id == exclude_moment:
+                continue
+            out.append(hit)
+        return out
+
+    def health(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "vectors_by_channel": {
+                "text": 1,
+                "joint": 1,
+                "image": 0,
+                "audio": 0,
+                "video": 0,
+            },
+            "joint_repair_remaining": 0,
+        }
+
+
 # ---------------------------------------------------------------------------
 # select_semantic behaviours
 # ---------------------------------------------------------------------------
@@ -893,3 +935,256 @@ def test_compose_meal_deduped_reason_and_meta(store):
     assert pkg.semantic_select_meta is not None
     assert pkg.semantic_select_meta["deduped"] >= 1
     assert pkg.semantic_select_meta["packed"] == 0
+
+
+def test_select_semantic_deduped_real_memory_index(store):
+    """Product MemoryEmbeddingIndex filters exclude → probe classifies deduped.
+
+    Regression for KD-R6: when the only ANN neighbours are already in
+    temporal/episodic, reason must be deduped (not no_hits).
+    """
+    open_id = "m_open"
+    now = datetime(2026, 7, 28, 15, 0, tzinfo=UTC)
+    open_atom = _atom(
+        t="2026-07-28T14:50:00Z",
+        text="open seed about bees",
+        moment_id=open_id,
+        atom_id="a_open",
+        embedding_status="ready",
+    )
+    store.put_atom(open_atom)
+    # Prior-moment atom that will land in episodic and be excluded from semantic.
+    past = _atom(
+        t="2026-07-28T10:00:00Z",
+        kind="speak",
+        text="prior moment chat about bees",
+        moment_id="m_prior",
+        atom_id="a_prior",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store)
+    seed_vec = emb.encode_text("open seed about bees")
+    for aid, seed in (("a_open", "open seed about bees"), ("a_prior", "prior moment chat about bees")):
+        vec = emb.encode_text(seed)
+        idx.upsert(
+            EmbeddingSet(
+                atom_id=aid,
+                emb_text=tuple(vec),
+                emb_joint=tuple(vec),
+                model_id="mock",
+                encoded_at=to_iso_z(now),
+            )
+        )
+    # Also index open with seed-aligned vector so ANN would rank it.
+    idx.upsert(
+        EmbeddingSet(
+            atom_id="a_open",
+            emb_text=tuple(seed_vec),
+            emb_joint=tuple(seed_vec),
+            model_id="mock",
+            encoded_at=to_iso_z(now),
+        )
+    )
+
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=500,
+        semantic_min_score=0.0,
+        semantic_search_channel="joint",
+        episodic_horizon_hours=24.0,
+    )
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=now,
+        settings=cfg,
+        index=idx,
+        embedder=emb,
+    )
+    assert "semantic" not in pkg.channels_present
+    assert pkg.semantic_omitted_reason == SEMANTIC_OMIT_DEDUPED
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta.get("raw_hits") == 0
+    assert pkg.semantic_select_meta.get("deduped", 0) >= 1
+    assert pkg.semantic_select_meta.get("dedupe_probe") is True
+    assert pkg.semantic_select_meta.get("packed") == 0
+
+
+def test_select_semantic_deduped_filtering_index_probe(store):
+    """Filtering index (honors exclude) → primary empty, probe → deduped."""
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="already packed elsewhere",
+        moment_id="m_past",
+        atom_id="a_dup",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_dup", score=0.95, channel="joint", atom=past)
+    idx = _FilteringHitIndex([hit])
+    emb = MockEmbedder()
+    cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        exclude_atom_ids={"a_dup"},
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_DEDUPED
+    assert meta is not None
+    assert meta["raw_hits"] == 0  # primary search filtered
+    assert meta["deduped"] >= 1
+    assert meta.get("dedupe_probe") is True
+    assert idx.search_calls >= 2  # primary + probe
+
+
+def test_select_semantic_mixed_min_score_and_deduped(store):
+    """Some below min_score, some pack-side deduped → deduped (not min_score)."""
+    keep = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="already in temporal",
+        moment_id="m_past",
+        atom_id="a_dup",
+        embedding_status="ready",
+    )
+    weak = _atom(
+        t="2026-07-27T09:00:00Z",
+        text="weak unrelated",
+        moment_id="m_weak",
+        atom_id="a_weak",
+        embedding_status="ready",
+    )
+    store.put_atom(keep)
+    store.put_atom(weak)
+    hits = [
+        ScoredAtom(atom_id="a_weak", score=0.1, channel="joint", atom=weak),
+        ScoredAtom(atom_id="a_dup", score=0.9, channel="joint", atom=keep),
+    ]
+    idx = _FixedHitIndex(hits)
+    emb = MockEmbedder()
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_min_score=0.5,
+        semantic_select_max_ms=500,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        exclude_atom_ids={"a_dup"},
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_DEDUPED
+    assert meta is not None
+    assert meta["raw_hits"] == 2
+    assert meta["below_min"] == 1
+    assert meta["deduped"] == 1
+    assert meta["packed"] == 0
+
+
+def test_select_semantic_packed_with_deduped_counter(store):
+    """Packed ≥1 with some pack-side dups → reason None; meta both counters."""
+    keep = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="fresh semantic hit",
+        moment_id="m_keep",
+        atom_id="a_keep",
+        embedding_status="ready",
+    )
+    dup = _atom(
+        t="2026-07-27T09:00:00Z",
+        text="already temporal",
+        moment_id="m_dup",
+        atom_id="a_dup",
+        embedding_status="ready",
+    )
+    store.put_atom(keep)
+    store.put_atom(dup)
+    hits = [
+        ScoredAtom(atom_id="a_dup", score=0.99, channel="joint", atom=dup),
+        ScoredAtom(atom_id="a_keep", score=0.8, channel="joint", atom=keep),
+    ]
+    idx = _FixedHitIndex(hits)
+    emb = MockEmbedder()
+    cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        exclude_atom_ids={"a_dup"},
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert items[0].atom_id == "a_keep"
+    assert meta is not None
+    assert meta["packed"] == 1
+    assert meta["deduped"] == 1
+    assert meta["raw_hits"] == 2
+
+
+def test_select_semantic_zero_cap_still_has_meta(store):
+    """cap_tokens=0 leaves breadcrumb meta (budget floor cut semantic share)."""
+    items, reason, meta = select_semantic(
+        store,
+        index=_FixedHitIndex([]),
+        embedder=MockEmbedder(),
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=0,
+    )
+    assert items == []
+    assert reason is None
+    assert meta is not None
+    assert meta["cap_tokens"] == 0
+    assert meta["packed"] == 0
+    assert meta["elapsed_ms"] == 0
+
+
+def test_select_semantic_true_empty_channel_is_no_hits(store):
+    """Filtering index with no vectors at all → no_hits (probe finds nothing)."""
+    idx = _FilteringHitIndex([])  # nothing to return even unexcluded
+    emb = MockEmbedder()
+    cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        exclude_atom_ids={"a_other"},
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_NO_HITS
+    assert meta is not None
+    assert meta["raw_hits"] == 0
+    assert meta.get("deduped", 0) == 0
+    assert meta.get("dedupe_probe") is True

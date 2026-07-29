@@ -975,11 +975,16 @@ def select_semantic(
     channel / channel_reason / hit counters for MealPackage (PR-R2).
     """
     cfg = settings or MemorySettings()
+    t0 = _now_ms()
     cap = max(0, int(cap_tokens))
     if cap <= 0:
-        return [], None, None
+        # Semantic share can be zero under temporal floor; still leave a breadcrumb.
+        return [], None, {
+            "elapsed_ms": 0,
+            "packed": 0,
+            "cap_tokens": 0,
+        }
 
-    t0 = _now_ms()
     max_ms = (
         int(deadline_ms)
         if deadline_ms is not None
@@ -1046,9 +1051,11 @@ def select_semantic(
         exclude.add(a.atom_id)
 
     # KD-R16 / KD-R2: pure resolve then search(concrete) — no multi-try.
-    concrete = "joint"
-    channel_reason = "explicit"
+    # Channel fields only set after resolve succeeds (Issue 4: no false "explicit").
+    concrete: str | None = None
+    channel_reason: str | None = None
     joint_repair_remaining = 0
+    hits: list[Any] = []
     try:
         from elyra.memory.index import resolve_search_channel  # noqa: PLC0415
 
@@ -1059,6 +1066,12 @@ def select_semantic(
                 health = h
         except Exception:  # noqa: BLE001
             health = {}
+        # Design: JSONL / NullEmbeddingIndex → no_index (not empty-search no_hits).
+        if str(health.get("backend") or "").lower() == "null":
+            return early(
+                SEMANTIC_OMIT_NO_INDEX,
+                meta={"backend": "null", "joint_repair_remaining": 0},
+            )
         joint_repair_remaining = int(health.get("joint_repair_remaining") or 0)
         channel_req = str(
             getattr(cfg, "semantic_search_channel", None) or "auto"
@@ -1079,20 +1092,22 @@ def select_semantic(
         )
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic index.search failed")
-        return early(
-            SEMANTIC_OMIT_NO_INDEX,
-            meta={
-                "channel": concrete,
-                "channel_reason": channel_reason,
-                "joint_repair_remaining": joint_repair_remaining,
-            },
-        )
+        fail_meta: dict[str, Any] = {
+            "joint_repair_remaining": joint_repair_remaining,
+        }
+        if concrete is not None:
+            fail_meta["channel"] = concrete
+        if channel_reason is not None:
+            fail_meta["channel_reason"] = channel_reason
+        return early(SEMANTIC_OMIT_NO_INDEX, meta=fail_meta)
 
-    channel_meta = {
-        "channel": concrete,
-        "channel_reason": channel_reason,
+    channel_meta: dict[str, Any] = {
         "joint_repair_remaining": joint_repair_remaining,
     }
+    if concrete is not None:
+        channel_meta["channel"] = concrete
+    if channel_reason is not None:
+        channel_meta["channel_reason"] = channel_reason
 
     if over_deadline():
         return early(SEMANTIC_OMIT_TIMEOUT, meta=channel_meta)
@@ -1193,7 +1208,86 @@ def select_semantic(
         return [], SEMANTIC_OMIT_MIN_SCORE, select_meta
     if deduped_count > 0:
         return [], SEMANTIC_OMIT_DEDUPED, select_meta
+
+    # Product indexes filter exclude_atom_ids inside search, so pack-side
+    # dedup never sees those hits. Probe without exclude to distinguish
+    # "channel empty" (no_hits) from "only already-in-package" (deduped).
+    if (
+        raw_hit_count == 0
+        and exclude
+        and concrete is not None
+        and not over_deadline()
+    ):
+        probe_deduped = _probe_deduped_against_exclude(
+            store,
+            index,
+            query_vec=query_vec,
+            channel=concrete,
+            horizon_start=horizon_start,
+            now_dt=now_dt,
+            exclude=exclude,
+            top_k=int(cfg.semantic_top_k),
+        )
+        if probe_deduped > 0:
+            select_meta["deduped"] = probe_deduped
+            select_meta["dedupe_probe"] = True
+            select_meta["elapsed_ms"] = int(_now_ms() - t0)
+            return [], SEMANTIC_OMIT_DEDUPED, select_meta
+        select_meta["dedupe_probe"] = True
+
+    select_meta["elapsed_ms"] = int(_now_ms() - t0)
     return [], SEMANTIC_OMIT_NO_HITS, select_meta
+
+
+def _probe_deduped_against_exclude(
+    store: MemoryStore,
+    index: Any,
+    *,
+    query_vec: Sequence[float],
+    channel: str,
+    horizon_start: datetime,
+    now_dt: datetime,
+    exclude: set[str],
+    top_k: int,
+) -> int:
+    """Cheap unexcluded probe: count hits whose parent is already in exclude.
+
+    Primary search keeps exclude_* for packing quality. When that returns
+    zero hits, this probe (no exclude_atom_ids / exclude_moment_id, still
+    horizon-bound) detects "matched but already in temporal/episodic"
+    (KD-R6) without inventing index stash.
+    """
+    probe_k = max(1, min(int(top_k) if top_k > 0 else 1, 3))
+    try:
+        probe_hits = index.search(
+            query_vec,
+            k=probe_k,
+            channel=channel,
+            t_start=horizon_start,
+            t_end=now_dt,
+            # Intentionally no exclude_atom_ids / exclude_moment_id.
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.debug("semantic dedupe probe search failed", exc_info=True)
+        return 0
+
+    counted = 0
+    for hit in probe_hits or []:
+        atom_id = getattr(hit, "atom_id", None)
+        atom = getattr(hit, "atom", None)
+        if atom is None and atom_id:
+            try:
+                atom = store.get_atom(str(atom_id))
+            except Exception:  # noqa: BLE001
+                atom = None
+        if atom is None:
+            continue
+        parent, _via = _map_parcel_to_parent(store, atom)
+        if parent is None:
+            continue
+        if parent.atom_id in exclude:
+            counted += 1
+    return counted
 
 
 # ---------------------------------------------------------------------------

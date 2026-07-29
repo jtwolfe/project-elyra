@@ -224,10 +224,10 @@ def test_jsonl_null_index_semantic_empty(store):
         embedder=MockEmbedder(),
     )
     assert "semantic" not in pkg.channels_present
-    # PR-R2 / KD-R6: zero hits is an honest omit reason (not silent None).
-    assert pkg.semantic_omitted_reason == "no_hits"
+    # Design: JSONL / NullEmbeddingIndex → no_index (not empty-search no_hits).
+    assert pkg.semantic_omitted_reason == "no_index"
     assert pkg.semantic_select_meta is not None
-    assert pkg.semantic_select_meta.get("raw_hits") == 0
+    assert pkg.semantic_select_meta.get("backend") == "null"
     assert any(i.channel == "temporal" for i in pkg.items)
 
 
