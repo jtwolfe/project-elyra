@@ -62,26 +62,40 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | Phase | Focus | Care | Status |
 |-------|--------|------|--------|
 | **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors | **Done** (2026-07-28) — see caveats below |
-| **2** | Semantic / Nemotron / ANN | Hardware portability + index freshness policy | **Done / shipped** (2026-07-28) — flags default **off**; see caveats below |
-| **2a** | Directed traversal | Temporary context hygiene | Planned |
+| **2** | Semantic / Nemotron / vector search | Portability + freshness + product-path honesty | **Code rectified (PR-R1–R5, 2026-07-29)** on ship stack (PR1–PR9); **operator smoke dogfood pending**; flags default **off** — see close-out |
+| **2a** | Directed traversal | Temporary context hygiene | Planned — after rectified seeds |
 | **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on | Planned |
 
-### Phase 2 close-out (2026-07-28)
+### Phase 2 close-out (updated 2026-07-29)
 
-**Operator-complete on execute-plan stack / `grok-improvement-memory` (PR1–PR9):** multi-embeddings (mock + optional Nemotron + Lance `emb_*`), async encode queue + store write hooks + idle drain, ANN hybrid recent-buffer + idle optimize, opt-in parcels, meal **semantic** channel (`select_semantic`, budget v2, timeout omit), glass **Vectors** tab (health + status list + neighbors; `tabs.vectors.stub=false`), architecture note.
+**Ship stack (PR1–PR9, 2026-07-28):** multi-embeddings (mock + optional Nemotron + Lance `emb_*`), async encode queue + store write hooks + idle drain, hybrid recent-buffer + idle optimize, opt-in parcels, meal **semantic** channel, glass **Vectors** tab, architecture note.
 
-**Defaults stay safe:** `semantic_enabled` / `embed_enabled` / `parcels_enabled` **false** until dogfood. Durable ANN needs `backend=lance` + `elyra[memory-lance]`. JSONL remains hermetic CI (no production ANN).
+**Product-path rectification (PR-R1–R5, 2026-07-29) — code landed:**
 
-**Caveats / follow-ups (not Phase 2 reopen blockers):**
+| PR | What |
+|----|------|
+| **R1** | `auto` channel resolve + single-modality **joint = copy** + eager joint-copy repair |
+| **R2** | Meal omit `no_hits` / `deduped` + `semantic_select_meta` |
+| **R3** | Safe optimize/rebuild (no IVF on empty; no false `ann_index_built`) |
+| **R4** | Lance-native main search; small-N **`full_lance`**; rollback `ann_search_backend=python` |
+| **R5** | Vectors glass: channel auto/toggle + honest empty/rebuild UX |
+| **R6** | Docs closeout (this README + architecture + known-bugs) |
+
+**Honesty:** execute-plan complete ≠ product target. Pre-rectification dogfood showed empty joint neighbors/meal on text-only corpora (**BUG-mem-p2-01**). Code now matches product intent; **operator smoke dogfood verification is still pending** before claiming Phase 2 product-complete or default-on.
+
+**Defaults stay safe:** `semantic_enabled` / `embed_enabled` / `parcels_enabled` **false**. Durable vectors need `backend=lance` + `elyra[memory-lance]`. JSONL remains hermetic CI (no production ANN).
+
+**Caveats / follow-ups:**
 
 | Topic | Notes |
 |-------|--------|
-| Glass **Vectors** tab | **Filled (PR7 / KD18)** — live health, embedding status, neighbor inspect; optional 2D projection non-gate — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
+| Operator smoke / full dogfood | Still needed on rectified path (mock → Nemotron ladder) |
+| Glass **Vectors** tab | Live + honest (PR7 + PR-R5) — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
 | Glass **Graph** tab | Phase **2a** — out of scope (stub remains) |
-| Nemotron runtime | **Landed (PR8)** — real load when deps present; mock fallback when not; Gate B before product default-on |
-| Default-on semantic | Only after Gate B spike checklist + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
+| Nemotron / GPU | Runtime landed (PR8); **BUG-mem-gpu-01** open (ROCm / device); Gate B before product default-on |
+| Default-on semantic | Only after rectified dogfood + Gate B + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
 
-**Docs:** [design-phase-2-implementation.md](design-phase-2-implementation.md) (implementation design), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped map). **Product-path rectification (auto channel + joint-for-single + eager repair):** [design-phase-2-rectification.md](design-phase-2-rectification.md).
+**Docs:** [design-phase-2-rectification.md](design-phase-2-rectification.md) (normative fix plan), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped + rectified map), [design-phase-2-implementation.md](design-phase-2-implementation.md) (historical PR1–PR9), [known-bugs.md](../known-bugs.md) (**BUG-mem-p2-01**, **BUG-mem-gpu-01**).
 
 ### Phase 1 close-out (2026-07-28)
 
@@ -120,9 +134,10 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |
 | [design-phase-1-implementation.md](design-phase-1-implementation.md) | Phase 1 implementation design + key decisions |
 | [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) | **Phase 1 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
-| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 short sketch (points at implementation design + architecture note) |
-| [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Phase 2 implementation design + PR plan** (shipped stack reference) |
-| [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
+| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 short sketch (points at implementation + rectification + architecture) |
+| [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Historical** Phase 2 implementation design + PR plan (PR1–PR9) |
+| [design-phase-2-rectification.md](design-phase-2-rectification.md) | **Phase 2 product-path rectification** design + PR-R1–R6 |
+| [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped + rectified: structure ↔ essay, activities, invariants) |
 | [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a design |
 | [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
 | `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 + Phase 2 shipped) |
@@ -135,14 +150,14 @@ All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
 
 In addition to engineering-principles “done”:
 
-- [x] Behaviour implemented and tested for that phase only — **Phase 1** + **Phase 2** (semantic flags default off; dogfood opt-in); 2a/3 open
+- [x] Behaviour implemented and tested for that phase only — **Phase 1** + **Phase 2** code (semantic flags default off; dogfood opt-in; rectification PR-R1–R5 hermetic coverage); 2a/3 open
 - [x] Public memory APIs minimal and documented — Phase 1 store Protocol + glass inspect; Phase 2 index/embed + meal semantic + Vectors APIs (`/api/memory/vectors*`)
-- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md); Phase 2: [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)
+- [x] **Concept-mapping architecture note** written or updated (structures ↔ essay) — Phase 1: [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md); Phase 2: [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (includes rectification)
 - [x] Activity list updated (which §3 activities are now live) — Phase 1 + Phase 2 maps in architecture notes
 - [x] No dependency on later phases for correctness — **Phase 1** meal works without vectors; **Phase 2** meal works with semantic off or omitted
 - [x] Operator-visible failure modes documented — Phase 1 + Phase 2 architecture notes
 
-Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 done means semantic path + **Vectors glass gate (KD18)** + architecture note with safe defaults — **not** product default-on and **not** Graph/2a.
+Philosophical soft guidance is **not** a checklist item for phase done. Meal composition percentages stay tunable; Phase 1 done means temporal/episodic package + slide-off path exist, not final budget ratios. Glass polish and prompt soften are **not** Phase 1 reopen criteria (see close-out caveats). Phase 2 **code** done means semantic path + Vectors glass + rectification stack + architecture note with safe defaults — **not** product default-on, **not** Graph/2a, and **not** a substitute for operator smoke dogfood.
 
 ---
 
@@ -160,7 +175,7 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 
 ## Next steps
 
-1. Dogfood Phase 1 with `write_atoms` + `enabled` (defaults on; see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md)).
-2. Dogfood Phase 2 ladder (mock → Nemotron → `semantic_enabled`) with `backend=lance`; flags stay off until Gate B — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md).
-3. Phase 2a directed traversal → fill **Graph** tab; Phase 3 procedural eval-first.
-4. Keep architecture manuals updated when behaviour changes.
+1. **Smoke dogfood Phase 2 rectification** (flags on, `backend=lance`): neighbors/meal under `auto`, joint repair completes, rebuild notes honest — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md), [design-phase-2-rectification.md](design-phase-2-rectification.md).
+2. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on — [design-nemotron-runtime.md](design-nemotron-runtime.md).
+3. **Phase 2a** directed traversal → fill **Graph** tab (depends on rectified semantic seeds); then Phase 3 procedural eval-first.
+4. Keep architecture manuals updated when behaviour changes. Do not start 2a on empty joint search.

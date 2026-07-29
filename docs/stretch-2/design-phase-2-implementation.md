@@ -16,7 +16,9 @@
 | **Phase 1 patterns** | [`design-phase-1-implementation.md`](design-phase-1-implementation.md), [`architecture/phase-1-temporal.md`](architecture/phase-1-temporal.md) |
 | **Boundary** | Phase 2a directed traversal is **out of scope** ([`design-phase-2a-directed-traversal.md`](design-phase-2a-directed-traversal.md)) |
 
-This document **supersedes the short Phase 2 outline** (`design-phase-2-semantic.md`) for implementation purposes. Where it resolves open questions from that sketch and the Nemotron runtime note, resolutions appear under **Key Decisions** with rationale. Soft influences from `philosophical-soft-guidance.md` inform judgment only; they are not deliverables.
+> **Historical:** this document is the Phase 2 **PR1–PR9** ship design. Product-path rectification (joint-for-single, `auto` channel, Lance-native search, meal/Vectors honesty) is owned by **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — do not rewrite this file for R1–R5 behaviour; update [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) instead.
+
+This document **supersedes the short Phase 2 outline** (`design-phase-2-semantic.md`) for the original implementation stack. Where it resolves open questions from that sketch and the Nemotron runtime note, resolutions appear under **Key Decisions** with rationale. Soft influences from `philosophical-soft-guidance.md` inform judgment only; they are not deliverables.
 
 Deferred polish bugs in [`docs/known-bugs.md`](../known-bugs.md) (glass beautify, system prompt soften, status bugs, etc.) are **not** Phase 2 scope unless they block semantic work.
 

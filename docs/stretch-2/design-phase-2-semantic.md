@@ -1,19 +1,24 @@
 # Phase 2 — Semantic Memory (Nemotron + Multi-Embeddings)
 
-**Status:** **Shipped** (2026-07-28) — short outline only; implementers and operators use the documents below.
+**Status:** **Shipped + product-path rectified (code)** — short outline only. Ship stack PR1–PR9 (2026-07-28); rectification **PR-R1–R5** landed (2026-07-29); **operator smoke dogfood still pending**. Prefer the documents below.
 **Depends on:** Phase 1 Done
-**Implementation design (normative for code):** [design-phase-2-implementation.md](design-phase-2-implementation.md)
-**Architecture note (what shipped):** [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)
+**Implementation design (historical PR1–PR9):** [design-phase-2-implementation.md](design-phase-2-implementation.md)
+**Rectification design (landed — normative for product-path fixes):** [design-phase-2-rectification.md](design-phase-2-rectification.md)
+**Architecture note (what shipped + rectified):** [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)
+**Program status:** [README.md](README.md) Phase 2 close-out
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md), [design-database-choices.md](design-database-choices.md)
 **Runtime:** [design-nemotron-runtime.md](design-nemotron-runtime.md)
 **Meal channel:** [design-context-meal-composition.md](design-context-meal-composition.md) (semantic as supporting only)
 
+> **Honesty (historical):** the 2026-07-28 “Shipped” banner described the execute-plan stack. Live dogfood showed empty joint-primary search on text-only corpora (**BUG-mem-p2-01**). That product-path gap is closed in code by the rectification stack; see [design-phase-2-rectification.md](design-phase-2-rectification.md) and the updated architecture note.
+
 This sketch is **superseded for implementation and post-ship mapping** by:
 
-1. **[design-phase-2-implementation.md](design-phase-2-implementation.md)** — full design, key decisions, PR plan, failure modes, flag matrix.
-2. **[architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)** — structure ↔ essay, activity map, invariants, freshness/migration as shipped, Vectors/Graph caveats.
+1. **[design-phase-2-implementation.md](design-phase-2-implementation.md)** — historical full design, key decisions, PR plan (PR1–PR9).
+2. **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — product-intent recovery (KD-R*, PR-R1–R6); **landed in code** for R1–R5.
+3. **[architecture/phase-2-semantic.md](architecture/phase-2-semantic.md)** — structure ↔ essay, activity map, invariants, search/repair/Vectors as shipped + rectified.
 
-Prefer those two docs over the outline below. The outline remains as a historical short map of intent.
+Prefer those docs over the outline below. The outline remains as a historical short map of intent.
 
 ## Goal
 

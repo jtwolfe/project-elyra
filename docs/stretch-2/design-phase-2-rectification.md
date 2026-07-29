@@ -6,13 +6,13 @@
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
 | **Date** | 2026-07-29 |
-| **Status** | **Ready for `/execute-plan`** — operator OQs resolved 2026-07-29 (revision R2 + OQ lock) |
+| **Status** | **Implemented (PR-R1–R5 code)** — docs closeout PR-R6; operator OQs resolved 2026-07-29 (revision R2 + OQ lock) |
 | **Branch** | `grok-improvement-memory` |
 | **Depends on** | Phase 2 execute-plan stack shipped (PR1–PR9, 2026-07-28); Phase 1 Done |
-| **Program status** | [README.md](README.md) Phase 2 honesty close-out — **Partial / rectification needed** |
-| **Bug trackers** | [known-bugs.md](../known-bugs.md) **BUG-mem-p2-01** (core), **BUG-mem-gpu-01** (hardware — ownership below) |
+| **Program status** | [README.md](README.md) Phase 2 close-out — **code rectified (R1–R5)**; operator smoke dogfood pending before product-complete / default-on |
+| **Bug trackers** | [known-bugs.md](../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open — hardware) |
 | **Historical design** | [design-phase-2-implementation.md](design-phase-2-implementation.md) — do **not** rewrite; this doc owns the fix plan |
-| **Architecture (as shipped)** | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — update after implement |
+| **Architecture (as shipped + rectified)** | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — updated in PR-R6 |
 | **Boundary** | **Not** Phase 2a ([design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md)); **not** Phase 3 ([design-phase-3-procedural.md](design-phase-3-procedural.md)) |
 | **Revision** | R2 + OQ lock (2026-07-29) — review issues closed; operator OQ-R1/R4/R6 resolved |
 

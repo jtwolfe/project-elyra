@@ -459,6 +459,72 @@ The fixed **system** block (esp. the leading `# Elyra system` framing and **Hard
 
 ---
 
+## BUG-mem-p2-01 — Phase 2 semantic surface dead on text-only corpus (joint default)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **Fixed in code (PR-R1–R5, 2026-07-29)** — residual: **operator smoke dogfood verification pending** before full product sign-off |
+| **Severity now** | Low residual (code path restored; unconfirmed on live operator corpus) |
+| **Severity later** | High if regressed — 2a seeds and meal semantic go empty again |
+| **Area** | `elyra/memory/embed/*`, `index.py`, `lance_store.py`, `meal.py`, Vectors APIs / glass |
+| **Dogfood** | 2026-07-28 on `grok-improvement-memory`: `vectors_ready≈32`, neighbors `channel=joint` → 0 hits; `channel=text` → real cosine hits; meal channels episodic+temporal only; `ann_index_built=false`, `search_mode=full`, `last_optimize=null` |
+| **Fix ownership** | [design-phase-2-rectification.md](stretch-2/design-phase-2-rectification.md) PR-R1–R5; docs closeout PR-R6 |
+
+### Symptom
+
+Default product search used `channel=joint` while text-only encode wrote only `emb_text` (no `emb_joint`). Neighbors and meal semantic looked “off” or empty; optimize/rebuild targeted empty joint; glass had no channel control / weak empty-state honesty.
+
+### Root chain (pre-fix)
+
+Text-only encode → ready + `emb_text` only → search `joint` → 0 main hits; recent buffer stored text → invisible under joint search; meal hardcoded joint with no `no_hits` reason.
+
+### Resolution (code)
+
+| PR | Fix |
+|----|-----|
+| **PR-R1** | `resolve_search_channel` (`auto`); joint-for-single **copy**; eager joint-copy repair |
+| **PR-R2** | Meal omit `no_hits` / `deduped` + `semantic_select_meta` |
+| **PR-R3** | Optimize skip n=0 / below IVF min; no false `ann_index_built` |
+| **PR-R4** | Lance-native main search; small-N `full_lance` |
+| **PR-R5** | Vectors channel auto/toggle + honest empty/rebuild UX |
+
+Architecture: [architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md). Program: [stretch-2 README](stretch-2/README.md).
+
+### Residual
+
+- Confirm on operator dogfood corpus with flags on (`backend=lance`, embed+semantic): neighbors under `auto`, meal semantic non-empty when data exists, `joint_repair_remaining→0`.
+- Product default-on still requires Gate B — not this bug’s reopen.
+
+---
+
+## BUG-mem-gpu-01 — Nemotron / embed path not on Radeon VII ROCm GPU (CPU fallback)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **Open** (defer to Gate B / runtime) |
+| **Severity now** | Med — dogfood encode slow on CPU; mock path fine for CI |
+| **Severity later** | High when product default-on wants real Nemotron latency under meal budgets |
+| **Area** | `elyra/memory/embed/runtime.py`, device select (`embed_device`), optional `memory-embed` extra / ROCm wheels |
+| **Dogfood** | 2026-07-28 — Radeon VII / ROCm environment; Nemotron encode effective device CPU |
+| **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md); **not** Phase 2 rectification core (KD-R10). Rectification only optional device honesty in health |
+
+### Symptom
+
+Operator requests GPU/ROCm for Omni-Embed-Nemotron; runtime lands on CPU (or mock). Idle encode and optional warm paths are slower than hardware suggests; does not by itself empty joint search once PR-R1 repair/encode is in place.
+
+### Related design intent
+
+Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presence. Core imports must not require torch/GPU.
+
+### Fix directions (later)
+
+1. ROCm wheel / quant matrix validation on operator hardware.
+2. Vectors health: requested vs effective device honesty (optional polish).
+3. Do **not** block meal/channel product path on GPU presence.
+4. Gate B checklist before product default-on of semantic flags.
+
+---
+
 ## Template for new entries
 
 ```markdown
