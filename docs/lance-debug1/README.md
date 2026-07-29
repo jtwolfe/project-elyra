@@ -1,6 +1,6 @@
 # Lance debug package 1 (`docs/lance-debug1`)
 
-**Status:** Scaffolded (PR1) — inspection package layout + safety rules in place; probes not yet executed.
+**Status:** PR2 probes ready — `api_matrix` / `env_check` / `quarantine_copy` + P01 + R1; dogfood evidence not yet sealed.
 
 | Field | Value |
 |-------|--------|
@@ -46,10 +46,11 @@ docs/lance-debug1/
 ├── FAULT-BUCKETS.md             # Buckets A–G
 ├── CODE-PATH-MAP.md             # Open/load/write/consumer + line pins
 ├── TO-ARROW-CALLERS.md          # Every to_arrow / head / count_rows site
-├── procedures/                  # P01–P09 (stubs until later PRs)
+├── procedures/                  # P01 filled (PR2); P02–P09 stubs until later PRs
 ├── evidence/                    # Run dirs + templates
-├── scripts/                     # Hermetic helpers (colocated)
-└── (later) API-COMPARISON.md, REPRO-RECIPES.md, EVIDENCE-MATRIX.md,
+├── scripts/                     # Hermetic helpers (api_matrix, env_check, quarantine_copy, …)
+├── REPRO-RECIPES.md             # R1 offline smoking gun (PR2)
+└── (later) API-COMPARISON.md, EVIDENCE-MATRIX.md,
             VERSION-ARCHAEOLOGY.md, adjacency/, BUG-DOSSIER.md
 ```
 
@@ -66,11 +67,11 @@ docs/lance-debug1/
 | [FAULT-BUCKETS.md](FAULT-BUCKETS.md) | Buckets A–G | PR1 |
 | [CODE-PATH-MAP.md](CODE-PATH-MAP.md) | Call graph + fresh line pins | PR1 |
 | [TO-ARROW-CALLERS.md](TO-ARROW-CALLERS.md) | `to_arrow` / related call matrix | PR1 |
-| [procedures/](procedures/) | P01–P09 procedure stubs | PR1 stubs; fill PR2–PR4 |
+| [procedures/](procedures/) | P01–P09 (P01 filled PR2) | PR1 stubs; fill PR2–PR4 |
 | [evidence/](evidence/) | Templates + per-run evidence | PR1 templates; fill PR5 |
-| [scripts/](scripts/) | Probe helpers (`caller_grep_report` in PR1) | PR1+ |
+| [scripts/](scripts/) | Probe helpers (`env_check`, `api_matrix`, `quarantine_copy`, …) | PR1+ |
 | `API-COMPARISON.md` | Structured API comparison results | PR3 |
-| `REPRO-RECIPES.md` | Step-by-step repros | PR2 |
+| [REPRO-RECIPES.md](REPRO-RECIPES.md) | Step-by-step repros (R1) | PR2 |
 | `EVIDENCE-MATRIX.md` | Observation × hypothesis × bucket | PR4 |
 | `VERSION-ARCHAEOLOGY.md` | Version sampling plan/results | PR3 |
 | `adjacency/` | Embed / graph / meal / glass cascade | PR4 |
@@ -83,7 +84,7 @@ docs/lance-debug1/
 | Track | Status |
 |-------|--------|
 | Scaffold + safety + hypotheses + buckets | **Done (PR1)** |
-| P01 `api_matrix` + quarantine_copy + env_check | Pending PR2 |
+| P01 `api_matrix` + quarantine_copy + env_check | **Done (PR2)** |
 | P02 load_parity + P08 version_sample | Pending PR3 |
 | Adjacency P03–P07, P09 | Pending PR4 |
 | Dogfood evidence + BUG-DOSSIER | Pending PR5 |
@@ -100,19 +101,24 @@ docs/lance-debug1/
 4. Update [HYPOTHESES.md](HYPOTHESES.md) statuses only from procedure evidence.
 5. Never patch `elyra/memory/**` in lance-debug1 PRs. Merging the dossier does **not** authorize `_load` changes.
 
-### Scripts (when present)
+### Scripts (PR2)
 
 ```bash
 # Optional: refresh TO-ARROW-CALLERS pins from this worktree
 python docs/lance-debug1/scripts/caller_grep_report.py
 
-# Later PRs (not in PR1):
-# ./docs/lance-debug1/scripts/quarantine_copy.sh data/memory /tmp/lance-q-YYYYMMDD
-# python docs/lance-debug1/scripts/api_matrix.py --uri "$LANCE_DEBUG_URI" --out ...
+# R1 offline smoking gun (see REPRO-RECIPES.md R1)
+python docs/lance-debug1/scripts/env_check.py
+./docs/lance-debug1/scripts/quarantine_copy.sh data/memory /tmp/lance-q-YYYYMMDD
+export LANCE_DEBUG_URI=/tmp/lance-q-YYYYMMDD/data/memory/lance
+python docs/lance-debug1/scripts/api_matrix.py --uri "$LANCE_DEBUG_URI" --out docs/lance-debug1/evidence/$(date +%Y-%m-%d)-run-01/api-matrix.json
+
+# Later PRs:
 # python docs/lance-debug1/scripts/load_parity.py --data-dir "$LANCE_DEBUG_DATA_DIR" ...
 ```
 
-See [scripts/README.md](scripts/README.md).
+See [scripts/README.md](scripts/README.md) and [REPRO-RECIPES.md](REPRO-RECIPES.md).
+
 
 ---
 
