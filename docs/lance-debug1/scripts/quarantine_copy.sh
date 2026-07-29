@@ -89,14 +89,38 @@ case "$QROOT_ABS" in
 esac
 
 # Best-effort writer detection (do not hard-fail).
+# High-confidence cmdline patterns only — NOT bare substring "elyra" (that matches
+# terminals/cwd paths like workspace-project-elyra and floods possibly_torn).
+# Patterns: python -m elyra…, uvicorn …elyra…, elyra.runtime / elyra.presence modules.
 WRITER_PID=""
+WRITER_MATCH=""
 POSSIBLY_TORN=false
+SELF_PID=$$
+PARENT_PID=${PPID:-}
 if command -v pgrep >/dev/null 2>&1; then
-  # Match common elyra process names; best-effort only.
-  WRITER_PID="$(pgrep -f 'elyra|uvicorn.*elyra' 2>/dev/null | head -n1 || true)"
+  # pgrep -af → "PID full cmdline"
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    pid="${line%% *}"
+    cmd="${line#* }"
+    # Skip self / parent shell of this script.
+    if [[ "$pid" == "$SELF_PID" || "$pid" == "$PARENT_PID" ]]; then
+      continue
+    fi
+    # Require an actual interpreter/app token, not path-only noise.
+    case "$cmd" in
+      *python*-m*elyra*|*uvicorn*elyra*|*elyra.runtime*|*elyra.presence*|*elyra.memory*)
+        WRITER_PID="$pid"
+        WRITER_MATCH="$cmd"
+        break
+        ;;
+    esac
+  done < <(pgrep -af '(python[0-9.]*[[:space:]].*-m[[:space:]]+elyra|uvicorn[[:space:]].*elyra|elyra\.runtime|elyra\.presence|elyra\.memory)' 2>/dev/null || true)
+
   if [[ -n "$WRITER_PID" ]]; then
     POSSIBLY_TORN=true
-    echo "warn: possible Elyra/writer PID $WRITER_PID — prefer idle/stop before copy" >&2
+    echo "warn: high-confidence Elyra/writer PID $WRITER_PID — prefer idle/stop before copy" >&2
+    echo "warn: match: ${WRITER_MATCH:0:160}" >&2
     echo "warn: concurrent merge_insert can yield a torn snapshot (possibly_torn=true)" >&2
   fi
 fi
@@ -131,7 +155,9 @@ cat >"$MARKER" <<EOF
   "quarantine_root": $(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$QROOT_ABS"),
   "copied_at_utc": "$UTC_NOW",
   "writer_pid": $(if [[ -n "$WRITER_PID" ]]; then echo "\"$WRITER_PID\""; else echo "null"; fi),
-  "possibly_torn": $POSSIBLY_TORN
+  "writer_match": $(if [[ -n "$WRITER_MATCH" ]]; then python3 -c 'import json,sys; print(json.dumps(sys.argv[1][:240]))' "$WRITER_MATCH"; else echo "null"; fi),
+  "possibly_torn": $POSSIBLY_TORN,
+  "writer_detection": "high-confidence cmdline only (python -m elyra / uvicorn elyra / elyra.runtime); advisory"
 }
 EOF
 

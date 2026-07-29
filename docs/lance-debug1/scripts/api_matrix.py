@@ -166,29 +166,46 @@ def _jsonable(obj: Any) -> Any:
     return str(obj)
 
 
+def _is_bare_thin(n_full: int, n_arrow: int) -> bool:
+    """True when bare to_arrow is thin vs full corpus (design: n_arrow ≪ n_full).
+
+    Criterion (intentional, not any shortfall):
+      - n_arrow < n_full, and
+      - n_arrow <= 10 (default query limit smoking gun on 0.20.x), or
+      - n_arrow <= max(1, n_full // 10) (relative thinness for other limits).
+    """
+    if n_full <= 0 or n_arrow < 0 or n_arrow >= n_full:
+        return False
+    if n_arrow <= 10:
+        return True
+    return n_arrow <= max(1, n_full // 10)
+
+
 def _run_h1b_chain(
     table: Any,
     *,
     n_full: int,
     n_arrow: int,
     n_head: int | None,
+    head_cap: int = _DEFAULT_HEAD_CAP,
+    head_requested: int | None = None,
 ) -> dict[str, Any]:
-    """H1b fallback chain: stop at first success; record attempts.
+    """H1b fallback chain: stop at first public success; record attempts.
 
-    Overall pass: any step yields full row count while bare to_arrow stays thin.
-    Missing public table.query is NOT a failure.
+    Overall pass: any step yields full row count while bare to_arrow stays thin
+    (see ``_is_bare_thin``). Missing public table.query is NOT a failure.
+
+    ``head_cap`` bounds H1b-3 the same as step-2 head: when capped and
+    ``n_head < n_full``, head path is inconclusive and we fall through to
+    to_lance (and optional subprocess-native outside this function).
     """
     attempts: list[str] = []
     path: str | None = None
     details: dict[str, Any] = {}
-    bare_thin = n_full > 0 and n_arrow < n_full and (
-        n_arrow <= 10 or n_arrow <= max(1, n_full // 10)
+    bare_thin = _is_bare_thin(n_full, n_arrow)
+    details["bare_thin_rule"] = (
+        "n_arrow < n_full and (n_arrow <= 10 or n_arrow <= max(1, n_full//10))"
     )
-    # Typical smoking-gun: n_arrow == 10 and n_full >> 10
-    if n_full > 10 and n_arrow == 10:
-        bare_thin = True
-    if n_full > 0 and n_arrow < n_full:
-        bare_thin = True
 
     # --- H1b-1: public query if present ---
     public_query = getattr(table, "query", None)
@@ -246,12 +263,15 @@ def _run_h1b_chain(
     except Exception as exc:  # noqa: BLE001
         details["private_async"] = {"error": f"{type(exc).__name__}: {exc}"}
 
-    # --- H1b-3: primary public proof on 0.20.0 — head(n_full) ---
+    # --- H1b-3: primary public proof on 0.20.0 — head (bounded by head_cap) ---
     attempts.append("head_n_full")
+    head_capped = n_full > head_cap
     try:
         if n_head is not None and n_head == n_full and bare_thin:
             details["head_n_full"] = {
                 "num_rows": n_head,
+                "requested": head_requested if head_requested is not None else n_full,
+                "capped": False,
                 "note": "bare to_arrow is default-limit query; head(n) is explicit full/limited read",
             }
             path = "head_n_full"
@@ -264,24 +284,40 @@ def _run_h1b_chain(
                 "details": details,
                 "bare_thin": bare_thin,
             }
-        # Re-probe if n_head not already full
-        ht = table.head(n_full)
-        n = int(ht.num_rows)
-        details["head_n_full"] = {
-            "num_rows": n,
-            "note": "bare to_arrow is default-limit query; head(n) is explicit full/limited read",
-        }
-        if n == n_full and bare_thin:
-            path = "head_n_full"
-            return {
-                "ok": True,
-                "path": path,
-                "n_full": n_full,
-                "n_arrow": n_arrow,
-                "attempts": attempts,
-                "details": details,
-                "bare_thin": bare_thin,
+        if head_capped and (n_head is None or n_head < n_full):
+            # Do not re-probe uncapped head(n_full) — honor --head-cap safety valve.
+            details["head_n_full"] = {
+                "num_rows": n_head,
+                "requested": head_requested,
+                "capped": True,
+                "head_cap": head_cap,
+                "note": (
+                    "head-cap bound; head path inconclusive for full n_full; "
+                    "falling through to to_lance"
+                ),
             }
+        else:
+            # Re-probe only when not capped (or step-2 failed); still clamp to head_cap.
+            req = n_full if n_full <= head_cap else head_cap
+            ht = table.head(req)
+            n = int(ht.num_rows)
+            details["head_n_full"] = {
+                "num_rows": n,
+                "requested": req,
+                "capped": head_capped,
+                "note": "bare to_arrow is default-limit query; head(n) is explicit full/limited read",
+            }
+            if n == n_full and bare_thin:
+                path = "head_n_full"
+                return {
+                    "ok": True,
+                    "path": path,
+                    "n_full": n_full,
+                    "n_arrow": n_arrow,
+                    "attempts": attempts,
+                    "details": details,
+                    "bare_thin": bare_thin,
+                }
     except Exception as exc:  # noqa: BLE001
         details["head_n_full"] = {"error": f"{type(exc).__name__}: {exc}"}
 
@@ -289,7 +325,7 @@ def _run_h1b_chain(
     attempts.append("to_lance")
     try:
         ds = table.to_lance()
-        n = None  # type: int | None
+        n: int | None = None
         if hasattr(ds, "count_rows"):
             try:
                 n = int(ds.count_rows())
@@ -530,10 +566,15 @@ def run_matrix(
         "note": "order-sensitive equality; haiku skew not required",
     }
 
-    # 6) H1b fallback chain (uses n_head from step 2 when full)
+    # 6) H1b fallback chain (uses n_head from step 2 when full; respects head_cap)
     if n_arrow is not None:
         h1b = _run_h1b_chain(
-            table, n_full=n_full, n_arrow=n_arrow, n_head=n_head
+            table,
+            n_full=n_full,
+            n_arrow=n_arrow,
+            n_head=n_head,
+            head_cap=head_cap,
+            head_requested=head_n,
         )
     else:
         h1b = {
@@ -619,15 +660,18 @@ def run_matrix(
             "note": "not on sync LanceTable 0.20.0 — skipped",
         }
 
-    # H1 overall
+    # H1 overall — same thinness rule as H1b (n_arrow ≪ n_full, not any shortfall)
     n_a = n_arrow if n_arrow is not None else -1
-    h1_ok = n_full > 0 and n_a >= 0 and n_a < n_full
+    h1_ok = n_full > 0 and n_a >= 0 and _is_bare_thin(n_full, n_a)
     result["h1"] = {
         "ok": h1_ok,
         "n_full": n_full,
         "n_arrow": n_arrow,
         "n_head": n_head,
-        "note": "bare to_arrow thin vs count_rows/full APIs",
+        "note": (
+            "bare to_arrow thin vs count_rows/full APIs "
+            "(n_arrow <= 10 or n_arrow <= n_full//10)"
+        ),
     }
 
     # Summary convenience fields
@@ -664,7 +708,11 @@ def main(argv: list[str] | None = None) -> int:
         "--head-cap",
         type=int,
         default=_DEFAULT_HEAD_CAP,
-        help=f"Max rows for head(n_full) materialize (default {_DEFAULT_HEAD_CAP})",
+        help=(
+            f"Max rows for head() in step-2 and H1b-3 (default {_DEFAULT_HEAD_CAP}). "
+            "When n_full exceeds cap, head path is inconclusive and H1b falls "
+            "through to to_lance (does not re-probe uncapped head(n_full))."
+        ),
     )
     parser.add_argument(
         "--subprocess-native",

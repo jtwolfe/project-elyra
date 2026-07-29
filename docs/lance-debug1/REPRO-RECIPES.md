@@ -53,7 +53,7 @@ python docs/lance-debug1/scripts/api_matrix.py \
 | `h1.ok` | true (`n_arrow ≪ n_full`) |
 | `h1a.ok` | true (`arrow_ids == head(10)` order-sensitive) |
 | `h1b.ok` / `h1b.path` | true / `head_n_full` (or `to_lance`) |
-| `h1b.attempts` | includes `query_public_missing` then `head_n_full` on 0.20.0 |
+| `h1b.attempts` | typically `query_public_missing` → `private_async` (discovery) → `head_n_full` on 0.20.0 |
 | `summary.h4_demoted_if_h1a_h1b` | true when both hold |
 
 ### Safety
