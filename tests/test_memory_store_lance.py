@@ -217,8 +217,24 @@ def test_health(store):
     assert h["ok"] is True
     assert h["backend"] == "lance"
     assert h["atom_count"] == 0
+    assert h.get("disk_atom_count") == 0
+    assert h.get("atom_count_parity") is True
     store.put_atom(_atom(t="2026-07-28T10:00:00Z"))
-    assert store.health()["atom_count"] == 1
+    h2 = store.health()
+    assert h2["atom_count"] == 1
+    assert h2.get("disk_atom_count") == 1
+    assert h2.get("atom_count_parity") is True
+
+
+def test_health_closed_omits_disk_dual_count(store):
+    """Closed store omits disk_atom_count / atom_count_parity (KD9/KD19)."""
+    store.close()
+    h = store.health()
+    assert h["ok"] is False
+    assert h["atom_count"] == 0
+    assert h.get("error") == "closed"
+    assert "disk_atom_count" not in h
+    assert "atom_count_parity" not in h
 
 
 def test_delete_atom(store):
@@ -244,6 +260,244 @@ def test_restart_reloads_indexes(paths, store):
         assert store2.health()["backend"] == "lance"
     finally:
         store2.close()
+
+
+def test_restart_loads_all_rows_above_default_to_arrow_limit(paths):
+    """Regression: bare to_arrow default limit is 10; load must exceed it."""
+    N = 25  # > 10
+    store = open_memory_store(paths, MemorySettings(backend="lance", write_atoms=True))
+    try:
+        ids = []
+        for i in range(N):
+            a = store.put_atom(
+                _atom(
+                    t=f"2026-07-28T10:00:{i:02d}Z",
+                    text=f"row-{i}",
+                    atom_id=f"loadfix_{i:03d}",
+                    moment_id="m_load",
+                )
+            )
+            ids.append(a.atom_id)
+        assert store.health()["atom_count"] == N
+    finally:
+        store.close()
+
+    store2 = open_memory_store(paths, MemorySettings(backend="lance"))
+    try:
+        h = store2.health()
+        # Clean put_atom fixture → process == disk == N (no corrupt skip)
+        assert h["atom_count"] == N
+        assert h["disk_atom_count"] == N
+        assert h["atom_count_parity"] is True
+        assert store2.get_atom(ids[-1]) is not None
+        assert store2.get_atom(ids[10]) is not None  # first past default limit
+        listed = store2.list_by_moment("m_load")
+        assert len(listed) == N
+        assert {a.atom_id for a in listed} == set(ids)
+    finally:
+        store2.close()
+
+
+# ── Full-table materialize helpers (no bare to_arrow) ──────────────────────
+
+
+class _FakeTableHead:
+    """to_arrow intentionally thin; head returns full prefix of n."""
+
+    def __init__(self, full_rows: list[dict], *, arrow_limit: int = 10):
+        self._full = full_rows
+        self._limit = arrow_limit
+        self.to_arrow_calls = 0
+
+    def count_rows(self) -> int:
+        return len(self._full)
+
+    def head(self, n: int):
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full[: int(n)])
+
+    def to_arrow(self):
+        self.to_arrow_calls += 1
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full[: self._limit])
+
+
+class _FakeLanceDataset:
+    def __init__(self, full_rows: list[dict]):
+        self._full = full_rows
+
+    def to_table(self):
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full)
+
+
+class _FakeTableLanceOnly:
+    """Omits head so Path B is exercised; to_arrow still thin if mis-called."""
+
+    def __init__(self, full_rows: list[dict], *, arrow_limit: int = 10):
+        self._full = full_rows
+        self._limit = arrow_limit
+        self.to_arrow_calls = 0
+
+    def count_rows(self) -> int:
+        return len(self._full)
+
+    def to_lance(self) -> _FakeLanceDataset:
+        return _FakeLanceDataset(self._full)
+
+    def to_arrow(self):
+        self.to_arrow_calls += 1
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full[: self._limit])
+
+
+class _FakeTableBrokenHead:
+    """head raises; to_lance succeeds (fallback path)."""
+
+    def __init__(self, full_rows: list[dict], *, arrow_limit: int = 10):
+        self._full = full_rows
+        self._limit = arrow_limit
+        self.to_arrow_calls = 0
+
+    def count_rows(self) -> int:
+        return len(self._full)
+
+    def head(self, n: int):
+        raise RuntimeError("head broken")
+
+    def to_lance(self) -> _FakeLanceDataset:
+        return _FakeLanceDataset(self._full)
+
+    def to_arrow(self):
+        self.to_arrow_calls += 1
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full[: self._limit])
+
+
+class _FakeTableNoPath:
+    """No head, no to_lance — materialize must fail closed."""
+
+    def __init__(self, full_rows: list[dict], *, arrow_limit: int = 10):
+        self._full = full_rows
+        self._limit = arrow_limit
+        self.to_arrow_calls = 0
+
+    def count_rows(self) -> int:
+        return len(self._full)
+
+    def to_arrow(self):
+        self.to_arrow_calls += 1
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full[: self._limit])
+
+
+class _FakeTableParityMismatch:
+    """head returns wrong N → MemoryUnavailable."""
+
+    def __init__(self, full_rows: list[dict]):
+        self._full = full_rows
+        self.to_arrow_calls = 0
+
+    def count_rows(self) -> int:
+        return len(self._full)
+
+    def head(self, n: int):
+        import pyarrow as pa
+
+        # Always return at most 10 regardless of n.
+        return pa.Table.from_pylist(self._full[:10])
+
+    def to_arrow(self):
+        self.to_arrow_calls += 1
+        import pyarrow as pa
+
+        return pa.Table.from_pylist(self._full[:10])
+
+
+def _fake_rows(n: int) -> list[dict]:
+    return [{"atom_id": f"a{i:03d}", "i": i} for i in range(n)]
+
+
+def test_materialize_uses_head_not_to_arrow():
+    from elyra.memory.lance_store import _materialize_table_rows
+
+    tbl = _FakeTableHead(_fake_rows(25))
+    rows = _materialize_table_rows(tbl, purpose="test_head")
+    assert len(rows) == 25
+    assert tbl.to_arrow_calls == 0
+
+
+def test_materialize_empty():
+    from elyra.memory.lance_store import (
+        _materialize_table_arrow,
+        _materialize_table_rows,
+    )
+
+    tbl = _FakeTableHead([])
+    rows = _materialize_table_rows(tbl, purpose="test_empty")
+    assert rows == []
+    arrow = _materialize_table_arrow(tbl, purpose="test_empty_arrow")
+    assert arrow.num_rows == 0
+    assert tbl.to_arrow_calls == 0
+
+
+def test_materialize_parity_mismatch_raises():
+    from elyra.memory.errors import MemoryUnavailable
+    from elyra.memory.lance_store import _materialize_table_rows
+
+    tbl = _FakeTableParityMismatch(_fake_rows(25))
+    with pytest.raises(MemoryUnavailable, match="materialize failed"):
+        _materialize_table_rows(tbl, purpose="test_parity")
+    assert tbl.to_arrow_calls == 0
+
+
+def test_materialize_to_lance_fallback():
+    from elyra.memory.lance_store import _materialize_table_rows
+
+    tbl = _FakeTableLanceOnly(_fake_rows(25))
+    rows = _materialize_table_rows(tbl, purpose="test_to_lance")
+    assert len(rows) == 25
+    assert tbl.to_arrow_calls == 0
+
+
+def test_materialize_to_lance_fallback_when_head_raises():
+    from elyra.memory.lance_store import _materialize_table_rows
+
+    tbl = _FakeTableBrokenHead(_fake_rows(25))
+    rows = _materialize_table_rows(tbl, purpose="test_head_raises")
+    assert len(rows) == 25
+    assert tbl.to_arrow_calls == 0
+
+
+def test_materialize_never_returns_default_limit_when_full_available():
+    from elyra.memory.lance_store import (
+        _LANCEDB_DEFAULT_TO_ARROW_LIMIT,
+        _materialize_table_rows,
+    )
+
+    n = 25
+    assert n > _LANCEDB_DEFAULT_TO_ARROW_LIMIT
+    tbl = _FakeTableHead(_fake_rows(n))
+    rows = _materialize_table_rows(tbl, purpose="test_not_thin")
+    assert len(rows) == n
+    assert len(rows) != _LANCEDB_DEFAULT_TO_ARROW_LIMIT
+
+
+def test_materialize_no_path_raises_memory_unavailable():
+    from elyra.memory.errors import MemoryUnavailable
+    from elyra.memory.lance_store import _materialize_table_rows
+
+    tbl = _FakeTableNoPath(_fake_rows(25))
+    with pytest.raises(MemoryUnavailable, match="materialize failed"):
+        _materialize_table_rows(tbl, purpose="test_no_path")
+    # Must not fall back to bare to_arrow.
+    assert tbl.to_arrow_calls == 0
 
 
 def test_content_spill_to_blob(paths):

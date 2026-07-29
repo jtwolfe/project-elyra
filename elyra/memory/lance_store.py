@@ -104,6 +104,129 @@ def _require_lancedb():
     return lancedb
 
 
+# Documented library behavior on lancedb 0.20.x — not a product cap.
+# Bare Table.to_arrow() is a default-limit query (~10 rows), not a full scan.
+# See docs/lance-debug1/BUG-DOSSIER.md.
+_LANCEDB_DEFAULT_TO_ARROW_LIMIT = 10
+
+
+def _table_row_count(table: Any) -> int | None:
+    """Best-effort cardinality via ``count_rows``; None if unavailable."""
+    if table is None:
+        return None
+    try:
+        if hasattr(table, "count_rows"):
+            return int(table.count_rows())
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _materialize_table_arrow(table: Any, *, purpose: str) -> Any:
+    """Return a full ``pyarrow.Table`` for *table* (all rows).
+
+    Never uses bare ``table.to_arrow()`` — that is a default-limit query (~10)
+    on lancedb 0.20.x (see docs/lance-debug1/BUG-DOSSIER.md).
+
+    Strategy (stop at first successful full materialize):
+      1. n = count_rows() when available
+      2. table.head(n)  → primary on 0.20.0 (H1b sealed path)
+      3. table.to_lance().to_table()  → fallback / corroboration
+
+    Raises MemoryUnavailable if no full path works or if materialized
+    row count != n when n is known. Chain the underlying exception as
+    ``__cause__`` when applicable. Does not return a thin prefix.
+    """
+    import pyarrow as pa  # noqa: PLC0415
+
+    n = _table_row_count(table)
+
+    if n == 0:
+        try:
+            if hasattr(table, "schema") and table.schema is not None:
+                return pa.Table.from_pylist([], schema=table.schema)
+        except Exception:  # noqa: BLE001
+            pass
+        if hasattr(table, "head"):
+            try:
+                return table.head(0)
+            except Exception:  # noqa: BLE001
+                pass
+        return pa.Table.from_pylist([])
+
+    errors: list[str] = []
+
+    # Path A — head(n) [PRIMARY]
+    if hasattr(table, "head") and n is not None:
+        try:
+            arrow = table.head(int(n))
+            got = int(arrow.num_rows)
+            if got == n:
+                _LOG.debug(
+                    "lance materialize purpose=%s path=head n=%d", purpose, n
+                )
+                return arrow
+            errors.append(f"head_row_mismatch got={got} want={n}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"head_error: {type(exc).__name__}: {exc}")
+
+    # Path B — to_lance().to_table() [FALLBACK]
+    if hasattr(table, "to_lance"):
+        try:
+            ds = table.to_lance()
+            arrow = ds.to_table()
+            got = int(arrow.num_rows)
+            if n is None or got == n:
+                _LOG.debug(
+                    "lance materialize purpose=%s path=to_lance n=%d",
+                    purpose,
+                    got,
+                )
+                if n is None:
+                    _LOG.info(
+                        "lance materialize purpose=%s path=to_lance n=%d "
+                        "(count_rows unavailable)",
+                        purpose,
+                        got,
+                    )
+                return arrow
+            errors.append(f"to_lance_row_mismatch got={got} want={n}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"to_lance_error: {type(exc).__name__}: {exc}")
+
+    # Path C — public query().limit(n) if present (future-proof; optional)
+    if hasattr(table, "query") and n is not None:
+        try:
+            builder = table.query()
+            if hasattr(builder, "limit"):
+                builder = builder.limit(int(n))
+            if hasattr(builder, "to_arrow"):
+                arrow = builder.to_arrow()
+                got = int(arrow.num_rows)
+                if got == n:
+                    _LOG.debug(
+                        "lance materialize purpose=%s path=query_limit n=%d",
+                        purpose,
+                        n,
+                    )
+                    return arrow
+                errors.append(f"query_limit_row_mismatch got={got} want={n}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"query_error: {type(exc).__name__}: {exc}")
+
+    # Do NOT fall through to bare to_arrow() — thin prefix is the production bug.
+    raise MemoryUnavailable(
+        f"lance full materialize failed purpose={purpose} n={n} errors={errors}"
+    )
+
+
+def _materialize_table_rows(table: Any, *, purpose: str) -> list[dict[str, Any]]:
+    """Full table as list[dict] via ``_materialize_table_arrow(...).to_pylist()``."""
+    arrow = _materialize_table_arrow(table, purpose=purpose)
+    rows = arrow.to_pylist()
+    return list(rows) if rows is not None else []
+
+
 def _emb_vector_type():
     """Fixed-size list float32[EMBED_DIM] (lancedb.vector / pa.list_)."""
     import pyarrow as pa  # noqa: PLC0415
@@ -209,6 +332,8 @@ class LanceMemoryStore:
         self._lance_search_error_logged: bool = False
         # Phase 2 write hook (encode enqueue); best-effort, never raises out.
         self._write_hook: AtomWriteHook | None = None
+        # Cached disk row count from last successful full load (health dual-count).
+        self._disk_atom_count_at_load: int | None = None
         self._ensure_layout()
         self._open_db()
         self._load()
@@ -376,18 +501,23 @@ class LanceMemoryStore:
         self._migrate_vector_schema()
 
     def _atoms_table_is_empty(self) -> bool:
-        """True when open atoms table has zero rows (best-effort)."""
+        """True when open atoms table has zero rows (best-effort).
+
+        Prefer ``count_rows``; fallback uses ``head(1)`` — never bare
+        ``to_arrow`` (default-limit query on lancedb 0.20.x).
+        """
         if self._table is None:
             return True
+        n = _table_row_count(self._table)
+        if n is not None:
+            return n == 0
         try:
-            if hasattr(self._table, "count_rows"):
-                return int(self._table.count_rows()) == 0
+            # Fallback: explicit head(1), never bare to_arrow.
+            if hasattr(self._table, "head"):
+                return int(self._table.head(1).num_rows) == 0
         except Exception:  # noqa: BLE001
             pass
-        try:
-            return len(self._table.to_arrow()) == 0
-        except Exception:  # noqa: BLE001
-            return False
+        return False  # fail closed: assume non-empty if unknown
 
     def _has_recoverable_migration_artifacts(
         self, names: Sequence[str] | None = None
@@ -449,7 +579,9 @@ class LanceMemoryStore:
     def _promote_staging_table(self) -> None:
         """Copy ``atoms__migrating`` → ``atoms`` and drop staging."""
         staging_tbl = self._db.open_table(_STAGING_TABLE)
-        rows_rec = staging_tbl.to_arrow()
+        rows_rec = _materialize_table_arrow(
+            staging_tbl, purpose="promote_staging"
+        )
         names = list(self._db.table_names())
         if _ATOMS_TABLE in names:
             # Replace empty/broken atoms with staging content.
@@ -514,10 +646,11 @@ class LanceMemoryStore:
         )
         bak_path: Path | None = None
         try:
-            try:
-                rows = self._table.to_arrow().to_pylist()
-            except Exception:
-                rows = []
+            # Full-table materialize; never treat failure as empty (KD16).
+            # Fail before any drop_table(atoms) / bak-as-empty wipe.
+            rows = _materialize_table_rows(
+                self._table, purpose="migrate_vector_schema"
+            )
             new_rows: list[dict[str, Any]] = []
             for r in rows:
                 if not isinstance(r, dict):
@@ -652,24 +785,39 @@ class LanceMemoryStore:
         )
 
     def _load(self) -> None:
-        """Rebuild in-memory indexes from the Lance table."""
+        """Rebuild in-memory indexes from the Lance table (full table)."""
         self._by_id.clear()
         self._by_moment.clear()
         self._ladder.clear()
         self._emb_by_id.clear()
+        self._disk_atom_count_at_load = None
         if self._table is None:
             return
         try:
-            rows = self._table.to_arrow().to_pylist()
+            rows = _materialize_table_rows(self._table, purpose="load")
         except Exception:
             _LOG.exception("lance load failed")
             raise
+        # Defensive parity (helper already checks when count_rows known).
+        n_disk = _table_row_count(self._table)
+        if n_disk is not None and len(rows) != n_disk:
+            raise MemoryUnavailable(
+                f"lance load parity failure materialized_rows={len(rows)} "
+                f"disk_rows={n_disk}"
+            )
+        self._disk_atom_count_at_load = (
+            n_disk if n_disk is not None else len(rows)
+        )
+        skip = 0
         for row in rows:
             try:
                 atom = self._atom_from_row(row)
                 atom = self._hydrate_content(atom)
             except (TypeError, ValueError):
-                _LOG.warning("skipping corrupt lance row atom_id=%r", row.get("atom_id"))
+                skip += 1
+                _LOG.warning(
+                    "skipping corrupt lance row atom_id=%r", row.get("atom_id")
+                )
                 continue
             self._by_id[atom.atom_id] = atom
             if self._vector_schema_ok:
@@ -677,6 +825,12 @@ class LanceMemoryStore:
                 if emb_map is not None:
                     self._emb_by_id[atom.atom_id] = emb_map
         self._rebuild_secondary_indexes()
+        if skip:
+            _LOG.warning(
+                "lance load skipped_corrupt=%d loaded=%d", skip, len(self._by_id)
+            )
+        else:
+            _LOG.info("lance load complete atoms=%d", len(self._by_id))
 
     def _rebuild_secondary_indexes(self) -> None:
         self._by_moment.clear()
@@ -1478,6 +1632,8 @@ class LanceMemoryStore:
         if hasattr(builder, "to_list"):
             rows = builder.to_list()
         elif hasattr(builder, "to_arrow"):
+            # bounded search materialize — not full-table intent
+            # (builder.limit(fetch_k) already applied above)
             rows = builder.to_arrow().to_pylist()
         elif hasattr(builder, "to_pandas"):
             rows = builder.to_pandas().to_dict("records")
@@ -1792,7 +1948,12 @@ class LanceMemoryStore:
             return True
 
     def health(self) -> dict[str, Any]:
-        """``{ok, backend, atom_count, vectors, error?}``."""
+        """``{ok, backend, atom_count, vectors, error?}`` plus dual-count when open.
+
+        Open: ``atom_count`` is process truth (``len(_by_id)``);
+        ``disk_atom_count`` / ``atom_count_parity`` when disk count known.
+        Closed: omit disk dual-count fields.
+        """
         with self._lock:
             if self._closed:
                 return {
@@ -1823,6 +1984,22 @@ class LanceMemoryStore:
             }
             if self._vector_error:
                 out["vector_error"] = self._vector_error
+            # KD9/KD19 dual-count: process vs disk when open and disk known.
+            n_disk: int | None = None
+            try:
+                if self._table is not None and hasattr(self._table, "count_rows"):
+                    n_disk = int(self._table.count_rows())
+            except Exception:  # noqa: BLE001
+                n_disk = getattr(self, "_disk_atom_count_at_load", None)
+            if n_disk is not None:
+                out["disk_atom_count"] = n_disk
+                out["atom_count_parity"] = out["atom_count"] == n_disk
+                if not out["atom_count_parity"]:
+                    _LOG.warning(
+                        "lance health atom_count_parity=false process=%s disk=%s",
+                        out["atom_count"],
+                        n_disk,
+                    )
             return out
 
     def close(self) -> None:

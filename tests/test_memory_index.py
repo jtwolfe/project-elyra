@@ -384,11 +384,26 @@ def test_recover_interrupted_migration_promotes_staging(paths):
     )
 
     class _FakeTable:
-        def __init__(self, arrow: Any) -> None:
+        """Promote/recover fake: full ``head(n)``; intentionally thin ``to_arrow``."""
+
+        def __init__(self, arrow: Any, *, arrow_limit: int = 10) -> None:
             self._arrow = arrow
+            self._arrow_limit = arrow_limit
+            self.to_arrow_calls = 0
 
         def to_arrow(self) -> Any:
-            return self._arrow
+            # Intentionally thin (simulates lancedb 0.20 default limit).
+            self.to_arrow_calls += 1
+            n = min(self._arrow_limit, self._arrow.num_rows)
+            return self._arrow.slice(0, n) if n < self._arrow.num_rows else self._arrow
+
+        def head(self, n: int) -> Any:
+            n = int(n)
+            if n <= 0:
+                return self._arrow.slice(0, 0)
+            if n >= self._arrow.num_rows:
+                return self._arrow
+            return self._arrow.slice(0, n)
 
         def count_rows(self) -> int:
             return self._arrow.num_rows
@@ -459,6 +474,105 @@ def test_recover_interrupted_migration_promotes_staging(paths):
     assert store._table.count_rows() == 1
 
 
+def test_recover_interrupted_migration_promotes_staging_above_to_arrow_limit(paths):
+    """Staging with N>10 must promote all rows (not bare to_arrow prefix)."""
+    import pyarrow as pa
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.lance_store import (
+        LanceMemoryStore,
+        _ATOMS_TABLE,
+        _STAGING_TABLE,
+        _atoms_schema,
+    )
+
+    class _FakeTable:
+        def __init__(self, arrow: Any, *, arrow_limit: int = 10) -> None:
+            self._arrow = arrow
+            self._arrow_limit = arrow_limit
+            self.to_arrow_calls = 0
+
+        def to_arrow(self) -> Any:
+            self.to_arrow_calls += 1
+            n = min(self._arrow_limit, self._arrow.num_rows)
+            return self._arrow.slice(0, n) if n < self._arrow.num_rows else self._arrow
+
+        def head(self, n: int) -> Any:
+            n = int(n)
+            if n <= 0:
+                return self._arrow.slice(0, 0)
+            if n >= self._arrow.num_rows:
+                return self._arrow
+            return self._arrow.slice(0, n)
+
+        def count_rows(self) -> int:
+            return self._arrow.num_rows
+
+        @property
+        def schema(self) -> Any:
+            return self._arrow.schema
+
+    class _FakeDB:
+        def __init__(self) -> None:
+            self.tables: dict[str, _FakeTable] = {}
+
+        def table_names(self) -> list[str]:
+            return list(self.tables.keys())
+
+        def open_table(self, name: str) -> _FakeTable:
+            return self.tables[name]
+
+        def drop_table(self, name: str) -> None:
+            self.tables.pop(name, None)
+
+        def create_table(self, name: str, data: Any) -> _FakeTable:
+            arrow = data if hasattr(data, "schema") else pa.Table.from_pylist(data)
+            tbl = _FakeTable(arrow)
+            self.tables[name] = tbl
+            return tbl
+
+    N = 15
+    store = object.__new__(LanceMemoryStore)
+    store._paths = paths
+    store._settings = MemorySettings(backend="lance")
+    store._db = _FakeDB()
+    store._table = None
+    store._vector_schema_ok = False
+    store._vector_error = None
+    store._by_id = {}
+    store._emb_by_id = {}
+
+    schema = _atoms_schema(with_vectors=True)
+    rows = []
+    for i in range(N):
+        row = {name: None for name in schema.names}
+        row.update(
+            {
+                "atom_id": f"stg_{i:03d}",
+                "t_start": f"2026-07-28T10:00:{i:02d}Z",
+                "kind": "observation",
+                "content_text": f"staging-{i}",
+                "content_ref": "inline",
+                "embedding_status": "none",
+                "media_ids_json": "[]",
+                "meta_json": "{}",
+                "schema_version": 1,
+            }
+        )
+        rows.append(row)
+    staging_arrow = pa.Table.from_pylist(rows, schema=schema)
+    staging_tbl = _FakeTable(staging_arrow)
+    store._db.tables[_STAGING_TABLE] = staging_tbl
+
+    assert store._recover_interrupted_migration(store._db.table_names()) is True
+    assert store._table is not None
+    assert store._table.count_rows() == N
+    # Helper must use head, not thin to_arrow.
+    assert staging_tbl.to_arrow_calls == 0
+    # Thin to_arrow still returns only 10 if mis-called.
+    assert staging_tbl.to_arrow().num_rows == 10
+
+
 def test_recover_interrupted_migration_restores_bak(paths):
     """Issue 9: restore newest JSONL bak when staging absent."""
     import pyarrow as pa
@@ -467,11 +581,23 @@ def test_recover_interrupted_migration_restores_bak(paths):
     from elyra.memory.lance_store import LanceMemoryStore, _ATOMS_TABLE
 
     class _FakeTable:
-        def __init__(self, arrow: Any) -> None:
+        def __init__(self, arrow: Any, *, arrow_limit: int = 10) -> None:
             self._arrow = arrow
+            self._arrow_limit = arrow_limit
+            self.to_arrow_calls = 0
 
         def to_arrow(self) -> Any:
-            return self._arrow
+            self.to_arrow_calls += 1
+            n = min(self._arrow_limit, self._arrow.num_rows)
+            return self._arrow.slice(0, n) if n < self._arrow.num_rows else self._arrow
+
+        def head(self, n: int) -> Any:
+            n = int(n)
+            if n <= 0:
+                return self._arrow.slice(0, 0)
+            if n >= self._arrow.num_rows:
+                return self._arrow
+            return self._arrow.slice(0, n)
 
         def count_rows(self) -> int:
             return self._arrow.num_rows
@@ -746,6 +872,142 @@ def test_lance_phase1_scalar_table_migrates(paths, tmp_path):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         assert meta["vector_schema_version"] == 1
         assert meta["emb_dim"] == EMBED_DIM
+    finally:
+        store.close()
+
+
+@lance_required
+def test_lance_phase1_migrate_preserves_all_rows_above_to_arrow_limit(paths):
+    """Phase-1 table with N>10 must migrate full corpus (not thin to_arrow)."""
+    import pyarrow as pa
+    import lancedb
+
+    from elyra.memory.config import lance_root
+    from elyra.memory.lance_store import LanceMemoryStore, _STRING_COLS
+
+    N = 15  # > default to_arrow limit of 10
+    root = lance_root(paths)
+    root.mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(str(root))
+    fields = [pa.field(n, pa.utf8()) for n in _STRING_COLS]
+    fields.append(pa.field("schema_version", pa.int64()))
+    schema = pa.schema(fields)
+    rows = []
+    ids = []
+    for i in range(N):
+        aid = f"legacy_{i:03d}"
+        ids.append(aid)
+        row = {n: None for n in _STRING_COLS}
+        row.update(
+            {
+                "atom_id": aid,
+                "t_start": f"2026-07-28T10:00:{i:02d}Z",
+                "kind": "observation",
+                "content_text": f"legacy body {i}",
+                "content_ref": "inline",
+                "embedding_status": "none",
+                "media_ids_json": "[]",
+                "meta_json": "{}",
+                "moment_id": "m1",
+                "schema_version": 1,
+            }
+        )
+        rows.append(row)
+    db.create_table("atoms", pa.Table.from_pylist(rows, schema=schema))
+
+    meta_path = memory_meta_path(paths)
+    meta_path.write_text(
+        json.dumps({"schema_version": 1, "backend": "lance", "created_at": "x"}),
+        encoding="utf-8",
+    )
+
+    store = LanceMemoryStore(paths, MemorySettings(backend="lance"))
+    try:
+        assert store.vector_schema_ok is True
+        h = store.health()
+        assert h["atom_count"] == N
+        assert h.get("disk_atom_count") == N
+        assert h.get("atom_count_parity") is True
+        assert store.get_atom(ids[-1]) is not None
+        assert store.get_atom(ids[10]) is not None
+        listed = store.list_by_moment("m1")
+        assert len(listed) == N
+        assert {a.atom_id for a in listed} == set(ids)
+    finally:
+        store.close()
+
+
+@lance_required
+def test_lance_migrate_materialize_failure_does_not_wipe(paths, monkeypatch):
+    """KD16: materialize failure must not drop atoms / rewrite empty corpus."""
+    import pyarrow as pa
+    import lancedb
+
+    from elyra.memory.config import lance_root
+    from elyra.memory.errors import MemoryUnavailable
+    from elyra.memory.lance_store import (
+        LanceMemoryStore,
+        _STRING_COLS,
+        _materialize_table_rows,
+    )
+
+    root = lance_root(paths)
+    root.mkdir(parents=True, exist_ok=True)
+    db = lancedb.connect(str(root))
+    fields = [pa.field(n, pa.utf8()) for n in _STRING_COLS]
+    fields.append(pa.field("schema_version", pa.int64()))
+    schema = pa.schema(fields)
+    N = 5
+    rows = []
+    for i in range(N):
+        row = {n: None for n in _STRING_COLS}
+        row.update(
+            {
+                "atom_id": f"keep_{i}",
+                "t_start": f"2026-07-28T10:00:{i:02d}Z",
+                "kind": "observation",
+                "content_text": f"keep body {i}",
+                "content_ref": "inline",
+                "embedding_status": "none",
+                "media_ids_json": "[]",
+                "meta_json": "{}",
+                "moment_id": "m1",
+                "schema_version": 1,
+            }
+        )
+        rows.append(row)
+    db.create_table("atoms", pa.Table.from_pylist(rows, schema=schema))
+    pre_count = db.open_table("atoms").count_rows()
+    assert pre_count == N
+
+    meta_path = memory_meta_path(paths)
+    meta_path.write_text(
+        json.dumps({"schema_version": 1, "backend": "lance", "created_at": "x"}),
+        encoding="utf-8",
+    )
+
+    real_materialize = _materialize_table_rows
+
+    def _fail_on_migrate(table, *, purpose: str):
+        if purpose == "migrate_vector_schema":
+            raise MemoryUnavailable("injected migrate materialize failure")
+        return real_materialize(table, purpose=purpose)
+
+    monkeypatch.setattr(
+        "elyra.memory.lance_store._materialize_table_rows",
+        _fail_on_migrate,
+    )
+
+    # Open may soft-fail migrate but must not wipe the Phase-1 table.
+    store = LanceMemoryStore(paths, MemorySettings(backend="lance"))
+    try:
+        # Migration failed; scalar path may still work if table reopened.
+        # Critical: disk atoms table must not be empty / wiped.
+        db2 = lancedb.connect(str(root))
+        names = list(db2.table_names())
+        assert "atoms" in names
+        post = int(db2.open_table("atoms").count_rows())
+        assert post == N, f"migrate fail wiped atoms: pre={N} post={post}"
     finally:
         store.close()
 
