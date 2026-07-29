@@ -1384,3 +1384,49 @@ def test_select_semantic_wait_kwargs_override_settings(store):
     assert meta is not None
     assert meta["wait"] is True
     assert meta["deadline_ms"] == 5000
+
+
+def test_select_semantic_wait_on_packs_when_encode_past_deadline(store):
+    """Wait on: encode past absolute deadline still search+packs good vector.
+
+    deadline_ms bypasses product clamp so we can exercise the ceiling-edge
+    case without sleeping a full second (MIN wait band is 1000ms).
+    """
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="late encode keep",
+        moment_id="m_past",
+        atom_id="a_late",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_late", score=0.95, channel="joint", atom=past)
+    emb = _SlowEncodeEmbedder(sleep_s=0.08)
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=50,
+        encode_query_max_ms=30,
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=15_000,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=_FixedHitIndex([hit]),
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed late encode")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        wait_for_completion=True,
+        deadline_ms=50,  # encode 80ms already past; still pack
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert items[0].atom_id == "a_late"
+    assert meta is not None
+    assert meta["wait"] is True
+    assert meta["deadline_ms"] == 50
+    assert meta["packed"] == 1
+    assert meta["elapsed_ms"] >= 50

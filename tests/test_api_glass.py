@@ -768,6 +768,83 @@ def test_patch_continuous_validation(paths):
         h.close()
 
 
+def test_patch_semantic_wait_enable_disable_and_persist(paths):
+    """PATCH /api/semantic-wait toggles runtime flag and writes JSON."""
+    from elyra.runtime.semantic_wait import (
+        load_semantic_wait_runtime,
+        semantic_wait_runtime_path,
+    )
+
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch(
+            "/api/semantic-wait", {"enabled": False, "max_ms": 10_000}
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["changed"] is True
+        assert body["semantic_wait"]["enabled"] is False
+        assert body["semantic_wait"]["max_ms"] == 10_000
+        assert body["semantic_wait"]["effective_select_max_ms"] == (
+            h.worker.settings.memory.semantic_select_max_ms
+        )
+
+        code, st = h.get("/api/status")
+        assert code == 200
+        assert st["semantic_wait"]["enabled"] is False
+        assert st["semantic_wait"]["max_ms"] == 10_000
+        assert "snappy_select_max_ms" in st["semantic_wait"]
+
+        path = semantic_wait_runtime_path(paths.data_dir)
+        assert path.is_file()
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["enabled"] is False
+        assert raw["max_ms"] == 10_000
+        assert "updated_at" in raw
+
+        code, body = h.patch("/api/semantic-wait", {"enabled": True})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["semantic_wait"]["enabled"] is True
+        # max_ms preserved when only toggling enabled
+        assert body["semantic_wait"]["max_ms"] == 10_000
+
+        reloaded = load_semantic_wait_runtime(paths.data_dir)
+        assert reloaded.enabled is True
+        assert reloaded.max_ms == 10_000
+    finally:
+        h.close()
+
+
+def test_patch_semantic_wait_validation(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch("/api/semantic-wait", {})
+        assert code == 400
+        assert body["ok"] is False
+        assert "enabled" in body["error"] or "max_ms" in body["error"]
+
+        code, body = h.patch("/api/semantic-wait", {"enabled": "yes"})
+        assert code == 400
+        assert body["ok"] is False
+
+        code, body = h.patch("/api/semantic-wait", {"max_ms": True})
+        assert code == 400
+        assert body["ok"] is False
+
+        code, body = h.patch("/api/semantic-wait", {"max_ms": "slow"})
+        assert code == 400
+        assert body["ok"] is False
+
+        # Clamp out-of-band max_ms rather than 400 (product band).
+        code, body = h.patch("/api/semantic-wait", {"max_ms": 50})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["semantic_wait"]["max_ms"] == 1_000
+    finally:
+        h.close()
+
+
 def test_patch_unknown_path_404(paths):
     h = _ApiHarness(paths)
     try:

@@ -1729,6 +1729,17 @@ function renderSemanticWait(s) {
     typeof d.max_ms === "number" && !Number.isNaN(d.max_ms)
       ? d.max_ms
       : 15000;
+  // Prefer live effective/snappy from status (settings.semantic_select_max_ms).
+  const effective =
+    typeof d.effective_select_max_ms === "number" &&
+    !Number.isNaN(d.effective_select_max_ms)
+      ? d.effective_select_max_ms
+      : enabled
+        ? maxMs
+        : typeof d.snappy_select_max_ms === "number" &&
+            !Number.isNaN(d.snappy_select_max_ms)
+          ? d.snappy_select_max_ms
+          : 50;
   lastSemanticWaitEnabled = enabled;
   lastSemanticWaitMaxMs = maxMs;
 
@@ -1745,7 +1756,7 @@ function renderSemanticWait(s) {
   if (semanticWaitMeta) {
     semanticWaitMeta.textContent = enabled
       ? `up to ${Math.round(maxMs / 1000)}s for encode+search`
-      : "off — snappy omit (50ms)";
+      : `off — snappy omit (${Math.round(effective)}ms)`;
   }
 }
 

@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from elyra.memory.config import (
+    SEMANTIC_WAIT_MAX_MS_DEFAULT,
+    MemorySettings,
+    clamp_semantic_wait_max_ms,
+)
 from elyra.runtime.semantic_wait import (
     DEFAULT_ENABLED,
     DEFAULT_MAX_MS,
@@ -19,7 +24,7 @@ from elyra.runtime.semantic_wait import (
 def test_defaults_on_with_15s() -> None:
     s = SemanticWaitState()
     assert s.enabled is DEFAULT_ENABLED is True
-    assert s.max_ms == DEFAULT_MAX_MS == 15_000
+    assert s.max_ms == DEFAULT_MAX_MS == SEMANTIC_WAIT_MAX_MS_DEFAULT == 15_000
     assert effective_select_max_ms(s) == 15_000
 
 
@@ -27,6 +32,8 @@ def test_clamp_band() -> None:
     assert clamp_wait_max_ms(100) == 1_000
     assert clamp_wait_max_ms(200_000) == 120_000
     assert clamp_wait_max_ms(8_000) == 8_000
+    # Single source: runtime re-exports memory.config clamp.
+    assert clamp_wait_max_ms(50) == clamp_semantic_wait_max_ms(50)
 
 
 def test_effective_snappy_when_off() -> None:
@@ -42,18 +49,37 @@ def test_load_save_roundtrip(tmp_path: Path) -> None:
     loaded = load_semantic_wait_runtime(data)
     assert loaded.enabled is False
     assert loaded.max_ms == 12_000
-    block = semantic_wait_status_block(loaded)
+    block = semantic_wait_status_block(loaded, snappy_max_ms=40)
     assert block["enabled"] is False
     assert block["max_ms"] == 12_000
-    assert block["effective_select_max_ms"] == 50  # snappy when off
+    assert block["snappy_select_max_ms"] == 40
+    assert block["effective_select_max_ms"] == 40  # snappy when off
 
 
-def test_missing_file_uses_defaults(tmp_path: Path) -> None:
+def test_missing_file_uses_product_defaults(tmp_path: Path) -> None:
     data = tmp_path / "data"
     data.mkdir()
     loaded = load_semantic_wait_runtime(data)
     assert loaded.enabled is True
     assert loaded.max_ms == 15_000
+
+
+def test_missing_file_seeds_from_memory_settings(tmp_path: Path) -> None:
+    """elyra.toml knobs affect live path until operator writes runtime JSON."""
+    data = tmp_path / "data"
+    data.mkdir()
+    defaults = MemorySettings(
+        semantic_wait_for_select=False,
+        semantic_wait_max_ms=8_000,
+    )
+    loaded = load_semantic_wait_runtime(data, defaults=defaults)
+    assert loaded.enabled is False
+    assert loaded.max_ms == 8_000
+    # JSON still wins over settings when present.
+    save_semantic_wait_runtime(data, enabled=True, max_ms=20_000)
+    reloaded = load_semantic_wait_runtime(data, defaults=defaults)
+    assert reloaded.enabled is True
+    assert reloaded.max_ms == 20_000
 
 
 def test_save_preserves_max_ms_when_only_toggling(tmp_path: Path) -> None:
@@ -67,12 +93,16 @@ def test_save_preserves_max_ms_when_only_toggling(tmp_path: Path) -> None:
 
 
 def test_status_block_shape() -> None:
-    block = semantic_wait_status_block(SemanticWaitState(enabled=True, max_ms=9_000))
+    block = semantic_wait_status_block(
+        SemanticWaitState(enabled=True, max_ms=9_000),
+        snappy_max_ms=50,
+    )
     assert block == {
         "enabled": True,
         "max_ms": 9_000,
         "min_max_ms": 1_000,
         "max_max_ms": 120_000,
+        "snappy_select_max_ms": 50,
         "effective_select_max_ms": 9_000,
     }
 
@@ -95,3 +125,6 @@ def test_glass_assets_wire_semantic_wait() -> None:
     assert "method: \"PATCH\"" in js or 'method: "PATCH"' in js
     assert "semanticWaitToggle.addEventListener" in js
     assert "renderSemanticWait(s)" in js
+    # Off copy uses live effective/snappy from status — not hardcode-only 50.
+    assert "effective_select_max_ms" in js
+    assert "snappy omit" in js

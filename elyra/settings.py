@@ -416,7 +416,6 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.encode_max_attempts",
             "memory.encode_query_max_ms",
             "memory.semantic_select_max_ms",
-            "memory.semantic_wait_max_ms",
             "memory.semantic_top_k",
             "memory.ann_recent_buffer_max",
             "memory.ann_full_search_below",
@@ -432,6 +431,21 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.joint_repair_max_per_tick",
         ) and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        # Wait ceiling: same product band as runtime clamp (no silent rewrite).
+        if path == "memory.semantic_wait_max_ms":
+            from elyra.memory.config import (  # noqa: PLC0415
+                SEMANTIC_WAIT_MAX_MS_MAX,
+                SEMANTIC_WAIT_MAX_MS_MIN,
+            )
+
+            if not (
+                SEMANTIC_WAIT_MAX_MS_MIN <= coerced <= SEMANTIC_WAIT_MAX_MS_MAX
+            ):
+                raise ValueError(
+                    f"{path}: expected int in "
+                    f"[{SEMANTIC_WAIT_MAX_MS_MIN}, {SEMANTIC_WAIT_MAX_MS_MAX}], "
+                    f"got {coerced!r}"
+                )
         if path == "memory.ann_index_channels":
             # Normalize emb_* prefixes; require non-empty ⊂ CHANNEL_SET.
             if not isinstance(coerced, tuple) or not coerced:

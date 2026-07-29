@@ -499,7 +499,6 @@ encode_max_ms_per_tick = 0
 encode_max_items_per_tick = 0
 encode_query_max_ms = 0
 semantic_select_max_ms = 0
-semantic_wait_max_ms = 0
 semantic_top_k = 0
 ann_optimize_every_n_encodes = 0
 ann_optimize_interval_s = 0
@@ -516,14 +515,13 @@ temporal_min_fraction = 1.0
     s = load_settings(tmp_path)
     assert s.memory.encode_max_ms_per_tick == 0
     assert s.memory.semantic_top_k == 0
-    assert s.memory.semantic_wait_max_ms == 0
     assert s.memory.semantic_min_score == 0.0
     assert s.memory.semantic_fraction == 0.0
     assert s.memory.temporal_min_fraction == 1.0
 
 
 def test_memory_semantic_wait_settings(tmp_path):
-    """semantic_wait_for_select / max_ms load + validation."""
+    """semantic_wait_for_select / max_ms load + product-band validation."""
     (tmp_path / "elyra.toml").write_text(
         """
 [memory]
@@ -537,12 +535,14 @@ semantic_wait_max_ms = 8000
     assert s.memory.semantic_wait_for_select is False
     assert s.memory.semantic_wait_max_ms == 8000
 
-    (tmp_path / "elyra.toml").write_text(
-        "[memory]\nsemantic_wait_max_ms = -1\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="memory.semantic_wait_max_ms"):
-        load_settings(tmp_path)
+    # Outside product band [1000, 120000] — reject (no silent clamp at load).
+    for bad in (-1, 0, 500, 999, 120_001, 999_999):
+        (tmp_path / "elyra.toml").write_text(
+            f"[memory]\nsemantic_wait_max_ms = {bad}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="memory.semantic_wait_max_ms"):
+            load_settings(tmp_path)
 
     # Explicit false must not be rewritten via x-or-default.
     (tmp_path / "elyra.toml").write_text(

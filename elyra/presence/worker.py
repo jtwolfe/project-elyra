@@ -458,8 +458,10 @@ class PresenceWorker:
         # Dev-speed pacing (default ON): inter-hop pause for followable glass.
         self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
         # Semantic wait-for-select (default ON): keep slow encodes for meal pack.
+        # Missing runtime JSON seeds from settings.memory (elyra.toml).
         self._semantic_wait: SemanticWaitState = load_semantic_wait_runtime(
-            paths.data_dir
+            paths.data_dir,
+            defaults=self.settings.memory,
         )
 
         # Stretch 2 memory store (lazy). Defaults write_atoms=true / enabled=true
@@ -590,29 +592,35 @@ class PresenceWorker:
         wakes. When both args are None, returns current state.
         """
         with self._lock:
+            snappy = int(self.settings.memory.semantic_select_max_ms)
             if self._continuous.resetting:
                 return {
                     "ok": False,
                     "error": "resetting",
-                    "semantic_wait": semantic_wait_status_block(self._semantic_wait),
+                    "semantic_wait": semantic_wait_status_block(
+                        self._semantic_wait, snappy_max_ms=snappy
+                    ),
                 }
             prev_en = bool(self._semantic_wait.enabled)
             prev_max = int(self._semantic_wait.max_ms)
             if enabled is not None:
                 self._semantic_wait.enabled = bool(enabled)
             if max_ms is not None:
-                from elyra.runtime.semantic_wait import clamp_wait_max_ms
+                from elyra.memory.config import clamp_semantic_wait_max_ms
 
-                self._semantic_wait.max_ms = clamp_wait_max_ms(max_ms)
+                self._semantic_wait.max_ms = clamp_semantic_wait_max_ms(max_ms)
             try:
                 save_semantic_wait_runtime(
                     self.paths.data_dir,
                     enabled=bool(self._semantic_wait.enabled),
                     max_ms=int(self._semantic_wait.max_ms),
+                    defaults=self.settings.memory,
                 )
             except OSError as exc:
                 _LOG.warning("persist semantic_wait.json failed: %s", exc)
-            block = semantic_wait_status_block(self._semantic_wait)
+            block = semantic_wait_status_block(
+                self._semantic_wait, snappy_max_ms=snappy
+            )
             return {
                 "ok": True,
                 "changed": (
@@ -1046,7 +1054,12 @@ class PresenceWorker:
                     pending_moment_continues=pending_continues,
                 ),
                 "dev_speed": dev_speed_status_block(self._dev_speed),
-                "semantic_wait": semantic_wait_status_block(self._semantic_wait),
+                "semantic_wait": semantic_wait_status_block(
+                    self._semantic_wait,
+                    snappy_max_ms=int(
+                        self.settings.memory.semantic_select_max_ms
+                    ),
+                ),
                 "context": context_block,
                 "memory": self._memory_status_block(),
             }

@@ -602,6 +602,90 @@ def test_status_snapshot_continuous_defaults(paths):
     }
 
 
+def test_status_snapshot_semantic_wait_defaults(paths):
+    """Semantic wait block defaults ON with snappy budget from settings."""
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    snap = worker.status_snapshot()
+    sw = snap["semantic_wait"]
+    assert sw["enabled"] is True
+    assert sw["max_ms"] == 15_000
+    assert sw["snappy_select_max_ms"] == worker.settings.memory.semantic_select_max_ms
+    assert sw["effective_select_max_ms"] == 15_000
+
+
+def test_set_semantic_wait_persist_and_status(paths):
+    """set_semantic_wait mutates status and writes runtime JSON."""
+    from elyra.runtime.semantic_wait import (
+        load_semantic_wait_runtime,
+        semantic_wait_runtime_path,
+    )
+
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    result = worker.set_semantic_wait(enabled=False, max_ms=8_000)
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["semantic_wait"]["enabled"] is False
+    assert result["semantic_wait"]["max_ms"] == 8_000
+    assert result["semantic_wait"]["effective_select_max_ms"] == (
+        worker.settings.memory.semantic_select_max_ms
+    )
+
+    path = semantic_wait_runtime_path(paths.data_dir)
+    assert path.is_file()
+    loaded = load_semantic_wait_runtime(paths.data_dir)
+    assert loaded.enabled is False
+    assert loaded.max_ms == 8_000
+
+    snap = worker.status_snapshot()
+    assert snap["semantic_wait"]["enabled"] is False
+    assert snap["semantic_wait"]["max_ms"] == 8_000
+
+
+def test_semantic_wait_seeds_from_settings_when_json_missing(paths, tmp_path):
+    """Missing semantic_wait.json → MemorySettings / elyra.toml knobs."""
+    from dataclasses import replace
+
+    from elyra.settings import default_settings
+
+    settings = replace(
+        default_settings(),
+        memory=replace(
+            default_settings().memory,
+            semantic_wait_for_select=False,
+            semantic_wait_max_ms=12_000,
+            semantic_select_max_ms=40,
+        ),
+    )
+    worker, _stop = _make_worker(
+        paths, run_do_loop_fn=_stub_loop(), settings=settings
+    )
+    sw = worker.status_snapshot()["semantic_wait"]
+    assert sw["enabled"] is False
+    assert sw["max_ms"] == 12_000
+    assert sw["snappy_select_max_ms"] == 40
+    assert sw["effective_select_max_ms"] == 40
+
+
+def test_semantic_wait_rebuild_outer_overlay_contract(paths):
+    """rebuild_outer replace(mem_cfg, wait from runtime) matches set_semantic_wait."""
+    from dataclasses import replace
+
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_semantic_wait(enabled=False, max_ms=9_000)
+    # Same overlay rebuild_outer applies under lock before compose_meal.
+    with worker._lock:  # noqa: SLF001
+        sw = worker._semantic_wait  # noqa: SLF001
+        mem_cfg = replace(
+            worker.settings.memory,
+            semantic_wait_for_select=bool(sw.enabled),
+            semantic_wait_max_ms=int(sw.max_ms),
+        )
+    assert mem_cfg.semantic_wait_for_select is False
+    assert mem_cfg.semantic_wait_max_ms == 9_000
+    # Settings library defaults stay unchanged until overlay.
+    assert worker.settings.memory.semantic_wait_for_select is True
+
+
 def test_why_now_moment_continue():
     from elyra.presence.queue import WakeItem
     from elyra.presence.worker import _why_now

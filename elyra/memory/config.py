@@ -45,6 +45,22 @@ MEMORY_SEARCH_CHANNELS = SEARCH_CHANNEL_SET
 # KD-R4: sole rollback knob for main-leg vector search engine.
 MEMORY_ANN_SEARCH_BACKENDS = frozenset({"lance_native", "python"})
 
+# Wait-for-select absolute ceiling band (ms). Shared by settings validation,
+# select_semantic, and the runtime glass toggle — keep memory free of runtime.
+SEMANTIC_WAIT_MAX_MS_MIN = 1_000
+SEMANTIC_WAIT_MAX_MS_MAX = 120_000
+SEMANTIC_WAIT_MAX_MS_DEFAULT = 15_000
+
+
+def clamp_semantic_wait_max_ms(value: float | int) -> int:
+    """Clamp wait-for-select ceiling to the product [1000, 120000] ms band."""
+    v = int(value)
+    if v < SEMANTIC_WAIT_MAX_MS_MIN:
+        return SEMANTIC_WAIT_MAX_MS_MIN
+    if v > SEMANTIC_WAIT_MAX_MS_MAX:
+        return SEMANTIC_WAIT_MAX_MS_MAX
+    return v
+
 
 @dataclass(frozen=True)
 class MemorySettings:
@@ -96,9 +112,13 @@ class MemorySettings:
     encode_query_max_ms: int = 30  # sub-budget of semantic_select_max_ms
     semantic_select_max_ms: int = 50  # total encode+search+pack in rebuild_outer
     # Wait-for-select: when on, raise ceiling and keep slow encode results
-    # (CPU Nemotron dogfood). Runtime toggle may overlay via worker.
+    # (CPU Nemotron dogfood). Product band [SEMANTIC_WAIT_MAX_MS_MIN,
+    # SEMANTIC_WAIT_MAX_MS_MAX]; settings validation enforces the same band.
+    # Runtime JSON (if present) overlays on the worker path; missing JSON
+    # seeds from these settings so elyra.toml affects live meal until glass
+    # writes semantic_wait.json.
     semantic_wait_for_select: bool = True
-    semantic_wait_max_ms: int = 15_000  # absolute ceiling when wait is on
+    semantic_wait_max_ms: int = SEMANTIC_WAIT_MAX_MS_DEFAULT
     # OQ4: flip historical none → pending when semantic+embed on (idle catch-up).
     embed_catchup_max: int = 500  # max none atoms marked pending per process life
     embed_catchup_horizon_hours: float = 168.0  # only t_start within this lookback
@@ -191,10 +211,14 @@ __all__ = [
     "MEMORY_JSONL_COMPACT_BYTES",
     "MEMORY_JSONL_COMPACT_DIRTY",
     "META_JSON",
+    "SEMANTIC_WAIT_MAX_MS_DEFAULT",
+    "SEMANTIC_WAIT_MAX_MS_MAX",
+    "SEMANTIC_WAIT_MAX_MS_MIN",
     "MemorySettings",
     "atoms_blob_root",
     "atoms_jsonl_path",
     "blob_relpath_for_atom",
+    "clamp_semantic_wait_max_ms",
     "ensure_memory_dirs",
     "ladder_dir",
     "lance_root",
