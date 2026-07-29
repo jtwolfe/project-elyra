@@ -152,6 +152,18 @@ class MemorySettings:
     # Small-N under lance_native reports search_mode=full_lance (not full_python).
     ann_search_backend: str = "lance_native"  # lance_native | python
 
+    # --- Phase 2a GraphView read-only knobs (PR-A1; session flags in PR-A2) ---
+    # Directed-traversal feature flags stay off until PR-A2; these only tune
+    # neighbourhood / weight projection when GraphView is constructed in tests
+    # or later worker wiring.
+    traverse_expand_max_ms: int = 80  # soft wall for neighbors / seed_from_text
+    traverse_parcel_child_cap: int = 32  # parent_of reverse chain / moment cap
+    traverse_same_moment_k: int = 4  # OQ-A4 same_moment soft edge cap
+    traverse_semantic_k: int = 8  # semantic_hop / seed_from_text top-k
+    traverse_allow_semantic_hops: bool = True  # no-ops without index / cold encoder
+    traverse_temporal_half_life_hours: float = 72.0  # weight model half-life
+    traverse_min_expand_weight: float = 0.05  # drop edges below this floor
+
 
 def memory_root(paths: ElyraPaths) -> Path:
     """Return ``{data_dir}/memory``."""
