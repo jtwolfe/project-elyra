@@ -1,7 +1,8 @@
-"""Read-only memory inspection helpers for glass /api/memory/* (PR9 + Phase 2 PR7).
+"""Read-only memory inspection helpers for glass /api/memory/* (PR9 + Phase 2).
 
-Scope: serialize meal packages, atoms, and vector/neighbor inspect for operator UI.
-Out of scope: atom edit/delete, raw 2048-d dumps, graph product.
+Scope: serialize meal packages, atoms, vector/neighbor inspect, and Phase 2a
+Graph tab session/neighbor views for the operator UI.
+Out of scope: atom edit/delete, raw 2048-d dumps, edge mutation.
 """
 
 from __future__ import annotations
@@ -18,8 +19,20 @@ from elyra.memory.types import (
     PERIOD_SCALE_ORDER,
     Atom,
     atom_to_dict,
+    parse_iso_z,
     to_iso_z,
     utc_now_iso,
+)
+from elyra.memory.weights import (
+    BASE_PARENT_CHILD,
+    BASE_SAME_MOMENT,
+    BASE_SEMANTIC_HOP,
+    BASE_SEQUENTIAL,
+    EDGE_CHILD_OF,
+    EDGE_PARENT_OF,
+    EDGE_SAME_MOMENT,
+    EDGE_SEMANTIC_HOP,
+    EDGE_SEQUENTIAL,
 )
 
 # Truncation for glass list rows (not store limits).
@@ -600,11 +613,241 @@ def index_health_block(index: Any | None) -> dict[str, Any]:
         }
 
 
+# ── Phase 2a Graph glass (PR-A5) ────────────────────────────────────────────
+
+# Edge-kind legend for the Graph tab (base weights from weights.py v1).
+_EDGE_KIND_LEGEND: tuple[dict[str, Any], ...] = (
+    {
+        "kind": EDGE_SEQUENTIAL,
+        "base_weight": BASE_SEQUENTIAL,
+        "label": "Sequential prev/next",
+        "structural": True,
+    },
+    {
+        "kind": EDGE_PARENT_OF,
+        "base_weight": BASE_PARENT_CHILD,
+        "label": "Parent → child (parcel)",
+        "structural": True,
+    },
+    {
+        "kind": EDGE_CHILD_OF,
+        "base_weight": BASE_PARENT_CHILD,
+        "label": "Child → parent",
+        "structural": True,
+    },
+    {
+        "kind": EDGE_SAME_MOMENT,
+        "base_weight": BASE_SAME_MOMENT,
+        "label": "Same moment (soft)",
+        "structural": True,
+    },
+    {
+        "kind": EDGE_SEMANTIC_HOP,
+        "base_weight": BASE_SEMANTIC_HOP,
+        "label": "Semantic hop (ephemeral ANN)",
+        "structural": False,
+    },
+)
+
+
+def edge_kind_legend() -> list[dict[str, Any]]:
+    """Static edge-kind legend for Graph overview (no secrets)."""
+    return [dict(row) for row in _EDGE_KIND_LEGEND]
+
+
+def idle_age_seconds(
+    updated_at: str | None,
+    *,
+    now: str | None = None,
+) -> float | None:
+    """Seconds since ``updated_at`` (idle TTL basis). None if unparseable.
+
+    Graph session card shows idle age — not multi-hop wall-clock (KD-A18).
+    """
+    if not updated_at:
+        return None
+    try:
+        then = parse_iso_z(str(updated_at))
+        now_dt = parse_iso_z(now) if now else parse_iso_z(utc_now_iso())
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (now_dt - then).total_seconds())
+
+
+def graph_edge_to_inspect(
+    edge: Any,
+    store: MemoryStore | None = None,
+    *,
+    snippet_chars: int = _SNIPPET_CHARS,
+) -> dict[str, Any]:
+    """Serialize a GraphEdge (+ optional dst atom snippet) for glass neighbors.
+
+    No raw embedding dumps. Snippets are truncated like Vectors neighbors.
+    """
+    dst_id = str(getattr(edge, "dst_atom_id", "") or "")
+    src_id = str(getattr(edge, "src_atom_id", "") or "")
+    kind = getattr(edge, "edge_kind", None)
+    weight = getattr(edge, "weight", None)
+    try:
+        weight_f = float(weight) if weight is not None else None
+    except (TypeError, ValueError):
+        weight_f = None
+    reason = str(getattr(edge, "reason", "") or "")
+    meta = getattr(edge, "meta", None)
+    slim_meta: dict[str, Any] = {}
+    if isinstance(meta, Mapping):
+        for key in ("moment_id", "parent_atom_id", "parcel_index", "cosine", "channel"):
+            if key in meta:
+                slim_meta[key] = meta[key]
+
+    row: dict[str, Any] = {
+        "atom_id": dst_id,
+        "src_atom_id": src_id,
+        "edge_kind": kind,
+        "weight": weight_f,
+        "reason": reason,
+        "kind": None,
+        "moment_id": None,
+        "t_start": None,
+        "snippet": "",
+        "label": "",
+        "meta": slim_meta,
+    }
+    if store is not None and dst_id:
+        try:
+            atom = store.get_atom(dst_id)
+        except Exception:  # noqa: BLE001
+            atom = None
+        if atom is not None:
+            text = getattr(atom, "content_text", None) or ""
+            snip = truncate_text(str(text), max_chars=snippet_chars)
+            row.update(
+                {
+                    "kind": getattr(atom, "kind", None),
+                    "moment_id": getattr(atom, "moment_id", None),
+                    "t_start": getattr(atom, "t_start", None),
+                    "snippet": snip,
+                    "label": snip,
+                    "text_chars": len(str(text)),
+                }
+            )
+    return row
+
+
+def enrich_session_for_glass(session: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Copy a TraversalSession ``to_view()`` dict and add glass-only fields.
+
+    Marks considered rows that are in ``keep_ids``; attaches idle_age_s from
+    ``updated_at``. Does not invent multi-hop wall-clock countdowns (KD-A18).
+    """
+    if not isinstance(session, dict):
+        return None
+    out = dict(session)
+    keep_set = {str(x) for x in (out.get("keep_ids") or [])}
+    considered = out.get("considered")
+    if isinstance(considered, list):
+        enriched: list[dict[str, Any]] = []
+        for raw in considered:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            aid = str(row.get("atom_id") or "")
+            row["kept"] = aid in keep_set
+            # label doubles as snippet for considered list honesty
+            if "snippet" not in row and row.get("label"):
+                row["snippet"] = row["label"]
+            enriched.append(row)
+        out["considered"] = enriched
+    age = idle_age_seconds(out.get("updated_at") if isinstance(out.get("updated_at"), str) else None)
+    out["idle_age_s"] = age
+    # Explicitly omit any wall-clock fields if present on older payloads.
+    out.pop("wall_ms_remaining", None)
+    out.pop("wall_clock_ms", None)
+    out.pop("session_wall_ms", None)
+    return out
+
+
+def graph_session_view_to_inspect(view: Any) -> dict[str, Any]:
+    """Serialize GraphSessionView (or duck-type) for GET …/graph/session."""
+    if view is None:
+        return {
+            "which": "none",
+            "session": None,
+            "has_active": False,
+            "has_last_session": False,
+            "meal_keep_count": 0,
+            "meal_keep_ids": [],
+        }
+    if hasattr(view, "to_dict"):
+        raw = view.to_dict()
+    elif isinstance(view, Mapping):
+        raw = dict(view)
+    else:
+        raw = {
+            "which": getattr(view, "which", "none"),
+            "session": getattr(view, "session", None),
+            "has_active": bool(getattr(view, "has_active", False)),
+            "has_last_session": bool(getattr(view, "has_last_session", False)),
+            "meal_keep_count": int(getattr(view, "meal_keep_count", 0) or 0),
+            "meal_keep_ids": list(getattr(view, "meal_keep_ids", None) or []),
+        }
+    sess = enrich_session_for_glass(raw.get("session") if isinstance(raw, dict) else None)
+    return {
+        "which": raw.get("which") or "none",
+        "session": sess,
+        "has_active": bool(raw.get("has_active")),
+        "has_last_session": bool(raw.get("has_last_session")),
+        "meal_keep_count": int(raw.get("meal_keep_count") or 0),
+        "meal_keep_ids": list(raw.get("meal_keep_ids") or []),
+    }
+
+
+def directed_traversal_flags(settings: Any | None) -> dict[str, Any]:
+    """Flag block for Graph overview honesty (defaults off)."""
+    from elyra.memory.config import (
+        is_directed_keep_enabled,
+        is_directed_traversal_enabled,
+    )
+
+    trav = is_directed_traversal_enabled(settings)
+    keep = is_directed_keep_enabled(settings)
+    return {
+        "directed_traversal_enabled": trav,
+        "directed_keep_enabled": keep,
+        # Surface key budgets so glass can explain caps without a separate call.
+        "traverse_expand_max_ms": int(
+            getattr(settings, "traverse_expand_max_ms", 80) or 80
+        )
+        if settings is not None
+        else 80,
+        "traverse_max_steps": int(getattr(settings, "traverse_max_steps", 8) or 8)
+        if settings is not None
+        else 8,
+        "traverse_max_nodes": int(getattr(settings, "traverse_max_nodes", 48) or 48)
+        if settings is not None
+        else 48,
+        "traverse_max_depth": int(getattr(settings, "traverse_max_depth", 3) or 3)
+        if settings is not None
+        else 3,
+        "traverse_session_ttl_s": int(
+            getattr(settings, "traverse_session_ttl_s", 900) or 900
+        )
+        if settings is not None
+        else 900,
+    }
+
+
 __all__ = [
     "atom_to_detail",
     "atom_to_list_row",
     "atom_to_vector_row",
+    "directed_traversal_flags",
+    "edge_kind_legend",
     "encoder_health_block",
+    "enrich_session_for_glass",
+    "graph_edge_to_inspect",
+    "graph_session_view_to_inspect",
+    "idle_age_seconds",
     "index_health_block",
     "list_atoms_by_embedding_status",
     "list_atoms_for_glass",

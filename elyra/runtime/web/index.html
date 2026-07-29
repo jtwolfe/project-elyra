@@ -398,15 +398,82 @@
             </div>
           </div>
           <div id="memory-tab-graph" class="memory-tab-panel" role="tabpanel" hidden>
-            <div class="memory-stub card">
+            <div id="memory-graph-overview" class="memory-flags status-fields">loading…</div>
+            <p id="memory-graph-honesty" class="muted status-helper memory-graph-honesty" hidden></p>
+            <div id="memory-graph-session" class="memory-graph-session card">
               <div class="card-head">
-                <strong>Graph</strong>
-                <span class="badge">Phase 2a+</span>
+                <strong>Walk session</strong>
+                <span id="memory-graph-session-badge" class="badge">—</span>
               </div>
-              <p class="muted">
-                Typed edges / hypergraph walk land in Phase 2a+. No layout or multi-hop browser
-                here — sequential prev/next stays on atom detail only when useful.
-              </p>
+              <div id="memory-graph-session-body" class="memory-graph-session-body">
+                <p class="muted empty memory-empty">No walk yet.</p>
+              </div>
+            </div>
+            <div class="memory-graph-split">
+              <div class="memory-graph-list-panel card">
+                <div class="card-head">
+                  <strong>Considered</strong>
+                  <span class="badge memory-graph-considered-badge" title="Visited during the walk">walk</span>
+                </div>
+                <div id="memory-graph-considered" class="list-panel list-panel-auto memory-graph-list">
+                  <p class="muted empty memory-empty">—</p>
+                </div>
+              </div>
+              <div class="memory-graph-list-panel card">
+                <div class="card-head">
+                  <strong>Kept</strong>
+                  <span class="badge memory-graph-kept-badge" title="Confirmed keep-set">keep</span>
+                </div>
+                <div id="memory-graph-kept" class="list-panel list-panel-auto memory-graph-list">
+                  <p class="muted empty memory-empty">—</p>
+                </div>
+              </div>
+            </div>
+            <div class="memory-graph-list-panel card memory-graph-frontier-panel">
+              <div class="card-head">
+                <strong>Frontier</strong>
+                <span class="badge" title="Expand candidates (active walks only)">active only</span>
+              </div>
+              <div id="memory-graph-frontier" class="list-panel list-panel-auto memory-graph-list">
+                <p class="muted empty memory-empty">—</p>
+              </div>
+            </div>
+            <div class="memory-neighbors-panel card memory-graph-neighbors-panel">
+              <div class="card-head">
+                <strong>Neighbor probe</strong>
+                <span class="badge" title="1-hop multi-kind expand (structural + optional semantic)">1-hop</span>
+              </div>
+              <div class="memory-neighbors-toolbar memory-graph-neighbors-toolbar">
+                <label class="status-label" for="memory-graph-neighbor-atom">Atom id</label>
+                <input
+                  id="memory-graph-neighbor-atom"
+                  type="text"
+                  class="status-input memory-filter"
+                  placeholder="a_…"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-graph-neighbor-k">k</label>
+                <input
+                  id="memory-graph-neighbor-k"
+                  type="number"
+                  class="status-input memory-filter memory-neighbor-k"
+                  value="12"
+                  min="1"
+                  max="50"
+                />
+                <label class="status-label memory-graph-sem-label" for="memory-graph-neighbor-sem">
+                  <input id="memory-graph-neighbor-sem" type="checkbox" checked />
+                  semantic
+                </label>
+                <button type="button" id="memory-graph-neighbors-run" class="btn-secondary btn-sm">
+                  Expand
+                </button>
+              </div>
+              <div id="memory-graph-neighbors-meta" class="muted status-helper memory-neighbors-meta" hidden></div>
+              <div id="memory-graph-neighbors-list" class="list-panel list-panel-auto memory-neighbors-list">
+                <p class="muted empty memory-empty">Pick an atom id to expand 1-hop.</p>
+              </div>
             </div>
           </div>
         </section>

@@ -171,7 +171,7 @@ def test_memory_overview_vectors_live(paths):
         assert code == 200
         assert body["tabs"]["vectors"]["stub"] is False
         assert body["tabs"]["vectors"]["phase"] == "2"
-        assert body["tabs"]["graph"]["stub"] is True
+        assert body["tabs"]["graph"]["stub"] is False
         assert body["tabs"]["graph"]["phase"] == "2a"
     finally:
         h.close()

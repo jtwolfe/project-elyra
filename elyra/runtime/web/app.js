@@ -51,6 +51,19 @@ const memoryNeighborK = $("#memory-neighbor-k");
 const memoryNeighborsRun = $("#memory-neighbors-run");
 const memoryNeighborsList = $("#memory-neighbors-list");
 const memoryNeighborsMeta = $("#memory-neighbors-meta");
+const memoryGraphOverview = $("#memory-graph-overview");
+const memoryGraphHonesty = $("#memory-graph-honesty");
+const memoryGraphSessionBadge = $("#memory-graph-session-badge");
+const memoryGraphSessionBody = $("#memory-graph-session-body");
+const memoryGraphConsidered = $("#memory-graph-considered");
+const memoryGraphKept = $("#memory-graph-kept");
+const memoryGraphFrontier = $("#memory-graph-frontier");
+const memoryGraphNeighborAtom = $("#memory-graph-neighbor-atom");
+const memoryGraphNeighborK = $("#memory-graph-neighbor-k");
+const memoryGraphNeighborSem = $("#memory-graph-neighbor-sem");
+const memoryGraphNeighborsRun = $("#memory-graph-neighbors-run");
+const memoryGraphNeighborsList = $("#memory-graph-neighbors-list");
+const memoryGraphNeighborsMeta = $("#memory-graph-neighbors-meta");
 /** @type {boolean} */
 let memoryVectorsRebuildInFlight = false;
 /** @type {"context" | "atoms" | "vectors" | "graph"} */
@@ -2964,6 +2977,494 @@ async function runNeighborSearch() {
   }
 }
 
+/**
+ * Format idle age for Graph session card (seconds → short human).
+ * @param {number | null | undefined} ageS
+ */
+function formatIdleAge(ageS) {
+  if (ageS == null || !Number.isFinite(Number(ageS))) return "—";
+  const s = Math.max(0, Math.floor(Number(ageS)));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+/**
+ * Graph overview flags + honesty note.
+ * @param {Record<string, any>} data
+ */
+function renderGraphOverview(data) {
+  if (!memoryGraphOverview) return;
+  memoryGraphOverview.innerHTML = "";
+  const trav = data.traversal || {};
+  const mem = data.memory || {};
+  const flagOn = trav.directed_traversal_enabled === true;
+  const keepOn = trav.directed_keep_enabled === true;
+  const rows = [
+    [
+      "traversal",
+      flagOn ? "on" : "off (default)",
+      flagOn === true,
+    ],
+    [
+      "directed keep",
+      keepOn ? "on" : "off",
+      keepOn === true ? true : null,
+    ],
+    [
+      "sessions",
+      [
+        data.has_active ? "active walk" : null,
+        data.has_last_session ? "last finished" : null,
+        !data.has_active && !data.has_last_session ? "none" : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      data.has_active === true ? true : null,
+    ],
+    [
+      "meal keep",
+      data.meal_keep_count != null ? String(data.meal_keep_count) : "0",
+      null,
+    ],
+    [
+      "budgets",
+      [
+        trav.traverse_max_steps != null ? `steps≤${trav.traverse_max_steps}` : null,
+        trav.traverse_max_nodes != null ? `nodes≤${trav.traverse_max_nodes}` : null,
+        trav.traverse_max_depth != null ? `depth≤${trav.traverse_max_depth}` : null,
+        trav.traverse_expand_max_ms != null
+          ? `expand_ms≤${trav.traverse_expand_max_ms}`
+          : null,
+        trav.traverse_session_ttl_s != null
+          ? `idle_ttl=${trav.traverse_session_ttl_s}s`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "—",
+      null,
+    ],
+    [
+      "store",
+      mem.ok ? mem.backend || "ok" : mem.error || "down",
+      mem.ok === true,
+    ],
+  ];
+  for (const [label, value, good] of rows) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = label;
+    const val = document.createElement("span");
+    val.className = "status-value";
+    if (good === true) val.classList.add("status-ok");
+    if (good === false) val.classList.add("status-bad");
+    // Flag off is expected default — muted, not status-bad.
+    if (label === "traversal" && !flagOn) {
+      val.classList.remove("status-bad");
+      val.classList.add("memory-vector-stale");
+    }
+    val.textContent = value;
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryGraphOverview.appendChild(row);
+  }
+  // Edge-kind legend as a compact line.
+  const legend = Array.isArray(data.edge_kind_legend) ? data.edge_kind_legend : [];
+  if (legend.length) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = "edge kinds";
+    const val = document.createElement("span");
+    val.className = "status-value";
+    val.textContent = legend
+      .map((e) => `${e.kind}=${e.base_weight != null ? e.base_weight : "?"}`)
+      .join(" · ");
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryGraphOverview.appendChild(row);
+  }
+
+  if (memoryGraphHonesty) {
+    const honesty = data.honesty || {};
+    const note = honesty.note || null;
+    if (note) {
+      memoryGraphHonesty.hidden = false;
+      memoryGraphHonesty.textContent = String(note);
+    } else {
+      memoryGraphHonesty.hidden = true;
+      memoryGraphHonesty.textContent = "";
+    }
+  }
+}
+
+/**
+ * Session card: status, goal, budgets (steps/nodes/depth/expand_ms/idle) — no wall-clock.
+ * @param {Record<string, any>} data session API payload
+ */
+function renderGraphSession(data) {
+  const sess = data.session || null;
+  const which = data.which || "none";
+  const dual =
+    data.has_active && data.has_last_session
+      ? which === "active"
+        ? "walking… · last finished retained"
+        : "last finished · active also present"
+      : null;
+
+  if (memoryGraphSessionBadge) {
+    if (!sess) {
+      memoryGraphSessionBadge.textContent = which === "meal" ? "meal-thin" : "none";
+    } else {
+      const st = sess.status || which;
+      memoryGraphSessionBadge.textContent = dual
+        ? `${st} · dual`
+        : String(st);
+    }
+  }
+
+  if (!memoryGraphSessionBody) return;
+  memoryGraphSessionBody.innerHTML = "";
+
+  if (!sess) {
+    const p = document.createElement("p");
+    p.className = "muted empty memory-empty";
+    if (data.honesty && data.honesty.note) {
+      p.textContent = String(data.honesty.note);
+    } else if (which === "meal") {
+      const n = data.meal_keep_count != null ? data.meal_keep_count : 0;
+      p.textContent = `Meal-thin keep only (${n} ids) — full walk is on active/last session.`;
+    } else {
+      p.textContent = "No walk yet. Start via traverse tools (flag on) or wait for a session.";
+    }
+    memoryGraphSessionBody.appendChild(p);
+    return;
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = [
+    sess.session_id || "—",
+    sess.status || null,
+    which ? `view=${which}` : null,
+    dual || null,
+    sess.moment_id ? `moment=${sess.moment_id}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  memoryGraphSessionBody.appendChild(meta);
+
+  const goal = document.createElement("div");
+  goal.style.marginTop = "0.35rem";
+  const goalLabel = document.createElement("span");
+  goalLabel.className = "muted";
+  goalLabel.textContent = "goal: ";
+  goal.appendChild(goalLabel);
+  goal.appendChild(document.createTextNode(sess.goal || "—"));
+  memoryGraphSessionBody.appendChild(goal);
+
+  const budgets = sess.budgets || {};
+  const budgetRow = document.createElement("div");
+  budgetRow.className = "memory-graph-budgets";
+  // KD-A18: steps/nodes/depth + expand_ms + idle age — NOT multi-hop wall-clock.
+  const idle =
+    sess.idle_age_s != null
+      ? sess.idle_age_s
+      : data.session && data.session.idle_age_s;
+  const bits = [
+    `steps ${budgets.steps_spent != null ? budgets.steps_spent : 0}/${
+      budgets.max_steps != null ? budgets.max_steps : "—"
+    } (rem ${budgets.steps_remaining != null ? budgets.steps_remaining : "—"})`,
+    `nodes ${budgets.nodes_spent != null ? budgets.nodes_spent : 0}/${
+      budgets.max_nodes != null ? budgets.max_nodes : "—"
+    }`,
+    `depth ${budgets.depth_spent != null ? budgets.depth_spent : 0}/${
+      budgets.max_depth != null ? budgets.max_depth : "—"
+    }`,
+    `expand_ms last=${
+      budgets.expand_ms_spent_last != null ? budgets.expand_ms_spent_last : 0
+    }/budget=${budgets.expand_ms_budget != null ? budgets.expand_ms_budget : "—"}`,
+    budgets.expand_truncated ? "expand_truncated" : null,
+    `idle ${formatIdleAge(idle)}`,
+  ].filter(Boolean);
+  budgetRow.textContent = bits.join(" · ");
+  memoryGraphSessionBody.appendChild(budgetRow);
+
+  const summary = document.createElement("pre");
+  summary.className = "memory-graph-summary";
+  summary.textContent =
+    sess.walk_summary_nl && String(sess.walk_summary_nl).trim()
+      ? String(sess.walk_summary_nl)
+      : "no walk summary yet";
+  memoryGraphSessionBody.appendChild(summary);
+
+  if (data.meal_keep_count != null && data.has_last_session) {
+    const meal = document.createElement("div");
+    meal.className = "muted";
+    meal.style.fontSize = "0.8rem";
+    meal.style.marginTop = "0.35rem";
+    meal.textContent = `meal keep ids: ${data.meal_keep_count} (thin; full considered is above)`;
+    memoryGraphSessionBody.appendChild(meal);
+  }
+}
+
+/**
+ * @param {HTMLElement | null} el
+ * @param {Array<Record<string, any>>} nodes
+ * @param {"considered" | "kept" | "frontier"} mode
+ */
+function renderGraphNodeList(el, nodes, mode) {
+  if (!el) return;
+  el.innerHTML = "";
+  if (!nodes.length) {
+    const empty = mode === "frontier"
+      ? "No frontier (active walks only; frozen on finished)."
+      : mode === "kept"
+        ? "No keeps yet."
+        : "No considered nodes.";
+    el.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(empty)}</p>`;
+    return;
+  }
+  for (const n of nodes) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn memory-graph-node";
+    if (mode === "kept" || n.kept) {
+      card.classList.add("memory-graph-node-kept");
+    } else if (mode === "considered") {
+      card.classList.add("memory-graph-node-considered");
+    }
+    const aid = n.atom_id || "";
+    card.dataset.atomId = aid;
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const strong = document.createElement("strong");
+    strong.textContent = n.kind || n.edge_kind || mode;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    if (mode === "kept" || n.kept) {
+      badge.classList.add("memory-graph-kept-badge");
+      badge.textContent = "kept";
+    } else if (n.via_edge_kind || n.edge_kind) {
+      badge.textContent = String(n.via_edge_kind || n.edge_kind);
+    } else {
+      badge.textContent = n.depth != null ? `d=${n.depth}` : mode;
+    }
+    head.appendChild(strong);
+    head.appendChild(badge);
+    card.appendChild(head);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const weight =
+      n.weight != null && Number.isFinite(Number(n.weight))
+        ? Number(n.weight).toFixed(3)
+        : null;
+    meta.textContent = [
+      aid || "—",
+      n.depth != null ? `depth=${n.depth}` : null,
+      weight != null ? `w=${weight}` : null,
+      n.via_edge_kind || n.edge_kind || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+
+    const snip = document.createElement("div");
+    snip.className = "muted";
+    snip.style.fontSize = "0.85rem";
+    snip.style.marginTop = "0.25rem";
+    snip.textContent = n.snippet || n.label || n.preview || n.reason || "(empty)";
+    card.appendChild(snip);
+
+    card.addEventListener("click", () => {
+      if (memoryGraphNeighborAtom && aid) {
+        memoryGraphNeighborAtom.value = aid;
+      }
+      runGraphNeighborSearch().catch((e) =>
+        panelLoadError("Memory graph neighbors", e)
+      );
+    });
+    el.appendChild(card);
+  }
+}
+
+/**
+ * @param {Record<string, any>} data session payload
+ */
+function renderGraphLists(data) {
+  const sess = data.session || null;
+  const considered = sess && Array.isArray(sess.considered) ? sess.considered : [];
+  const keepIds = new Set(
+    sess && Array.isArray(sess.keep_ids) ? sess.keep_ids.map(String) : []
+  );
+  // Kept list: prefer order of keep_ids, fall back to considered.kept flags.
+  const byId = new Map(considered.map((n) => [String(n.atom_id || ""), n]));
+  const kept = [];
+  if (sess && Array.isArray(sess.keep_ids)) {
+    for (const id of sess.keep_ids) {
+      const row = byId.get(String(id));
+      if (row) kept.push({ ...row, kept: true });
+      else kept.push({ atom_id: id, kept: true, label: id });
+    }
+  } else {
+    for (const n of considered) {
+      if (n.kept || keepIds.has(String(n.atom_id || ""))) {
+        kept.push({ ...n, kept: true });
+      }
+    }
+  }
+  const frontier =
+    sess && Array.isArray(sess.frontier) && data.which === "active"
+      ? sess.frontier
+      : [];
+  renderGraphNodeList(memoryGraphConsidered, considered, "considered");
+  renderGraphNodeList(memoryGraphKept, kept, "kept");
+  renderGraphNodeList(memoryGraphFrontier, frontier, "frontier");
+}
+
+/**
+ * Graph neighbor probe results (multi-kind edges).
+ * @param {Record<string, any>} data
+ */
+function renderGraphNeighbors(data) {
+  if (!memoryGraphNeighborsList) return;
+  memoryGraphNeighborsList.innerHTML = "";
+  if (memoryGraphNeighborsMeta) {
+    const q = data.query || {};
+    const em = data.expand_meta || {};
+    const parts = [
+      q.atom_id ? `atom=${q.atom_id}` : null,
+      q.k != null ? `k=${q.k}` : null,
+      q.allow_semantic === false ? "semantic=off" : "semantic=on",
+      em.elapsed_ms != null ? `elapsed_ms=${em.elapsed_ms}` : null,
+      em.expand_truncated ? "truncated" : null,
+      em.semantic_reason ? `sem=${em.semantic_reason}` : null,
+    ].filter(Boolean);
+    memoryGraphNeighborsMeta.hidden = parts.length === 0;
+    memoryGraphNeighborsMeta.textContent = parts.join(" · ");
+  }
+  const neighbors = data.neighbors || [];
+  if (!neighbors.length) {
+    const omit = data.omitted_reason || data.error || "no_hits";
+    const lines = [
+      `No neighbors (${omit}).`,
+      "Structural edges need prev/next/parent links; semantic hops need index + warm encoder.",
+    ];
+    memoryGraphNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+      lines.join(" ")
+    )}</p>`;
+    return;
+  }
+  for (const n of neighbors) {
+    const card = document.createElement("div");
+    card.className = "card memory-channel-card memory-graph-node";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const title = document.createElement("strong");
+    title.textContent = n.kind || n.edge_kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    const w =
+      n.weight != null && Number.isFinite(Number(n.weight))
+        ? Number(n.weight).toFixed(3)
+        : "—";
+    badge.textContent = `${n.edge_kind || "edge"} w=${w}`;
+    badge.title = n.reason || "edge weight (v1 model)";
+    head.appendChild(title);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      n.atom_id || "—",
+      n.moment_id ? `moment=${n.moment_id}` : null,
+      n.reason || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet";
+    pre.textContent = n.snippet || n.label || "(empty)";
+    card.appendChild(pre);
+    card.style.cursor = "pointer";
+    card.addEventListener("click", () => {
+      if (memoryGraphNeighborAtom && n.atom_id) {
+        memoryGraphNeighborAtom.value = n.atom_id;
+      }
+    });
+    memoryGraphNeighborsList.appendChild(card);
+  }
+}
+
+async function runGraphNeighborSearch() {
+  const params = new URLSearchParams();
+  const atomId = memoryGraphNeighborAtom
+    ? memoryGraphNeighborAtom.value.trim()
+    : "";
+  let k = 12;
+  if (memoryGraphNeighborK) {
+    const raw = parseInt(memoryGraphNeighborK.value, 10);
+    if (Number.isFinite(raw)) k = raw;
+  }
+  params.set("k", String(k));
+  const allowSem =
+    !memoryGraphNeighborSem || memoryGraphNeighborSem.checked !== false;
+  params.set("allow_semantic", allowSem ? "1" : "0");
+  if (!atomId) {
+    if (memoryGraphNeighborsMeta) {
+      memoryGraphNeighborsMeta.hidden = true;
+      memoryGraphNeighborsMeta.textContent = "";
+    }
+    if (memoryGraphNeighborsList) {
+      memoryGraphNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id to expand 1-hop.</p>`;
+    }
+    return;
+  }
+  params.set("atom_id", atomId);
+  if (memoryGraphNeighborsList) {
+    memoryGraphNeighborsList.innerHTML = `<p class="muted">expanding…</p>`;
+  }
+  try {
+    const data = await fetchJson(
+      `/api/memory/graph/neighbors?${params.toString()}`
+    );
+    renderGraphNeighbors(data);
+  } catch (err) {
+    if (memoryGraphNeighborsMeta) memoryGraphNeighborsMeta.hidden = true;
+    if (memoryGraphNeighborsList) {
+      memoryGraphNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+  }
+}
+
+async function refreshMemoryGraph() {
+  const overview = await fetchJson("/api/memory/graph");
+  renderGraphOverview(overview);
+
+  const session = await fetchJson("/api/memory/graph/session");
+  // Merge honesty from overview when session has none.
+  if (!session.honesty && overview.honesty) {
+    session.honesty = overview.honesty;
+  }
+  // Prefer dual-badge presence from overview if session omitted.
+  if (session.has_active == null) session.has_active = overview.has_active;
+  if (session.has_last_session == null) {
+    session.has_last_session = overview.has_last_session;
+  }
+  renderGraphSession(session);
+  renderGraphLists(session);
+}
+
 async function refreshMemory() {
   if (memoryActiveTab === "atoms") {
     await refreshMemoryAtoms();
@@ -2974,7 +3475,7 @@ async function refreshMemory() {
     return;
   }
   if (memoryActiveTab === "graph") {
-    // Stub phase 2a — static HTML only.
+    await refreshMemoryGraph();
     return;
   }
   await refreshMemoryContext();
@@ -3023,6 +3524,13 @@ if (memoryVectorStatus) {
 if (memoryNeighborsRun) {
   memoryNeighborsRun.addEventListener("click", () => {
     runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
+  });
+}
+if (memoryGraphNeighborsRun) {
+  memoryGraphNeighborsRun.addEventListener("click", () => {
+    runGraphNeighborSearch().catch((e) =>
+      panelLoadError("Memory graph neighbors", e)
+    );
   });
 }
 

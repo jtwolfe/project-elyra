@@ -10,7 +10,8 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
   named secrets store GET/PUT/DELETE + grants (PR5 / IK10),
   memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only;
-  Phase 2 PR7 — vectors health/status/neighbors, graph still stub).
+  Phase 2 PR7 — vectors health/status/neighbors;
+  Phase 2a PR-A5 — graph overview/session/neighbors + optional debug POST).
 Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
 """
@@ -318,6 +319,16 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         if path == "/api/memory/vectors/neighbors":
             self._get_memory_vectors_neighbors(qs)
             return
+        # Phase 2a Graph tab (PR-A5) — overview / session / neighbors.
+        if path == "/api/memory/graph" or path == "/api/memory/graph/":
+            self._get_memory_graph()
+            return
+        if path == "/api/memory/graph/session":
+            self._get_memory_graph_session(qs)
+            return
+        if path == "/api/memory/graph/neighbors":
+            self._get_memory_graph_neighbors(qs)
+            return
         if path.startswith("/api/memory/"):
             self._json(404, {"ok": False, "error": "not found"})
             return
@@ -481,6 +492,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/memory/vectors/rebuild":
             self._post_memory_vectors_rebuild(body)
+            return
+
+        if path == "/api/memory/graph/traverse":
+            self._post_memory_graph_traverse(body)
             return
 
         if path == "/api/users":
@@ -649,7 +664,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "context": True,
                 "atoms": True,
                 "vectors": {"stub": False, "phase": "2"},
-                "graph": {"stub": True, "phase": "2a"},
+                "graph": {"stub": False, "phase": "2a"},
             },
         }
         if not ok and block.get("error"):
@@ -979,7 +994,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "memory": flags,
                 "tabs": {
                     "vectors": {"stub": False, "phase": "2"},
-                    "graph": {"stub": True, "phase": "2a"},
+                    "graph": {"stub": False, "phase": "2a"},
                 },
             },
         )
@@ -1364,6 +1379,593 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "memory": flags,
             },
         )
+
+    # ── Phase 2a Graph tab (PR-A5) ────────────────────────────────────────
+
+    def _traversal_registry(self) -> Any | None:
+        """Best-effort TraversalRegistry from worker — never raises."""
+        trav = getattr(self.worker, "traversal", None)
+        if trav is not None:
+            return trav
+        return getattr(self.worker, "_traversal", None)
+
+    def _graph_view_for_api(self) -> Any | None:
+        """Worker GraphView factory (structural always; semantic if warm)."""
+        factory = getattr(self.worker, "graph_view", None)
+        if not callable(factory):
+            return None
+        try:
+            return factory()
+        except Exception:  # noqa: BLE001
+            _LOG.exception("graph_view factory failed for glass")
+            return None
+
+    def _memory_settings(self) -> Any | None:
+        return getattr(getattr(self.worker, "settings", None), "memory", None)
+
+    def _get_memory_graph(self) -> None:
+        """GET /api/memory/graph — overview: flags, session presence, legend."""
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            edge_kind_legend,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        reg = self._traversal_registry()
+        has_active = False
+        has_last = False
+        meal_keep_count = 0
+        if reg is not None:
+            try:
+                # Bind live settings so flag honesty matches registry.
+                bind = getattr(reg, "bind_settings", None)
+                if callable(bind) and mem_cfg is not None:
+                    bind(mem_cfg)
+                view = reg.get_graph_session_view()
+                has_active = bool(getattr(view, "has_active", False))
+                has_last = bool(getattr(view, "has_last_session", False))
+                meal_keep_count = int(getattr(view, "meal_keep_count", 0) or 0)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("graph overview session peek failed")
+
+        # Overview is always 200; ok tracks store health (flags may be off).
+        self._json(
+            200,
+            {
+                "ok": bool(flags.get("ok")),
+                "has_active": has_active,
+                "has_last_session": has_last,
+                "meal_keep_count": meal_keep_count,
+                "edge_kind_legend": edge_kind_legend(),
+                "traversal": trav_flags,
+                "memory": flags,
+                "tabs": {
+                    "vectors": {"stub": False, "phase": "2"},
+                    "graph": {"stub": False, "phase": "2a"},
+                },
+                # Honesty for empty/disabled (UI copy).
+                "honesty": {
+                    "flag_off": not bool(
+                        trav_flags.get("directed_traversal_enabled")
+                    ),
+                    "no_session": not has_active and not has_last,
+                    "note": (
+                        "directed_traversal_enabled is off — tools/POST fail closed; "
+                        "structural neighbor probe still available when store is open"
+                        if not trav_flags.get("directed_traversal_enabled")
+                        else (
+                            "no active or last walk yet — start via traverse tools "
+                            "or debug POST"
+                            if not has_active and not has_last
+                            else None
+                        )
+                    ),
+                },
+            },
+        )
+
+    def _get_memory_graph_session(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/graph/session — active else last_session (KD-A19).
+
+        Query ``?which=active|last|meal`` optional. Never meal-thin-only for
+        the default/session body — meal ids only as side fields.
+        """
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            graph_session_view_to_inspect,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        which_raw = (qs.get("which") or [None])[0]
+        which = (
+            which_raw.strip().lower()
+            if isinstance(which_raw, str) and which_raw.strip()
+            else None
+        )
+        if which is not None and which not in ("active", "last", "meal"):
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "which must be active|last|meal",
+                    "session": None,
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        reg = self._traversal_registry()
+        if reg is None:
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "which": "none",
+                    "session": None,
+                    "has_active": False,
+                    "has_last_session": False,
+                    "meal_keep_count": 0,
+                    "meal_keep_ids": [],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                    "honesty": {
+                        "flag_off": not trav_flags["directed_traversal_enabled"],
+                        "no_session": True,
+                        "note": "traversal registry unavailable",
+                    },
+                },
+            )
+            return
+
+        try:
+            bind = getattr(reg, "bind_settings", None)
+            if callable(bind) and mem_cfg is not None:
+                bind(mem_cfg)
+            view = reg.get_graph_session_view(which=which)
+            payload = graph_session_view_to_inspect(view)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("GET /api/memory/graph/session failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "which": "none",
+                    "session": None,
+                    "has_active": False,
+                    "has_last_session": False,
+                    "meal_keep_count": 0,
+                    "meal_keep_ids": [],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        sess = payload.get("session")
+        no_session = sess is None and which != "meal"
+        note = None
+        if not trav_flags["directed_traversal_enabled"]:
+            note = (
+                "directed_traversal_enabled is off — showing sticky last walk "
+                "if any; new walks disabled"
+            )
+        elif no_session:
+            note = "no walk session yet (active or last)"
+        elif which == "meal":
+            note = "meal-thin keep ids only (not full glass last walk)"
+
+        payload.update(
+            {
+                "ok": True,
+                "memory": flags,
+                "traversal": trav_flags,
+                "honesty": {
+                    "flag_off": not trav_flags["directed_traversal_enabled"],
+                    "no_session": no_session,
+                    "note": note,
+                },
+            }
+        )
+        self._json(200, payload)
+
+    def _get_memory_graph_neighbors(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/graph/neighbors?atom_id= — 1-hop multi-kind expand.
+
+        Structural always (when store open). Semantic hops only if index + warm
+        encoder. Snippets only — no raw vectors. Soft-empty with reasons.
+        """
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            graph_edge_to_inspect,
+            resolve_neighbor_k,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        atom_id_raw = (qs.get("atom_id") or [None])[0]
+        atom_id = (
+            atom_id_raw.strip()
+            if isinstance(atom_id_raw, str) and atom_id_raw.strip()
+            else None
+        )
+        k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
+        allow_sem_raw = (qs.get("allow_semantic") or ["1"])[0]
+        allow_semantic = str(allow_sem_raw).strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
+        if not atom_id:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "atom_id required",
+                    "neighbors": [],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        graph = self._graph_view_for_api()
+        if graph is None:
+            # Fall back: try store health message.
+            err = flags.get("error") or "store_unavailable"
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": err,
+                    "neighbors": [],
+                    "count": 0,
+                    "omitted_reason": "store_unavailable",
+                    "query": {
+                        "atom_id": atom_id,
+                        "k": k,
+                        "allow_semantic": allow_semantic,
+                    },
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        store = getattr(graph, "_store", None)
+        # 404 only when atom itself is missing.
+        if store is not None:
+            try:
+                atom = store.get_atom(atom_id)
+            except Exception:  # noqa: BLE001
+                atom = None
+            if atom is None:
+                self._json(
+                    404,
+                    {
+                        "ok": False,
+                        "error": "atom not found",
+                        "neighbors": [],
+                        "query": {
+                            "atom_id": atom_id,
+                            "k": k,
+                            "allow_semantic": allow_semantic,
+                        },
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+
+        try:
+            edges = graph.neighbors(
+                atom_id,
+                k=k,
+                allow_semantic=allow_semantic,
+            )
+            expand_meta = dict(getattr(graph, "last_expand_meta", None) or {})
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("memory graph neighbor expand failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "neighbors": [],
+                    "count": 0,
+                    "omitted_reason": "expand_failed",
+                    "query": {
+                        "atom_id": atom_id,
+                        "k": k,
+                        "allow_semantic": allow_semantic,
+                    },
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        neighbors = [graph_edge_to_inspect(e, store) for e in edges]
+        omit: str | None = None
+        if not neighbors:
+            omit = (
+                expand_meta.get("error")
+                or expand_meta.get("semantic_reason")
+                or "no_hits"
+            )
+            # Prefer structural-empty honesty over semantic-only reason.
+            if expand_meta.get("error") == "atom_not_found":
+                omit = "atom_not_found"
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "neighbors": neighbors,
+                "count": len(neighbors),
+                "omitted_reason": omit if not neighbors else None,
+                "expand_meta": {
+                    "expand_truncated": bool(expand_meta.get("expand_truncated")),
+                    "elapsed_ms": expand_meta.get("elapsed_ms"),
+                    "semantic_reason": expand_meta.get("semantic_reason"),
+                    "parent_of_reason": expand_meta.get("parent_of_reason"),
+                },
+                "query": {
+                    "atom_id": atom_id,
+                    "k": k,
+                    "allow_semantic": allow_semantic,
+                },
+                "memory": flags,
+                "traversal": trav_flags,
+            },
+        )
+
+    def _post_memory_graph_traverse(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/graph/traverse — optional operator debug walk.
+
+        Same validation + budgets as tools. Flags-off fail-closed
+        (``ok: false``, ``error_reason: traverse_disabled``) — no budget bypass.
+        Body: ``action`` = start|step|finish|abandon|inspect (+ action fields).
+        """
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            enrich_session_for_glass,
+        )
+        from elyra.memory.traverse import (
+            ERROR_TRAVERSE_DISABLED,
+            inspect_atoms,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        if not isinstance(body, dict):
+            body = {}
+
+        action = str(body.get("action") or body.get("op") or "").strip().lower()
+        if action not in ("start", "step", "finish", "abandon", "inspect"):
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "action must be start|step|finish|abandon|inspect",
+                    "error_reason": "bad_action",
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        reg = self._traversal_registry()
+        if reg is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error_reason": "traverse_unavailable",
+                    "error": "traversal registry unavailable",
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        # Always bind live settings before enable check / mutate.
+        try:
+            bind = getattr(reg, "bind_settings", None)
+            if callable(bind) and mem_cfg is not None:
+                bind(mem_cfg)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Fail closed when directed traversal is off (parity with tools).
+        if not reg.enabled():
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error_reason": ERROR_TRAVERSE_DISABLED,
+                    "status": "disabled",
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        # Inspect is read-only against the store (still requires flag on so
+        # glass debug cannot bypass the same gate as tools).
+        if action == "inspect":
+            raw_ids = body.get("atom_ids") or body.get("ids") or []
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+            try:
+                store = self.worker._ensure_memory_store()  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error_reason": "store_unavailable",
+                        "error": str(exc) or "store_unavailable",
+                        "previews": [],
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+            if store is None:
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error_reason": "store_unavailable",
+                        "error": flags.get("error") or "store_unavailable",
+                        "previews": [],
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+            previews = inspect_atoms(store, raw_ids, settings=mem_cfg)
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "action": "inspect",
+                    "previews": [p.to_dict() for p in previews],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        graph = self._graph_view_for_api()
+        if graph is None and action in ("start", "step", "finish"):
+            # finish may run without graph when keep_adjacent is off; still try.
+            if action != "finish":
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error_reason": "store_unavailable",
+                        "error": flags.get("error") or "store_unavailable",
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+
+        session_id = body.get("session_id")
+        if session_id is not None:
+            session_id = str(session_id)
+
+        try:
+            if action == "start":
+                goal = str(body.get("goal") or "explore")
+                seed_query = body.get("seed_query")
+                if seed_query is not None:
+                    seed_query = str(seed_query)
+                seed_ids = body.get("seed_atom_ids") or body.get("seed_ids") or []
+                if not isinstance(seed_ids, list):
+                    seed_ids = []
+                moment_id = body.get("moment_id")
+                if moment_id is not None:
+                    moment_id = str(moment_id)
+                # Optional budget overrides (cannot exceed settings hard max —
+                # TraversalRegistry clamps via min()).
+                overrides: dict[str, int] = {}
+                for key in ("max_steps", "max_nodes", "max_depth", "max_keep"):
+                    if key in body and body[key] is not None:
+                        try:
+                            overrides[key] = int(body[key])
+                        except (TypeError, ValueError):
+                            pass
+                result = reg.start(
+                    graph,
+                    goal=goal,
+                    seed_query=seed_query,
+                    seed_atom_ids=[str(x) for x in seed_ids],
+                    moment_id=moment_id,
+                    budget_overrides=overrides or None,
+                )
+            elif action == "step":
+                expand_ids = body.get("expand_ids") or []
+                keep_ids = body.get("keep_ids") or []
+                if not isinstance(expand_ids, list):
+                    expand_ids = []
+                if not isinstance(keep_ids, list):
+                    keep_ids = []
+                scratchpad = body.get("scratchpad")
+                if scratchpad is not None:
+                    scratchpad = str(scratchpad)
+                result = reg.step(
+                    graph,
+                    session_id=session_id,
+                    expand_ids=[str(x) for x in expand_ids],
+                    keep_ids=[str(x) for x in keep_ids],
+                    scratchpad=scratchpad,
+                )
+            elif action == "finish":
+                keep_ids = body.get("keep_ids")
+                if keep_ids is not None and not isinstance(keep_ids, list):
+                    keep_ids = []
+                summary_hint = body.get("summary_hint")
+                if summary_hint is not None:
+                    summary_hint = str(summary_hint)
+                result = reg.finish(
+                    graph,
+                    session_id=session_id,
+                    keep_ids=(
+                        [str(x) for x in keep_ids] if keep_ids is not None else None
+                    ),
+                    summary_hint=summary_hint,
+                )
+            else:  # abandon
+                reason = str(body.get("reason") or "abandoned")
+                result = reg.abandon(session_id=session_id, reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("POST /api/memory/graph/traverse action=%s failed", action)
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error_reason": "traverse_error",
+                    "error": str(exc) or type(exc).__name__,
+                    "action": action,
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        out = dict(result)
+        out["action"] = action
+        out["memory"] = flags
+        out["traversal"] = trav_flags
+        # Attach glass-enriched session view when useful (finish returns full).
+        if action == "finish" and out.get("ok") and out.get("session_id"):
+            out["session"] = enrich_session_for_glass(
+                {k: v for k, v in out.items() if k not in ("ok", "thin_surface", "memory", "traversal", "action")}
+            )
+        # Also expose sticky glass view for operator after any mutating call.
+        try:
+            gview = reg.get_graph_session_view()
+            from elyra.memory.inspect import graph_session_view_to_inspect
+
+            out["graph_view"] = graph_session_view_to_inspect(gview)
+        except Exception:  # noqa: BLE001
+            pass
+        self._json(200, out)
 
     # ── Glass session + identity panel helpers ───────────────────────────
 
