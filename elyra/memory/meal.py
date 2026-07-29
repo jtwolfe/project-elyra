@@ -961,6 +961,8 @@ def select_semantic(
     now: datetime | str | None = None,
     exclude_atom_ids: set[str] | None = None,
     deadline_ms: int | None = None,
+    wait_for_completion: bool | None = None,
+    wait_max_ms: int | None = None,
 ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
     """Select supporting semantic neighbours under a hard wall-clock budget.
 
@@ -970,6 +972,13 @@ def select_semantic(
     ``exclude_atom_ids`` (KD11). Parcel hits map to parent atoms (label
     ``semantic/parcel→parent``).
 
+    Wait-for-select (CPU dogfood): when ``wait_for_completion`` / settings
+    ``semantic_wait_for_select`` is on, use ``semantic_wait_max_ms`` as the
+    ceiling, drop the snappy encode sub-budget discard, and keep a finished
+    encode when the vector is usable. Mid-pack still respects the absolute
+    deadline. Fail-fast paths (no_index / cold encoder / empty_seed) are
+    unchanged.
+
     Empty-pack omit priority (KD-R6): timeout > encoder > no_index >
     empty_seed > min_score > deduped > no_hits. ``select_meta`` carries
     channel / channel_reason / hit counters for MealPackage (PR-R2).
@@ -977,19 +986,39 @@ def select_semantic(
     cfg = settings or MemorySettings()
     t0 = _now_ms()
     cap = max(0, int(cap_tokens))
+    wait = (
+        bool(wait_for_completion)
+        if wait_for_completion is not None
+        else bool(getattr(cfg, "semantic_wait_for_select", True))
+    )
     if cap <= 0:
         # Semantic share can be zero under temporal floor; still leave a breadcrumb.
         return [], None, {
             "elapsed_ms": 0,
             "packed": 0,
             "cap_tokens": 0,
+            "wait": wait,
+            "deadline_ms": 0,
         }
 
-    max_ms = (
-        int(deadline_ms)
-        if deadline_ms is not None
-        else int(cfg.semantic_select_max_ms)
-    )
+    # Absolute ceiling: explicit deadline wins; else wait ceiling or snappy budget.
+    if deadline_ms is not None:
+        max_ms = int(deadline_ms)
+    elif wait:
+        raw_wait = (
+            wait_max_ms
+            if wait_max_ms is not None
+            else getattr(cfg, "semantic_wait_max_ms", 15_000)
+        )
+        try:
+            from elyra.runtime.semantic_wait import clamp_wait_max_ms  # noqa: PLC0415
+
+            max_ms = clamp_wait_max_ms(int(raw_wait))
+        except Exception:  # noqa: BLE001
+            # Fallback if runtime helper unavailable: clamp inline.
+            max_ms = max(1_000, min(120_000, int(raw_wait)))
+    else:
+        max_ms = int(cfg.semantic_select_max_ms)
     if max_ms < 0:
         max_ms = 0
 
@@ -1001,7 +1030,11 @@ def select_semantic(
         *,
         meta: dict[str, Any] | None = None,
     ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
-        base: dict[str, Any] = {"elapsed_ms": int(_now_ms() - t0)}
+        base: dict[str, Any] = {
+            "elapsed_ms": int(_now_ms() - t0),
+            "wait": wait,
+            "deadline_ms": max_ms,
+        }
         if meta:
             base.update(meta)
         return [], reason, base
@@ -1019,11 +1052,15 @@ def select_semantic(
     if over_deadline():
         return early(SEMANTIC_OMIT_TIMEOUT)
 
-    # Query encode under remaining deadline and encode_query_max_ms sub-budget.
-    encode_budget = min(
-        max(0, int(cfg.encode_query_max_ms)),
-        max(0, max_ms - int(_now_ms() - t0)),
-    )
+    # Query encode. Wait mode: remaining total is the only budget; snappy mode
+    # also caps with encode_query_max_ms and discards after a slow encode.
+    if wait:
+        encode_budget = max(0, max_ms - int(_now_ms() - t0))
+    else:
+        encode_budget = min(
+            max(0, int(cfg.encode_query_max_ms)),
+            max(0, max_ms - int(_now_ms() - t0)),
+        )
     t_enc0 = _now_ms()
     try:
         query_vec = embedder.encode_text(seed)
@@ -1031,12 +1068,16 @@ def select_semantic(
         _LOG.exception("semantic query encode failed")
         return early(SEMANTIC_OMIT_ENCODER)
     enc_elapsed = _now_ms() - t_enc0
-    if enc_elapsed > encode_budget or over_deadline():
-        return early(SEMANTIC_OMIT_TIMEOUT)
     if not query_vec:
         return early(SEMANTIC_OMIT_ENCODER)
+    if wait:
+        # Keep finished encode when vector is good; absolute ceiling still
+        # applies during search/pack (mid-pack), not as a post-encode discard.
+        pass
+    elif enc_elapsed > encode_budget or over_deadline():
+        return early(SEMANTIC_OMIT_TIMEOUT)
 
-    if over_deadline():
+    if not wait and over_deadline():
         return early(SEMANTIC_OMIT_TIMEOUT)
 
     if now is None:
@@ -1197,6 +1238,8 @@ def select_semantic(
         "deduped": deduped_count,
         "packed": len(packed),
         "elapsed_ms": int(_now_ms() - t0),
+        "wait": wait,
+        "deadline_ms": max_ms,
     }
 
     if packed:

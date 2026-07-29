@@ -7,7 +7,7 @@ Out of scope: HTTP/web, tool internals, glass UI panels.
 
 Public API: enqueue_wake, enqueue_user_message, interject, resolve_user_input,
 busy, active_moment_id, pending_wait, status_snapshot, reset_runtime_state,
-set_continuous_enabled, set_dev_speed.
+set_continuous_enabled, set_dev_speed, set_semantic_wait.
 Must not import runtime.web.
 """
 
@@ -17,6 +17,7 @@ import logging
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
 
@@ -49,6 +50,12 @@ from elyra.runtime.dev_speed import (
     effective_hop_delay_seconds,
     load_dev_speed_runtime,
     save_dev_speed_runtime,
+)
+from elyra.runtime.semantic_wait import (
+    SemanticWaitState,
+    load_semantic_wait_runtime,
+    save_semantic_wait_runtime,
+    semantic_wait_status_block,
 )
 from elyra.presence.interject import (
     REASON_BUFFER_FULL,
@@ -450,6 +457,10 @@ class PresenceWorker:
         )
         # Dev-speed pacing (default ON): inter-hop pause for followable glass.
         self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
+        # Semantic wait-for-select (default ON): keep slow encodes for meal pack.
+        self._semantic_wait: SemanticWaitState = load_semantic_wait_runtime(
+            paths.data_dir
+        )
 
         # Stretch 2 memory store (lazy). Defaults write_atoms=true / enabled=true
         # → never opened; meal still legacy until PR6.
@@ -564,6 +575,51 @@ class PresenceWorker:
                     or abs(prev_delay - float(self._dev_speed.delay_seconds)) > 1e-9
                 ),
                 "dev_speed": block,
+            }
+
+    def set_semantic_wait(
+        self,
+        *,
+        enabled: bool | None = None,
+        max_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Toggle / set meal semantic wait ceiling; persist runtime JSON.
+
+        When wait is on, ``compose_meal`` → ``select_semantic`` uses a long
+        ceiling and keeps finished slow encodes (CPU dogfood). Does not invent
+        wakes. When both args are None, returns current state.
+        """
+        with self._lock:
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "semantic_wait": semantic_wait_status_block(self._semantic_wait),
+                }
+            prev_en = bool(self._semantic_wait.enabled)
+            prev_max = int(self._semantic_wait.max_ms)
+            if enabled is not None:
+                self._semantic_wait.enabled = bool(enabled)
+            if max_ms is not None:
+                from elyra.runtime.semantic_wait import clamp_wait_max_ms
+
+                self._semantic_wait.max_ms = clamp_wait_max_ms(max_ms)
+            try:
+                save_semantic_wait_runtime(
+                    self.paths.data_dir,
+                    enabled=bool(self._semantic_wait.enabled),
+                    max_ms=int(self._semantic_wait.max_ms),
+                )
+            except OSError as exc:
+                _LOG.warning("persist semantic_wait.json failed: %s", exc)
+            block = semantic_wait_status_block(self._semantic_wait)
+            return {
+                "ok": True,
+                "changed": (
+                    prev_en != bool(self._semantic_wait.enabled)
+                    or prev_max != int(self._semantic_wait.max_ms)
+                ),
+                "semantic_wait": block,
             }
 
     def reset_runtime_state(
@@ -990,6 +1046,7 @@ class PresenceWorker:
                     pending_moment_continues=pending_continues,
                 ),
                 "dev_speed": dev_speed_status_block(self._dev_speed),
+                "semantic_wait": semantic_wait_status_block(self._semantic_wait),
                 "context": context_block,
                 "memory": self._memory_status_block(),
             }
@@ -1792,6 +1849,15 @@ class PresenceWorker:
                     )
                     budget = int(loop.sliding_input_tokens)
                     mem_cfg = self.settings.memory
+                    # Overlay runtime wait toggle so first outer + re-outer both
+                    # honor glass/API wait-for-select (CPU dogfood).
+                    with self._lock:
+                        sw = self._semantic_wait
+                        mem_cfg = replace(
+                            mem_cfg,
+                            semantic_wait_for_select=bool(sw.enabled),
+                            semantic_wait_max_ms=int(sw.max_ms),
+                        )
                     # Semantic select: pass index (cheap open) + warm embedder
                     # only (KD12 — no cold model load inside rebuild_outer).
                     meal_index = None

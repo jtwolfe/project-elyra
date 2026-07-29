@@ -48,7 +48,7 @@ Phase 2 adds **associative / semantic** structure as a *supporting* context chan
 | Parcel split (opt-in) | `elyra/memory/parcel.py` — before truncate when `parcels_enabled` |
 | Lance emb columns + migration + preserve | `elyra/memory/lance_store.py` — `upsert_vectors`, KD19 read-merge-write; **eager joint-copy repair**; **Lance-native `search_vectors`** |
 | EmbeddingIndex + freshness | `elyra/memory/index.py` — `resolve_search_channel`, hybrid recent-buffer, honest `search_mode`, safe optimize (KD-R3) |
-| Meal semantic channel | `elyra/memory/meal.py` — `select_semantic` via auto→concrete; omit `no_hits` / `deduped`; `semantic_select_meta` |
+| Meal semantic channel | `elyra/memory/meal.py` — `select_semantic` via auto→concrete; omit `no_hits` / `deduped`; `semantic_select_meta`; **wait-for-select default ON** (CPU dogfood: keep slow encodes under `semantic_wait_max_ms`, runtime toggle) |
 | Budget split v2 | `elyra/memory/tokens.py` — `split_memory_budget_v2` + temporal floor |
 | Settings knobs | `elyra/memory/config.py` / `Settings.memory` (+ rectification knobs; validated in `elyra/settings.py`) |
 | Idle drain + optimize + meal wiring | `elyra/presence/worker.py` — idle repair continue; rebuild notes |

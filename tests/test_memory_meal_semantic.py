@@ -327,6 +327,7 @@ def test_select_semantic_timeout_on_slow_index(store):
         semantic_enabled=True,
         semantic_select_max_ms=20,
         encode_query_max_ms=15,
+        semantic_wait_for_select=False,
     )
     items, reason, meta = select_semantic(
         store,
@@ -342,6 +343,7 @@ def test_select_semantic_timeout_on_slow_index(store):
     assert items == []
     assert reason == SEMANTIC_OMIT_TIMEOUT
     assert meta is not None
+    assert meta.get("wait") is False
 
 
 def test_select_semantic_min_score_filters_all(store):
@@ -666,6 +668,7 @@ def test_compose_meal_semantic_timeout_still_returns_meal(store):
         semantic_enabled=True,
         semantic_select_max_ms=15,
         encode_query_max_ms=10,
+        semantic_wait_for_select=False,
     )
     pkg = compose_meal(
         store,
@@ -1188,3 +1191,196 @@ def test_select_semantic_true_empty_channel_is_no_hits(store):
     assert meta["raw_hits"] == 0
     assert meta.get("deduped", 0) == 0
     assert meta.get("dedupe_probe") is True
+
+
+# ---------------------------------------------------------------------------
+# Wait-for-select (CPU dogfood: keep slow encode when wait on)
+# ---------------------------------------------------------------------------
+
+
+class _SlowEncodeEmbedder:
+    """Warm embedder that sleeps during encode_text (simulates CPU Nemotron)."""
+
+    is_loaded = True
+
+    def __init__(self, sleep_s: float = 0.08):
+        self.sleep_s = sleep_s
+        self._inner = MockEmbedder()
+
+    def health(self) -> dict[str, Any]:
+        return {"ok": True, "backend": "mock", "device": "cpu"}
+
+    def encode_text(self, text: str) -> list[float]:
+        time.sleep(self.sleep_s)
+        return list(self._inner.encode_text(text))
+
+
+def test_select_semantic_wait_on_keeps_slow_encode(store):
+    """Wait on: encode >50ms still packs hits; no post-encode timeout discard."""
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="gardens in summer",
+        moment_id="m_past",
+        atom_id="a_past",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_past", score=0.9, channel="joint", atom=past)
+    idx = _FixedHitIndex([hit])
+    emb = _SlowEncodeEmbedder(sleep_s=0.08)
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=50,
+        encode_query_max_ms=30,
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=5000,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="talking about gardens")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert items[0].atom_id == "a_past"
+    assert meta is not None
+    assert meta["wait"] is True
+    assert meta["deadline_ms"] == 5000
+    assert meta["packed"] == 1
+    assert meta["elapsed_ms"] >= 50
+
+
+def test_select_semantic_wait_off_slow_encode_timeout(store):
+    """Wait off: same slow encode is discarded as timeout (snappy omit)."""
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="gardens in summer",
+        moment_id="m_past",
+        atom_id="a_past",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_past", score=0.9, channel="joint", atom=past)
+    idx = _FixedHitIndex([hit])
+    emb = _SlowEncodeEmbedder(sleep_s=0.08)
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=50,
+        encode_query_max_ms=30,
+        semantic_wait_for_select=False,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="talking about gardens")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_TIMEOUT
+    assert meta is not None
+    assert meta["wait"] is False
+
+
+def test_select_semantic_wait_on_still_fail_fast_empty_seed(store):
+    """Wait on does not change empty_seed / cold encoder fail-fast."""
+    emb = _SlowEncodeEmbedder(sleep_s=0.5)
+    idx = _FixedHitIndex([])
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=15000,
+    )
+    t0 = time.perf_counter()
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", kind="tool", text="tool noise")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    elapsed = time.perf_counter() - t0
+    assert items == []
+    assert reason == SEMANTIC_OMIT_EMPTY_SEED
+    assert meta is not None
+    assert meta["wait"] is True
+    # Must not sleep on encode for empty seed.
+    assert elapsed < 0.2
+
+
+def test_select_semantic_wait_on_still_fail_fast_cold_encoder(store):
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=15000,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=_FixedHitIndex([]),
+        embedder=_ColdEmbedder(),
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed body")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_ENCODER
+    assert meta is not None
+    assert meta["wait"] is True
+
+
+def test_select_semantic_wait_kwargs_override_settings(store):
+    """Explicit wait_for_completion kwargs win over MemorySettings."""
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="cats",
+        moment_id="m_past",
+        atom_id="a_past",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_past", score=0.88, channel="joint", atom=past)
+    emb = _SlowEncodeEmbedder(sleep_s=0.08)
+    # Settings say wait off; kwargs force wait on with short ceiling that still
+    # covers 80ms encode.
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=20,
+        encode_query_max_ms=10,
+        semantic_wait_for_select=False,
+        semantic_wait_max_ms=1000,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=_FixedHitIndex([hit]),
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="thinking of cats")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        wait_for_completion=True,
+        wait_max_ms=5000,
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert meta is not None
+    assert meta["wait"] is True
+    assert meta["deadline_ms"] == 5000

@@ -818,6 +818,36 @@
                 />
               </div>
             </div>
+            <div class="card continuous-card status-card" id="semantic-wait-card">
+              <div class="card-head">
+                <strong>Wait for semantic</strong>
+                <span id="semantic-wait-badge" class="badge">on</span>
+              </div>
+              <p class="muted status-helper">
+                Keep slow meal semantic encodes (CPU Nemotron). Default ON (15s ceiling, clamp 1–120s).
+              </p>
+              <div class="continuous-control">
+                <label class="toggle-label" for="semantic-wait-toggle">
+                  <input type="checkbox" id="semantic-wait-toggle" />
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">Wait for semantic select</span>
+                </label>
+                <div id="semantic-wait-meta" class="continuous-meta muted">up to 15s for encode+search</div>
+              </div>
+              <div class="status-row" style="margin-top: 0.75rem">
+                <span class="status-label">Max (ms)</span>
+                <input
+                  type="number"
+                  id="semantic-wait-max-ms"
+                  class="status-input"
+                  min="1000"
+                  max="120000"
+                  step="1000"
+                  value="15000"
+                  aria-label="Semantic wait max milliseconds"
+                />
+              </div>
+            </div>
           </div>
           <div class="reset-actions">
             <button type="button" id="reset-open-btn" class="btn-danger">
@@ -825,7 +855,7 @@
             </button>
             <p class="muted reset-hint">
               Clears moments, chat, goals, wakes/timers, sandbox, and tool drafts.
-              Preserves identity, users, continuous/dev-speed toggles, provider/usage prefs,
+              Preserves identity, users, continuous/dev-speed/semantic-wait toggles, provider/usage prefs,
               secrets (API key), skills/local, and tools/local.
             </p>
           </div>
@@ -858,6 +888,7 @@
           <li class="will-keep">identity/self, users</li>
           <li class="will-keep">continuous.json enabled flag</li>
           <li class="will-keep">dev_speed.json (pace hops toggle + delay)</li>
+          <li class="will-keep">semantic_wait.json (wait-for-select toggle + max_ms)</li>
           <li class="will-keep">data/secrets/ (API key)</li>
           <li class="will-keep">data/runtime/provider.json (model / credential source prefs)</li>
           <li class="will-keep">data/runtime/usage.json (usage meter + hard-stop override flag)</li>

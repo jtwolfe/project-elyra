@@ -521,6 +521,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._patch_dev_speed(body)
             return
 
+        if path == "/api/semantic-wait":
+            self._patch_semantic_wait(body)
+            return
+
         if path == "/api/provider":
             self._patch_provider(body)
             return
@@ -2309,6 +2313,39 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         result = self.worker.set_dev_speed(
             enabled=enabled if isinstance(enabled, bool) else None,
             delay_seconds=float(delay) if delay is not None else None,
+        )
+        if result.get("error") == "resetting":
+            self._json(503, result)
+            return
+        self._json(200, result)
+
+    def _patch_semantic_wait(self, body: dict[str, Any]) -> None:
+        """PATCH /api/semantic-wait — ``{ "enabled"?: bool, "max_ms"?: number }``.
+
+        Wait-for-select for meal semantic channel. Default product ON
+        (15000ms, clamp 1000–120000). When on, slow query encodes are kept.
+        """
+        if "enabled" not in body and "max_ms" not in body:
+            self._json(
+                400,
+                {"ok": False, "error": "enabled or max_ms required"},
+            )
+            return
+        enabled = body.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            self._json(400, {"ok": False, "error": "enabled must be a boolean"})
+            return
+        max_ms = body.get("max_ms")
+        if max_ms is not None:
+            if isinstance(max_ms, bool) or not isinstance(max_ms, (int, float)):
+                self._json(
+                    400,
+                    {"ok": False, "error": "max_ms must be a number"},
+                )
+                return
+        result = self.worker.set_semantic_wait(
+            enabled=enabled if isinstance(enabled, bool) else None,
+            max_ms=int(max_ms) if max_ms is not None else None,
         )
         if result.get("error") == "resetting":
             self._json(503, result)

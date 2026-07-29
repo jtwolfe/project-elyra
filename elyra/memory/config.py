@@ -95,6 +95,10 @@ class MemorySettings:
     encode_queue_max: int = 1024
     encode_query_max_ms: int = 30  # sub-budget of semantic_select_max_ms
     semantic_select_max_ms: int = 50  # total encode+search+pack in rebuild_outer
+    # Wait-for-select: when on, raise ceiling and keep slow encode results
+    # (CPU Nemotron dogfood). Runtime toggle may overlay via worker.
+    semantic_wait_for_select: bool = True
+    semantic_wait_max_ms: int = 15_000  # absolute ceiling when wait is on
     # OQ4: flip historical none → pending when semantic+embed on (idle catch-up).
     embed_catchup_max: int = 500  # max none atoms marked pending per process life
     embed_catchup_horizon_hours: float = 168.0  # only t_start within this lookback

@@ -416,6 +416,7 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.encode_max_attempts",
             "memory.encode_query_max_ms",
             "memory.semantic_select_max_ms",
+            "memory.semantic_wait_max_ms",
             "memory.semantic_top_k",
             "memory.ann_recent_buffer_max",
             "memory.ann_full_search_below",

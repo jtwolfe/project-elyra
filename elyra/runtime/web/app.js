@@ -154,6 +154,10 @@ const devSpeedToggle = $("#dev-speed-toggle");
 const devSpeedMeta = $("#dev-speed-meta");
 const devSpeedBadge = $("#dev-speed-badge");
 const devSpeedDelay = $("#dev-speed-delay");
+const semanticWaitToggle = $("#semantic-wait-toggle");
+const semanticWaitMeta = $("#semantic-wait-meta");
+const semanticWaitBadge = $("#semantic-wait-badge");
+const semanticWaitMaxMs = $("#semantic-wait-max-ms");
 
 /** Active glass session user (who is typing) — not orient USER on pure work. */
 let sessionUserId =
@@ -212,6 +216,12 @@ let devSpeedInFlight = false;
 let lastDevSpeedEnabled = true;
 /** Last known dev_speed.delay_seconds from status. */
 let lastDevSpeedDelay = 8;
+/** True while PATCH /api/semantic-wait is in flight. */
+let semanticWaitInFlight = false;
+/** Last known semantic_wait.enabled from status. */
+let lastSemanticWaitEnabled = true;
+/** Last known semantic_wait.max_ms from status. */
+let lastSemanticWaitMaxMs = 15000;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
 /** True while PATCH /api/provider is in flight. */
@@ -1712,6 +1722,56 @@ async function patchDevSpeed(body) {
   }
 }
 
+function renderSemanticWait(s) {
+  const d = (s && s.semantic_wait) || {};
+  const enabled = d.enabled !== undefined ? Boolean(d.enabled) : true;
+  const maxMs =
+    typeof d.max_ms === "number" && !Number.isNaN(d.max_ms)
+      ? d.max_ms
+      : 15000;
+  lastSemanticWaitEnabled = enabled;
+  lastSemanticWaitMaxMs = maxMs;
+
+  if (!semanticWaitInFlight) {
+    if (semanticWaitToggle) semanticWaitToggle.checked = enabled;
+    if (semanticWaitMaxMs && document.activeElement !== semanticWaitMaxMs) {
+      semanticWaitMaxMs.value = String(Math.round(maxMs));
+    }
+  }
+  if (semanticWaitBadge) {
+    semanticWaitBadge.textContent = enabled ? "on" : "off";
+    semanticWaitBadge.classList.toggle("badge-open", enabled);
+  }
+  if (semanticWaitMeta) {
+    semanticWaitMeta.textContent = enabled
+      ? `up to ${Math.round(maxMs / 1000)}s for encode+search`
+      : "off — snappy omit (50ms)";
+  }
+}
+
+async function patchSemanticWait(body) {
+  if (semanticWaitInFlight) return;
+  semanticWaitInFlight = true;
+  if (semanticWaitToggle) semanticWaitToggle.disabled = true;
+  if (semanticWaitMaxMs) semanticWaitMaxMs.disabled = true;
+  try {
+    await fetchJson("/api/semantic-wait", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshStatus();
+  } catch (err) {
+    if (semanticWaitToggle) semanticWaitToggle.checked = lastSemanticWaitEnabled;
+    if (semanticWaitMaxMs) semanticWaitMaxMs.value = String(lastSemanticWaitMaxMs);
+    showNotice(String(err.message || err));
+  } finally {
+    semanticWaitInFlight = false;
+    if (semanticWaitToggle) semanticWaitToggle.disabled = false;
+    if (semanticWaitMaxMs) semanticWaitMaxMs.disabled = false;
+  }
+}
+
 /**
  * Sandbox pill (KD27): ready / warming / unusable next to provider pill.
  * No secrets, no host paths — only coarse states from status.sandbox.
@@ -1778,6 +1838,7 @@ async function refreshStatus() {
   updateChatActivity(s);
   renderContinuous(s);
   renderDevSpeed(s);
+  renderSemanticWait(s);
   renderWaitBar(s.pending_wait || null);
   return s;
 }
@@ -3588,6 +3649,19 @@ if (devSpeedDelay) {
     const n = Number(devSpeedDelay.value);
     if (!Number.isFinite(n)) return;
     patchDevSpeed({ delay_seconds: n });
+  });
+}
+
+if (semanticWaitToggle) {
+  semanticWaitToggle.addEventListener("change", () => {
+    patchSemanticWait({ enabled: Boolean(semanticWaitToggle.checked) });
+  });
+}
+if (semanticWaitMaxMs) {
+  semanticWaitMaxMs.addEventListener("change", () => {
+    const n = Number(semanticWaitMaxMs.value);
+    if (!Number.isFinite(n)) return;
+    patchSemanticWait({ max_ms: n });
   });
 }
 
