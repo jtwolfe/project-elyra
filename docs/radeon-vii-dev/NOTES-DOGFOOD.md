@@ -217,3 +217,90 @@ Do **not** check Gate B from this session. HIP probe green alone is insufficient
 ---
 
 *PR4 ops record: A6–A7 blocked on A5 red; dogfood template filled; Gate B unchecked; bug stays Open; product worker not exercised.*
+
+---
+
+## PR5 follow-on — gfx906 Tensile inject → A5/A7 green (2026-07-29, same host)
+
+**Problem:** Official `torch 2.13.0+rocm7.2` wheel HIP-enumerates Radeon VII but **ships no** `TensileLibrary_lazy_gfx906.dat` in bundled rocBLAS (only gfx908/90a/942/950 + RDNA).
+
+**Fix (operator, not a product code change):** inject gfx906 Tensile assets from **Arch `rocblas` 7.2.4-2** into the venv torch library path:
+
+```text
+.venv/lib/python3.12/site-packages/torch/lib/rocblas/library/*gfx906*
+```
+
+Reproducible helper (re-run after any torch reinstall):
+
+```bash
+python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py
+```
+
+**Script fix:** `reset_peak_memory` must call `torch.cuda.init()` first on ROCm (otherwise `reset_peak_memory_stats(0)` → `Invalid device argument` before any alloc).
+
+### Outcome after inject
+
+| Gate | Result |
+|------|--------|
+| A1–A4 `01` | **PASS** |
+| A5 `02` matmul | **PASS** (~75 ms fp16 256×256 on `cuda:0`) |
+| A6–A7 `03` encode | **PASS** — G1–G9 |
+| Product `NemotronEmbedder(device="rocm")` | **PASS** — params on `cuda:0` |
+
+### 03_nemotron_encode measured (LuxPrimata)
+
+```text
+model_id=nvidia/omni-embed-nemotron-3b
+param_device=cuda:0
+dtype=float16
+load_s≈18.5
+encode_a_s≈2.2 (first) / encode_b_s≈0.10
+dim=2048
+l2_norm≈1.0
+cosine_a_b≈0.80
+vram_peak_bytes≈9580803584 (~8.9–9.0 GiB)
+hip=7.2.53211
+exit=0
+```
+
+### Dogfood — venv ROCm smoke after Tensile inject (2026-07-29)
+
+| Field | Value |
+|-------|--------|
+| Status of BUG-mem-gpu-01 | **Still Open** (standalone script path green; **product worker / meal path not yet dogfooded**) |
+| torch_version | 2.13.0+rocm7.2 |
+| hip_version | 7.2.53211 |
+| device_name | AMD Radeon VII (gfx906); torch `"AMD Radeon Graphics"` |
+| A1–A7 pass/fail | **A1–A7 all PASS** (after `00` Tensile inject) |
+| load_ms | ~18500 |
+| encode_ms | ~2200 first text; ~100 subsequent |
+| vram_peak_bytes | ~9580803584 |
+| attn_impl if known | product tries flash_attention_2 → sdpa/eager fallback (not logged as string this run) |
+| product worker path | **not exercised** (`elyra.toml` still local `embed_device=cpu`) |
+| Notes | Real GPU load+encode demonstrated via `03` + direct `NemotronEmbedder(device="rocm")`. Do **not** claim product GPU embed default-on fixed. Re-inject Tensile after torch reinstall. |
+
+### Gate B
+
+| Checkbox | State |
+|----------|--------|
+| Standalone ROCm encode smoke (G1–G9) | **Checked** (scripts path) |
+| Product worker GPU dogfood | **Unchecked** — pin still `cpu` |
+| Product semantic default-on | **No** — still Gate B / product decision |
+
+### How to re-run
+
+```bash
+cd /home/jim/Workspace/project-elyra
+source .venv/bin/activate
+export PYTHONPATH=. ROCM_PATH=/opt/rocm
+python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py   # no-op if already present
+python docs/radeon-vii-dev/scripts/01_device_probe.py
+python docs/radeon-vii-dev/scripts/02_matmul_smoke.py
+python docs/radeon-vii-dev/scripts/03_nemotron_encode.py
+```
+
+To try **product** path intentionally (separate session): stop presence → set `embed_device = "rocm"` (or `auto`) locally → `elyra start` → confirm health device. Keep BUG open until that dogfood is deliberate and stable.
+
+---
+
+*PR5 ops: Tensile inject unlocked A5/A7; real Nemotron on cuda:0 demonstrated; product worker still pinned CPU; bug remains Open.*

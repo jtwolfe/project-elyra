@@ -4,7 +4,7 @@
 **Design:** [design-rocm-venv-gpu-embed-smoke.md](../design-rocm-venv-gpu-embed-smoke.md) §4  
 **Runbook:** [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md)
 
-**Status:** Scripts present (`01` / `02` / `03` / `_common.py`). On cu130 (pre-swap) they **fail closed** (exit 2). Green A5/A7 requires ROCm torch on LuxPrimata after the venv switch.
+**Status:** Scripts present (`00` / `01` / `02` / `03` / `_common.py`). On LuxPrimata after ROCm venv + **gfx906 Tensile inject**, A1–A7 green (2026-07-29). On cu130 (pre-swap) they **fail closed** (exit 2).
 
 ---
 
@@ -12,12 +12,13 @@
 
 | Script | Role | Gate |
 |--------|------|------|
+| `00_inject_gfx906_tensile.py` | Copy gfx906 Tensile from Arch `rocblas` pkg into venv torch | **Prerequisite** for A5 on official `+rocm7.2` wheel |
 | `01_device_probe.py` | HIP torch + product `probe_devices` / `select_device` agree | A1–A4 |
 | `02_matmul_smoke.py` | Tiny fp16 matmul on `cuda:0` | **A5 HARD GATE** — stop before model load on ISA fail |
 | `03_nemotron_encode.py` | Real Nemotron text encode on GPU with G1–G9 asserts | A6–A7 |
 | `_common.py` | Shared helpers: param device, VRAM floor, GPU-proof asserts | used by 03 |
 
-**Order is normative:** `01` → `02` → only if exit 0 → `03`.  
+**Order is normative:** `00` (if missing Tensile) → `01` → `02` → only if exit 0 → `03`.  
 **Do not** run `03` if `02` fails with ISA / arch unsupported.
 
 ---
@@ -39,7 +40,10 @@ cd /path/to/project-elyra
 source .venv/bin/activate
 export PYTHONPATH=.
 export ROCM_PATH=/opt/rocm
+python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py
 ```
+
+**Why `00`:** Official PyTorch ROCm wheels list modern CDNA/RDNA Tensile arches but **not gfx906**. Arch `rocblas` still ships the gfx906 library files; we copy them into the wheel’s `torch/lib/rocblas/library/`. Re-run after any torch reinstall.
 
 ---
 

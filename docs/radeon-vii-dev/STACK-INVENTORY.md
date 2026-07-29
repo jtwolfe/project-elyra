@@ -1,12 +1,12 @@
 # Radeon VII / ROCm stack inventory (dev)
 
-**Branch:** `execute-plan/859daddb-pr-4-nemotron-gpu-encode-notes-bug-dogfood`  
-**Recorded:** 2026-07-29T11:24:25Z (baseline) · **updated:** 2026-07-29T12:09:00Z (post ROCm switch) · **PR4 docs:** 2026-07-29  
+**Branch:** `grok-improv-radeonvii`  
+**Recorded:** 2026-07-29T11:24:25Z (baseline) · **updated:** 2026-07-29 PM (A5/A7 green after Tensile inject)  
 **Host:** LuxPrimata  
 **Purpose:** Hardware + package + venv baseline for an isolated Radeon VII embed shim.  
 **Policy:** Python ML libs stay in the **project venv** (not system `python-pytorch-rocm`). Host ROCm is system packages only.
 
-> **PR3+PR4 status (2026-07-29):** Project `.venv` switched to `torch==2.13.0+rocm7.2`. **A1–A4 green; A5 HARD FAIL** — official rocm7.2 wheel rocBLAS has **no gfx906** TensileLibrary (available: gfx908/90a/942/950 + RDNA3/4). A6–A7 / `03` **not run** (A5 hard stop). BUG-mem-gpu-01 dogfood template filled; bug remains **Open**. See [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md).
+> **2026-07-29 PM:** `torch==2.13.0+rocm7.2` + **Arch rocblas gfx906 Tensile inject** into the wheel library → **A1–A7 PASS** (real Nemotron encode on `cuda:0`, ~9 GiB VRAM). Helper: `scripts/00_inject_gfx906_tensile.py`. Product worker still local `embed_device=cpu`. BUG-mem-gpu-01 **Open**. See [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md).
 
 ---
 

@@ -205,8 +205,14 @@ def assert_params_on_cuda0(embedder: Any) -> str:
 
 
 def reset_peak_memory(torch: Any, device_index: int = 0) -> None:
-    """G9: reset peak memory stats so floor measures this run."""
+    """G9: reset peak memory stats so floor measures this run.
+
+    ROCm/PyTorch: ``reset_peak_memory_stats`` can raise
+    ``RuntimeError: Invalid device argument`` until the CUDA/HIP
+    context is initialized — call ``torch.cuda.init()`` first.
+    """
     if torch.cuda.is_available():
+        torch.cuda.init()
         torch.cuda.reset_peak_memory_stats(device_index)
         torch.cuda.synchronize(device_index)
 

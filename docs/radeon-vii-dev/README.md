@@ -14,11 +14,12 @@
 | Hardware Radeon VII / gfx906 | **OK** — seen by `rocminfo` |
 | Host ROCm 7.2.4 Tier A | **OK** |
 | Host Tier B (rocBLAS / MIOpen) | Not installed (ISA miss — not used as workaround) |
-| Venv ROCm torch | **Installed** `2.13.0+rocm7.2` — HIP OK; A1–A4 PASS |
-| A5 matmul / gfx906 kernels | **FAIL** — rocBLAS no gfx906 Tensile |
-| A6–A7 / encode smoke | **NOT RUN** (A5 hard stop) |
-| Embed path effective device | **CPU** (local `embed_device=cpu` pin; uncommitted) |
-| BUG-mem-gpu-01 | **Open** — dogfood template filled; see [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) |
+| Venv ROCm torch | **Installed** `2.13.0+rocm7.2` — HIP OK |
+| gfx906 Tensile inject | **Required** — `scripts/00_inject_gfx906_tensile.py` (Arch rocblas → venv torch) |
+| A5 matmul / gfx906 kernels | **PASS** (after inject) |
+| A6–A7 / encode smoke | **PASS** — G1–G9; ~9 GiB VRAM; param `cuda:0` |
+| Product worker embed device | **CPU pin** (local uncommitted) — worker GPU dogfood not done |
+| BUG-mem-gpu-01 | **Open** — standalone green; product path not closed; see [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) |
 
 See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package baseline.
 
@@ -76,7 +77,7 @@ Full procedure: [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md).
 
 ---
 
-## Quick start (after scripts land)
+## Quick start (LuxPrimata / after ROCm venv install)
 
 ```bash
 cd /path/to/project-elyra
@@ -84,13 +85,15 @@ source .venv/bin/activate   # Python 3.12.8 only
 export PYTHONPATH=.
 export ROCM_PATH=/opt/rocm
 
-# Only after VENV-ROCM-SWITCH.md completed and A5 green:
+# Official +rocm7.2 wheel lacks gfx906 Tensile — inject once (or after torch reinstall):
+python docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py
+
 python docs/radeon-vii-dev/scripts/01_device_probe.py
-python docs/radeon-vii-dev/scripts/02_matmul_smoke.py   # HARD GATE
+python docs/radeon-vii-dev/scripts/02_matmul_smoke.py   # HARD GATE — must exit 0
 python docs/radeon-vii-dev/scripts/03_nemotron_encode.py
 ```
 
-Do **not** run the switch or smokes while presence/pytest are using this venv.
+Do **not** run the switch or smokes while presence/pytest are using this venv for GPU work.
 
 ---
 

@@ -609,17 +609,17 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | Field | Value |
 |-------|--------|
 | **Status** | **Open** (defer to Gate B / runtime) |
-| **Severity now** | Med — dogfood encode on CPU; ROCm torch installs but **gfx906 matmul fails** (no Tensile), so GPU encode is unusable on official rocm7.2 wheel |
-| **Severity later** | High when product default-on wants real Nemotron latency under meal budgets |
-| **Area** | `elyra/memory/embed/runtime.py`, device select (`embed_device`), optional `memory-embed` extra / ROCm wheels |
-| **Dogfood** | 2026-07-28 — Radeon VII / ROCm env; Nemotron effective CPU. **2026-07-29** — venv ROCm smoke: A1–A4 PASS, A5 FAIL (rocBLAS no gfx906), A6–A7 NOT RUN; product worker **not exercised**. Ops record: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
+| **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product worker still CPU-pinned; wheel reinstall loses inject |
+| **Severity later** | High when product default-on wants durable ROCm without manual Tensile inject |
+| **Area** | `elyra/memory/embed/runtime.py`, device select (`embed_device`), optional `memory-embed` extra / ROCm wheels / venv Tensile inject |
+| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile in wheel). **2026-07-29 PM** — inject Arch rocblas gfx906 Tensile into torch wheel → A1–A7 **PASS**; `03` real encode on `cuda:0` (~9 GiB VRAM). Product worker **not exercised**. Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
 | **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md); **not** Phase 2 rectification core (KD-R10). Rectification only optional device honesty in health |
 
 ### Symptom
 
-Operator requests GPU/ROCm for Omni-Embed-Nemotron; runtime lands on CPU (or mock). Idle encode and optional warm paths are slower than hardware suggests; does not by itself empty joint search once PR-R1 repair/encode is in place.
+Operator requests GPU/ROCm for Omni-Embed-Nemotron; without operator steps, official `+rocm7.2` wheel **enumerates** the device but **aborts matmul** (no gfx906 Tensile in the wheel). Presence stays on CPU when `embed_device=cpu` (recommended pin) or fails compute if forced onto ROCm without the inject.
 
-**2026-07-29 addendum:** Official `torch 2.13.0+rocm7.2` on LuxPrimata enumerates the HIP device (`rocm=True`) but **aborts on matmul** — wheel rocBLAS has no TensileLibrary for **gfx906**. Standalone encode smoke was not run (A5 hard stop). This is stronger than “fell back to CPU”: GPU compute is currently **broken** on this wheel for Radeon VII, not merely unused.
+**2026-07-29 PM addendum:** Injecting `TensileLibrary_lazy_gfx906.dat` (+ kernels) from Arch `rocblas` 7.2.4-2 into the venv torch `rocblas/library` unlocks matmul and full Nemotron load/encode on Radeon VII. Helper: `docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py`. This is **operator local**, not a product packaging fix.
 
 ### Related design intent
 
@@ -627,28 +627,28 @@ Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presen
 
 ### Fix directions (later)
 
-1. ROCm wheel / quant matrix validation on operator hardware — **try older indexes or source Tensile with gfx906** after the 7.2 failure is recorded (see NOTES).
+1. Durable gfx906 support: document inject (done) and/or ship/vendor Tensile with wheels; re-run inject after torch reinstall.
 2. Vectors health: requested vs effective device honesty (optional polish).
 3. Do **not** block meal/channel product path on GPU presence.
-4. Gate B checklist before product default-on of semantic flags — **Gate B remains unchecked** (encode smoke did not pass).
+4. Gate B: standalone smoke green; **product worker GPU dogfood still required** before semantic default-on.
 
-### Dogfood — venv ROCm smoke (2026-07-29)
+### Dogfood — venv ROCm smoke after Tensile inject (2026-07-29)
 
 | Field | Value |
 |-------|--------|
-| Status of BUG-mem-gpu-01 | **Still Open** (script path only / product worker: not exercised) |
+| Status of BUG-mem-gpu-01 | **Still Open** (script path green; product worker not exercised) |
 | torch_version | 2.13.0+rocm7.2 |
 | hip_version | 7.2.53211 |
-| device_name | AMD Radeon VII (gfx906); torch name may say "AMD Radeon Graphics" |
-| A1–A7 pass/fail | A1–A4 PASS; A5 FAIL (rocBLAS no gfx906 Tensile); A6–A7 NOT RUN (A5 hard stop) |
-| load_ms | n/a (model not loaded) |
-| encode_ms | n/a |
-| vram_peak_bytes | n/a |
-| attn_impl if known | n/a |
-| product worker path | **not exercised** |
-| Notes | Official rocm7.2 wheel enumerates HIP device but matmul aborts; no "GPU embed fixed"; standalone smoke only under docs/radeon-vii-dev |
+| device_name | AMD Radeon VII (gfx906); torch `"AMD Radeon Graphics"` |
+| A1–A7 pass/fail | **A1–A7 PASS** (after `00_inject_gfx906_tensile`) |
+| load_ms | ~18500 |
+| encode_ms | ~2200 first / ~100 subsequent |
+| vram_peak_bytes | ~9580803584 |
+| attn_impl if known | product tries flash_attention_2 then falls back |
+| product worker path | **not exercised** (local `embed_device=cpu`) |
+| Notes | Real GPU load+encode via `03` + `NemotronEmbedder(device="rocm")`. No “product GPU embed fixed.” Re-inject after torch reinstall. |
 
-Full A5 error, freezes, and A6–A7 block decision: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md). Spike Gate B “ROCm attempt succeeded” stays **unchecked**. Local product pin `embed_device=cpu` kept (uncommitted) while ROCm torch remains for ISA experiments.
+Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) PR3/PR4 sections.
 
 ### Related
 
