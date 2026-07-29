@@ -1095,9 +1095,11 @@ class LanceMemoryStore:
     ) -> dict[str, Any]:
         """Best-effort Lance IVF/ANN create on ``emb_{channel}`` (KD-R3).
 
-        Callers (``LanceEmbeddingIndex.optimize``) must pre-check n>0 and
-        ``ann_ivf_min_vectors``. This method does **not** claim index readiness
-        itself — it only invokes Lance ``create_index`` when a table is present.
+        Callers (``LanceEmbeddingIndex.optimize``) should pre-check n>0 and
+        ``ann_ivf_min_vectors``. Defense-in-depth: this method **raises** when
+        the target column has zero ready vectors so a direct call cannot invoke
+        Lance IVF/KMeans on an empty column. Does **not** claim index readiness
+        itself — only invokes Lance ``create_index`` when a table is present.
 
         Raises on hard failure so the index façade can record ``error:{col}:…``
         without setting ``ann_index_built``.
@@ -1113,6 +1115,10 @@ class LanceMemoryStore:
             self._check_open()
             if not self._vector_schema_ok:
                 raise RuntimeError("vector schema unavailable; cannot create_index")
+            # KD-R3 defense-in-depth: never create_index on empty channel.
+            n = int(self._vectors_by_channel_unlocked().get(ch) or 0)
+            if n == 0:
+                raise ValueError(f"no_vectors:{col}")
             table = self._table
             if table is None or not hasattr(table, "create_index"):
                 raise RuntimeError("no Lance table.create_index available")
@@ -1124,7 +1130,7 @@ class LanceMemoryStore:
                 )
             except TypeError:
                 table.create_index(col)
-            return {"ok": True, "channel": ch, "column": col}
+            return {"ok": True, "channel": ch, "column": col, "n": n}
 
     def joint_repair_remaining(self) -> int:
         """Count ready sole-modality rows still missing emb_joint."""

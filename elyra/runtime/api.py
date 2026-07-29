@@ -1006,11 +1006,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         rebuild = getattr(self.worker, "rebuild_vector_index", None)
         if not callable(rebuild):
+            err = "rebuild_vector_index not available"
             self._json(
                 501,
                 {
                     "ok": False,
-                    "error": "rebuild_vector_index not available",
+                    "error": err,
+                    "notes": [err],
+                    "note": err,
                     "memory": flags,
                 },
             )
@@ -1019,11 +1022,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             result = rebuild(max_ms=budget)
         except Exception as exc:  # noqa: BLE001
             _LOG.exception("POST /api/memory/vectors/rebuild failed")
+            err = str(exc) or type(exc).__name__
             self._json(
                 200,
                 {
                     "ok": False,
-                    "error": str(exc) or type(exc).__name__,
+                    "error": err,
+                    "notes": [err],
+                    "note": err,
                     "memory": flags,
                 },
             )

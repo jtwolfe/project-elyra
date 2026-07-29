@@ -1400,17 +1400,23 @@ class PresenceWorker:
         if store is None and (mem_cfg.write_atoms or mem_cfg.enabled or mem_cfg.semantic_enabled):
             store = self._ensure_memory_store()
         if store is None:
+            err = "store_unavailable"
             return {
                 "ok": False,
-                "error": "store_unavailable",
+                "error": err,
                 "optimized": False,
+                "notes": [err],
+                "note": err,
             }
         index = self._ensure_embedding_index()
         if index is None:
+            err = "index_unavailable"
             return {
                 "ok": False,
-                "error": "index_unavailable",
+                "error": err,
                 "optimized": False,
+                "notes": [err],
+                "note": err,
             }
         try:
             seed_fn = getattr(index, "seed_buffer", None)

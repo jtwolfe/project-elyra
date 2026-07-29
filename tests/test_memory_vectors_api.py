@@ -297,10 +297,17 @@ def test_vectors_rebuild_endpoint(paths):
         assert code == 200, body
         assert "ok" in body
         assert "memory" in body
+        # KD-R3 rebuild honesty: notes[] always present for glass.
+        assert isinstance(body.get("notes"), list), body
+        assert isinstance(body.get("note"), str), body
         # optimized may be False on Null index; must not 500.
         assert body.get("error") in (None, "index_unavailable", "store_unavailable") or (
             body.get("ok") is True or body.get("optimized") is False
         )
+        # JSONL → NullEmbeddingIndex: skip path should explain (not silent empty notes).
+        if body.get("optimized") is False and not body.get("error"):
+            joined = " ".join(str(n) for n in body["notes"]).lower()
+            assert "null" in joined or body["notes"], body
         # Bad max_ms
         code, bad = h.post("/api/memory/vectors/rebuild", {"max_ms": "nope"})
         assert code == 400
