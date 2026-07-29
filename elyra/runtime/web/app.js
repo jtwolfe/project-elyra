@@ -2299,14 +2299,9 @@ function renderMemoryContext(data) {
   head.appendChild(meta);
   memoryContextBody.appendChild(head);
 
-  // PR-R2: one muted line for semantic omit / channel meta (honest empty state).
-  const semLine = formatSemanticSelectLine(meal);
-  if (semLine) {
-    const p = document.createElement("p");
-    p.className = "muted memory-semantic-meta";
-    p.textContent = semLine;
-    memoryContextBody.appendChild(p);
-  }
+  // Semantic channel note (omit / packed) — always visible when select ran.
+  const semNote = renderSemanticChannelNote(meal);
+  if (semNote) memoryContextBody.appendChild(semNote);
 
   // PR-A3: one muted line for directed_keep omit / pack meta.
   const dkLine = formatDirectedKeepLine(meal);
@@ -2347,13 +2342,17 @@ function renderMemoryContext(data) {
   }
 }
 
-/** One muted Context line: semantic reason + channel (PR-R2 / KD-R6). */
+/**
+ * Human-readable semantic select status for Memory → Context.
+ * PR-R2 / KD-R6: include dedupe counts so operators see retrieval ran
+ * even when no semantic items were packed.
+ */
 function formatSemanticSelectLine(meal) {
   if (!meal) return "";
   const reason = meal.semantic_omitted_reason || null;
   const sm = meal.semantic_select_meta || null;
   if (!reason && !sm) return "";
-  const parts = ["semantic"];
+  const parts = [];
   if (reason) {
     parts.push(`omitted (${reason})`);
   } else if (sm && sm.packed != null) {
@@ -2365,12 +2364,90 @@ function formatSemanticSelectLine(meal) {
       : `channel=${sm.channel}`;
     parts.push(chBit);
   }
+  // Dedupe: primary path may show raw_hits=0 (excludes in search) while probe
+  // counted matches already in temporal/episodic — surface the count.
   if (reason === "deduped") {
-    parts.push("matched but already in temporal/episodic");
+    const n =
+      sm && sm.deduped != null
+        ? Number(sm.deduped)
+        : sm && sm.raw_hits != null
+          ? Number(sm.raw_hits)
+          : null;
+    if (n != null && !Number.isNaN(n) && n > 0) {
+      parts.push(
+        `${n} match${n === 1 ? "" : "es"} already in temporal/episodic (not re-listed as semantic)`
+      );
+    } else {
+      parts.push(
+        "matches already in temporal/episodic (not re-listed as semantic)"
+      );
+    }
   } else if (reason === "no_hits" && sm && sm.channel) {
     parts.push(`no candidates on ${sm.channel}`);
+  } else if (reason === "timeout") {
+    parts.push("encode/search exceeded meal wall-clock");
+  } else if (reason === "empty_seed") {
+    parts.push("no observation/speak/model text on open moment");
+  } else if (reason === "encoder") {
+    parts.push("embedder not warm or encode failed");
+  } else if (reason === "no_index") {
+    parts.push("no vector index");
   }
+  if (sm && sm.deduped != null && reason !== "deduped" && Number(sm.deduped) > 0) {
+    parts.push(`also_deduped=${sm.deduped}`);
+  }
+  if (sm && sm.elapsed_ms != null) {
+    const ms = Number(sm.elapsed_ms);
+    if (!Number.isNaN(ms)) {
+      parts.push(ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+    }
+  }
+  if (sm && sm.wait === true) parts.push("wait=on");
+  if (sm && sm.wait === false) parts.push("wait=off");
+  if (!parts.length) return "";
   return parts.join(" · ");
+}
+
+/** Small Context panel card so semantic omit (esp. dedupe) is easy to see. */
+function renderSemanticChannelNote(meal) {
+  const line = formatSemanticSelectLine(meal);
+  if (!line) return null;
+  const reason = meal.semantic_omitted_reason || null;
+  const sm = meal.semantic_select_meta || null;
+  const card = document.createElement("div");
+  card.className = "card memory-channel-card memory-semantic-note";
+  if (reason === "deduped") {
+    card.classList.add("memory-semantic-note-deduped");
+  } else if (reason) {
+    card.classList.add("memory-semantic-note-omit");
+  } else {
+    card.classList.add("memory-semantic-note-ok");
+  }
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = "Semantic";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  if (reason === "deduped") {
+    const n = sm && sm.deduped != null ? Number(sm.deduped) : null;
+    badge.textContent =
+      n != null && !Number.isNaN(n) ? `deduped · ${n}` : "deduped";
+  } else if (reason) {
+    badge.textContent = `omitted · ${reason}`;
+  } else if (sm && sm.packed != null) {
+    badge.textContent = `packed · ${sm.packed}`;
+  } else {
+    badge.textContent = "select";
+  }
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+  const body = document.createElement("p");
+  body.className = "memory-semantic-meta";
+  body.textContent = line;
+  card.appendChild(body);
+  return card;
 }
 
 /** One muted Context line: directed_keep omit / pack (PR-A3). */

@@ -2709,6 +2709,27 @@ body {
   margin: 0.15rem 0 0.45rem;
 }
 
+/* Semantic select note on Memory → Context (omit / dedupe visibility). */
+.memory-semantic-note {
+  border-left: 3px solid var(--border);
+}
+.memory-semantic-note-deduped {
+  border-left-color: var(--warn, #c9a227);
+}
+.memory-semantic-note-omit {
+  border-left-color: var(--muted);
+}
+.memory-semantic-note-ok {
+  border-left-color: var(--ok, #3d9a5f);
+}
+.memory-semantic-note .memory-semantic-meta {
+  margin: 0.25rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--muted);
+  word-break: break-word;
+}
+
 .memory-snippet {
   margin: 0;
   white-space: pre-wrap;

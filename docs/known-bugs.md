@@ -123,6 +123,67 @@ notion in `scripts/live_eval` — any fix should extend or reuse that language.
 
 ---
 
+## BUG-wake-02 — No post-restart sanitation / “I just restarted” awareness
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open (defer) |
+| **Severity now** | Med nuisance — after restart (or after long idle), timed-out waits and stale context can resume **old** threads (e.g. haiku collection) instead of recent work |
+| **Severity later** | Med–High when denser memory + continuous make “zombie” threads more common |
+| **Area** | Presence startup (`_startup_recover`, `_fire_due_unlocked`), wait/timer rehydrate, orient / meal seed, rest vs work skills on `wait_timeout` |
+| **Dogfood** | 2026-07-29 — process restart ~05:15Z; wait `183dea3c…` (armed after continuity chat, prompt about continuity) expired **05:16:16Z** → moment `6dcd352d…` **`wait_timeout`**; model reasoning chose *“Completing the promised funny-haiku collection”* from older glass/sandbox residue (`tmp/funny_haiku_collection.md`, prior joke/haiku moments), not the wait prompt and not open goal `g_ff66028e8f9b` continuity. Continuous was **off**. |
+
+### Symptom
+
+Operator restarts Elyra (or process comes back near a due wait). Shortly after, a moment runs that:
+
+- is triggered by a **normal** durable mechanism (`wait_timeout`, due timer, recovered claimed wake, stale `task_ready`, …), **not** a special “restart” wake; and
+- the model treats residual **old** context (glass, sandbox files, episodic jokes) as live unfinished work, ignoring **recency** of the latest social/goal thread.
+
+Feels like “restart restarted the haiku problem” even when the enqueue path is just “wait expired while process was alive again.”
+
+### Reproduction shape
+
+1. Multi-thread dogfood: older haiku/joke arc + newer continuity/agency chat.
+2. Social moment ends with `wait_user` (e.g. 300s) whose **prompt** is about the new thread.
+3. Restart (or leave process down) such that due-fire runs when the wait expires.
+4. `wait_timeout` moment opens; first hop free-chooses old sandbox/haiku promise from context residue.
+
+Same class can apply without restart if a long wait expires while glass still shows ancient threads — restart makes the discontinuity more obvious to the operator.
+
+### What already works (do not regress)
+
+| Intent | Where |
+|--------|--------|
+| Crash: re-enqueue durable claimed work; cancel fragile social claims | `queue.recover_claimed` |
+| Close interrupted open moments | `moments.recover_open_moments` |
+| Rehydrate waits/timers; fire due → `wait_timeout` / timer wakes | `timers` + `_fire_due_unlocked` / startup recover |
+| Continuous OFF does not invent `moment_continue` | continuous policy |
+
+**Gap:** recovery is **mechanical** (don’t lose durable wakes). There is **no** POST-like hygiene that says: *process boundary or long gap → re-check recency of latest social/goal context before treating residual glass/sandbox as active work.*
+
+### Fix directions (when we address it)
+
+1. **Startup / first-claim policy (“POST” test):** after `_startup_recover` (and optionally first idle claim after boot), inject a short **host observation** or orient flag, e.g. `runtime_event=process_start` + boot time + “prefer most recent social/goal; do not resume abandoned sandbox threads without reconfirming.” Not necessarily a full moment — could be a one-shot orient line for the next social/work wake only.
+2. **Wait-timeout skill bias:** on `wait_timeout`, prefer **rest** or **re-ask** unless there is a **ready ledger task** or wait prompt that clearly continues work; deprioritize free-form “finish old promise from glass” unless linked to open goal/task.
+3. **Recency gate for free work:** if last user message / last social moment is older than X minutes relative to this wake, require explicit ready task or new user message before multi-hop sandbox work (timers that only re-prompt are fine).
+4. **Optional:** on restart, **do not fire** waits that expired while the process was down without a single **startup summary** moment (or demote them to a compact “missed waits” list) — more aggressive; product call.
+5. **Sanitation beyond timers:** same recency test for recovered `task_ready` / empty-reason timers (ties **BUG-wake-01**).
+
+### Explicit non-goals
+
+- Do not drop legitimate due work forever on every restart.
+- Do not disable `wait_timeout` as a wake kind.
+- Do not require GPU/semantic wait fixes for this class (**BUG-mem-gpu-01** / semantic wait are separate).
+
+### Related
+
+- **BUG-wake-01** — stale timer/`task_ready` storms (complement: cancel when work already done).
+- Continuous / rest skills: honest idle vs invented busywork.
+- Memory meal seed: `empty_seed` on timeout wakes does **not** prevent glass history from steering the model.
+
+---
+
 ## BUG-usage-01 — Usage metering / SuperGrok pacing still not working as intended
 
 | Field | Value |

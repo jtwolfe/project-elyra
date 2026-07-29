@@ -128,3 +128,19 @@ def test_glass_assets_wire_semantic_wait() -> None:
     # Off copy uses live effective/snappy from status — not hardcode-only 50.
     assert "effective_select_max_ms" in js
     assert "snappy omit" in js
+
+
+def test_glass_assets_wire_semantic_context_dedupe_note() -> None:
+    """Memory Context panel shows semantic omit/dedupe note (not silent empty)."""
+    root = Path(__file__).resolve().parents[1]
+    web = root / "elyra" / "runtime" / "web"
+    js = (web / "app.js").read_text(encoding="utf-8")
+    css = (web / "style.css").read_text(encoding="utf-8")
+
+    assert "function formatSemanticSelectLine" in js
+    assert "function renderSemanticChannelNote" in js
+    assert "renderSemanticChannelNote(meal)" in js
+    assert "memory-semantic-note-deduped" in js
+    assert "already in temporal/episodic" in js
+    assert "memory-semantic-note-deduped" in css
+    assert ".memory-semantic-note" in css
