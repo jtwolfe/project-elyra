@@ -1430,3 +1430,51 @@ def test_select_semantic_wait_on_packs_when_encode_past_deadline(store):
     assert meta["deadline_ms"] == 50
     assert meta["packed"] == 1
     assert meta["elapsed_ms"] >= 50
+
+
+def test_select_semantic_wait_on_dedupe_probe_past_deadline(store):
+    """Wait + late encode + exclude-filtered empty search → still probe deduped.
+
+    Without the wait probe gate, over_deadline would skip the empty-channel
+    probe and mis-report no_hits after a paid encode.
+    """
+    past = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="already packed elsewhere",
+        moment_id="m_past",
+        atom_id="a_dup",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+    hit = ScoredAtom(atom_id="a_dup", score=0.95, channel="joint", atom=past)
+    idx = _FilteringHitIndex([hit])
+    emb = _SlowEncodeEmbedder(sleep_s=0.08)
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=50,
+        encode_query_max_ms=30,
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=15_000,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed late dedupe probe")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        exclude_atom_ids={"a_dup"},
+        wait_for_completion=True,
+        deadline_ms=50,  # encode already past; probe must still run
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_DEDUPED
+    assert meta is not None
+    assert meta["wait"] is True
+    assert meta["raw_hits"] == 0
+    assert meta["deduped"] >= 1
+    assert meta.get("dedupe_probe") is True
+    assert idx.search_calls >= 2  # primary + probe

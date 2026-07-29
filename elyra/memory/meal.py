@@ -1247,11 +1247,13 @@ def select_semantic(
     # Product indexes filter exclude_atom_ids inside search, so pack-side
     # dedup never sees those hits. Probe without exclude to distinguish
     # "channel empty" (no_hits) from "only already-in-package" (deduped).
+    # Under wait, still probe after a late encode (paid work → honest omit);
+    # snappy mode skips the probe when already past the wall-clock budget.
     if (
         raw_hit_count == 0
         and exclude
         and concrete is not None
-        and not over_deadline()
+        and (wait or not over_deadline())
     ):
         probe_deduped = _probe_deduped_against_exclude(
             store,
