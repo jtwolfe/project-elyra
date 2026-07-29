@@ -4,7 +4,7 @@
 **Design:** [design-rocm-venv-gpu-embed-smoke.md](../design-rocm-venv-gpu-embed-smoke.md) §4  
 **Runbook:** [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md)
 
-**Status:** Scripts land in a later PR (PR2). This README is the contract so review can proceed before hardware green.
+**Status:** Scripts present (`01` / `02` / `03` / `_common.py`). On cu130 (pre-swap) they **fail closed** (exit 2). Green A5/A7 requires ROCm torch on LuxPrimata after the venv switch.
 
 ---
 
@@ -61,13 +61,24 @@ On current cu130 (pre-swap) hosts, scripts should **fail closed** (exit 2) — g
 ## Example invocation
 
 ```bash
+cd /path/to/project-elyra
+source .venv/bin/activate   # 3.12.8 only
+export PYTHONPATH=.
+export ROCM_PATH=/opt/rocm
+
 python docs/radeon-vii-dev/scripts/01_device_probe.py
+echo exit=$?
+
 python docs/radeon-vii-dev/scripts/02_matmul_smoke.py   # HARD GATE
-# only if exit 0:
+echo exit=$?
+
+# only if 02 exit 0:
 python docs/radeon-vii-dev/scripts/03_nemotron_encode.py \
   --text-a "passage: a red cube on a table" \
   --text-b "passage: a blue sphere in space"
 ```
+
+Helpers live in `_common.py`: `require_hip`, `require_select_rocm`, `parameter_device` / `assert_params_on_cuda0` (`# noqa: SLF001` on `_model`), `VRAM_FLOOR_BYTES` (default `1_000_000_000`), `assert_gpu_nemotron` (G1–G9).
 
 ---
 
