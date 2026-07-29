@@ -609,51 +609,54 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | Field | Value |
 |-------|--------|
 | **Status** | **Open** (defer to Gate B / runtime) |
-| **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product worker still CPU-pinned; wheel reinstall loses inject |
-| **Severity later** | High when product default-on wants durable ROCm without manual Tensile inject |
-| **Area** | `elyra/memory/embed/runtime.py`, device select (`embed_device`), optional `memory-embed` extra / ROCm wheels / venv Tensile inject |
-| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile in wheel). **2026-07-29 PM** — inject Arch rocblas gfx906 Tensile into torch wheel → A1–A7 **PASS**; `03` real encode on `cuda:0` (~9 GiB VRAM). Product worker **not exercised**. Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
+| **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **moment/meal encode path not verified**; wheel reinstall loses inject |
+| **Severity later** | High when product default-on wants durable ROCm + encode during live moments under meal budgets |
+| **Area** | `elyra/memory/embed/runtime.py`, encode queue / idle worker, moment/meal integration, device select (`embed_device`), ROCm wheels / venv Tensile inject |
+| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; operator **suspects embeddings may not run during a moment** (not yet proven). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
 | **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md); **not** Phase 2 rectification core (KD-R10). Rectification only optional device honesty in health |
 
 ### Symptom
 
-Operator requests GPU/ROCm for Omni-Embed-Nemotron; without operator steps, official `+rocm7.2` wheel **enumerates** the device but **aborts matmul** (no gfx906 Tensile in the wheel). Presence stays on CPU when `embed_device=cpu` (recommended pin) or fails compute if forced onto ROCm without the inject.
+Operator requests GPU/ROCm for Omni-Embed-Nemotron; without operator steps, official `+rocm7.2` wheel **enumerates** the device but **aborts matmul** (no gfx906 Tensile in the wheel). Presence stays on CPU when `embed_device=cpu` or fails compute if forced onto ROCm without the inject.
 
 **2026-07-29 PM addendum:** Injecting `TensileLibrary_lazy_gfx906.dat` (+ kernels) from Arch `rocblas` 7.2.4-2 into the venv torch `rocblas/library` unlocks matmul and full Nemotron load/encode on Radeon VII. Helper: `docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py`. This is **operator local**, not a product packaging fix.
 
+**2026-07-29 product-path observation (unconfirmed):** After setting local `embed_device = "rocm"`, presence appears to **load** Nemotron onto GPU, but the operator is **not sure embeddings actually run during a moment** (encode queue / idle / meal-path vs load-only). Treat as open dogfood — may be timing, queue, flags, or observation gap; **not** sealed as a separate root cause yet.
+
 ### Related design intent
 
-Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presence. Core imports must not require torch/GPU.
+Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presence. Core imports must not require torch/GPU. Standalone script success ≠ product moment encode.
 
 ### Fix directions (later)
 
 1. Durable gfx906 support: document inject (done) and/or ship/vendor Tensile with wheels; re-run inject after torch reinstall.
 2. Vectors health: requested vs effective device honesty (optional polish).
 3. Do **not** block meal/channel product path on GPU presence.
-4. Gate B: standalone smoke green; **product worker GPU dogfood still required** before semantic default-on.
+4. Gate B: standalone smoke green; **product worker + in-moment encode dogfood still required** before semantic default-on.
+5. **Moment encode dogfood (next):** during a live moment, confirm encode queue activity, atom vectors land, health/device stay ROCm, and semantic expand is not load-only. Capture moment id + log snippets when repro’d.
 
 ### Dogfood — venv ROCm smoke after Tensile inject (2026-07-29)
 
 | Field | Value |
 |-------|--------|
-| Status of BUG-mem-gpu-01 | **Still Open** (script path green; product worker not exercised) |
+| Status of BUG-mem-gpu-01 | **Still Open** (script path green; product moment encode **unverified**) |
 | torch_version | 2.13.0+rocm7.2 |
 | hip_version | 7.2.53211 |
 | device_name | AMD Radeon VII (gfx906); torch `"AMD Radeon Graphics"` |
 | A1–A7 pass/fail | **A1–A7 PASS** (after `00_inject_gfx906_tensile`) |
 | load_ms | ~18500 |
-| encode_ms | ~2200 first / ~100 subsequent |
+| encode_ms | ~2200 first / ~100 subsequent (**standalone `03` only**) |
 | vram_peak_bytes | ~9580803584 |
 | attn_impl if known | product tries flash_attention_2 then falls back |
-| product worker path | **not exercised** (local `embed_device=cpu`) |
-| Notes | Real GPU load+encode via `03` + `NemotronEmbedder(device="rocm")`. No “product GPU embed fixed.” Re-inject after torch reinstall. |
+| product worker path | local `embed_device=rocm` after inject; **GPU load seen**; **in-moment encode not confirmed** |
+| Notes | Real GPU load+encode via `03` + `NemotronEmbedder(device="rocm")`. No “product GPU embed fixed.” Re-inject after torch reinstall. Dig later: does encode run during a moment? |
 
-Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) PR3/PR4 sections.
+Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) PR3/PR4 sections. Product-path note: same file PR5 / product follow-on.
 
 ### Related
 
 - **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
-- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — PR3 switch + PR4 template; bug stays **Open**.
+- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions; bug stays **Open**.
 - [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii-dev/STACK-INVENTORY.md) — post-switch inventory / A5 status.
 
 ---

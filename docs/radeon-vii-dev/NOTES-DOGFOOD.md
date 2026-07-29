@@ -276,7 +276,7 @@ exit=0
 | encode_ms | ~2200 first text; ~100 subsequent |
 | vram_peak_bytes | ~9580803584 |
 | attn_impl if known | product tries flash_attention_2 → sdpa/eager fallback (not logged as string this run) |
-| product worker path | **not exercised** (`elyra.toml` still local `embed_device=cpu`) |
+| product worker path | later same day: local `embed_device=rocm` (was `cpu`); GPU **load** seen; **in-moment encode not confirmed** |
 | Notes | Real GPU load+encode demonstrated via `03` + direct `NemotronEmbedder(device="rocm")`. Do **not** claim product GPU embed default-on fixed. Re-inject Tensile after torch reinstall. |
 
 ### Gate B
@@ -284,7 +284,8 @@ exit=0
 | Checkbox | State |
 |----------|--------|
 | Standalone ROCm encode smoke (G1–G9) | **Checked** (scripts path) |
-| Product worker GPU dogfood | **Unchecked** — pin still `cpu` |
+| Product worker GPU load | **Partial** — `embed_device=rocm` local; model loads on GPU |
+| Product in-moment encode | **Unchecked / suspect** — operator not sure encode runs during a moment |
 | Product semantic default-on | **No** — still Gate B / product decision |
 
 ### How to re-run
@@ -299,8 +300,46 @@ python docs/radeon-vii-dev/scripts/02_matmul_smoke.py
 python docs/radeon-vii-dev/scripts/03_nemotron_encode.py
 ```
 
-To try **product** path intentionally (separate session): stop presence → set `embed_device = "rocm"` (or `auto`) locally → `elyra start` → confirm health device. Keep BUG open until that dogfood is deliberate and stable.
+Product path (local only): `embed_device = "rocm"` in `elyra.toml` (uncommitted) → `elyra start` → confirm health device. Keep BUG open until moment-path dogfood is done.
 
 ---
 
-*PR5 ops: Tensile inject unlocked A5/A7; real Nemotron on cuda:0 demonstrated; product worker still pinned CPU; bug remains Open.*
+## Product follow-on — moment encode path (open, dig later)
+
+**Date:** 2026-07-29 (after PR5 inject + pin flip)  
+**Status:** **Open observation** — not a sealed root-cause; filed under **BUG-mem-gpu-01** adjacency / Gate B product dogfood.
+
+### Observation
+
+1. Standalone GPU encode is **proven** (`03`, params on `cuda:0`).
+2. Local product pin set to `embed_device = "rocm"` (was `cpu`); presence appears to **load** Nemotron on GPU.
+3. Operator is **unsure whether embeddings actually run during a moment** (encode queue / idle worker / meal or atom write path vs load-at-start only).
+
+Possible explanations (unranked, not yet tested):
+
+| Hypothesis | Notes |
+|------------|--------|
+| H-m1 | Load-only: ensure_loaded on start; encode queue never drains during moment |
+| H-m2 | Encode deferred to idle / refresh_due; moment ends before work runs |
+| H-m3 | Atoms written without enqueue (flags / backend / semantic off for that write) |
+| H-m4 | Encode runs but is silent in UI; vectors_ready / logs not checked |
+| H-m5 | Device pin works for load; path still falls back or skips under meal budgets |
+
+### Dogfood procedure (when ready)
+
+1. Keep Tensile inject present; `embed_device=rocm`; restart presence.
+2. Run a short social/work moment that should write memory atoms (or force a known write path).
+3. Capture: presence logs (embed ensure, queue enqueue/complete, device), moment id, atom ids.
+4. Check Memory health / vectors: new embeddings present? `vectors_ready`? dim 2048?
+5. Optional: `rocm-smi` / VRAM during moment to see encode spikes vs load-only.
+6. Record pass/fail + evidence in this NOTES section and update BUG-mem-gpu-01 dogfood fields.
+
+### Explicit non-claims
+
+- Do **not** claim “GPU embed fixed” for product meals until in-moment encode is confirmed.
+- Do **not** open a separate bug id until root is distinguished from timing/UX gap.
+- BUG-mem-gpu-01 remains **Open**.
+
+---
+
+*PR5 ops: Tensile inject unlocked A5/A7; real Nemotron on cuda:0 demonstrated. Product pin later set to rocm; in-moment encode still open. Bug remains Open.*

@@ -18,8 +18,8 @@
 | gfx906 Tensile inject | **Required** — `scripts/00_inject_gfx906_tensile.py` (Arch rocblas → venv torch) |
 | A5 matmul / gfx906 kernels | **PASS** (after inject) |
 | A6–A7 / encode smoke | **PASS** — G1–G9; ~9 GiB VRAM; param `cuda:0` |
-| Product worker embed device | **CPU pin** (local uncommitted) — worker GPU dogfood not done |
-| BUG-mem-gpu-01 | **Open** — standalone green; product path not closed; see [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) |
+| Product worker embed device | local `embed_device=rocm` — GPU **load** seen; **in-moment encode unverified** |
+| BUG-mem-gpu-01 | **Open** — standalone green; moment encode path to dig later; see [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) |
 
 See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package baseline.
 
