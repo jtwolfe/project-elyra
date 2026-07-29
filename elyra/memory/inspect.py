@@ -336,7 +336,11 @@ def list_atoms_by_embedding_status(
 
 
 def neighbor_hit_to_inspect(hit: Any) -> dict[str, Any]:
-    """Serialize an EmbeddingIndex ``ScoredAtom`` (or duck-type) for glass."""
+    """Serialize an EmbeddingIndex ``ScoredAtom`` (or duck-type) for glass.
+
+    ``score`` is cosine similarity (higher is closer). ``score_kind`` is always
+    ``"cosine"`` so glass can badge honestly without guessing.
+    """
     atom = getattr(hit, "atom", None)
     atom_id = str(getattr(hit, "atom_id", "") or "")
     score = getattr(hit, "score", None)
@@ -345,22 +349,10 @@ def neighbor_hit_to_inspect(hit: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         score_f = None
     channel = str(getattr(hit, "channel", "joint") or "joint")
-    if atom is not None:
-        text = getattr(atom, "content_text", None) or ""
-        return {
-            "atom_id": atom_id or getattr(atom, "atom_id", ""),
-            "score": score_f,
-            "channel": channel,
-            "kind": getattr(atom, "kind", None),
-            "moment_id": getattr(atom, "moment_id", None),
-            "t_start": getattr(atom, "t_start", None),
-            "embedding_status": getattr(atom, "embedding_status", None),
-            "snippet": truncate_text(str(text), max_chars=_SNIPPET_CHARS),
-            "text_chars": len(str(text)),
-        }
-    return {
+    base = {
         "atom_id": atom_id,
         "score": score_f,
+        "score_kind": "cosine",
         "channel": channel,
         "kind": None,
         "moment_id": None,
@@ -369,6 +361,20 @@ def neighbor_hit_to_inspect(hit: Any) -> dict[str, Any]:
         "snippet": "",
         "text_chars": 0,
     }
+    if atom is not None:
+        text = getattr(atom, "content_text", None) or ""
+        base.update(
+            {
+                "atom_id": atom_id or getattr(atom, "atom_id", ""),
+                "kind": getattr(atom, "kind", None),
+                "moment_id": getattr(atom, "moment_id", None),
+                "t_start": getattr(atom, "t_start", None),
+                "embedding_status": getattr(atom, "embedding_status", None),
+                "snippet": truncate_text(str(text), max_chars=_SNIPPET_CHARS),
+                "text_chars": len(str(text)),
+            }
+        )
+    return base
 
 
 def resolve_neighbor_k(raw: Any, *, default: int = _NEIGHBOR_K_DEFAULT) -> int:
@@ -391,6 +397,11 @@ def query_vector_for_atom(
 
     Prefers in-memory index ``get``; falls back to store ``get_vectors``.
     Returns ``(vector, error_reason)``.
+
+    **Channel alignment (PR-R5 / KD-R16):** load the vector for the **concrete**
+    ``channel`` only. Never soft-fallback to another embed column — callers that
+    want auto-policy must ``resolve_search_channel`` first and pass the concrete
+    channel here so query and corpus search stay aligned.
     """
     emb = None
     if index is not None:
@@ -409,14 +420,13 @@ def query_vector_for_atom(
                 emb = None
     if emb is None:
         return None, "no_vector"
-    # Prefer joint, then requested channel, then any present.
-    for ch in (channel, "joint", "text", "image", "audio", "video"):
-        try:
-            vec = emb.channel_vector(ch)
-        except Exception:  # noqa: BLE001
-            vec = None
-        if vec is not None:
-            return list(vec), None
+    ch = (channel or "joint").strip().lower() or "joint"
+    try:
+        vec = emb.channel_vector(ch)
+    except Exception:  # noqa: BLE001
+        vec = None
+    if vec is not None:
+        return list(vec), None
     return None, "no_vector"
 
 
@@ -498,8 +508,20 @@ def encoder_health_block(
     return block
 
 
+def _empty_vectors_by_channel() -> dict[str, int]:
+    """Zero counts for durable embed channels (glass defaults; no index import)."""
+    return {"joint": 0, "text": 0, "image": 0, "audio": 0, "video": 0}
+
+
 def index_health_block(index: Any | None) -> dict[str, Any]:
-    """JSON-ready EmbeddingIndex health for Vectors overview."""
+    """JSON-ready EmbeddingIndex health for Vectors overview.
+
+    Always includes honesty fields used by the Vectors glass (PR-R5):
+    ``vectors_by_channel``, ``joint_repair_remaining``, ``ann_index_built``,
+    ``last_optimize_notes``, ``search_mode``. Defaults are zero/false — never
+    claim ready without data.
+    """
+    empty_counts = _empty_vectors_by_channel()
     if index is None:
         return {
             "ok": False,
@@ -508,6 +530,13 @@ def index_health_block(index: Any | None) -> dict[str, Any]:
             "index_stale": False,
             "recent_buffer": 0,
             "vectors": False,
+            "ann_index_built": False,
+            "search_mode": None,
+            "last_optimize": None,
+            "last_optimize_notes": [],
+            "vectors_by_channel": empty_counts,
+            "joint_repair_remaining": 0,
+            "joint_repair_last_batch": 0,
             "error": "no_index",
         }
     try:
@@ -519,6 +548,35 @@ def index_health_block(index: Any | None) -> dict[str, Any]:
         out.setdefault("vectors_ready", 0)
         out.setdefault("index_stale", False)
         out.setdefault("recent_buffer", 0)
+        out.setdefault("ann_index_built", False)
+        out.setdefault("search_mode", None)
+        out.setdefault("last_optimize", None)
+        notes = out.get("last_optimize_notes")
+        if not isinstance(notes, list):
+            out["last_optimize_notes"] = []
+        counts = out.get("vectors_by_channel")
+        if not isinstance(counts, Mapping):
+            out["vectors_by_channel"] = dict(empty_counts)
+        else:
+            merged = dict(empty_counts)
+            for k, v in counts.items():
+                try:
+                    merged[str(k)] = int(v or 0)
+                except (TypeError, ValueError):
+                    merged[str(k)] = 0
+            out["vectors_by_channel"] = merged
+        try:
+            out["joint_repair_remaining"] = max(
+                0, int(out.get("joint_repair_remaining") or 0)
+            )
+        except (TypeError, ValueError):
+            out["joint_repair_remaining"] = 0
+        try:
+            out["joint_repair_last_batch"] = max(
+                0, int(out.get("joint_repair_last_batch") or 0)
+            )
+        except (TypeError, ValueError):
+            out["joint_repair_last_batch"] = 0
         return out
     except Exception as exc:  # noqa: BLE001
         return {
@@ -527,6 +585,13 @@ def index_health_block(index: Any | None) -> dict[str, Any]:
             "vectors_ready": 0,
             "index_stale": False,
             "recent_buffer": 0,
+            "ann_index_built": False,
+            "search_mode": None,
+            "last_optimize": None,
+            "last_optimize_notes": [],
+            "vectors_by_channel": empty_counts,
+            "joint_repair_remaining": 0,
+            "joint_repair_last_batch": 0,
             "error": str(exc) or type(exc).__name__,
         }
 

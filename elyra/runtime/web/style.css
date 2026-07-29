@@ -2794,6 +2794,23 @@ body {
   margin-top: 0.35rem;
 }
 
+.memory-neighbors-meta {
+  padding: 0.25rem 0 0.15rem;
+  font-size: 0.8rem;
+}
+
+.memory-channel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+
+.memory-channel-chip {
+  font-size: 0.72rem;
+  opacity: 0.92;
+}
+
 #memory-vectors-list {
   flex: 0 1 auto;
   max-height: min(36vh, 22rem);

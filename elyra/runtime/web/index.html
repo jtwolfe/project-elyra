@@ -335,13 +335,15 @@
             </div>
             <p class="muted status-helper memory-vectors-hint">
               ANN = approximate nearest-neighbor <strong>search index</strong> (cosine over embeddings),
-              not the neural net. Rebuild speeds large corpora; small stores use full scan either way.
+              not the neural net. Rebuild speeds large corpora.
+              <strong>IVF not built on a small corpus is normal</strong> — full scan is still used and
+              is not “search broken.” Repair-pending joint means auto prefers text until joint is full.
             </p>
             <div id="memory-vectors-list" class="list-panel list-panel-auto">loading…</div>
             <div class="memory-neighbors-panel card">
               <div class="card-head">
                 <strong>Neighbor inspect</strong>
-                <span class="badge">cosine</span>
+                <span class="badge" title="Scores are cosine similarity (higher = closer)">cosine</span>
               </div>
               <div class="memory-neighbors-toolbar">
                 <label class="status-label" for="memory-neighbor-atom">Atom id</label>
@@ -362,6 +364,20 @@
                   spellcheck="false"
                   autocomplete="off"
                 />
+                <label class="status-label" for="memory-neighbor-channel">Channel</label>
+                <select
+                  id="memory-neighbor-channel"
+                  class="status-select memory-filter"
+                  aria-label="Embedding channel for neighbor search"
+                  title="auto resolves joint when multi-modal/joint is ready; falls back to text while joint repair is pending"
+                >
+                  <option value="auto" selected>auto</option>
+                  <option value="joint">joint</option>
+                  <option value="text">text</option>
+                  <option value="image">image</option>
+                  <option value="audio">audio</option>
+                  <option value="video">video</option>
+                </select>
                 <label class="status-label" for="memory-neighbor-k">k</label>
                 <input
                   id="memory-neighbor-k"
@@ -375,6 +391,7 @@
                   Search
                 </button>
               </div>
+              <div id="memory-neighbors-meta" class="muted status-helper memory-neighbors-meta" hidden></div>
               <div id="memory-neighbors-list" class="list-panel list-panel-auto memory-neighbors-list">
                 <p class="muted empty memory-empty">Pick an atom id or free-text query.</p>
               </div>

@@ -1137,8 +1137,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         Read-only. No raw 2048-d vectors in the response. Fail soft with empty
         neighbors when encoder/index unavailable (may no-op).
+
+        Channel policy (PR-R5 / KD-R16): default ``channel=auto``; resolve once
+        from index health, then query-vector + ``search(concrete)`` on that
+        same snapshot. Response echoes request, ``resolved_channel``, and
+        ``channel_reason``.
         """
+        from elyra.memory.index import resolve_search_channel
         from elyra.memory.inspect import (
+            index_health_block,
             neighbor_hit_to_inspect,
             query_vector_for_atom,
             resolve_neighbor_k,
@@ -1147,7 +1154,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         flags = self._memory_flags_block()
         atom_id_raw = (qs.get("atom_id") or [None])[0]
         q_raw = (qs.get("q") or [None])[0]
-        channel = ((qs.get("channel") or ["joint"])[0] or "joint").strip() or "joint"
+        channel_req = (
+            (qs.get("channel") or ["auto"])[0] or "auto"
+        ).strip() or "auto"
         k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
 
         atom_id = (
@@ -1185,14 +1194,48 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         embedder, _queue, index = self._vectors_worker_handles()
+        # One health snapshot for resolve + response honesty (KD-R16).
+        idx_health = index_health_block(index)
+        resolved_channel, channel_reason = resolve_search_channel(
+            channel_req,
+            vectors_by_channel=idx_health.get("vectors_by_channel") or {},
+            joint_repair_remaining=int(
+                idx_health.get("joint_repair_remaining") or 0
+            ),
+        )
+
+        def _query_block(
+            *,
+            source: str,
+            extra: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            block: dict[str, Any] = {
+                "atom_id": atom_id,
+                "q": query_text,
+                "channel": channel_req,
+                "resolved_channel": resolved_channel,
+                "channel_reason": channel_reason,
+                "k": k,
+                "source": source,
+            }
+            if extra:
+                block.update(extra)
+            return block
+
         query_vec: list[float] | None = None
         seed_atom_id: str | None = atom_id
         source = "atom" if atom_id else "text"
         omit_reason: str | None = None
+        searched = False
 
         if atom_id:
+            # Query vector for concrete resolved channel only (no cross-channel
+            # soft-fallback — aligns seed with corpus search).
             query_vec, omit_reason = query_vector_for_atom(
-                atom_id, index=index, store=store, channel=channel
+                atom_id,
+                index=index,
+                store=store,
+                channel=resolved_channel,
             )
             if query_vec is None and store is not None:
                 # Fall back: encode atom content_text when encoder is warm.
@@ -1208,6 +1251,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                             "error": "atom not found",
                             "neighbors": [],
                             "memory": flags,
+                            "query": _query_block(source=source),
                         },
                     )
                     return
@@ -1229,7 +1273,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 elif query_vec is None:
                     omit_reason = omit_reason or "no_vector"
         else:
-            # Free-text query — need encoder.
+            # Free-text query — encode_text then search resolved channel.
             if embedder is None:
                 ensure_emb = getattr(self.worker, "_ensure_embedder", None)
                 if callable(ensure_emb):
@@ -1241,8 +1285,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 omit_reason = "encoder"
             else:
                 try:
-                    health = embedder.health() if hasattr(embedder, "health") else {}
-                    if isinstance(health, dict) and health.get("ok") is False:
+                    emb_health = (
+                        embedder.health() if hasattr(embedder, "health") else {}
+                    )
+                    if isinstance(emb_health, dict) and emb_health.get("ok") is False:
                         omit_reason = "encoder"
                     else:
                         query_vec = list(embedder.encode_text(str(query_text)))
@@ -1260,9 +1306,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 hits = index.search(
                     query_vec,
                     k=fetch_k,
-                    channel=channel,
+                    channel=resolved_channel,
                     exclude_atom_ids=exclude or None,
                 )
+                searched = True
                 for hit in hits:
                     if seed_atom_id and getattr(hit, "atom_id", None) == seed_atom_id:
                         continue
@@ -1277,14 +1324,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         "ok": False,
                         "error": str(exc) or type(exc).__name__,
                         "neighbors": [],
+                        "omitted_reason": "search_failed",
                         "memory": flags,
-                        "query": {
-                            "atom_id": atom_id,
-                            "q": query_text,
-                            "channel": channel,
-                            "k": k,
-                            "source": source,
-                        },
+                        "index": idx_health,
+                        "query": _query_block(source=source),
                     },
                 )
                 return
@@ -1293,6 +1336,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         elif query_vec is None and omit_reason is None:
             omit_reason = "no_vector"
 
+        if not neighbors:
+            if omit_reason is None and searched:
+                omit_reason = "no_hits"
+            elif omit_reason is None:
+                omit_reason = "no_vector"
+
         self._json(
             200,
             {
@@ -1300,12 +1349,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "neighbors": neighbors,
                 "count": len(neighbors),
                 "omitted_reason": omit_reason if not neighbors else None,
-                "query": {
-                    "atom_id": atom_id,
-                    "q": query_text,
-                    "channel": channel,
-                    "k": k,
-                    "source": source,
+                "query": _query_block(source=source),
+                "index": {
+                    "search_mode": idx_health.get("search_mode"),
+                    "ann_index_built": idx_health.get("ann_index_built"),
+                    "vectors_by_channel": idx_health.get("vectors_by_channel"),
+                    "joint_repair_remaining": idx_health.get(
+                        "joint_repair_remaining"
+                    ),
+                    "vectors_ready": idx_health.get("vectors_ready"),
                 },
                 "memory": flags,
             },

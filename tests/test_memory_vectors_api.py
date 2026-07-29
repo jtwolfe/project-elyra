@@ -194,6 +194,16 @@ def test_vectors_health_defaults(paths):
         idx = body["index"]
         assert "vectors_ready" in idx
         assert "index_stale" in idx
+        # PR-R5 honesty fields always present (never claim ready without data).
+        assert "vectors_by_channel" in idx
+        assert isinstance(idx["vectors_by_channel"], dict)
+        assert "joint" in idx["vectors_by_channel"]
+        assert "joint_repair_remaining" in idx
+        assert idx["joint_repair_remaining"] == 0
+        assert "ann_index_built" in idx
+        assert idx["ann_index_built"] is False or idx["ann_index_built"] is True
+        assert "last_optimize_notes" in idx
+        assert isinstance(idx["last_optimize_notes"], list)
         assert body["tabs"]["vectors"]["stub"] is False
         # No raw vectors dumped.
         blob = json.dumps(body)
@@ -345,14 +355,20 @@ def test_neighbors_soft_empty_without_index_vectors(paths):
         assert code == 200, body
         assert body["ok"] is True
         assert body["neighbors"] == []
-        # Soft omit: no_vector / no_index / encoder depending on warm state.
+        # Soft omit: no_vector / no_index / encoder / no_hits depending on warm state.
+        # Null index may still "search" empty → no_hits after encode_text fallback.
         assert body.get("omitted_reason") in (
             "no_vector",
             "no_index",
+            "no_hits",
             "encoder",
             "encode_failed",
             None,
         )
+        # PR-R5: default channel auto + resolve fields even on empty.
+        assert body["query"]["channel"] == "auto"
+        assert body["query"]["resolved_channel"]
+        assert body["query"]["channel_reason"]
     finally:
         h.close()
 
@@ -413,7 +429,7 @@ def test_neighbors_with_memory_index_and_mock(paths):
             assert reloaded is not None
             assert reloaded.embedding_status == "ready"
 
-        # Free-text query near a1.
+        # Free-text query near a1 — default channel=auto (PR-R5).
         code, body = h.get(
             "/api/memory/vectors/neighbors?"
             + "q="
@@ -423,10 +439,16 @@ def test_neighbors_with_memory_index_and_mock(paths):
         assert code == 200, body
         assert body["ok"] is True
         assert body["count"] >= 1
+        qblock = body["query"]
+        assert qblock["channel"] == "auto"
+        assert qblock["resolved_channel"] in ("joint", "text")
+        assert qblock["channel_reason"]
+        assert "auto_" in qblock["channel_reason"] or qblock["channel_reason"] == "explicit"
         ids = [n["atom_id"] for n in body["neighbors"]]
         assert a1.atom_id in ids or a2.atom_id in ids
         for n in body["neighbors"]:
             assert "score" in n
+            assert n.get("score_kind") == "cosine"
             assert "snippet" in n
             assert "atom_id" in n
             assert len(n["snippet"]) <= 250
@@ -439,10 +461,21 @@ def test_neighbors_with_memory_index_and_mock(paths):
         )
         assert code == 200, by_atom
         assert by_atom["ok"] is True
+        assert by_atom["query"]["channel"] == "auto"
+        assert by_atom["query"]["resolved_channel"]
         for n in by_atom["neighbors"]:
             assert n["atom_id"] != a1.atom_id
         if by_atom["neighbors"]:
             assert by_atom["neighbors"][0]["atom_id"] == a2.atom_id
+
+        # Explicit channel still works.
+        code, joint_only = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={a1.atom_id}&k=5&channel=joint"
+        )
+        assert code == 200, joint_only
+        assert joint_only["query"]["channel"] == "joint"
+        assert joint_only["query"]["resolved_channel"] == "joint"
+        assert joint_only["query"]["channel_reason"] == "explicit"
 
         # Missing atom → 404.
         code, missing = h.get(
@@ -452,6 +485,152 @@ def test_neighbors_with_memory_index_and_mock(paths):
         assert missing["ok"] is False
     finally:
         h.close()
+
+
+def test_neighbors_auto_resolves_text_only_corpus(paths):
+    """Text-only ready vectors: auto → text (or joint after copy); hits not empty."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+        ),
+    )
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        a1 = promote_wake_observation(
+            store,
+            "m_text_only_1",
+            content="text only corpus seed alpha",
+            message_id="msg_to1",
+            settings=h.worker.settings.memory,
+        )
+        a2 = promote_wake_observation(
+            store,
+            "m_text_only_2",
+            content="text only corpus seed beta",
+            message_id="msg_to2",
+            settings=h.worker.settings.memory,
+        )
+        assert a1 and a2
+        emb = MockEmbedder()
+        h.worker._embedder = emb  # noqa: SLF001
+        # Disable eager repair so joint stays empty for this fixture.
+        index = MemoryEmbeddingIndex(store, joint_repair_max_per_open=0)
+        h.worker._embedding_index = index  # noqa: SLF001
+        for atom in (a1, a2):
+            text = atom.content_text or ""
+            vec = tuple(l2_normalize(emb.encode_text(text)))
+            ok = index.upsert(
+                EmbeddingSet(
+                    atom_id=atom.atom_id,
+                    emb_text=vec,
+                    emb_joint=None,
+                    model_id=emb.model_id,
+                    encoded_at="2026-01-01T00:00:00Z",
+                )
+            )
+            assert ok is True
+
+        health = index.health()
+        assert health["vectors_by_channel"]["text"] >= 2
+        assert health["vectors_by_channel"]["joint"] == 0
+
+        code, body = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={a1.atom_id}&k=5&channel=auto"
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["query"]["channel"] == "auto"
+        # Repair remaining may be >0 or auto_text when joint empty.
+        assert body["query"]["resolved_channel"] == "text"
+        assert "text" in body["query"]["channel_reason"]
+        assert body["count"] >= 1
+        assert body["omitted_reason"] is None
+        ids = [n["atom_id"] for n in body["neighbors"]]
+        assert a2.atom_id in ids
+
+        # Explicit joint against text-only → no soft-fallback; empty + no_vector/no_hits.
+        code, joint = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={a1.atom_id}&k=5&channel=joint"
+        )
+        assert code == 200, joint
+        assert joint["query"]["resolved_channel"] == "joint"
+        assert joint["query"]["channel_reason"] == "explicit"
+        # Seed has no emb_joint; encode_text fallback may still search joint
+        # corpus (empty) → no_hits, or omit no_vector if encode also cold.
+        if joint["neighbors"]:
+            # encode fallback found something unexpected — still ok if score_kind set
+            for n in joint["neighbors"]:
+                assert n.get("score_kind") == "cosine"
+        else:
+            assert joint["omitted_reason"] in (
+                "no_vector",
+                "no_hits",
+                "encode_failed",
+                "encoder",
+            )
+    finally:
+        h.close()
+
+
+def test_neighbors_query_vector_no_cross_channel_fallback():
+    """query_vector_for_atom must not soft-fallback to another channel (PR-R5)."""
+    from elyra.memory.inspect import query_vector_for_atom
+
+    emb = MockEmbedder()
+    text_v = tuple(l2_normalize(emb.encode_text("only text")))
+    es = EmbeddingSet(
+        atom_id="a_only_text",
+        emb_text=text_v,
+        emb_joint=None,
+        model_id=emb.model_id,
+        encoded_at="2026-01-01T00:00:00Z",
+    )
+
+    class _Idx:
+        def get(self, atom_id: str):
+            return es if atom_id == "a_only_text" else None
+
+    vec, reason = query_vector_for_atom(
+        "a_only_text", index=_Idx(), store=None, channel="joint"
+    )
+    assert vec is None
+    assert reason == "no_vector"
+
+    vec_t, reason_t = query_vector_for_atom(
+        "a_only_text", index=_Idx(), store=None, channel="text"
+    )
+    assert vec_t is not None
+    assert reason_t is None
+    assert len(vec_t) == len(text_v)
+
+
+def test_vectors_glass_static_wiring():
+    """Glass Vectors tab wires channel select + honesty helpers (not identifier-only)."""
+    web = Path(__file__).resolve().parents[1] / "elyra" / "runtime" / "web"
+    html = (web / "index.html").read_text(encoding="utf-8")
+    js = (web / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="memory-neighbor-channel"' in html
+    assert 'value="auto"' in html
+    assert 'value="joint"' in html
+    assert 'value="text"' in html
+    # Wiring: JS reads select and sends channel param (snippet, not bare id).
+    assert "memoryNeighborChannel" in js
+    assert 'params.set("channel"' in js or "params.set('channel'" in js
+    assert "formatAnnHonesty" in js
+    assert "formatVectorsByChannel" in js
+    assert "renderNeighborsMeta" in js
+    assert "joint_repair_remaining" in js
+    assert "cosine" in js
+    assert "score_kind" in js
+    # Honesty copy present in glass.
+    assert "full scan still used" in html or "full scan still used" in js
 
 
 def test_vectors_status_list_includes_ready_after_index(paths):

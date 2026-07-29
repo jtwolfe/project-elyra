@@ -46,9 +46,11 @@ const memoryVectorsApply = $("#memory-vectors-apply");
 const memoryVectorsRebuild = $("#memory-vectors-rebuild");
 const memoryNeighborAtom = $("#memory-neighbor-atom");
 const memoryNeighborQ = $("#memory-neighbor-q");
+const memoryNeighborChannel = $("#memory-neighbor-channel");
 const memoryNeighborK = $("#memory-neighbor-k");
 const memoryNeighborsRun = $("#memory-neighbors-run");
 const memoryNeighborsList = $("#memory-neighbors-list");
+const memoryNeighborsMeta = $("#memory-neighbors-meta");
 /** @type {boolean} */
 let memoryVectorsRebuildInFlight = false;
 /** @type {"context" | "atoms" | "vectors" | "graph"} */
@@ -2474,17 +2476,68 @@ async function refreshMemoryAtoms() {
   }
 }
 
+/**
+ * Format vectors_by_channel map for glass health (omit zero channels except joint/text).
+ * @param {Record<string, number> | null | undefined} counts
+ */
+function formatVectorsByChannel(counts) {
+  if (!counts || typeof counts !== "object") return "—";
+  const order = ["joint", "text", "image", "audio", "video"];
+  const parts = [];
+  for (const ch of order) {
+    const n = counts[ch];
+    if (n == null) continue;
+    const num = Number(n) || 0;
+    if (num > 0 || ch === "joint" || ch === "text") {
+      parts.push(`${ch}=${num}`);
+    }
+  }
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+/**
+ * Honest ANN / search-mode copy: small corpus without IVF is not "search broken".
+ * @param {Record<string, any>} idx
+ */
+function formatAnnHonesty(idx) {
+  const ready = Number(idx.vectors_ready) || 0;
+  const built = idx.ann_index_built === true;
+  const mode = idx.search_mode ? String(idx.search_mode) : null;
+  const repair = Number(idx.joint_repair_remaining) || 0;
+  const bits = [];
+  if (built) {
+    bits.push("ann=built");
+  } else if (ready === 0) {
+    bits.push("ann=off (no vectors yet)");
+  } else {
+    // Small-N / not yet optimized: full scan still works.
+    bits.push("ann=off — corpus small or IVF not built; full scan still used");
+  }
+  if (mode) bits.push(`mode=${mode}`);
+  if (repair > 0) bits.push(`joint_repair_remaining=${repair}`);
+  return bits.join(" · ");
+}
+
 function renderVectorsHealth(data) {
   if (!memoryVectorsHealth) return;
   memoryVectorsHealth.innerHTML = "";
   const enc = data.encoder || {};
   const idx = data.index || {};
   const mem = data.memory || {};
+  const notes = Array.isArray(idx.last_optimize_notes)
+    ? idx.last_optimize_notes
+    : [];
+  const deviceBits = [
+    enc.device ? `eff=${enc.device}` : null,
+    enc.device_pref ? `req=${enc.device_pref}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const rows = [
     [
       "encoder",
       enc.ok
-        ? `${enc.backend || "—"} · ${enc.device || enc.device_pref || "—"}`
+        ? `${enc.backend || "—"} · ${deviceBits || enc.device || enc.device_pref || "—"}`
         : enc.error || "down",
       enc.ok === true,
     ],
@@ -2513,21 +2566,46 @@ function renderVectorsHealth(data) {
       idx.ok === true,
     ],
     [
+      "channels",
+      formatVectorsByChannel(idx.vectors_by_channel),
+      null,
+    ],
+    [
+      "repair",
+      (() => {
+        const rem = Number(idx.joint_repair_remaining) || 0;
+        const batch = Number(idx.joint_repair_last_batch) || 0;
+        if (rem > 0) {
+          return `pending=${rem}${batch ? ` · last_batch=${batch}` : ""} (auto prefers text)`;
+        }
+        return rem === 0 && batch > 0
+          ? `complete (last_batch=${batch})`
+          : "none pending";
+      })(),
+      // Repair pending is not search-broken — warn tone only.
+      Number(idx.joint_repair_remaining) > 0 ? false : null,
+    ],
+    [
       "freshness",
       [
         idx.index_stale ? "stale" : "fresh",
-        idx.search_mode ? `mode=${idx.search_mode}` : null,
-        idx.ann_index_built === true
-          ? "ann=built"
-          : idx.ann_index_built === false
-            ? "ann=off"
-            : null,
+        formatAnnHonesty(idx),
         idx.recent_buffer != null ? `buf=${idx.recent_buffer}` : null,
         idx.last_optimize ? `opt=${idx.last_optimize}` : null,
       ]
         .filter(Boolean)
         .join(" · ") || "—",
+      // Stale is a warning; ann=off on small corpus must NOT look like status-bad.
       idx.index_stale === true ? false : null,
+    ],
+    [
+      "optimize notes",
+      notes.length
+        ? notes.map((n) => String(n)).join("; ")
+        : idx.last_optimize
+          ? "(no notes)"
+          : "—",
+      null,
     ],
     ["store", mem.ok ? mem.backend || "ok" : mem.error || "down", mem.ok === true],
   ];
@@ -2541,8 +2619,11 @@ function renderVectorsHealth(data) {
     val.className = "status-value";
     if (good === true) val.classList.add("status-ok");
     if (good === false) {
+      // repair / freshness warn — not hard error (search still works).
       val.classList.add(
-        label === "freshness" ? "memory-vector-stale" : "status-bad"
+        label === "freshness" || label === "repair"
+          ? "memory-vector-stale"
+          : "status-bad"
       );
     }
     val.textContent = value;
@@ -2576,18 +2657,26 @@ function renderVectorsAtomsList(atoms) {
     card.appendChild(head);
     const meta = document.createElement("div");
     meta.className = "meta";
-    const channels = Array.isArray(a.channels) && a.channels.length
-      ? `ch=${a.channels.join(",")}`
-      : null;
     meta.textContent = [
       a.atom_id || "—",
       a.t_start || null,
-      channels,
       a.embed_error ? `err=${a.embed_error}` : null,
     ]
       .filter(Boolean)
       .join(" · ");
     card.appendChild(meta);
+    // embed_channels chips — joint vs text visible (PR-R5 honesty).
+    if (Array.isArray(a.channels) && a.channels.length) {
+      const chips = document.createElement("div");
+      chips.className = "memory-channel-chips";
+      for (const ch of a.channels) {
+        const chip = document.createElement("span");
+        chip.className = "badge memory-channel-chip";
+        chip.textContent = String(ch);
+        chips.appendChild(chip);
+      }
+      card.appendChild(chips);
+    }
     const snip = document.createElement("div");
     snip.className = "muted";
     snip.style.fontSize = "0.85rem";
@@ -2605,14 +2694,56 @@ function renderVectorsAtomsList(atoms) {
   }
 }
 
+/**
+ * Neighbor empty-state / meta line: never blank without explanation when query ran.
+ * @param {Record<string, any>} data
+ */
+function renderNeighborsMeta(data) {
+  if (!memoryNeighborsMeta) return;
+  const q = data.query || {};
+  const req = q.channel || "auto";
+  const resolved = q.resolved_channel || req;
+  const reason = q.channel_reason || null;
+  const parts = [
+    `channel ${req}${resolved && resolved !== req ? ` → ${resolved}` : resolved ? ` (${resolved})` : ""}`,
+    reason ? `reason=${reason}` : null,
+  ].filter(Boolean);
+  const idx = data.index || {};
+  if (idx.search_mode) parts.push(`mode=${idx.search_mode}`);
+  if (idx.ann_index_built === false) {
+    parts.push("IVF not built — full scan still used");
+  }
+  if (Number(idx.joint_repair_remaining) > 0) {
+    parts.push(`repair_pending=${idx.joint_repair_remaining}`);
+  }
+  memoryNeighborsMeta.hidden = false;
+  memoryNeighborsMeta.textContent = parts.join(" · ");
+}
+
 function renderNeighborsList(data) {
   if (!memoryNeighborsList) return;
   memoryNeighborsList.innerHTML = "";
+  renderNeighborsMeta(data);
   const neighbors = data.neighbors || [];
   if (!neighbors.length) {
-    const reason = data.omitted_reason || data.error || "no hits";
+    const omit = data.omitted_reason || data.error || "no_hits";
+    const q = data.query || {};
+    const resolved = q.resolved_channel || q.channel || "—";
+    const reason = q.channel_reason || "—";
+    const lines = [
+      `No neighbors (${omit}).`,
+      `Searched channel ${resolved} (${reason}).`,
+    ];
+    // Distinguish “search broken” vs empty channel / small corpus.
+    if (omit === "no_hits" || omit === "no_vector") {
+      lines.push(
+        "Empty result is not necessarily broken search — try another channel or wait for encode/repair."
+      );
+    } else if (omit === "no_index" || omit === "encoder" || omit === "search_failed") {
+      lines.push("Search path unavailable (index/encoder) — not an IVF small-corpus skip.");
+    }
     memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
-      String(reason)
+      lines.join(" ")
     )}</p>`;
     return;
   }
@@ -2629,7 +2760,10 @@ function renderNeighborsList(data) {
       n.score != null && Number.isFinite(Number(n.score))
         ? Number(n.score).toFixed(4)
         : "—";
-    badge.textContent = `score=${score}`;
+    // Cosine similarity badge (higher = closer).
+    const kind = n.score_kind === "cosine" || !n.score_kind ? "cosine" : n.score_kind;
+    badge.textContent = `${kind}=${score}`;
+    badge.title = "Cosine similarity (1 = identical direction)";
     head.appendChild(title);
     head.appendChild(badge);
     card.appendChild(head);
@@ -2684,9 +2818,19 @@ async function runNeighborSearch() {
     if (Number.isFinite(raw)) k = raw;
   }
   params.set("k", String(k));
+  // Default auto when select missing; always send explicit channel from UI.
+  const channel =
+    memoryNeighborChannel && memoryNeighborChannel.value
+      ? memoryNeighborChannel.value.trim() || "auto"
+      : "auto";
+  params.set("channel", channel);
   if (atomId) params.set("atom_id", atomId);
   else if (q) params.set("q", q);
   else {
+    if (memoryNeighborsMeta) {
+      memoryNeighborsMeta.hidden = true;
+      memoryNeighborsMeta.textContent = "";
+    }
     if (memoryNeighborsList) {
       memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id or free-text query.</p>`;
     }
@@ -2701,6 +2845,9 @@ async function runNeighborSearch() {
     );
     renderNeighborsList(data);
   } catch (err) {
+    if (memoryNeighborsMeta) {
+      memoryNeighborsMeta.hidden = true;
+    }
     if (memoryNeighborsList) {
       memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
         String(err.message || err)
@@ -2774,6 +2921,7 @@ if (memoryNeighborsRun) {
 /**
  * Rebuild approximate nearest-neighbor index over stored embeddings.
  * Does not re-run Nemotron / re-encode atoms.
+ * Honesty: notes[] explain skips (no vectors / below IVF min) vs failures.
  */
 async function rebuildVectorIndex() {
   if (memoryVectorsRebuildInFlight) return;
@@ -2788,16 +2936,33 @@ async function rebuildVectorIndex() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    const note =
-      (data && (data.note || data.error)) ||
-      (data && data.optimized === false
-        ? "optimize finished without a durable ANN (full scan still works)"
-        : "index rebuild requested");
+    const notes = Array.isArray(data && data.notes)
+      ? data.notes.map((n) => String(n))
+      : [];
+    const joined = notes.length
+      ? notes.join("; ")
+      : data && (data.note || data.error)
+        ? String(data.note || data.error)
+        : data && data.optimized === false
+          ? "optimize finished without a durable ANN (full scan still works)"
+          : "index rebuild requested";
+    // Map common skip notes into operator-facing honesty.
+    const lower = joined.toLowerCase();
+    let notice = joined;
+    if (
+      data &&
+      data.optimized === false &&
+      (lower.includes("below_ivf_min") ||
+        lower.includes("no_vectors") ||
+        lower.includes("null"))
+    ) {
+      notice = `${joined} — IVF not built is normal on small/empty corpora; full scan still used (not search broken).`;
+    }
     if (typeof showNotice === "function") {
       showNotice(
         data && data.ok !== false
-          ? `Vector index: ${note}`
-          : `Vector index rebuild: ${note}`
+          ? `Vector index: ${notice}`
+          : `Vector index rebuild: ${notice}`
       );
     }
     await refreshMemoryVectors();
