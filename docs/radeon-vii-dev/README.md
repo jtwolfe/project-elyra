@@ -67,6 +67,15 @@ Full procedure: [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md).
 3. Prove standalone Nemotron encode on GPU with **non-gameable** asserts (G1–G9).
 4. Keep **BUG-mem-gpu-01** Open; do not claim “GPU embed fixed.”
 
+## Scope vs product (important)
+
+This directory is the **non-standard Radeon VII / gfx906 dev** path (Tensile inject, host freezes, VII NOTES). Product should keep a **generic** story:
+
+- **CPU / CUDA / modern ROCm** — first-class (official wheels, matmul green without inject)
+- **Radeon VII** — optional dev profile only (see BUG-mem-gpu-01 device matrix)
+
+Other AMD GPUs: install matching host ROCm + venv `+rocm*` torch → run `02` matmul; inject only if that arch is missing from the wheel. Project-wide setup script (ongoing) will eventually cover multi-backend install + optional `--dev-radeon-vii`-style profile — not VII-only.
+
 ## Non-goals
 
 - Full meal / presence worker GPU encode as acceptance
@@ -74,6 +83,7 @@ Full procedure: [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md).
 - Product-tree shims or ROCm attn reorder
 - Multimodal smoke, ANN/Lance, pyproject ROCm pins
 - CI GPU job (none exists)
+- Treating VII inject as the universal AMD install recipe
 
 ---
 

@@ -610,8 +610,8 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 |-------|--------|
 | **Status** | **Open** (defer to Gate B / runtime) |
 | **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **moment/meal encode path not verified**; wheel reinstall loses inject |
-| **Severity later** | High when product default-on wants durable ROCm + encode during live moments under meal budgets |
-| **Area** | `elyra/memory/embed/runtime.py`, encode queue / idle worker, moment/meal integration, device select (`embed_device`), ROCm wheels / venv Tensile inject |
+| **Severity later** | High when product default-on wants durable multi-device embed (CUDA / modern ROCm / CPU) + encode during live moments under meal budgets |
+| **Area** | `elyra/memory/embed/runtime.py`, encode queue / idle worker, moment/meal integration, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |
 | **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; operator **suspects embeddings may not run during a moment** (not yet proven). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
 | **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md); **not** Phase 2 rectification core (KD-R10). Rectification only optional device honesty in health |
 
@@ -625,15 +625,31 @@ Operator requests GPU/ROCm for Omni-Embed-Nemotron; without operator steps, offi
 
 ### Related design intent
 
-Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presence. Core imports must not require torch/GPU. Standalone script success ≠ product moment encode.
+Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product paths; fallback without hard-failing presence. Core imports must not require torch/GPU. Standalone script success ≠ product moment encode.
+
+**Productization target (feature, tracked here so it is not lost):** keep a **generic modern** device story for operators; treat **Radeon VII / gfx906** as a **non-standard dev** profile, not the template for “all AMD.”
+
+### Device matrix (desired product shape)
+
+| Path | Role | What “works” means |
+|------|------|---------------------|
+| **CPU** | Default-safe / CI / no GPU | Encode correct; slow OK |
+| **CUDA** | NVIDIA hosts with matching torch | `select_device` / load / encode on GPU; matmul green |
+| **ROCm (modern)** | AMD GPUs **in official PyTorch ROCm Tensile set** (typical current RDNA / CDNA listed by the wheel) | Host ROCm + matching `+rocm*` wheel; **A5 matmul green without inject**; then product encode |
+| **dev / Radeon VII (gfx906)** | **Non-standard** operator/dev only | Official wheel may enumerate HIP but omit Tensile → needs **explicit** inject (`00_inject_gfx906_tensile`) or equivalent; **must not** become the only documented AMD path |
+
+**Portability rule (ops):** on any AMD card, install host ROCm + matching venv torch → run hard gate **matmul smoke** → only then load Nemotron. Green A5 ⇒ same product path as modern AMD. Red A5 with missing Tensile for `gfx####` ⇒ arch not in the wheel; VII-style inject is **arch-specific**, not “install any packages.” Avoid cargo-cult `HSA_OVERRIDE` / Tier B for ISA miss.
 
 ### Fix directions (later)
 
-1. Durable gfx906 support: document inject (done) and/or ship/vendor Tensile with wheels; re-run inject after torch reinstall.
-2. Vectors health: requested vs effective device honesty (optional polish).
-3. Do **not** block meal/channel product path on GPU presence.
-4. Gate B: standalone smoke green; **product worker + in-moment encode dogfood still required** before semantic default-on.
-5. **Moment encode dogfood (next):** during a live moment, confirm encode queue activity, atom vectors land, health/device stay ROCm, and semantic expand is not load-only. Capture moment id + log snippets when repro’d.
+1. **Generic modern stack (product):** document and dogfood **CPU + CUDA + modern ROCm** as the supported matrix; `embed_device=auto` prefers real GPU when probe/matmul-healthy, else CPU. Do not require VII inject on modern cards.
+2. **Non-standard Radeon VII / gfx906 (dev):** keep under `docs/radeon-vii-dev/`; optional setup flag or profile (e.g. “dev-radeon-vii”) that runs Tensile inject after torch install; never imply this is required for all AMD.
+3. Durable gfx906: inject script (done); re-run after torch reinstall; optional future vendor/document only for that profile.
+4. Vectors health: requested vs effective device honesty (optional polish).
+5. Do **not** block meal/channel product path on GPU presence.
+6. Gate B: standalone smoke green; **product worker + in-moment encode dogfood still required** before semantic default-on.
+7. **Moment encode dogfood (next):** during a live moment, confirm encode queue activity, atom vectors land, health/device stay ROCm, and semantic expand is not load-only. Capture moment id + log snippets when repro’d.
+8. **Project-wide setup script (ongoing feature, not VII-only):** evolve `scripts/setup_venv.sh` / project setup into a single operator entry that can install extras, optional torch backend (cpu / cuda / rocm), probe devices, run smoke gates, and **optionally** apply non-standard profiles (e.g. Radeon VII Tensile inject). Track as iterative work — not a one-shot PR; keep secrets out of repo; keep machine-specific freezes out of the generic path.
 
 ### Dogfood — venv ROCm smoke after Tensile inject (2026-07-29)
 
@@ -656,8 +672,10 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 ### Related
 
 - **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
-- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions; bug stays **Open**.
+- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions, portability notes; bug stays **Open**.
 - [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii-dev/STACK-INVENTORY.md) — post-switch inventory / A5 status.
+- [radeon-vii-dev/scripts/00_inject_gfx906_tensile.py](radeon-vii-dev/scripts/00_inject_gfx906_tensile.py) — **dev-only** gfx906 path, not generic AMD.
+- Project setup today: [docs/README.md](README.md) / `scripts/setup_venv.sh` — to grow into multi-backend setup (ongoing).
 
 ---
 

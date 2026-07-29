@@ -342,4 +342,34 @@ Possible explanations (unranked, not yet tested):
 
 ---
 
-*PR5 ops: Tensile inject unlocked A5/A7; real Nemotron on cuda:0 demonstrated. Product pin later set to rocm; in-moment encode still open. Bug remains Open.*
+## Productization notes — generic modern vs Radeon VII dev (2026-07-29)
+
+Tracked on **BUG-mem-gpu-01** even though much of this is **feature / setup** work, so the product shape is not lost.
+
+### Desired product shape
+
+| Path | Status goal | Notes |
+|------|-------------|--------|
+| **CPU** | First-class | Default-safe, CI, no GPU |
+| **CUDA** | First-class | Matching NVIDIA torch in venv |
+| **ROCm modern** | First-class | AMD GPUs **in official wheel Tensile set**; host ROCm + `+rocm*` wheel; **A5 green without inject** |
+| **Radeon VII / gfx906** | **Non-standard dev** | Isolated under `docs/radeon-vii-dev/`; Tensile inject is **VII-specific**, not the AMD template |
+
+**Other AMD GPUs:** usually work **without** `00_inject_gfx906_tensile` if packages match and matmul smoke passes. Red A5 (missing Tensile for that `gfx####`) is an arch/wheel problem — do not generalize the VII inject recipe blindly.
+
+### Project-wide setup script (ongoing)
+
+Not Radeon-only. Evolve project setup (`scripts/setup_venv.sh` and friends) over time toward:
+
+1. Create/activate project venv (already).
+2. Optional extras (`memory-embed`, sandbox, search, …).
+3. Optional **torch backend**: cpu / cuda / rocm (matching host).
+4. Probe + hard gate (matmul) before advertising GPU embed.
+5. **Optional non-standard profiles** (e.g. `--dev-radeon-vii` → run Tensile inject after ROCm torch install).
+6. Never commit secrets; keep machine freezes out of the generic path.
+
+This is **ongoing**, not a single PR. Record progress under BUG-mem-gpu-01 / setup docs as it lands.
+
+---
+
+*PR5 ops: Tensile inject unlocked A5/A7; real Nemotron on cuda:0 demonstrated. Product pin later set to rocm; in-moment encode still open. Generic CUDA/ROCm/CPU + VII-as-dev + project setup script recorded on BUG-mem-gpu-01. Bug remains Open.*
