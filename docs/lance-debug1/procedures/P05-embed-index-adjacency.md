@@ -72,10 +72,10 @@ Record:
 
 | Field | Source |
 |-------|--------|
-| `process.atom_count` | health / overview |
-| `process.vectors_ready` | health / vectors endpoint |
-| `vectors_by_channel` | if present |
-| Index notes | `below_ivf_min`, `ann_index_built`, `no_index` |
+| `process.atom_count` | R2: `GET /api/memory` overview; W1: `store.health()["atom_count"]` |
+| `process.vectors_ready` | R2: **`GET /api/memory/vectors`** → `index.vectors_ready` (not on overview); W1: `store.health()["vectors_ready"]` |
+| `vectors_by_channel` | if present on vectors/index health |
+| Index notes | `below_ivf_min`, `ann_index_built`, `no_index` on vectors payload |
 
 ### 3. Seed list vs process ready
 

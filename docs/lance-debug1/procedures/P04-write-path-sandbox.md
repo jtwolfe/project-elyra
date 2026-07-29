@@ -44,26 +44,49 @@ Record `n_full_before`, `n_arrow_before`, `n_versions_before` (if present).
 
 ### 1. Synthetic put (W1 store open)
 
-Open `LanceMemoryStore` on the marked quarantine and put **one** synthetic atom (or a thin harness that only calls `put_atom`). Marker required — same rule as `load_parity.py`:
+Open `LanceMemoryStore` on the marked quarantine and put **one** synthetic atom. Marker required — same rule as `load_parity.py`:
 
 ```text
 marker = Path(data_dir).resolve().parent / ".lance-debug1-quarantine"
 ```
 
-Example sketch (operator notebook / one-off; not a product entrypoint):
+**Preferred:** after the put (or if you only need load parity), re-run:
+
+```bash
+python docs/lance-debug1/scripts/load_parity.py \
+  --data-dir "$LANCE_DEBUG_DATA_DIR" \
+  --api-matrix "$RUN/api-matrix-before-write.json" \
+  --out "$RUN/load-parity-after-write.json"
+```
+
+(`load_parity` already builds `ElyraPaths` correctly via `_build_elyra_paths`.)
+
+Operator notebook sketch for a single synthetic `put_atom` (not a product entrypoint). **Do not** use bare `ElyraPaths(data_dir=…)` — the dataclass requires all six path args (same construction as `load_parity.py`):
 
 ```python
+import os
 from pathlib import Path
+
 from elyra.config import ElyraPaths
 from elyra.memory.config import MemorySettings
 from elyra.memory.lance_store import LanceMemoryStore
 from elyra.memory.types import Atom, utc_now_iso
 
-data_dir = Path("$LANCE_DEBUG_DATA_DIR")  # …/data
-marker = data_dir.resolve().parent / ".lance-debug1-quarantine"
-assert marker.is_file(), marker
+# Env expansion — not a literal "$LANCE_DEBUG_DATA_DIR" path
+data_dir = Path(os.environ["LANCE_DEBUG_DATA_DIR"]).resolve()  # …/data
+marker = data_dir.parent / ".lance-debug1-quarantine"
+assert marker.is_file(), f"missing marker {marker}"
 
-paths = ElyraPaths(data_dir=str(data_dir))
+# Match load_parity._build_elyra_paths (home = quarantine root = data_dir.parent)
+home = data_dir.parent
+paths = ElyraPaths(
+    home=home,
+    model_dir=home / "model",
+    data_dir=data_dir,
+    skills_dir=home / "skills",
+    tools_dir=home / "tools",
+    prompts_dir=home / "prompts",
+)
 store = LanceMemoryStore(paths, MemorySettings(backend="lance"))
 atom = Atom(
     atom_id="lance-debug1-probe-write-001",
@@ -74,8 +97,8 @@ atom = Atom(
 )
 store.put_atom(atom)
 print("process_count", len(store._by_id))
-print("health", store.health().get("atom_count"))
-store.close()  # if available; else process exit
+print("health_atom_count", store.health().get("atom_count"))
+# LanceMemoryStore may not expose close(); process exit is fine
 ```
 
 **Forbidden:** `compact_files`, `cleanup_old_versions`, `optimize`, `delete`, `drop_table`, live migrate.

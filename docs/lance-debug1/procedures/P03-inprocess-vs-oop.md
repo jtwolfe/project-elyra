@@ -48,8 +48,8 @@ Record at least:
 
 | Field | Source |
 |-------|--------|
-| `atom_count` | overview / store health |
-| `vectors_ready` | overview or `/api/memory/vectors` |
+| `atom_count` | `GET /api/memory` overview (store health / memory flags) |
+| `vectors_ready` | **`GET /api/memory/vectors`** → `index.vectors_ready` (not on overview) |
 | Atom list length + kinds (newest-first) | `/api/memory/atoms` |
 | Meal / semantic omit reasons | `/api/memory/context` |
 

@@ -45,7 +45,8 @@ BASE="${ELYRA_GLASS_BASE:-http://127.0.0.1:8787}"
 RUN=docs/lance-debug1/evidence/$(date +%Y-%m-%d)-run-01/glass
 mkdir -p "$RUN"
 
-# Overview — flags + store health (atom_count, vectors_ready)
+# Overview — flags + store health atom_count (process only).
+# Note: worker memory status block does NOT include vectors_ready.
 curl -sS "$BASE/api/memory" | tee "$RUN/overview.json"
 
 # Context meal inspector
@@ -58,7 +59,7 @@ curl -sS "$BASE/api/memory/atoms?limit=50&kind=tool" | tee "$RUN/atoms-tool.json
 # Single atom
 # curl -sS "$BASE/api/memory/atoms/ATOM_ID" | tee "$RUN/atom-detail.json"
 
-# Vectors health + atom emb status list
+# Vectors health — process vectors_ready is here (index.vectors_ready), not overview
 curl -sS "$BASE/api/memory/vectors" | tee "$RUN/vectors.json"
 curl -sS "$BASE/api/memory/vectors/atoms?limit=200" | tee "$RUN/vectors-atoms.json"
 # curl -sS "$BASE/api/memory/vectors/neighbors?atom_id=ATOM_ID&k=12" | tee "$RUN/vectors-neighbors.json"
