@@ -2,8 +2,9 @@
 
 Scope: Protocol-complete Lance persistence under data/memory/lance/.
 In scope: put/get/range/moment/links/walk/health, blob spill, meta.json,
-          additive emb_* columns, migration, KD19 preserve, upsert_vectors.
-Out of scope: ANN hybrid buffer (PR4), meal channel, torch.
+          additive emb_* columns, migration, KD19 preserve, upsert_vectors,
+          Lance-native ``search_vectors`` (KD-R4) with Python cosine fallback.
+Out of scope: hybrid recent-buffer (index.py), meal channel, torch.
 
 Requires optional dependency: ``pip install elyra[memory-lance]`` (lancedb).
 """
@@ -203,6 +204,9 @@ class LanceMemoryStore:
         self._vector_schema_ok: bool = False
         self._vector_error: str | None = None
         self._joint_repair_last_batch: int = 0
+        # KD-R4: sticky Lance-native search health (None=never tried).
+        self._lance_search_ok: bool | None = None
+        self._lance_search_error_logged: bool = False
         # Phase 2 write hook (encode enqueue); best-effort, never raises out.
         self._write_hook: AtomWriteHook | None = None
         self._ensure_layout()
@@ -1252,6 +1256,26 @@ class LanceMemoryStore:
             "vectors_by_channel": counts,
         }
 
+    def ann_search_backend(self) -> str:
+        """Configured main-leg engine: ``lance_native`` (default) or ``python``."""
+        raw = getattr(self._settings, "ann_search_backend", "lance_native")
+        if isinstance(raw, str):
+            val = raw.strip().lower()
+            if val in ("lance_native", "python"):
+                return val
+        return "lance_native"
+
+    def vector_search_status(self) -> dict[str, Any]:
+        """Honesty for index ``search_mode`` (KD-R4 / OQ-R6).
+
+        ``lance_search_ok`` is sticky: None=never tried, True=last Lance path
+        succeeded, False=Lance failed and Python fallback was used.
+        """
+        return {
+            "ann_search_backend": self.ann_search_backend(),
+            "lance_search_ok": self._lance_search_ok,
+        }
+
     def search_vectors(
         self,
         query: Sequence[float],
@@ -1265,16 +1289,30 @@ class LanceMemoryStore:
         exclude_atom_ids: Sequence[str] | None = None,
         exclude_moment_id: str | None = None,
     ) -> list[tuple[str, float]]:
-        """Brute-force cosine over ready emb columns (PR3 minimal search).
+        """Main-leg vector search: Lance-native preferred, Python cosine fallback.
 
-        Returns list of (atom_id, score) sorted by score desc. ANN / hybrid
-        buffer is PR4.
+        Concrete channel only (never ``auto``). Returns ``(atom_id, score)``
+        sorted by score desc.
+
+        When ``ann_search_backend=lance_native`` (default): ``table.search`` on
+        ``emb_{channel}`` with cosine metric. Product score = ``1.0 - distance``
+        when Lance returns cosine distance ``d`` in ``[0, 2]`` (≈ cosine
+        similarity). Filters (ready-only, kind, time, moment_id,
+        exclude_atom_ids, exclude_moment_id) are applied with the same
+        semantics as the Python path (post-filter when not pushed down).
+
+        When ``ann_search_backend=python`` or Lance fails: in-process cosine
+        over ``_emb_by_id``. On Lance failure: log once; sticky fallback flag
+        for honest ``search_mode`` reporting.
         """
         with self._lock:
             self._check_open()
             if not self._vector_schema_ok or not query:
                 return []
-            col = f"emb_{channel}" if not channel.startswith("emb_") else channel
+            ch = (channel or "joint").strip().lower()
+            if ch.startswith("emb_"):
+                ch = ch[len("emb_") :]
+            col = f"emb_{ch}"
             if col not in _EMB_VECTOR_COLS:
                 return []
             q = [float(x) for x in query]
@@ -1283,46 +1321,235 @@ class LanceMemoryStore:
                 return []
             q = [x / q_norm for x in q]
 
-            start_s = to_iso_z(t_start) if t_start is not None else None
-            end_s = to_iso_z(t_end) if t_end is not None else None
-            kind_set = set(kinds) if kinds is not None else None
-            exclude = set(exclude_atom_ids or ())
+            n_ch = int(self._vectors_by_channel_unlocked().get(ch) or 0)
+            if n_ch == 0:
+                return []
 
-            scored: list[tuple[str, float]] = []
-            for atom_id, emb_map in self._emb_by_id.items():
-                if atom_id in exclude:
-                    continue
-                atom = self._by_id.get(atom_id)
-                if atom is None:
-                    continue
-                if atom.embedding_status != "ready":
-                    continue
-                if kind_set is not None and atom.kind not in kind_set:
-                    continue
-                if moment_id is not None and atom.moment_id != moment_id:
-                    continue
-                if exclude_moment_id and atom.moment_id == exclude_moment_id:
-                    continue
-                at = to_iso_z(atom.t_start)
-                if start_s is not None and at < start_s:
-                    continue
-                if end_s is not None and at >= end_s:
-                    continue
-                raw = emb_map.get(col)
-                if raw is None:
-                    continue
-                vec = [float(x) for x in raw]
-                if len(vec) != len(q):
-                    continue
-                # Vectors stored L2-normalized; still normalize defensively.
-                v_norm = math.sqrt(sum(x * x for x in vec))
-                if v_norm < 1e-12:
-                    continue
-                score = sum(a * b for a, b in zip(q, vec, strict=False)) / v_norm
-                scored.append((atom_id, float(score)))
+            backend = self.ann_search_backend()
+            if backend == "python":
+                return self._search_vectors_python(
+                    q,
+                    col=col,
+                    k=k,
+                    t_start=t_start,
+                    t_end=t_end,
+                    moment_id=moment_id,
+                    kinds=kinds,
+                    exclude_atom_ids=exclude_atom_ids,
+                    exclude_moment_id=exclude_moment_id,
+                )
 
-            scored.sort(key=lambda p: (-p[1], p[0]))
-            return scored[: max(0, int(k))]
+            # lance_native — try table.search; fall back to Python on failure.
+            try:
+                hits = self._search_vectors_lance(
+                    q,
+                    col=col,
+                    k=k,
+                    n_ch=n_ch,
+                    t_start=t_start,
+                    t_end=t_end,
+                    moment_id=moment_id,
+                    kinds=kinds,
+                    exclude_atom_ids=exclude_atom_ids,
+                    exclude_moment_id=exclude_moment_id,
+                )
+                self._lance_search_ok = True
+                return hits
+            except Exception as exc:  # noqa: BLE001
+                self._lance_search_ok = False
+                if not self._lance_search_error_logged:
+                    self._lance_search_error_logged = True
+                    _LOG.warning(
+                        "Lance-native vector search failed (%s); "
+                        "falling back to Python cosine. "
+                        "Set memory.ann_search_backend=python to silence.",
+                        exc,
+                    )
+                return self._search_vectors_python(
+                    q,
+                    col=col,
+                    k=k,
+                    t_start=t_start,
+                    t_end=t_end,
+                    moment_id=moment_id,
+                    kinds=kinds,
+                    exclude_atom_ids=exclude_atom_ids,
+                    exclude_moment_id=exclude_moment_id,
+                )
+
+    def _search_vectors_python(
+        self,
+        q: list[float],
+        *,
+        col: str,
+        k: int,
+        t_start: datetime | str | None,
+        t_end: datetime | str | None,
+        moment_id: str | None,
+        kinds: Sequence[str] | None,
+        exclude_atom_ids: Sequence[str] | None,
+        exclude_moment_id: str | None,
+    ) -> list[tuple[str, float]]:
+        """In-process cosine over ready emb columns (filter-complete path)."""
+        start_s = to_iso_z(t_start) if t_start is not None else None
+        end_s = to_iso_z(t_end) if t_end is not None else None
+        kind_set = set(kinds) if kinds is not None else None
+        exclude = set(exclude_atom_ids or ())
+
+        scored: list[tuple[str, float]] = []
+        for atom_id, emb_map in self._emb_by_id.items():
+            if atom_id in exclude:
+                continue
+            atom = self._by_id.get(atom_id)
+            if atom is None:
+                continue
+            if not self._atom_passes_vector_filters(
+                atom,
+                start_s=start_s,
+                end_s=end_s,
+                moment_id=moment_id,
+                kind_set=kind_set,
+                exclude_moment_id=exclude_moment_id,
+            ):
+                continue
+            raw = emb_map.get(col)
+            if raw is None:
+                continue
+            vec = [float(x) for x in raw]
+            if len(vec) != len(q):
+                continue
+            # Vectors stored L2-normalized; still normalize defensively.
+            v_norm = math.sqrt(sum(x * x for x in vec))
+            if v_norm < 1e-12:
+                continue
+            score = sum(a * b for a, b in zip(q, vec, strict=False)) / v_norm
+            scored.append((atom_id, float(score)))
+
+        scored.sort(key=lambda p: (-p[1], p[0]))
+        return scored[: max(0, int(k))]
+
+    def _search_vectors_lance(
+        self,
+        q: list[float],
+        *,
+        col: str,
+        k: int,
+        n_ch: int,
+        t_start: datetime | str | None,
+        t_end: datetime | str | None,
+        moment_id: str | None,
+        kinds: Sequence[str] | None,
+        exclude_atom_ids: Sequence[str] | None,
+        exclude_moment_id: str | None,
+    ) -> list[tuple[str, float]]:
+        """Lance/LanceDB native vector query + Python post-filter (KD-R4).
+
+        Score formula (pinned): cosine distance ``d`` → ``score = 1.0 - d``.
+        """
+        table = self._table
+        if table is None or not hasattr(table, "search"):
+            raise RuntimeError("no Lance table.search available")
+
+        want_k = max(0, int(k))
+        if want_k == 0:
+            return []
+
+        # Over-fetch so post-filters do not starve top-k. Small corpora
+        # materialize the full channel set for exact filter parity.
+        if n_ch <= max(2000, want_k * 50):
+            fetch_k = max(n_ch, want_k)
+        else:
+            fetch_k = max(want_k * 20, want_k, 64)
+            fetch_k = min(fetch_k, n_ch)
+
+        builder = table.search(list(q), vector_column_name=col)
+        if hasattr(builder, "metric"):
+            try:
+                builder = builder.metric("cosine")
+            except Exception:  # noqa: BLE001
+                pass
+        builder = builder.limit(int(fetch_k))
+        if hasattr(builder, "select"):
+            try:
+                builder = builder.select(["atom_id"])
+            except Exception:  # noqa: BLE001
+                pass
+
+        if hasattr(builder, "to_list"):
+            rows = builder.to_list()
+        elif hasattr(builder, "to_arrow"):
+            rows = builder.to_arrow().to_pylist()
+        elif hasattr(builder, "to_pandas"):
+            rows = builder.to_pandas().to_dict("records")
+        else:
+            raise RuntimeError("Lance search result has no to_list/to_arrow")
+
+        start_s = to_iso_z(t_start) if t_start is not None else None
+        end_s = to_iso_z(t_end) if t_end is not None else None
+        kind_set = set(kinds) if kinds is not None else None
+        exclude = set(exclude_atom_ids or ())
+
+        scored: list[tuple[str, float]] = []
+        for row in rows or ():
+            if not isinstance(row, dict):
+                continue
+            atom_id = row.get("atom_id")
+            if not atom_id or atom_id in exclude:
+                continue
+            atom = self._by_id.get(str(atom_id))
+            if atom is None:
+                continue
+            if not self._atom_passes_vector_filters(
+                atom,
+                start_s=start_s,
+                end_s=end_s,
+                moment_id=moment_id,
+                kind_set=kind_set,
+                exclude_moment_id=exclude_moment_id,
+            ):
+                continue
+            # Cosine distance d ∈ [0, 2] → product score = 1 - d (≈ cosine sim).
+            dist = row.get("_distance")
+            if dist is None:
+                dist = row.get("distance")
+            if dist is None:
+                continue
+            try:
+                score = 1.0 - float(dist)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(score):
+                continue
+            scored.append((str(atom_id), float(score)))
+
+        scored.sort(key=lambda p: (-p[1], p[0]))
+        return scored[:want_k]
+
+    @staticmethod
+    def _atom_passes_vector_filters(
+        atom: Atom,
+        *,
+        start_s: str | None,
+        end_s: str | None,
+        moment_id: str | None,
+        kind_set: set[str] | None,
+        exclude_moment_id: str | None,
+    ) -> bool:
+        """Shared ready/kind/time/moment filters for python + lance paths."""
+        if atom.embedding_status != "ready":
+            return False
+        if kind_set is not None and atom.kind not in kind_set:
+            return False
+        if moment_id is not None and atom.moment_id != moment_id:
+            return False
+        if exclude_moment_id and atom.moment_id == exclude_moment_id:
+            return False
+        at = to_iso_z(atom.t_start)
+        if start_s is not None and at < start_s:
+            return False
+        if end_s is not None and at >= end_s:
+            return False
+        return True
 
     def list_by_moment(
         self,

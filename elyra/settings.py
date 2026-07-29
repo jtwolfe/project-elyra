@@ -19,6 +19,7 @@ import tomllib
 from elyra.llm.constants import MODEL_CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 from elyra.memory.config import (
+    MEMORY_ANN_SEARCH_BACKENDS,
     MEMORY_BACKENDS,
     MEMORY_EMBED_BACKENDS,
     MEMORY_EMBED_DEVICES,
@@ -35,6 +36,7 @@ _MEMORY_EMBED_BACKENDS = MEMORY_EMBED_BACKENDS
 _MEMORY_EMBED_DEVICES = MEMORY_EMBED_DEVICES
 _MEMORY_SEARCH_CHANNELS = MEMORY_SEARCH_CHANNELS
 _MEMORY_ANN_CHANNELS = CHANNEL_SET
+_MEMORY_ANN_SEARCH_BACKENDS = MEMORY_ANN_SEARCH_BACKENDS
 
 
 @dataclass(frozen=True)
@@ -381,6 +383,14 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                 raise ValueError(
                     f"{path}: expected one of {sorted(_MEMORY_SEARCH_CHANNELS)}, "
                     f"got {coerced!r}"
+                )
+        if path == "memory.ann_search_backend":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_ANN_SEARCH_BACKENDS:
+                raise ValueError(
+                    f"{path}: expected one of "
+                    f"{sorted(_MEMORY_ANN_SEARCH_BACKENDS)}, got {coerced!r}"
                 )
         if path in (
             "memory.semantic_fraction",

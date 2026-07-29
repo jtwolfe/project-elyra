@@ -1043,6 +1043,37 @@ def test_memory_ann_ivf_min_and_index_channels_defaults():
     s = default_settings()
     assert s.memory.ann_ivf_min_vectors == 256
     assert s.memory.ann_index_channels == ("joint",)
+    # KD-R4: lance_native is default primary search path.
+    assert s.memory.ann_search_backend == "lance_native"
+
+
+def test_memory_ann_search_backend_toml_and_allowlist(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_search_backend = "Python"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_search_backend == "python"
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_search_backend = "lance_native"\n',
+        encoding="utf-8",
+    )
+    s2 = load_settings(tmp_path)
+    assert s2.memory.ann_search_backend == "lance_native"
+
+
+def test_memory_ann_search_backend_invalid_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_search_backend = "faiss"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_search_backend"):
+        load_settings(tmp_path)
 
 
 def test_memory_ann_ivf_min_and_channels_toml(tmp_path):

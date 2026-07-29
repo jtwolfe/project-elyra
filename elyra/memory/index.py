@@ -540,6 +540,34 @@ class _FreshnessState:
                 self.ann_index_channels = merged
         return removed
 
+    def resolve_search_mode(
+        self,
+        vectors_ready: int,
+        *,
+        ann_search_backend: str = "lance_native",
+        lance_search_ok: bool | None = None,
+        engine: str = "lance",
+    ) -> str:
+        """Honest search_mode (KD-R4 / OQ-R6).
+
+        One of: ``full_python`` | ``full_lance`` | ``hybrid`` |
+        ``hybrid_python_fallback``.
+
+        - ``engine="memory"``: in-process index — full_python / hybrid
+        - ``engine="lance"``: lance_native + healthy → full_lance / hybrid;
+          python config or sticky Lance failure → full_python /
+          hybrid_python_fallback
+        """
+        full = self.use_full_search(vectors_ready)
+        backend = (ann_search_backend or "lance_native").strip().lower()
+        if engine == "memory":
+            return "full_python" if full else "hybrid"
+        # Lance path
+        use_python = backend == "python" or lance_search_ok is False
+        if full:
+            return "full_python" if use_python else "full_lance"
+        return "hybrid_python_fallback" if use_python else "hybrid"
+
     def health_fields(
         self,
         *,
@@ -547,13 +575,23 @@ class _FreshnessState:
         vectors_by_channel: Mapping[str, int] | None = None,
         joint_repair_remaining: int = 0,
         joint_repair_last_batch: int = 0,
+        ann_search_backend: str = "lance_native",
+        lance_search_ok: bool | None = None,
+        engine: str = "lance",
     ) -> dict[str, Any]:
+        mode = self.resolve_search_mode(
+            vectors_ready,
+            ann_search_backend=ann_search_backend,
+            lance_search_ok=lance_search_ok,
+            engine=engine,
+        )
         return {
             "vectors_ready": int(vectors_ready),
             "index_stale": self.is_stale(vectors_ready=vectors_ready),
             "recent_buffer": len(self.buffer),
-            "search_mode": (
-                "full" if self.use_full_search(vectors_ready) else "hybrid"
+            "search_mode": mode,
+            "ann_search_backend": (
+                (ann_search_backend or "lance_native").strip().lower()
             ),
             "encodes_since_optimize": self.encodes_since_optimize,
             "last_optimize": self.last_optimize_at,
@@ -706,7 +744,9 @@ class NullEmbeddingIndex:
             "index_stale": False,
             "recent_buffer": 0,
             "vectors": False,
-            "search_mode": "full",
+            # JSONL / Null never calls table.search (KD-R4).
+            "search_mode": "full_python",
+            "ann_search_backend": "python",
             "vectors_by_channel": empty_vectors_by_channel(),
             "joint_repair_remaining": 0,
             "joint_repair_last_batch": 0,
@@ -1098,6 +1138,8 @@ class MemoryEmbeddingIndex:
                 vectors_by_channel=self._vectors_by_channel_unlocked(),
                 joint_repair_remaining=self._joint_repair_remaining_unlocked(),
                 joint_repair_last_batch=self._joint_repair_last_batch,
+                ann_search_backend="python",
+                engine="memory",
             )
         return {
             "ok": True,
@@ -1684,12 +1726,37 @@ class LanceEmbeddingIndex:
         ok = bool(store_h.get("ok", True)) and vector_ok and not vector_error
         counts = self._vectors_by_channel()
         remaining = self._joint_repair_remaining()
+
+        # KD-R4: honest search_mode from config + sticky Lance search status.
+        backend = "lance_native"
+        if self._settings is not None:
+            raw = getattr(self._settings, "ann_search_backend", None)
+            if isinstance(raw, str) and raw.strip():
+                backend = raw.strip().lower()
+        lance_ok: bool | None = None
+        status_fn = getattr(self._store, "vector_search_status", None)
+        if callable(status_fn):
+            try:
+                st = status_fn() or {}
+                backend = str(st.get("ann_search_backend") or backend)
+                lance_ok = st.get("lance_search_ok")
+            except Exception:  # noqa: BLE001
+                pass
+        elif hasattr(self._store, "ann_search_backend"):
+            try:
+                backend = str(self._store.ann_search_backend())
+            except Exception:  # noqa: BLE001
+                pass
+
         with self._lock:
             fields = self._fresh.health_fields(
                 vectors_ready=int(store_h.get("vectors_ready") or 0),
                 vectors_by_channel=counts,
                 joint_repair_remaining=remaining,
                 joint_repair_last_batch=self._joint_repair_last_batch,
+                ann_search_backend=backend,
+                lance_search_ok=lance_ok,
+                engine="lance",
             )
         return {
             "ok": ok,

@@ -845,7 +845,8 @@ def test_full_search_mode_below_threshold(store):
     emb = _emb_set(a.atom_id, seed="fullmode")
     idx.upsert(emb)
     h = idx.health()
-    assert h["search_mode"] == "full"
+    # Memory index is always in-process cosine → full_python (KD-R4 honesty).
+    assert h["search_mode"] == "full_python"
     assert h["vectors_ready"] == 1
     hits = idx.search(emb.emb_joint, k=3)
     assert any(x.atom_id == a.atom_id for x in hits)
@@ -1117,7 +1118,8 @@ def test_restart_full_mode_search_returns_recent():
     del idx
     idx2 = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
     h = idx2.health()
-    assert h["search_mode"] == "full"
+    # Default ann_search_backend=lance_native → full_lance at small N (OQ-R6).
+    assert h["search_mode"] == "full_lance"
     assert h["vectors_ready"] == 5
     # Recent buffer not required in full mode after restart.
     q = mock_vector("joint:r4", dim=EMBED_DIM)
@@ -1128,8 +1130,8 @@ def test_restart_full_mode_search_returns_recent():
 def test_restart_hybrid_seed_returns_recent():
     """Above full_search_below: open seeds buffer; search finds recent.
 
-    Until ANN is built, search_mode stays full (KD4); buffer is still seeded
-    so hybrid is ready after a successful optimize.
+    Until ANN is built, search_mode stays full_lance (KD4 + OQ-R6); buffer is
+    still seeded so hybrid is ready after a successful optimize.
     """
     store = _FakeLanceStore(create_index_ok=True)
     # full_search_below=0 → above threshold immediately; seed last N on open.
@@ -1158,7 +1160,7 @@ def test_restart_hybrid_seed_returns_recent():
     idx2 = LanceEmbeddingIndex(store, ann=ann, seed_on_open=True)
     h = idx2.health()
     assert h["ann_index_built"] is False
-    assert h["search_mode"] == "full"  # full until index built
+    assert h["search_mode"] == "full_lance"  # full until index built (OQ-R6)
     assert h["recent_buffer"] >= 1
     assert h["seed_incomplete"] is False
     assert h["index_stale"] is True  # no ANN yet with vectors
@@ -1231,7 +1233,7 @@ def test_use_full_search_until_ann_built():
     h = idx.health()
     assert h["vectors_ready"] >= 2
     assert h["ann_index_built"] is False
-    assert h["search_mode"] == "full"
+    assert h["search_mode"] == "full_lance"
     idx.optimize()
     assert idx.health()["search_mode"] == "hybrid"
     assert idx.health()["ann_index_built"] is True
@@ -1690,3 +1692,76 @@ def test_ann_settings_from_ivf_and_channels():
     )._fresh.ann  # noqa: SLF001
     assert ann2.ivf_min_vectors == 128
     assert ann2.index_channels == ("joint", "text")
+
+
+def test_resolve_search_mode_honesty_matrix():
+    """KD-R4 / OQ-R6: honest full_python | full_lance | hybrid | hybrid_python_fallback."""
+    from elyra.memory.index import _FreshnessState
+
+    full_state = _FreshnessState(AnnSettings(full_search_below=2000))
+    # Small N → full_*
+    assert (
+        full_state.resolve_search_mode(10, ann_search_backend="lance_native")
+        == "full_lance"
+    )
+    assert (
+        full_state.resolve_search_mode(10, ann_search_backend="python")
+        == "full_python"
+    )
+    assert (
+        full_state.resolve_search_mode(
+            10, ann_search_backend="lance_native", lance_search_ok=False
+        )
+        == "full_python"
+    )
+    assert (
+        full_state.resolve_search_mode(10, engine="memory") == "full_python"
+    )
+
+    hybrid_state = _FreshnessState(AnnSettings(full_search_below=0))
+    hybrid_state.ann_index_built = True
+    assert (
+        hybrid_state.resolve_search_mode(
+            5000, ann_search_backend="lance_native"
+        )
+        == "hybrid"
+    )
+    assert (
+        hybrid_state.resolve_search_mode(5000, ann_search_backend="python")
+        == "hybrid_python_fallback"
+    )
+    assert (
+        hybrid_state.resolve_search_mode(
+            5000, ann_search_backend="lance_native", lance_search_ok=False
+        )
+        == "hybrid_python_fallback"
+    )
+    assert hybrid_state.resolve_search_mode(5000, engine="memory") == "hybrid"
+
+
+def test_lance_index_search_mode_respects_python_backend():
+    """ann_search_backend=python → full_python even at small N (rollback knob)."""
+    store = _FakeLanceStore()
+    settings = MemorySettings(ann_search_backend="python")
+    ann = AnnSettings(full_search_below=2000)
+    idx = LanceEmbeddingIndex(store, ann=ann, settings=settings)
+    store.put_atom(_atom(text="py", atom_id="py1"))
+    assert idx.upsert(_emb_set("py1", seed="py")) is True
+    h = idx.health()
+    assert h["search_mode"] == "full_python"
+    assert h["ann_search_backend"] == "python"
+
+
+def test_null_index_never_claims_lance_search():
+    idx = NullEmbeddingIndex()
+    h = idx.health()
+    assert h["search_mode"] == "full_python"
+    assert h["backend"] == "null"
+    assert idx.search([0.1] * 8) == []
+
+
+def test_lance_score_formula_one_minus_distance():
+    """PR-R4 pin: product score = 1 - cosine_distance (d ∈ [0, 2] → sim ∈ [-1, 1])."""
+    for d, expected in ((0.0, 1.0), (0.5, 0.5), (1.0, 0.0), (2.0, -1.0)):
+        score = 1.0 - float(d)
+        assert score == expected

@@ -42,6 +42,8 @@ _MEMORY_BACKENDS = MEMORY_BACKENDS  # alias for older call sites
 MEMORY_EMBED_BACKENDS = EMBED_BACKENDS
 MEMORY_EMBED_DEVICES = EMBED_DEVICE_PREFS
 MEMORY_SEARCH_CHANNELS = SEARCH_CHANNEL_SET
+# KD-R4: sole rollback knob for main-leg vector search engine.
+MEMORY_ANN_SEARCH_BACKENDS = frozenset({"lance_native", "python"})
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,9 @@ class MemorySettings:
     ann_ivf_min_vectors: int = 256
     # KD-R3: columns to build ANN on (channel names ⊂ CHANNEL_SET). Default joint only.
     ann_index_channels: tuple[str, ...] = ("joint",)
+    # KD-R4 / OQ-R6: primary main-leg engine. Sole rollback is ``python``.
+    # Small-N under lance_native reports search_mode=full_lance (not full_python).
+    ann_search_backend: str = "lance_native"  # lance_native | python
 
 
 def memory_root(paths: ElyraPaths) -> Path:
@@ -172,6 +177,7 @@ __all__ = [
     "LADDER_DIRNAME",
     "LADDER_STATE",
     "LANCE_DIRNAME",
+    "MEMORY_ANN_SEARCH_BACKENDS",
     "MEMORY_BACKENDS",
     "MEMORY_DIRNAME",
     "MEMORY_EMBED_BACKENDS",
