@@ -136,6 +136,9 @@ def meal_package_to_inspect(
         "semantic_omitted_reason": getattr(
             package, "semantic_omitted_reason", None
         ),
+        "semantic_select_meta": getattr(
+            package, "semantic_select_meta", None
+        ),
         "fixed": fixed_block,
         "items": items,
         "channels": by_channel,

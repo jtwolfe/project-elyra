@@ -13,10 +13,13 @@ from elyra.memory.config import MemorySettings
 from elyra.memory.embed.mock import MockEmbedder, mock_vector
 from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
 from elyra.memory.index import MemoryEmbeddingIndex, ScoredAtom
+from elyra.memory.inspect import meal_package_to_inspect
 from elyra.memory.meal import (
+    SEMANTIC_OMIT_DEDUPED,
     SEMANTIC_OMIT_EMPTY_SEED,
     SEMANTIC_OMIT_ENCODER,
     SEMANTIC_OMIT_MIN_SCORE,
+    SEMANTIC_OMIT_NO_HITS,
     SEMANTIC_OMIT_NO_INDEX,
     SEMANTIC_OMIT_TIMEOUT,
     compose_meal,
@@ -210,7 +213,7 @@ class _FixedHitIndex:
 
 def test_select_semantic_no_index(store):
     emb = MockEmbedder()
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=None,
         embedder=emb,
@@ -222,11 +225,13 @@ def test_select_semantic_no_index(store):
     )
     assert items == []
     assert reason == SEMANTIC_OMIT_NO_INDEX
+    assert meta is not None
+    assert "elapsed_ms" in meta
 
 
 def test_select_semantic_encoder_not_warm(store):
     idx = MemoryEmbeddingIndex(store)
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=None,
@@ -238,8 +243,9 @@ def test_select_semantic_encoder_not_warm(store):
     )
     assert items == []
     assert reason == SEMANTIC_OMIT_ENCODER
+    assert meta is not None
 
-    items2, reason2 = select_semantic(
+    items2, reason2, meta2 = select_semantic(
         store,
         index=idx,
         embedder=_ColdEmbedder(),
@@ -251,12 +257,13 @@ def test_select_semantic_encoder_not_warm(store):
     )
     assert items2 == []
     assert reason2 == SEMANTIC_OMIT_ENCODER
+    assert meta2 is not None
 
 
 def test_select_semantic_empty_seed(store):
     emb = MockEmbedder()
     idx = MemoryEmbeddingIndex(store)
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -268,6 +275,7 @@ def test_select_semantic_empty_seed(store):
     )
     assert items == []
     assert reason == SEMANTIC_OMIT_EMPTY_SEED
+    assert meta is not None
 
 
 def test_select_semantic_timeout_on_slow_index(store):
@@ -278,7 +286,7 @@ def test_select_semantic_timeout_on_slow_index(store):
         semantic_select_max_ms=20,
         encode_query_max_ms=15,
     )
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=slow,
         embedder=emb,
@@ -291,6 +299,7 @@ def test_select_semantic_timeout_on_slow_index(store):
     )
     assert items == []
     assert reason == SEMANTIC_OMIT_TIMEOUT
+    assert meta is not None
 
 
 def test_select_semantic_min_score_filters_all(store):
@@ -310,7 +319,7 @@ def test_select_semantic_min_score_filters_all(store):
         semantic_min_score=0.5,
         semantic_select_max_ms=500,
     )
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -323,6 +332,12 @@ def test_select_semantic_min_score_filters_all(store):
     )
     assert items == []
     assert reason == SEMANTIC_OMIT_MIN_SCORE
+    assert meta is not None
+    assert meta["raw_hits"] == 1
+    assert meta["below_min"] == 1
+    assert meta["packed"] == 0
+    assert "channel" in meta
+    assert "channel_reason" in meta
 
 
 def test_select_semantic_packs_hits_with_label(store):
@@ -338,7 +353,7 @@ def test_select_semantic_packs_hits_with_label(store):
     idx = _FixedHitIndex([hit])
     emb = MockEmbedder()
     cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -356,6 +371,13 @@ def test_select_semantic_packs_hits_with_label(store):
     assert items[0].label.startswith("semantic")
     assert "0.83" in items[0].label
     assert "cats on the roof" in items[0].content
+    assert meta is not None
+    assert meta["packed"] == 1
+    assert meta["raw_hits"] == 1
+    assert meta["deduped"] == 0
+    assert "channel" in meta
+    assert "channel_reason" in meta
+    assert "elapsed_ms" in meta
 
 
 def test_select_semantic_parcel_maps_to_parent(store):
@@ -383,7 +405,7 @@ def test_select_semantic_parcel_maps_to_parent(store):
     idx = _FixedHitIndex([hit])
     emb = MockEmbedder()
     cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -401,6 +423,8 @@ def test_select_semantic_parcel_maps_to_parent(store):
     assert "parent long story" in items[0].content
     assert items[0].meta.get("via_parcel") is True
     assert items[0].meta.get("hit_atom_id") == "a_parcel"
+    assert meta is not None
+    assert meta["packed"] == 1
 
 
 def test_select_semantic_dedup_exclude_ids(store):
@@ -416,7 +440,7 @@ def test_select_semantic_dedup_exclude_ids(store):
     idx = _FixedHitIndex([hit])
     emb = MockEmbedder()
     cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -428,8 +452,12 @@ def test_select_semantic_dedup_exclude_ids(store):
         settings=cfg,
         exclude_atom_ids={"a_dup"},
     )
-    assert reason is None
+    assert reason == SEMANTIC_OMIT_DEDUPED
     assert items == []
+    assert meta is not None
+    assert meta["raw_hits"] == 1
+    assert meta["deduped"] == 1
+    assert meta["packed"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +485,7 @@ def test_compose_meal_phase1_parity_semantic_flag_off(store):
     )
     assert "semantic" not in pkg_off.channels_present
     assert pkg_off.semantic_omitted_reason is None
+    assert pkg_off.semantic_select_meta is None
     assert any(i.channel == "temporal" for i in pkg_off.items)
 
 
@@ -530,6 +559,8 @@ def test_compose_meal_semantic_order_and_channel(store):
         assert channels.index("semantic") < channels.index("temporal")
     assert "semantic" in pkg.channels_present
     assert pkg.semantic_omitted_reason is None
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta["packed"] >= 1
     sem_items = [i for i in pkg.items if i.channel == "semantic"]
     assert any(i.atom_id == "a_sem" for i in sem_items)
 
@@ -577,6 +608,7 @@ def test_compose_meal_dedup_temporal_wins_over_semantic(store):
     )
     sem_ids = [i.atom_id for i in pkg.items if i.channel == "semantic"]
     assert "a_open" not in sem_ids
+    assert pkg.semantic_omitted_reason == SEMANTIC_OMIT_DEDUPED
 
 
 def test_compose_meal_semantic_timeout_still_returns_meal(store):
@@ -605,6 +637,8 @@ def test_compose_meal_semantic_timeout_still_returns_meal(store):
     assert pkg.semantic_omitted_reason == SEMANTIC_OMIT_TIMEOUT
     assert "semantic" not in pkg.channels_present
     assert any(i.channel == "temporal" for i in pkg.items)
+    # Timeout still attaches best-effort meta when available.
+    assert pkg.semantic_select_meta is not None
 
 
 def test_estimate_tokens_unchanged():
@@ -667,7 +701,7 @@ def test_select_semantic_auto_repair_pending_uses_text(store):
         semantic_select_max_ms=500,
         semantic_search_channel="auto",
     )
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -681,6 +715,10 @@ def test_select_semantic_auto_repair_pending_uses_text(store):
     assert reason is None
     assert len(items) == 1
     assert idx.last_channel == "text"
+    assert meta is not None
+    assert meta["channel"] == "text"
+    assert meta["channel_reason"] == "auto_text_repair_pending"
+    assert meta["joint_repair_remaining"] == 3
 
 
 def test_select_semantic_auto_post_repair_uses_joint(store):
@@ -705,7 +743,7 @@ def test_select_semantic_auto_post_repair_uses_joint(store):
         semantic_select_max_ms=500,
         semantic_search_channel="auto",
     )
-    items, reason = select_semantic(
+    items, reason, meta = select_semantic(
         store,
         index=idx,
         embedder=emb,
@@ -719,3 +757,139 @@ def test_select_semantic_auto_post_repair_uses_joint(store):
     assert reason is None
     assert len(items) == 1
     assert idx.last_channel == "joint"
+    assert meta is not None
+    assert meta["channel"] == "joint"
+    assert meta["channel_reason"] == "auto_joint"
+    assert meta["joint_repair_remaining"] == 0
+
+
+def test_select_semantic_no_hits(store):
+    """Empty search results → no_hits (not silent None)."""
+    idx = _FixedHitIndex([])
+    emb = MockEmbedder()
+    cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed about nothing")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_NO_HITS
+    assert meta is not None
+    assert meta["raw_hits"] == 0
+    assert meta["packed"] == 0
+    assert meta["deduped"] == 0
+    assert "channel" in meta
+    assert "channel_reason" in meta
+
+
+def test_select_semantic_no_hits_empty_channel_auto_empty(store):
+    """auto_empty resolve with zero hits still reports no_hits + meta.channel."""
+    idx = _ChannelRecordingIndex(
+        [],
+        vectors_by_channel={
+            "text": 0,
+            "joint": 0,
+            "image": 0,
+            "audio": 0,
+            "video": 0,
+        },
+        joint_repair_remaining=0,
+    )
+    emb = MockEmbedder()
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=500,
+        semantic_search_channel="auto",
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="lonely seed")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert items == []
+    assert reason == SEMANTIC_OMIT_NO_HITS
+    assert meta["channel"] == "joint"
+    assert meta["channel_reason"] == "auto_empty"
+    assert idx.last_channel == "joint"
+
+
+def test_compose_meal_pins_semantic_select_meta(store):
+    """MealPackage carries semantic_select_meta; inspect threads it."""
+    open_id = "m_open"
+    now = datetime(2026, 7, 28, 15, 0, tzinfo=UTC)
+    store.put_atom(
+        _atom(
+            t="2026-07-28T14:50:00Z",
+            text="open seed",
+            moment_id=open_id,
+        )
+    )
+    # Empty index → no_hits, but meta still pinned.
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=500,
+        semantic_search_channel="auto",
+    )
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=now,
+        settings=cfg,
+        index=_FixedHitIndex([]),
+        embedder=MockEmbedder(),
+    )
+    assert pkg.semantic_omitted_reason == SEMANTIC_OMIT_NO_HITS
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta["raw_hits"] == 0
+    assert "channel" in pkg.semantic_select_meta
+
+    dto = meal_package_to_inspect(pkg)
+    assert dto["semantic_omitted_reason"] == SEMANTIC_OMIT_NO_HITS
+    assert dto["semantic_select_meta"] == pkg.semantic_select_meta
+
+
+def test_compose_meal_deduped_reason_and_meta(store):
+    """All hits already in temporal → deduped omit + meta counters."""
+    open_id = "m_open"
+    now = datetime(2026, 7, 28, 15, 0, tzinfo=UTC)
+    open_atom = _atom(
+        t="2026-07-28T14:50:00Z",
+        text="live atom also in index",
+        moment_id=open_id,
+        atom_id="a_open",
+    )
+    store.put_atom(open_atom)
+    hit = ScoredAtom(
+        atom_id="a_open", score=0.99, channel="joint", atom=open_atom
+    )
+    idx = _FixedHitIndex([hit])
+    emb = MockEmbedder()
+    cfg = MemorySettings(semantic_enabled=True, semantic_select_max_ms=500)
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=now,
+        settings=cfg,
+        index=idx,
+        embedder=emb,
+    )
+    assert pkg.semantic_omitted_reason == SEMANTIC_OMIT_DEDUPED
+    assert "semantic" not in pkg.channels_present
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta["deduped"] >= 1
+    assert pkg.semantic_select_meta["packed"] == 0

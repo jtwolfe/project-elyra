@@ -72,6 +72,8 @@ SEMANTIC_OMIT_TIMEOUT = "timeout"
 SEMANTIC_OMIT_EMPTY_SEED = "empty_seed"
 SEMANTIC_OMIT_NO_INDEX = "no_index"
 SEMANTIC_OMIT_MIN_SCORE = "min_score"
+SEMANTIC_OMIT_NO_HITS = "no_hits"
+SEMANTIC_OMIT_DEDUPED = "deduped"
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,8 @@ class MealPackage:
     channels_present: tuple[str, ...]
     open_moment_id: str | None
     semantic_omitted_reason: str | None = None
+    # PR-R2: channel + hit counters from select_semantic (additive).
+    semantic_select_meta: dict[str, Any] | None = None
 
 
 def moment_id_short(moment_id: str | None) -> str:
@@ -957,18 +961,23 @@ def select_semantic(
     now: datetime | str | None = None,
     exclude_atom_ids: set[str] | None = None,
     deadline_ms: int | None = None,
-) -> tuple[list[MealItem], str | None]:
+) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
     """Select supporting semantic neighbours under a hard wall-clock budget.
 
-    Returns ``(items, omitted_reason)``. On timeout / missing encoder / empty
-    seed the channel is omitted (empty items + reason) — never blocks unbounded
-    (KD2). Temporal/episodic winners are passed via ``exclude_atom_ids`` (KD11).
-    Parcel hits map to parent atoms (label ``semantic/parcel→parent``).
+    Returns ``(items, omitted_reason, select_meta)``. On timeout / missing
+    encoder / empty seed the channel is omitted (empty items + reason) — never
+    blocks unbounded (KD2). Temporal/episodic winners are passed via
+    ``exclude_atom_ids`` (KD11). Parcel hits map to parent atoms (label
+    ``semantic/parcel→parent``).
+
+    Empty-pack omit priority (KD-R6): timeout > encoder > no_index >
+    empty_seed > min_score > deduped > no_hits. ``select_meta`` carries
+    channel / channel_reason / hit counters for MealPackage (PR-R2).
     """
     cfg = settings or MemorySettings()
     cap = max(0, int(cap_tokens))
     if cap <= 0:
-        return [], None
+        return [], None, None
 
     t0 = _now_ms()
     max_ms = (
@@ -982,18 +991,28 @@ def select_semantic(
     def over_deadline() -> bool:
         return (_now_ms() - t0) > max_ms
 
+    def early(
+        reason: str | None,
+        *,
+        meta: dict[str, Any] | None = None,
+    ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
+        base: dict[str, Any] = {"elapsed_ms": int(_now_ms() - t0)}
+        if meta:
+            base.update(meta)
+        return [], reason, base
+
     if index is None:
-        return [], SEMANTIC_OMIT_NO_INDEX
+        return early(SEMANTIC_OMIT_NO_INDEX)
 
     if not _embedder_is_warm(embedder):
-        return [], SEMANTIC_OMIT_ENCODER
+        return early(SEMANTIC_OMIT_ENCODER)
 
     seed = build_semantic_query_seed(open_moment_atoms)
     if not seed.strip():
-        return [], SEMANTIC_OMIT_EMPTY_SEED
+        return early(SEMANTIC_OMIT_EMPTY_SEED)
 
     if over_deadline():
-        return [], SEMANTIC_OMIT_TIMEOUT
+        return early(SEMANTIC_OMIT_TIMEOUT)
 
     # Query encode under remaining deadline and encode_query_max_ms sub-budget.
     encode_budget = min(
@@ -1005,15 +1024,15 @@ def select_semantic(
         query_vec = embedder.encode_text(seed)
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic query encode failed")
-        return [], SEMANTIC_OMIT_ENCODER
+        return early(SEMANTIC_OMIT_ENCODER)
     enc_elapsed = _now_ms() - t_enc0
     if enc_elapsed > encode_budget or over_deadline():
-        return [], SEMANTIC_OMIT_TIMEOUT
+        return early(SEMANTIC_OMIT_TIMEOUT)
     if not query_vec:
-        return [], SEMANTIC_OMIT_ENCODER
+        return early(SEMANTIC_OMIT_ENCODER)
 
     if over_deadline():
-        return [], SEMANTIC_OMIT_TIMEOUT
+        return early(SEMANTIC_OMIT_TIMEOUT)
 
     if now is None:
         from elyra.memory.types import utc_now_iso
@@ -1027,6 +1046,9 @@ def select_semantic(
         exclude.add(a.atom_id)
 
     # KD-R16 / KD-R2: pure resolve then search(concrete) — no multi-try.
+    concrete = "joint"
+    channel_reason = "explicit"
+    joint_repair_remaining = 0
     try:
         from elyra.memory.index import resolve_search_channel  # noqa: PLC0415
 
@@ -1037,18 +1059,15 @@ def select_semantic(
                 health = h
         except Exception:  # noqa: BLE001
             health = {}
+        joint_repair_remaining = int(health.get("joint_repair_remaining") or 0)
         channel_req = str(
             getattr(cfg, "semantic_search_channel", None) or "auto"
         ).strip().lower() or "auto"
-        # PR-R2: channel_reason → semantic_select_meta on MealPackage.
         concrete, channel_reason = resolve_search_channel(
             channel_req,
             vectors_by_channel=health.get("vectors_by_channel") or {},
-            joint_repair_remaining=int(
-                health.get("joint_repair_remaining") or 0
-            ),
+            joint_repair_remaining=joint_repair_remaining,
         )
-        _ = channel_reason  # retained for PR-R2 meta wiring
         hits = index.search(
             query_vec,
             k=int(cfg.semantic_top_k),
@@ -1060,10 +1079,23 @@ def select_semantic(
         )
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic index.search failed")
-        return [], SEMANTIC_OMIT_NO_INDEX
+        return early(
+            SEMANTIC_OMIT_NO_INDEX,
+            meta={
+                "channel": concrete,
+                "channel_reason": channel_reason,
+                "joint_repair_remaining": joint_repair_remaining,
+            },
+        )
+
+    channel_meta = {
+        "channel": concrete,
+        "channel_reason": channel_reason,
+        "joint_repair_remaining": joint_repair_remaining,
+    }
 
     if over_deadline():
-        return [], SEMANTIC_OMIT_TIMEOUT
+        return early(SEMANTIC_OMIT_TIMEOUT, meta=channel_meta)
 
     min_score = float(cfg.semantic_min_score)
     # 0.0 = off (accept all scores).
@@ -1071,6 +1103,7 @@ def select_semantic(
 
     raw_hit_count = 0
     below_min = 0
+    deduped_count = 0
     packed: list[MealItem] = []
     seen_ids: set[str] = set(exclude)
     used = 0
@@ -1079,7 +1112,13 @@ def select_semantic(
         if over_deadline():
             # Partial pack is OK only if we already have items; else timeout omit.
             if not packed:
-                return [], SEMANTIC_OMIT_TIMEOUT
+                return early(SEMANTIC_OMIT_TIMEOUT, meta={
+                    **channel_meta,
+                    "raw_hits": raw_hit_count,
+                    "below_min": below_min,
+                    "deduped": deduped_count,
+                    "packed": 0,
+                })
             break
         raw_hit_count += 1
         score = getattr(hit, "score", None)
@@ -1101,6 +1140,7 @@ def select_semantic(
         if parent is None:
             continue
         if parent.atom_id in seen_ids:
+            deduped_count += 1
             continue  # temporal/episodic win (KD11) or already packed
         # Skip parcel-kind if somehow still parcel (parent missing path).
         if parent.kind in _RAW_EXCLUDE_KINDS and parent.kind != "parcel":
@@ -1135,10 +1175,25 @@ def select_semantic(
         seen_ids.add(parent.atom_id)
         used += item.token_estimate
 
-    if not packed and raw_hit_count > 0 and apply_min and below_min == raw_hit_count:
-        return [], SEMANTIC_OMIT_MIN_SCORE
+    select_meta: dict[str, Any] = {
+        **channel_meta,
+        "raw_hits": raw_hit_count,
+        "below_min": below_min,
+        "deduped": deduped_count,
+        "packed": len(packed),
+        "elapsed_ms": int(_now_ms() - t0),
+    }
 
-    return packed, None
+    if packed:
+        return packed, None, select_meta
+
+    # Empty pack → omit reason priority (after early reasons already returned):
+    # min_score > deduped > no_hits
+    if apply_min and raw_hit_count > 0 and below_min == raw_hit_count:
+        return [], SEMANTIC_OMIT_MIN_SCORE, select_meta
+    if deduped_count > 0:
+        return [], SEMANTIC_OMIT_DEDUPED, select_meta
+    return [], SEMANTIC_OMIT_NO_HITS, select_meta
 
 
 # ---------------------------------------------------------------------------
@@ -1232,11 +1287,12 @@ def compose_meal(
     # Semantic supporting channel (Phase 2).
     semantic_items: list[MealItem] = []
     semantic_omitted: str | None = None
+    semantic_meta: dict[str, Any] | None = None
     if cfg.semantic_enabled:
         # Temporal + episodic win over semantic (KD11).
         exclude = open_ids | _atom_ids_in_meal_items(episodic_items)
         exclude |= _atom_ids_in_meal_items(temporal_items)
-        semantic_items, semantic_omitted = select_semantic(
+        semantic_items, semantic_omitted, semantic_meta = select_semantic(
             store,
             index=index,
             embedder=embedder,
@@ -1261,6 +1317,7 @@ def compose_meal(
         channels_present=channels,
         open_moment_id=open_moment_id,
         semantic_omitted_reason=semantic_omitted,
+        semantic_select_meta=semantic_meta,
     )
 
 
@@ -1562,9 +1619,11 @@ def expand_memory_meal_for_provider(
 
 __all__ = [
     "EPISODIC_MAX_PRIOR_MOMENTS",
+    "SEMANTIC_OMIT_DEDUPED",
     "SEMANTIC_OMIT_EMPTY_SEED",
     "SEMANTIC_OMIT_ENCODER",
     "SEMANTIC_OMIT_MIN_SCORE",
+    "SEMANTIC_OMIT_NO_HITS",
     "SEMANTIC_OMIT_NO_INDEX",
     "SEMANTIC_OMIT_TIMEOUT",
     "MealItem",

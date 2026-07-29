@@ -2212,6 +2212,15 @@ function renderMemoryContext(data) {
   head.appendChild(meta);
   memoryContextBody.appendChild(head);
 
+  // PR-R2: one muted line for semantic omit / channel meta (honest empty state).
+  const semLine = formatSemanticSelectLine(meal);
+  if (semLine) {
+    const p = document.createElement("p");
+    p.className = "muted memory-semantic-meta";
+    p.textContent = semLine;
+    memoryContextBody.appendChild(p);
+  }
+
   // Fixed system/orient if present.
   const fixed = meal.fixed || {};
   for (const key of ["system", "orient"]) {
@@ -2240,6 +2249,32 @@ function renderMemoryContext(data) {
   for (const item of items) {
     memoryContextBody.appendChild(renderMemoryChannelCard(item));
   }
+}
+
+/** One muted Context line: semantic reason + channel (PR-R2 / KD-R6). */
+function formatSemanticSelectLine(meal) {
+  if (!meal) return "";
+  const reason = meal.semantic_omitted_reason || null;
+  const sm = meal.semantic_select_meta || null;
+  if (!reason && !sm) return "";
+  const parts = ["semantic"];
+  if (reason) {
+    parts.push(`omitted (${reason})`);
+  } else if (sm && sm.packed != null) {
+    parts.push(`packed=${sm.packed}`);
+  }
+  if (sm && sm.channel) {
+    const chBit = sm.channel_reason
+      ? `channel=${sm.channel} (${sm.channel_reason})`
+      : `channel=${sm.channel}`;
+    parts.push(chBit);
+  }
+  if (reason === "deduped") {
+    parts.push("matched but already in temporal/episodic");
+  } else if (reason === "no_hits" && sm && sm.channel) {
+    parts.push(`no candidates on ${sm.channel}`);
+  }
+  return parts.join(" · ");
 }
 
 function renderMemoryChannelCard(item) {
