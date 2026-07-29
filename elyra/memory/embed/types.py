@@ -8,12 +8,16 @@ Out of scope: torch, store I/O, queue, meal.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
 # Normative multi-embedding channels bonded to one atom (KD7).
 CHANNELS: tuple[str, ...] = ("text", "image", "audio", "video", "joint")
 CHANNEL_SET: frozenset[str] = frozenset(CHANNELS)
+# Search request set includes product ``auto`` resolve (KD-R2); not a column.
+SEARCH_CHANNELS: tuple[str, ...] = CHANNELS + ("auto",)
+SEARCH_CHANNEL_SET: frozenset[str] = frozenset(SEARCH_CHANNELS)
 
 # Omni-Embed-Nemotron output dim (verify against pinned revision at spike).
 EMBED_DIM = 2048
@@ -186,14 +190,110 @@ class EmbeddingSet:
         return embeddings_are_ready(self)
 
 
-def embeddings_are_ready(emb: EmbeddingSet) -> bool:
+def should_write_joint(
+    present: Sequence[str],
+    *,
+    want_joint: bool | None = None,
+    single_modality_joint: bool = True,
+) -> bool:
+    """Whether to populate ``emb_joint`` (not *how* — see joint_vector helpers).
+
+    KD-R1: multi-mod always; single-mod when ``single_modality_joint`` (default
+    True). Explicit ``want_joint`` overrides the heuristic.
+    """
+    if want_joint is not None:
+        return bool(want_joint)
+    n = len(present)
+    if n >= 2:
+        return True
+    if n == 1 and single_modality_joint:
+        return True
+    return False
+
+
+def joint_vector_for_modalities(
+    *,
+    present: Sequence[str],
+    modality_vectors: Mapping[str, Sequence[float]],
+    encode_joint_fn: Callable[..., Sequence[float]],
+    parts: Any,
+    want_joint: bool | None = None,
+    single_modality_joint: bool = True,
+) -> tuple[float, ...] | None:
+    """Produce ``emb_joint``: single-mod → copy sole vector; multi → encode_joint.
+
+    Never calls ``encode_joint`` when ``len(present) == 1`` so free-text
+    ``encode_text`` queries stay cosine-aligned with corpus joint (KD-R1).
+    """
+    if not should_write_joint(
+        present,
+        want_joint=want_joint,
+        single_modality_joint=single_modality_joint,
+    ):
+        return None
+    if len(present) == 1:
+        sole = present[0]
+        vec = modality_vectors[sole]
+        return tuple(float(x) for x in vec)
+    return tuple(float(x) for x in encode_joint_fn(parts))
+
+
+def sole_non_joint_vector(
+    emb: EmbeddingSet,
+) -> tuple[str, tuple[float, ...]] | None:
+    """Return ``(channel, vector)`` when exactly one non-joint modality is set."""
+    found: list[tuple[str, tuple[float, ...]]] = []
+    for ch in ("text", "image", "audio", "video"):
+        vec = emb.channel_vector(ch)
+        if vec is not None:
+            found.append((ch, vec))
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
+def joint_copy_embedding_set(emb: EmbeddingSet) -> EmbeddingSet | None:
+    """If emb is sole-modality without joint, return a copy with joint filled.
+
+    No encoder. Returns None when not eligible (already has joint, multi-mod,
+    or no vectors). Repair path (KD-R11) and tests share this helper.
+    """
+    if emb.emb_joint is not None:
+        return None
+    sole = sole_non_joint_vector(emb)
+    if sole is None:
+        return None
+    _ch, vec = sole
+    joint = tuple(float(x) for x in vec)
+    return EmbeddingSet(
+        atom_id=emb.atom_id,
+        dim=emb.dim,
+        emb_text=emb.emb_text,
+        emb_image=emb.emb_image,
+        emb_audio=emb.emb_audio,
+        emb_video=emb.emb_video,
+        emb_joint=joint,
+        model_id=emb.model_id,
+        encoded_at=emb.encoded_at,
+    )
+
+
+def embeddings_are_ready(
+    emb: EmbeddingSet,
+    *,
+    require_joint: bool = False,
+) -> bool:
     """KD20 ready rule for EmbeddingIndex upsert.
 
-    True when ``emb_joint`` is present, **or** exactly one non-joint modality
-    vector is present (single-modality atom).
+    True when ``emb_joint`` is present, **or** (legacy / repair path) exactly
+    one non-joint modality vector is present. When ``require_joint=True``
+    (new encodes with ``embed_joint_for_single_modality`` — OQ-R4), joint is
+    mandatory; sole-modality without joint is not ready.
     """
     if emb.emb_joint is not None:
         return True
+    if require_joint:
+        return False
     non_joint = [c for c in emb.channels_present if c != "joint"]
     if len(non_joint) == 1 and emb.channel_vector(non_joint[0]) is not None:
         return True
@@ -260,6 +360,8 @@ __all__ = [
     "EMBED_DEVICE_PREFS",
     "EMBED_DIM",
     "ENCODE_STATUSES",
+    "SEARCH_CHANNEL_SET",
+    "SEARCH_CHANNELS",
     "DeviceKind",
     "EmbedBackend",
     "EmbedDevicePref",
@@ -269,6 +371,10 @@ __all__ = [
     "ModalityParts",
     "embedding_set_from_mapping",
     "embeddings_are_ready",
+    "joint_copy_embedding_set",
+    "joint_vector_for_modalities",
     "l2_normalize",
+    "should_write_joint",
+    "sole_non_joint_vector",
     "vector_l2_norm",
 ]

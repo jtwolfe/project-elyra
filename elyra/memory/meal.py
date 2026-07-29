@@ -1026,11 +1026,31 @@ def select_semantic(
     for a in open_moment_atoms:
         exclude.add(a.atom_id)
 
+    # KD-R16 / KD-R2: pure resolve then search(concrete) — no multi-try.
     try:
+        from elyra.memory.index import resolve_search_channel  # noqa: PLC0415
+
+        health: dict[str, Any] = {}
+        try:
+            h = index.health() if hasattr(index, "health") else {}
+            if isinstance(h, dict):
+                health = h
+        except Exception:  # noqa: BLE001
+            health = {}
+        channel_req = str(
+            getattr(cfg, "semantic_search_channel", None) or "auto"
+        ).strip().lower() or "auto"
+        concrete, _channel_reason = resolve_search_channel(
+            channel_req,
+            vectors_by_channel=health.get("vectors_by_channel") or {},
+            joint_repair_remaining=int(
+                health.get("joint_repair_remaining") or 0
+            ),
+        )
         hits = index.search(
             query_vec,
             k=int(cfg.semantic_top_k),
-            channel="joint",
+            channel=concrete,
             t_start=horizon_start,
             t_end=now_dt,
             exclude_atom_ids=exclude,

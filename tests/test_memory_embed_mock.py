@@ -122,16 +122,36 @@ def test_encode_joint_ignores_empty_media():
     assert enc.encode_joint(with_audio) != j_full
 
 
-def test_encode_atom_inputs_text_only_no_joint():
+def test_encode_atom_inputs_text_only_joint_copy():
+    """KD-R1: single-modality → emb_joint is elementwise copy of emb_text."""
     enc = MockEmbedder()
     result = enc.encode_atom_inputs("a_1", text="only text")
     assert result.status == "ready"
     assert result.embeddings is not None
     assert result.embeddings.emb_text is not None
-    assert result.embeddings.emb_joint is None
+    assert result.embeddings.emb_joint is not None
     assert "text" in result.channels_encoded
-    assert "joint" not in result.channels_encoded
+    assert "joint" in result.channels_encoded
     _assert_unit(result.embeddings.emb_text)
+    # Elementwise equal (not encode_joint which seeds differently).
+    assert result.embeddings.emb_joint == result.embeddings.emb_text
+    # encode_joint would diverge from free-text encode_text.
+    from elyra.memory.embed.types import ModalityParts
+
+    joint_encoded = enc.encode_joint(ModalityParts(text="only text"))
+    assert tuple(joint_encoded) != result.embeddings.emb_joint
+
+
+def test_encode_atom_inputs_text_only_joint_disabled():
+    enc = MockEmbedder()
+    result = enc.encode_atom_inputs(
+        "a_1b", text="only text", single_modality_joint=False
+    )
+    assert result.status == "ready"
+    assert result.embeddings is not None
+    assert result.embeddings.emb_text is not None
+    assert result.embeddings.emb_joint is None
+    assert "joint" not in result.channels_encoded
 
 
 def test_encode_atom_inputs_multimodal_eager_joint():
@@ -350,7 +370,9 @@ def test_encode_atom_inputs_protocol_fallback_text_only():
     assert result.status == "ready"
     assert result.embeddings is not None
     assert result.embeddings.emb_text is not None
-    assert result.embeddings.emb_joint is None
+    # KD-R1: protocol fallback also joint-copies single modality.
+    assert result.embeddings.emb_joint is not None
+    assert result.embeddings.emb_joint == result.embeddings.emb_text
     assert result.embeddings.encoded_at  # set by helper
     assert "T" in result.embeddings.encoded_at
     _assert_unit(result.embeddings.emb_text)

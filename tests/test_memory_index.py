@@ -1319,3 +1319,146 @@ def test_lance_restart_real_store_search_recent(paths):
         assert any(h.atom_id == last for h in hits)
     finally:
         store2.close()
+
+
+# ── Phase 2 rectification PR-R1: resolve + joint repair (KD-R1/R2/R11) ──────
+
+
+def test_resolve_search_channel_explicit_and_auto():
+    from elyra.memory.index import resolve_search_channel
+
+    assert resolve_search_channel("text") == ("text", "explicit")
+    assert resolve_search_channel("joint") == ("joint", "explicit")
+
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel={"text": 10, "joint": 0},
+        joint_repair_remaining=5,
+    )
+    assert ch == "text"
+    assert reason == "auto_text_repair_pending"
+
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel={"text": 10, "joint": 10},
+        joint_repair_remaining=0,
+    )
+    assert ch == "joint"
+    assert reason == "auto_joint"
+
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel={"text": 3, "joint": 0},
+        joint_repair_remaining=0,
+    )
+    assert ch == "text"
+    assert reason == "auto_text"
+
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel={},
+        joint_repair_remaining=0,
+    )
+    assert ch == "joint"
+    assert reason == "auto_empty"
+
+
+def test_search_channel_auto_does_not_early_return_empty(store):
+    """Footgun: channel=auto must not hit CHANNEL_SET reject before resolve."""
+    atom = store.put_atom(_atom(text="alpha", status="pending"))
+    idx = MemoryEmbeddingIndex(store=store)
+    # New encode path: joint copy of text
+    emb = EmbeddingSet(
+        atom_id=atom.atom_id,
+        emb_text=mock_vector("text:alpha", dim=EMBED_DIM),
+        emb_joint=mock_vector("text:alpha", dim=EMBED_DIM),  # copy
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert idx.upsert(emb) is True
+    q = mock_vector("text:alpha", dim=EMBED_DIM)
+    hits_auto = idx.search(q, k=5, channel="auto")
+    assert len(hits_auto) == 1
+    assert hits_auto[0].atom_id == atom.atom_id
+    hits_joint = idx.search(q, k=5, channel="joint")
+    assert len(hits_joint) == 1
+
+
+def test_joint_repair_text_only_without_encoder(store):
+    """KD-R11: ready text-only fixture → repair fills joint; search hits."""
+    atom = store.put_atom(_atom(text="legacy", status="ready"))
+    idx = MemoryEmbeddingIndex(store=store, joint_repair_max_per_open=0)
+    # Legacy ready without joint (pre-KD-R1).
+    emb = EmbeddingSet(
+        atom_id=atom.atom_id,
+        emb_text=mock_vector("text:legacy", dim=EMBED_DIM),
+        emb_joint=None,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert embeddings_are_ready(emb)  # legacy sole-mod still ready
+    assert embeddings_are_ready(emb, require_joint=True) is False
+    assert idx.upsert(emb) is True
+    h0 = idx.health()
+    assert h0["joint_repair_remaining"] == 1
+    assert h0["vectors_by_channel"]["text"] == 1
+    assert h0["vectors_by_channel"]["joint"] == 0
+
+    result = idx.repair_joint_copies(limit=64)
+    assert result["repaired"] == 1
+    assert result["joint_repair_remaining"] == 0
+    fixed = idx.get(atom.atom_id)
+    assert fixed is not None
+    assert fixed.emb_joint is not None
+    assert fixed.emb_joint == fixed.emb_text
+
+    q = mock_vector("text:legacy", dim=EMBED_DIM)
+    hits = idx.search(q, k=5, channel="joint")
+    assert len(hits) == 1
+    hits_auto = idx.search(q, k=5, channel="auto")
+    assert len(hits_auto) == 1
+    h1 = idx.health()
+    assert h1["joint_repair_remaining"] == 0
+    assert h1["vectors_by_channel"]["joint"] == 1
+    # Buffer re-pushed as joint
+    buf_entry = idx._fresh.buffer.get(atom.atom_id)
+    assert buf_entry is not None
+    assert buf_entry.channel == "joint"
+
+
+def test_auto_resolves_text_while_repair_pending(store):
+    atom = store.put_atom(_atom(text="pending-repair", status="ready"))
+    idx = MemoryEmbeddingIndex(store=store, joint_repair_max_per_open=0)
+    emb = EmbeddingSet(
+        atom_id=atom.atom_id,
+        emb_text=mock_vector("text:pr", dim=EMBED_DIM),
+        emb_joint=None,
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert idx.upsert(emb) is True
+    assert idx.health()["joint_repair_remaining"] == 1
+    q = mock_vector("text:pr", dim=EMBED_DIM)
+    # auto → text while repair pending (not empty joint)
+    hits = idx.search(q, k=5, channel="auto")
+    assert len(hits) == 1
+    assert hits[0].channel == "text"
+
+
+def test_embeddings_are_ready_require_joint_oq_r4():
+    sole = EmbeddingSet(
+        atom_id="a1",
+        emb_text=mock_vector("t", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert embeddings_are_ready(sole)
+    assert not embeddings_are_ready(sole, require_joint=True)
+    with_joint = EmbeddingSet(
+        atom_id="a1",
+        emb_text=mock_vector("t", dim=EMBED_DIM),
+        emb_joint=mock_vector("t", dim=EMBED_DIM),
+        model_id="mock",
+        encoded_at="2026-07-28T10:00:00Z",
+    )
+    assert embeddings_are_ready(with_joint, require_joint=True)

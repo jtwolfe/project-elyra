@@ -97,6 +97,10 @@ def test_default_settings_match_design():
     assert s.memory.semantic_select_max_ms == 50
     assert s.memory.encode_query_max_ms == 30
     assert s.memory.encode_queue_max == 1024
+    assert s.memory.semantic_search_channel == "auto"
+    assert s.memory.embed_joint_for_single_modality is True
+    assert s.memory.joint_repair_max_per_open == 500
+    assert s.memory.joint_repair_max_per_tick == 64
     assert s.memory.encode_max_ms_per_tick == 100
     assert s.memory.encode_max_items_per_tick == 4
     assert s.memory.encode_max_attempts == 3
@@ -366,6 +370,45 @@ def test_invalid_memory_embed_backend_and_device_raise(tmp_path):
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="memory.embed_device"):
+        load_settings(tmp_path)
+
+
+def test_memory_semantic_search_channel_and_repair_knobs(tmp_path):
+    """KD-R2 / KD-R11 settings defaults + allowlist / range validation."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+semantic_search_channel = "Auto"
+embed_joint_for_single_modality = true
+joint_repair_max_per_open = 100
+joint_repair_max_per_tick = 8
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.semantic_search_channel == "auto"
+    assert s.memory.embed_joint_for_single_modality is True
+    assert s.memory.joint_repair_max_per_open == 100
+    assert s.memory.joint_repair_max_per_tick == 8
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nsemantic_search_channel = "rrf"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.semantic_search_channel"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\njoint_repair_max_per_open = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.joint_repair_max_per_open"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\njoint_repair_max_per_tick = -3\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.joint_repair_max_per_tick"):
         load_settings(tmp_path)
 
 

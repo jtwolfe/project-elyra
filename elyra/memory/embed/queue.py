@@ -187,6 +187,7 @@ class EncodeQueue:
         """
         media_max_bytes = 8_000_000
         media_max_seconds: int | None = 30
+        single_modality_joint = True
         if settings is not None:
             max_ms = int(getattr(settings, "encode_max_ms_per_tick", max_ms))
             max_items = int(getattr(settings, "encode_max_items_per_tick", max_items))
@@ -196,6 +197,9 @@ class EncodeQueue:
             )
             media_max_seconds = int(
                 getattr(settings, "embed_media_max_seconds", media_max_seconds or 30)
+            )
+            single_modality_joint = bool(
+                getattr(settings, "embed_joint_for_single_modality", True)
             )
 
         stats: dict[str, int] = {
@@ -240,6 +244,7 @@ class EncodeQueue:
                     embedder_ok=embedder_ok,
                     media_max_bytes=media_max_bytes,
                     media_max_seconds=media_max_seconds,
+                    single_modality_joint=single_modality_joint,
                 )
                 stats[outcome] = stats.get(outcome, 0) + 1
             except Exception:  # noqa: BLE001 — isolate per item
@@ -262,6 +267,7 @@ class EncodeQueue:
         embedder_ok: bool,
         media_max_bytes: int = 8_000_000,
         media_max_seconds: int | None = 30,
+        single_modality_joint: bool = True,
     ) -> str:
         atom = store.get_atom(atom_id)
         if atom is None:
@@ -305,6 +311,7 @@ class EncodeQueue:
             media_store=media_store,
             media_max_bytes=media_max_bytes,
             media_max_seconds=media_max_seconds,
+            single_modality_joint=single_modality_joint,
         )
         attempts = int(meta.get(_META_ATTEMPTS) or 0) + 1
         updates: dict[str, Any] = {_META_ATTEMPTS: attempts}

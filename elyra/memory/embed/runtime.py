@@ -24,6 +24,7 @@ from elyra.memory.embed.types import (
     EmbeddingSet,
     EncodeResult,
     ModalityParts,
+    joint_vector_for_modalities,
     l2_normalize,
 )
 from elyra.memory.types import utc_now_iso
@@ -613,12 +614,16 @@ class NemotronEmbedder:
         audio: bytes | str | None = None,
         video: bytes | str | None = None,
         want_joint: bool | None = None,
+        single_modality_joint: bool = True,
     ) -> EncodeResult:
         """Encode present modalities into an EmbeddingSet (same contract as mock).
 
         When multimodal packing utilities are missing, **media channels soft-skip**
         (never label a text-only pool as ``emb_image`` / ``emb_joint``). Text still
         encodes. Media-only atoms without mm utils → ``skipped``.
+
+        KD-R1: single modality → joint is a copy of the sole vector; multi-mod →
+        true ``encode_joint`` via shared helpers.
         """
         try:
             self._ensure_open()
@@ -669,12 +674,26 @@ class NemotronEmbedder:
                 if "video" in present
                 else None
             )
-            # Joint only over channels we actually encoded (post soft-skip).
-            do_joint = want_joint if want_joint is not None else len(present) >= 2
-            emb_joint: tuple[float, ...] | None = None
+            modality_vectors: dict[str, tuple[float, ...]] = {}
+            if emb_text is not None:
+                modality_vectors["text"] = emb_text
+            if emb_image is not None:
+                modality_vectors["image"] = emb_image
+            if emb_audio is not None:
+                modality_vectors["audio"] = emb_audio
+            if emb_video is not None:
+                modality_vectors["video"] = emb_video
+
+            emb_joint = joint_vector_for_modalities(
+                present=present,
+                modality_vectors=modality_vectors,
+                encode_joint_fn=self.encode_joint,
+                parts=parts,
+                want_joint=want_joint,
+                single_modality_joint=single_modality_joint,
+            )
             channels: list[str] = list(present)
-            if do_joint:
-                emb_joint = tuple(self.encode_joint(parts))
+            if emb_joint is not None:
                 channels.append("joint")
 
             emb = EmbeddingSet(
@@ -931,6 +950,7 @@ class _UnavailableOrMockEmbedder:
         audio: bytes | str | None = None,
         video: bytes | str | None = None,
         want_joint: bool | None = None,
+        single_modality_joint: bool = True,
     ) -> EncodeResult:
         return self._mock.encode_atom_inputs(
             atom_id,
@@ -939,6 +959,7 @@ class _UnavailableOrMockEmbedder:
             audio=audio,
             video=video,
             want_joint=want_joint,
+            single_modality_joint=single_modality_joint,
         )
 
     def close(self) -> None:
@@ -955,21 +976,35 @@ def encode_atom_inputs(
     audio: bytes | str | None = None,
     video: bytes | str | None = None,
     want_joint: bool | None = None,
+    single_modality_joint: bool = True,
 ) -> EncodeResult:
     """Encode modalities via embedder; prefer ``encode_atom_inputs`` if present.
 
     Narrow public helper so callers need not know MockEmbedder specifics.
+    KD-R1 joint policy via shared helpers (single-mod copy / multi encode_joint).
     """
     encode_fn = getattr(embedder, "encode_atom_inputs", None)
     if callable(encode_fn):
-        return encode_fn(
-            atom_id,
-            text=text,
-            image=image,
-            audio=audio,
-            video=video,
-            want_joint=want_joint,
-        )
+        try:
+            return encode_fn(
+                atom_id,
+                text=text,
+                image=image,
+                audio=audio,
+                video=video,
+                want_joint=want_joint,
+                single_modality_joint=single_modality_joint,
+            )
+        except TypeError:
+            # Older embedders without single_modality_joint kwarg.
+            return encode_fn(
+                atom_id,
+                text=text,
+                image=image,
+                audio=audio,
+                video=video,
+                want_joint=want_joint,
+            )
     # Protocol-only embedder: build EmbeddingSet from channel methods.
     parts = ModalityParts(text=text, image=image, audio=audio, video=video)
     present = parts.present_modalities()
@@ -986,9 +1021,24 @@ def encode_atom_inputs(
     emb_video = (
         tuple(embedder.encode_video(video)) if "video" in present else None  # type: ignore[arg-type]
     )
-    do_joint = want_joint if want_joint is not None else len(present) >= 2
-    emb_joint = tuple(embedder.encode_joint(parts)) if do_joint else None
-    channels = list(present) + (["joint"] if do_joint else [])
+    modality_vectors: dict[str, tuple[float, ...]] = {}
+    if emb_text is not None:
+        modality_vectors["text"] = emb_text
+    if emb_image is not None:
+        modality_vectors["image"] = emb_image
+    if emb_audio is not None:
+        modality_vectors["audio"] = emb_audio
+    if emb_video is not None:
+        modality_vectors["video"] = emb_video
+    emb_joint = joint_vector_for_modalities(
+        present=present,
+        modality_vectors=modality_vectors,
+        encode_joint_fn=embedder.encode_joint,
+        parts=parts,
+        want_joint=want_joint,
+        single_modality_joint=single_modality_joint,
+    )
+    channels = list(present) + (["joint"] if emb_joint is not None else [])
     health = embedder.health()
     emb = EmbeddingSet(
         atom_id=atom_id,

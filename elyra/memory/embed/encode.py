@@ -176,6 +176,7 @@ def encode_atom(
     media_store: Any | None = None,
     media_max_bytes: int = _DEFAULT_MEDIA_MAX_BYTES,
     media_max_seconds: int | None = 30,
+    single_modality_joint: bool = True,
 ) -> EncodeResult:
     """Encode one atom via ``embedder``. Never raises.
 
@@ -226,6 +227,7 @@ def encode_atom(
             image=media.get("image"),
             audio=media.get("audio"),
             video=media.get("video"),
+            single_modality_joint=single_modality_joint,
         )
         if media_skipped:
             meta = dict(result.meta or {})

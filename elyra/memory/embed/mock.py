@@ -17,6 +17,7 @@ from elyra.memory.embed.types import (
     EmbeddingSet,
     EncodeResult,
     ModalityParts,
+    joint_vector_for_modalities,
     l2_normalize,
 )
 from elyra.memory.types import utc_now_iso
@@ -161,11 +162,14 @@ class MockEmbedder:
         audio: bytes | str | None = None,
         video: bytes | str | None = None,
         want_joint: bool | None = None,
+        single_modality_joint: bool = True,
     ) -> EncodeResult:
         """Encode present modalities into an EmbeddingSet.
 
-        When ``want_joint`` is None, joint is produced when ≥2 modalities are
-        present (eager joint policy — KD5 / design ready rule).
+        KD-R1: single modality → ``emb_joint`` is a copy of the sole vector
+        (never ``encode_joint``); multi-mod → true ``encode_joint`` fusion.
+        When ``want_joint`` is None, joint policy uses
+        ``single_modality_joint`` (default True).
         """
         self._ensure_open()
         parts = ModalityParts(text=text, image=image, audio=audio, video=video)
@@ -197,11 +201,26 @@ class MockEmbedder:
             else None
         )
 
-        do_joint = want_joint if want_joint is not None else len(present) >= 2
-        emb_joint: tuple[float, ...] | None = None
+        modality_vectors: dict[str, tuple[float, ...]] = {}
+        if emb_text is not None:
+            modality_vectors["text"] = emb_text
+        if emb_image is not None:
+            modality_vectors["image"] = emb_image
+        if emb_audio is not None:
+            modality_vectors["audio"] = emb_audio
+        if emb_video is not None:
+            modality_vectors["video"] = emb_video
+
+        emb_joint = joint_vector_for_modalities(
+            present=present,
+            modality_vectors=modality_vectors,
+            encode_joint_fn=self.encode_joint,
+            parts=parts,
+            want_joint=want_joint,
+            single_modality_joint=single_modality_joint,
+        )
         channels: list[str] = list(present)
-        if do_joint:
-            emb_joint = tuple(self.encode_joint(parts))
+        if emb_joint is not None:
             channels.append("joint")
 
         emb = EmbeddingSet(

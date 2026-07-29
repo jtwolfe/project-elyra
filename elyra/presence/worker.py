@@ -1018,6 +1018,8 @@ class PresenceWorker:
                         self._idle_memory_ladder()
                         # Corpus encode drain OUTSIDE lock (KD2 / KD16).
                         self._idle_memory_encode()
+                        # KD-R11: joint-copy repair continue (open/idle only).
+                        self._idle_memory_joint_repair()
                         # ANN optimize OUTSIDE lock — never mid-hop (KD4).
                         self._idle_memory_optimize()
                         self._stop.wait(timeout=self._poll)
@@ -1438,6 +1440,47 @@ class PresenceWorker:
                 "error": str(exc) or type(exc).__name__,
                 "optimized": False,
             }
+
+    def _idle_memory_joint_repair(self) -> None:
+        """Idle-only joint-copy repair continue (KD-R11). Never mid-hop / meal.
+
+        Fills emb_joint = copy(sole modality) for ready rows missing joint.
+        Caps via ``joint_repair_max_per_tick``. No encoder.
+        """
+        mem_cfg = self.settings.memory
+        if not (mem_cfg.semantic_enabled or self._embedding_index is not None):
+            return
+        store = self._memory
+        if store is None and (
+            mem_cfg.write_atoms or mem_cfg.enabled or mem_cfg.semantic_enabled
+        ):
+            store = self._ensure_memory_store()
+        if store is None:
+            return
+        index = self._ensure_embedding_index()
+        if index is None:
+            return
+        try:
+            health = index.health() if hasattr(index, "health") else {}
+            remaining = 0
+            if isinstance(health, dict):
+                remaining = int(health.get("joint_repair_remaining") or 0)
+            if remaining <= 0:
+                # Also check store directly when index health lacks the field.
+                store_fn = getattr(store, "joint_repair_remaining", None)
+                if callable(store_fn):
+                    remaining = int(store_fn() or 0)
+            if remaining <= 0:
+                return
+            limit = int(getattr(mem_cfg, "joint_repair_max_per_tick", 64) or 64)
+            repair_fn = getattr(index, "repair_joint_copies", None)
+            if not callable(repair_fn):
+                repair_fn = getattr(store, "repair_joint_copies", None)
+            if callable(repair_fn):
+                result = repair_fn(limit=max(0, limit))
+                _LOG.debug("memory joint repair: %s", result)
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("memory idle joint repair failed")
 
     def _idle_memory_optimize(self) -> None:
         """Idle-only ANN optimize / buffer seed (KD4). Never mid-hop.

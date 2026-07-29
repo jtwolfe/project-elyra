@@ -34,6 +34,8 @@ from elyra.memory.embed.types import (
     EMBED_DIM,
     EmbeddingSet,
     embeddings_are_ready,
+    joint_copy_embedding_set,
+    sole_non_joint_vector,
 )
 from elyra.memory.errors import MemoryAtomNotFound, MemoryUnavailable
 from elyra.memory.store import LIST_ATOMS_MAX, AtomWriteHook
@@ -199,11 +201,21 @@ class LanceMemoryStore:
         self._lancedb = lancedb
         self._vector_schema_ok: bool = False
         self._vector_error: str | None = None
+        self._joint_repair_last_batch: int = 0
         # Phase 2 write hook (encode enqueue); best-effort, never raises out.
         self._write_hook: AtomWriteHook | None = None
         self._ensure_layout()
         self._open_db()
         self._load()
+        # KD-R11: eager joint-copy repair on open (bounded; no encoder).
+        try:
+            open_cap = int(
+                getattr(self._settings, "joint_repair_max_per_open", 500) or 500
+            )
+            if open_cap > 0 and self._vector_schema_ok:
+                self.repair_joint_copies(limit=open_cap)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("joint repair on open failed")
 
     # ── paths ────────────────────────────────────────────────────────────
 
@@ -1071,6 +1083,129 @@ class LanceMemoryStore:
                 return None
             return self._embedding_set_from_map(atom_id, emb_map)
 
+    def vectors_by_channel(self) -> dict[str, int]:
+        """Count non-null emb vectors per channel among ready atoms."""
+        with self._lock:
+            self._check_open()
+            return self._vectors_by_channel_unlocked()
+
+    def joint_repair_remaining(self) -> int:
+        """Count ready sole-modality rows still missing emb_joint."""
+        with self._lock:
+            self._check_open()
+            return self._joint_repair_remaining_unlocked()
+
+    def _vectors_by_channel_unlocked(self) -> dict[str, int]:
+        counts = {c: 0 for c in CHANNELS}
+        for atom_id, emb_map in self._emb_by_id.items():
+            atom = self._by_id.get(atom_id)
+            if atom is None or atom.embedding_status != "ready":
+                continue
+            for ch in CHANNELS:
+                raw = emb_map.get(f"emb_{ch}")
+                if raw is not None:
+                    counts[ch] = counts.get(ch, 0) + 1
+        return counts
+
+    def _joint_repair_remaining_unlocked(self) -> int:
+        n = 0
+        for atom_id, emb_map in self._emb_by_id.items():
+            atom = self._by_id.get(atom_id)
+            if atom is None or atom.embedding_status != "ready":
+                continue
+            emb = self._embedding_set_from_map(atom_id, emb_map)
+            if emb is None:
+                continue
+            if emb.emb_joint is None and sole_non_joint_vector(emb) is not None:
+                n += 1
+        return n
+
+    def repair_joint_copies(self, *, limit: int = 64) -> dict[str, Any]:
+        """Copy sole modality → emb_joint for ready rows missing joint (KD-R11).
+
+        No encoder / torch. Idempotent. Caps rows per call. Updates durable
+        emb columns via upsert_vectors path and meta.embed_channels.
+        """
+        cap = max(0, int(limit))
+        repaired = 0
+        repaired_ids: list[str] = []
+        with self._lock:
+            self._check_open()
+            if not self._vector_schema_ok or cap == 0:
+                remaining = self._joint_repair_remaining_unlocked()
+                self._joint_repair_last_batch = 0
+                return {
+                    "ok": True,
+                    "repaired": 0,
+                    "joint_repair_remaining": remaining,
+                    "joint_repair_last_batch": 0,
+                    "repaired_ids": [],
+                    "vectors_by_channel": self._vectors_by_channel_unlocked(),
+                }
+            candidates: list[tuple[str, EmbeddingSet]] = []
+            for atom_id, emb_map in self._emb_by_id.items():
+                atom = self._by_id.get(atom_id)
+                if atom is None or atom.embedding_status != "ready":
+                    continue
+                emb = self._embedding_set_from_map(atom_id, emb_map)
+                if emb is None:
+                    continue
+                fixed = joint_copy_embedding_set(emb)
+                if fixed is not None:
+                    candidates.append((atom_id, fixed))
+            for atom_id, fixed in candidates[:cap]:
+                # Inline upsert without re-acquiring lock (already held).
+                emb_map: dict[str, Any] = {
+                    "emb_text": _vec_to_list(fixed.emb_text),
+                    "emb_image": _vec_to_list(fixed.emb_image),
+                    "emb_audio": _vec_to_list(fixed.emb_audio),
+                    "emb_video": _vec_to_list(fixed.emb_video),
+                    "emb_joint": _vec_to_list(fixed.emb_joint),
+                    "embed_model": fixed.model_id or None,
+                    "encoded_at": fixed.encoded_at or None,
+                }
+                atom = self._by_id.get(atom_id)
+                if atom is None:
+                    continue
+                self._emb_by_id[atom_id] = emb_map
+                meta = dict(atom.meta or {})
+                if fixed.model_id:
+                    meta["embed_model"] = fixed.model_id
+                if fixed.encoded_at:
+                    meta["embed_encoded_at"] = fixed.encoded_at
+                meta["embed_channels"] = list(fixed.channels_present)
+                meta["embed_encode_ok"] = True
+                updated = atom_replace(
+                    atom,
+                    embedding_status="ready",
+                    meta=meta,
+                )
+                try:
+                    self._upsert_row(updated)
+                except Exception:  # noqa: BLE001
+                    _LOG.exception(
+                        "repair_joint_copies write failed atom_id=%s", atom_id
+                    )
+                    # Roll back emb map change if disk write fails.
+                    # Leave previous map if we can reconstruct — drop joint only.
+                    emb_map["emb_joint"] = None
+                    continue
+                self._index_put(updated)
+                repaired += 1
+                repaired_ids.append(atom_id)
+
+            self._joint_repair_last_batch = repaired
+            remaining = self._joint_repair_remaining_unlocked()
+            counts = self._vectors_by_channel_unlocked()
+        return {
+            "ok": True,
+            "repaired": repaired,
+            "joint_repair_remaining": remaining,
+            "joint_repair_last_batch": repaired,
+            "repaired_ids": repaired_ids,
+            "vectors_by_channel": counts,
+        }
+
     def search_vectors(
         self,
         query: Sequence[float],
@@ -1409,6 +1544,9 @@ class LanceMemoryStore:
                     VECTOR_SCHEMA_VERSION if self._vector_schema_ok else 0
                 ),
                 "vectors_ready": vectors_ready,
+                "vectors_by_channel": self._vectors_by_channel_unlocked(),
+                "joint_repair_remaining": self._joint_repair_remaining_unlocked(),
+                "joint_repair_last_batch": int(self._joint_repair_last_batch),
             }
             if self._vector_error:
                 out["vector_error"] = self._vector_error

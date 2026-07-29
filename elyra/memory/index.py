@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import (
     AbstractSet,
     Any,
+    Mapping,
     Protocol,
     Sequence,
     runtime_checkable,
@@ -29,13 +30,84 @@ from typing import (
 
 from elyra.memory.embed.types import (
     CHANNEL_SET,
+    CHANNELS,
     EMBED_DIM,
     EmbeddingSet,
+    SEARCH_CHANNEL_SET,
     embeddings_are_ready,
+    joint_copy_embedding_set,
+    sole_non_joint_vector,
 )
 from elyra.memory.types import Atom, to_iso_z
 
 _LOG = logging.getLogger(__name__)
+
+
+# ── Channel resolve (KD-R2) ────────────────────────────────────────────────
+
+
+def resolve_search_channel(
+    request: str,
+    *,
+    vectors_by_channel: Mapping[str, int] | None = None,
+    joint_repair_remaining: int = 0,
+    seed_channels: Sequence[str] | None = None,
+) -> tuple[str, str]:
+    """Resolve a search channel request to a concrete column + reason.
+
+    Pure function (KD-R16): product paths call this then ``search(concrete)``.
+    ``auto`` is **not** in ``CHANNEL_SET``; resolve before any column lookup
+    so ``channel="auto"`` never early-returns empty (KD-R2 footgun).
+
+    While ``joint_repair_remaining > 0``, auto prefers text (or first sole
+    modality with coverage) so product search does not lock onto sparse joint.
+    """
+    del seed_channels  # optional hint reserved for future; unused in v1
+    req = (request or "").strip().lower()
+    if not req:
+        req = "auto"
+    if req in CHANNEL_SET:
+        return req, "explicit"
+    if req != "auto":
+        # Unknown request — callers that pass raw to search still get [];
+        # meal/glass should validate via SEARCH_CHANNEL_SET first.
+        return "joint", "invalid_request"
+
+    counts = dict(vectors_by_channel or {})
+    remaining = max(0, int(joint_repair_remaining))
+
+    if remaining > 0:
+        if int(counts.get("text") or 0) > 0:
+            return "text", "auto_text_repair_pending"
+        for ch in ("image", "audio", "video"):
+            if int(counts.get(ch) or 0) > 0:
+                return ch, f"auto_{ch}_repair_pending"
+        return "joint", "auto_empty_repair_pending"
+
+    if int(counts.get("joint") or 0) > 0:
+        return "joint", "auto_joint"
+    if int(counts.get("text") or 0) > 0:
+        return "text", "auto_text"
+    for ch in ("image", "audio", "video"):
+        if int(counts.get(ch) or 0) > 0:
+            return ch, f"auto_{ch}"
+    return "joint", "auto_empty"
+
+
+def empty_vectors_by_channel() -> dict[str, int]:
+    """Zero counts for all durable embed channels."""
+    return {c: 0 for c in CHANNELS}
+
+
+def _count_vectors_by_channel_from_sets(
+    emb_sets: Sequence[EmbeddingSet],
+) -> dict[str, int]:
+    counts = empty_vectors_by_channel()
+    for emb in emb_sets:
+        for ch in CHANNELS:
+            if emb.channel_vector(ch) is not None:
+                counts[ch] = counts.get(ch, 0) + 1
+    return counts
 
 
 # ── Public types ───────────────────────────────────────────────────────────
@@ -395,7 +467,14 @@ class _FreshnessState:
             self.ann_index_built = True
         return removed
 
-    def health_fields(self, *, vectors_ready: int) -> dict[str, Any]:
+    def health_fields(
+        self,
+        *,
+        vectors_ready: int,
+        vectors_by_channel: Mapping[str, int] | None = None,
+        joint_repair_remaining: int = 0,
+        joint_repair_last_batch: int = 0,
+    ) -> dict[str, Any]:
         return {
             "vectors_ready": int(vectors_ready),
             "index_stale": self.is_stale(vectors_ready=vectors_ready),
@@ -407,6 +486,13 @@ class _FreshnessState:
             "last_optimize": self.last_optimize_at,
             "seed_incomplete": self.seed_incomplete,
             "ann_index_built": self.ann_index_built,
+            "vectors_by_channel": dict(
+                vectors_by_channel
+                if vectors_by_channel is not None
+                else empty_vectors_by_channel()
+            ),
+            "joint_repair_remaining": int(joint_repair_remaining),
+            "joint_repair_last_batch": int(joint_repair_last_batch),
         }
 
 
@@ -519,6 +605,15 @@ class NullEmbeddingIndex:
     def optimize(self, *, max_ms: int | None = None) -> dict[str, Any]:
         return {"ok": True, "backend": "null", "optimized": False}
 
+    def repair_joint_copies(self, *, limit: int = 64) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "backend": "null",
+            "repaired": 0,
+            "joint_repair_remaining": 0,
+            "joint_repair_last_batch": 0,
+        }
+
     def health(self) -> dict[str, Any]:
         return {
             "ok": True,
@@ -528,6 +623,9 @@ class NullEmbeddingIndex:
             "recent_buffer": 0,
             "vectors": False,
             "search_mode": "full",
+            "vectors_by_channel": empty_vectors_by_channel(),
+            "joint_repair_remaining": 0,
+            "joint_repair_last_batch": 0,
         }
 
 
@@ -548,6 +646,7 @@ class MemoryEmbeddingIndex:
         *,
         ann: AnnSettings | None = None,
         settings: Any | None = None,
+        joint_repair_max_per_open: int | None = None,
     ) -> None:
         self._store = store
         self._lock = threading.RLock()
@@ -555,8 +654,21 @@ class MemoryEmbeddingIndex:
         self._fresh = _FreshnessState(ann or ann_settings_from(settings))
         # Dict main is always exhaustive → treat as "index built" for hybrid policy.
         self._fresh.ann_index_built = True
+        self._joint_repair_last_batch = 0
+        self._settings = settings
+        open_cap = joint_repair_max_per_open
+        if open_cap is None and settings is not None:
+            open_cap = int(
+                getattr(settings, "joint_repair_max_per_open", 500) or 500
+            )
+        if open_cap is None:
+            open_cap = 500
+        self._joint_repair_max_per_open = max(0, int(open_cap))
         # On open with existing store vectors: apply full vs seed policy.
         self._apply_open_policy()
+        # KD-R11: eager joint-copy repair on open (bounded).
+        if self._joint_repair_max_per_open > 0:
+            self.repair_joint_copies(limit=self._joint_repair_max_per_open)
 
     def _apply_open_policy(self) -> None:
         with self._lock:
@@ -657,6 +769,102 @@ class MemoryEmbeddingIndex:
         with self._lock:
             return self._by_id.get(atom_id)
 
+    def _vectors_by_channel_unlocked(self) -> dict[str, int]:
+        return _count_vectors_by_channel_from_sets(list(self._by_id.values()))
+
+    def _joint_repair_remaining_unlocked(self) -> int:
+        n = 0
+        for emb in self._by_id.values():
+            if emb.emb_joint is None and sole_non_joint_vector(emb) is not None:
+                n += 1
+        return n
+
+    def repair_joint_copies(self, *, limit: int = 64) -> dict[str, Any]:
+        """Copy sole modality → emb_joint for ready rows missing joint (KD-R11).
+
+        No encoder. Re-pushes buffer entries as joint. Idempotent.
+        """
+        cap = max(0, int(limit))
+        repaired = 0
+        with self._lock:
+            if cap > 0:
+                for atom_id, emb in list(self._by_id.items()):
+                    if repaired >= cap:
+                        break
+                    fixed = joint_copy_embedding_set(emb)
+                    if fixed is None:
+                        continue
+                    self._by_id[atom_id] = fixed
+                    atom = None
+                    if self._store is not None:
+                        try:
+                            atom = self._store.get_atom(atom_id)
+                        except Exception:  # noqa: BLE001
+                            atom = None
+                        # Persist vectors when store supports upsert_vectors.
+                        upsert = getattr(self._store, "upsert_vectors", None)
+                        if callable(upsert):
+                            try:
+                                upsert(atom_id, fixed)
+                            except Exception:  # noqa: BLE001
+                                _LOG.debug(
+                                    "MemoryEmbeddingIndex repair upsert failed %s",
+                                    atom_id,
+                                    exc_info=True,
+                                )
+                        elif atom is not None:
+                            try:
+                                from elyra.memory.types import (  # noqa: PLC0415
+                                    atom_replace,
+                                )
+
+                                meta = dict(atom.meta or {})
+                                meta["embed_channels"] = list(
+                                    fixed.channels_present
+                                )
+                                meta["embed_encode_ok"] = True
+                                updated = atom_replace(
+                                    atom, embedding_status="ready", meta=meta
+                                )
+                                try:
+                                    self._store.put_atom(updated, notify=False)
+                                except TypeError:
+                                    self._store.put_atom(updated)
+                            except Exception:  # noqa: BLE001
+                                pass
+                    entry = _entry_from_emb_and_atom(fixed, atom)
+                    if entry is not None:
+                        self._fresh.buffer.push(entry)
+                    repaired += 1
+            self._joint_repair_last_batch = repaired
+            remaining = self._joint_repair_remaining_unlocked()
+            counts = self._vectors_by_channel_unlocked()
+        return {
+            "ok": True,
+            "backend": "memory",
+            "repaired": repaired,
+            "joint_repair_remaining": remaining,
+            "joint_repair_last_batch": repaired,
+            "vectors_by_channel": counts,
+        }
+
+    def _resolve_channel(self, channel: str) -> str | None:
+        """Resolve request channel; return concrete or None if invalid."""
+        ch = (channel or "").strip().lower()
+        if ch == "auto":
+            with self._lock:
+                counts = self._vectors_by_channel_unlocked()
+                remaining = self._joint_repair_remaining_unlocked()
+            concrete, _reason = resolve_search_channel(
+                "auto",
+                vectors_by_channel=counts,
+                joint_repair_remaining=remaining,
+            )
+            return concrete
+        if ch in CHANNEL_SET:
+            return ch
+        return None
+
     def _search_main_unlocked(
         self,
         query: Sequence[float],
@@ -720,7 +928,9 @@ class MemoryEmbeddingIndex:
         exclude_atom_ids: AbstractSet[str] | None = None,
         exclude_moment_id: str | None = None,
     ) -> list[ScoredAtom]:
-        if channel not in CHANNEL_SET:
+        # KD-R2: resolve auto *before* CHANNEL_SET check (never treat auto as []).
+        concrete = self._resolve_channel(channel)
+        if concrete is None:
             return []
         with self._lock:
             n = len(self._by_id)
@@ -730,7 +940,7 @@ class MemoryEmbeddingIndex:
             main = self._search_main_unlocked(
                 query,
                 k=main_k if not full else max(main_k, n),
-                channel=channel,
+                channel=concrete,
                 t_start=t_start,
                 t_end=t_end,
                 moment_id=moment_id,
@@ -743,7 +953,7 @@ class MemoryEmbeddingIndex:
             buf_hits = _search_buffer(
                 self._fresh.buffer,
                 query,
-                channel=channel,
+                channel=concrete,
                 t_start=t_start,
                 t_end=t_end,
                 moment_id=moment_id,
@@ -774,7 +984,12 @@ class MemoryEmbeddingIndex:
     def health(self) -> dict[str, Any]:
         with self._lock:
             n = len(self._by_id)
-            fields = self._fresh.health_fields(vectors_ready=n)
+            fields = self._fresh.health_fields(
+                vectors_ready=n,
+                vectors_by_channel=self._vectors_by_channel_unlocked(),
+                joint_repair_remaining=self._joint_repair_remaining_unlocked(),
+                joint_repair_last_batch=self._joint_repair_last_batch,
+            )
         return {
             "ok": True,
             "backend": "memory",
@@ -801,10 +1016,27 @@ class LanceEmbeddingIndex:
         ann: AnnSettings | None = None,
         settings: Any | None = None,
         seed_on_open: bool = True,
+        joint_repair_max_per_open: int | None = None,
     ) -> None:
         self._store = store
         self._lock = threading.RLock()
         self._fresh = _FreshnessState(ann or ann_settings_from(settings))
+        self._settings = settings
+        self._joint_repair_last_batch = 0
+        open_cap = joint_repair_max_per_open
+        if open_cap is None and settings is not None:
+            open_cap = int(
+                getattr(settings, "joint_repair_max_per_open", 500) or 500
+            )
+        if open_cap is None:
+            open_cap = 500
+        self._joint_repair_max_per_open = max(0, int(open_cap))
+        # KD-R11: repair before seed so buffer gets joint channel entries.
+        if self._joint_repair_max_per_open > 0:
+            try:
+                self.repair_joint_copies(limit=self._joint_repair_max_per_open)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("LanceEmbeddingIndex joint repair on open failed")
         if seed_on_open:
             self._apply_open_policy()
 
@@ -814,6 +1046,108 @@ class LanceEmbeddingIndex:
             return int(h.get("vectors_ready") or 0)
         except Exception:  # noqa: BLE001
             return 0
+
+    def _vectors_by_channel(self) -> dict[str, int]:
+        try:
+            fn = getattr(self._store, "vectors_by_channel", None)
+            if callable(fn):
+                return dict(fn() or empty_vectors_by_channel())
+            h = self._store.health() or {}
+            raw = h.get("vectors_by_channel")
+            if isinstance(raw, dict):
+                base = empty_vectors_by_channel()
+                base.update({str(k): int(v) for k, v in raw.items()})
+                return base
+        except Exception:  # noqa: BLE001
+            pass
+        return empty_vectors_by_channel()
+
+    def _joint_repair_remaining(self) -> int:
+        try:
+            fn = getattr(self._store, "joint_repair_remaining", None)
+            if callable(fn):
+                return max(0, int(fn() or 0))
+            h = self._store.health() or {}
+            if "joint_repair_remaining" in h:
+                return max(0, int(h.get("joint_repair_remaining") or 0))
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+    def repair_joint_copies(self, *, limit: int = 64) -> dict[str, Any]:
+        """Eager joint-copy repair via store; re-push buffer as joint (KD-R11)."""
+        cap = max(0, int(limit))
+        repaired = 0
+        store_result: dict[str, Any] = {}
+        repair_fn = getattr(self._store, "repair_joint_copies", None)
+        if callable(repair_fn) and cap > 0:
+            try:
+                store_result = dict(repair_fn(limit=cap) or {})
+                repaired = int(store_result.get("repaired") or 0)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("store.repair_joint_copies failed")
+                store_result = {"ok": False, "repaired": 0}
+
+        # Re-push repaired (and any still-eligible) ready vectors into buffer.
+        if repaired > 0:
+            get_vectors = getattr(self._store, "get_vectors", None)
+            list_seed = getattr(self._store, "list_ready_embeddings_for_seed", None)
+            with self._lock:
+                ranked: list[tuple[str, EmbeddingSet, Atom | None]] = []
+                if callable(list_seed):
+                    try:
+                        ranked = list(list_seed(limit=max(repaired, 64)) or [])
+                    except Exception:  # noqa: BLE001
+                        ranked = []
+                for item in ranked:
+                    if len(item) >= 3:
+                        _aid, emb, atom = item[0], item[1], item[2]
+                    else:
+                        continue
+                    if emb is None or emb.emb_joint is None:
+                        continue
+                    entry = _entry_from_emb_and_atom(emb, atom)
+                    if entry is not None:
+                        self._fresh.buffer.push(entry)
+                # Fallback: if store returns repaired ids
+                ids = store_result.get("repaired_ids") or []
+                if callable(get_vectors) and ids:
+                    for aid in ids:
+                        try:
+                            emb = get_vectors(aid)
+                            atom = self._store.get_atom(aid)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if emb is None:
+                            continue
+                        entry = _entry_from_emb_and_atom(emb, atom)
+                        if entry is not None:
+                            self._fresh.buffer.push(entry)
+
+        remaining = self._joint_repair_remaining()
+        self._joint_repair_last_batch = repaired
+        return {
+            "ok": True,
+            "backend": "lance",
+            "repaired": repaired,
+            "joint_repair_remaining": remaining,
+            "joint_repair_last_batch": repaired,
+            "vectors_by_channel": self._vectors_by_channel(),
+            **{k: v for k, v in store_result.items() if k not in ("ok", "repaired")},
+        }
+
+    def _resolve_channel(self, channel: str) -> str | None:
+        ch = (channel or "").strip().lower()
+        if ch == "auto":
+            concrete, _reason = resolve_search_channel(
+                "auto",
+                vectors_by_channel=self._vectors_by_channel(),
+                joint_repair_remaining=self._joint_repair_remaining(),
+            )
+            return concrete
+        if ch in CHANNEL_SET:
+            return ch
+        return None
 
     def _apply_open_policy(self) -> None:
         """KD4 open/restart: full below threshold; seed when above threshold.
@@ -1047,7 +1381,9 @@ class LanceEmbeddingIndex:
         exclude_atom_ids: AbstractSet[str] | None = None,
         exclude_moment_id: str | None = None,
     ) -> list[ScoredAtom]:
-        if channel not in CHANNEL_SET:
+        # KD-R2: resolve auto before CHANNEL_SET check.
+        concrete = self._resolve_channel(channel)
+        if concrete is None:
             return []
         with self._lock:
             n = self._vectors_ready_count()
@@ -1059,7 +1395,7 @@ class LanceEmbeddingIndex:
             main = self._search_main(
                 query,
                 k=main_k,
-                channel=channel,
+                channel=concrete,
                 t_start=t_start,
                 t_end=t_end,
                 moment_id=moment_id,
@@ -1071,7 +1407,7 @@ class LanceEmbeddingIndex:
             buf_hits = _search_buffer(
                 self._fresh.buffer,
                 query,
-                channel=channel,
+                channel=concrete,
                 t_start=t_start,
                 t_end=t_end,
                 moment_id=moment_id,
@@ -1182,9 +1518,14 @@ class LanceEmbeddingIndex:
         vector_error = store_h.get("vector_error")
         # Fail-closed: migration failure → index not ok (scalar store may still be).
         ok = bool(store_h.get("ok", True)) and vector_ok and not vector_error
+        counts = self._vectors_by_channel()
+        remaining = self._joint_repair_remaining()
         with self._lock:
             fields = self._fresh.health_fields(
-                vectors_ready=int(store_h.get("vectors_ready") or 0)
+                vectors_ready=int(store_h.get("vectors_ready") or 0),
+                vectors_by_channel=counts,
+                joint_repair_remaining=remaining,
+                joint_repair_last_batch=self._joint_repair_last_batch,
             )
         return {
             "ok": ok,
@@ -1224,7 +1565,11 @@ __all__ = [
     "MemoryEmbeddingIndex",
     "NullEmbeddingIndex",
     "RecentBufferEntry",
+    "SEARCH_CHANNEL_SET",
     "ScoredAtom",
     "ann_settings_from",
+    "empty_vectors_by_channel",
+    "joint_copy_embedding_set",
     "open_embedding_index",
+    "resolve_search_channel",
 ]

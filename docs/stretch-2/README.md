@@ -81,7 +81,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | Nemotron runtime | **Landed (PR8)** — real load when deps present; mock fallback when not; Gate B before product default-on |
 | Default-on semantic | Only after Gate B spike checklist + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
 
-**Docs:** [design-phase-2-implementation.md](design-phase-2-implementation.md) (implementation design), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped map).
+**Docs:** [design-phase-2-implementation.md](design-phase-2-implementation.md) (implementation design), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped map). **Product-path rectification (auto channel + joint-for-single + eager repair):** [design-phase-2-rectification.md](design-phase-2-rectification.md).
 
 ### Phase 1 close-out (2026-07-28)
 

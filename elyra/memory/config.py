@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from elyra.config import ElyraPaths
-from elyra.memory.embed.types import EMBED_BACKENDS, EMBED_DEVICE_PREFS
+from elyra.memory.embed.types import (
+    EMBED_BACKENDS,
+    EMBED_DEVICE_PREFS,
+    SEARCH_CHANNEL_SET,
+)
 
 MEMORY_DIRNAME = "memory"
 ATOMS_JSONL = "atoms.jsonl"
@@ -37,6 +41,7 @@ _MEMORY_BACKENDS = MEMORY_BACKENDS  # alias for older call sites
 # Phase 2 embed allowlists — single source: elyra.memory.embed.types.
 MEMORY_EMBED_BACKENDS = EMBED_BACKENDS
 MEMORY_EMBED_DEVICES = EMBED_DEVICE_PREFS
+MEMORY_SEARCH_CHANNELS = SEARCH_CHANNEL_SET
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,13 @@ class MemorySettings:
     semantic_horizon_hours: float = 168.0
     semantic_top_k: int = 12
     semantic_min_score: float = 0.0  # 0 = off
+    # KD-R2: product default auto (resolve joint-primary after repair).
+    semantic_search_channel: str = "auto"  # auto | joint | text | image | audio | video
+    # KD-R1: single-modality encode also writes emb_joint = copy(sole).
+    embed_joint_for_single_modality: bool = True
+    # KD-R11: eager joint-copy repair caps (open + idle; never hop path).
+    joint_repair_max_per_open: int = 500
+    joint_repair_max_per_tick: int = 64
     ann_recent_buffer_max: int = 256
     ann_full_search_below: int = 2000
     ann_optimize_every_n_encodes: int = 64
@@ -159,6 +171,7 @@ __all__ = [
     "MEMORY_DIRNAME",
     "MEMORY_EMBED_BACKENDS",
     "MEMORY_EMBED_DEVICES",
+    "MEMORY_SEARCH_CHANNELS",
     "MEMORY_INLINE_MAX_CHARS",
     "MEMORY_JSONL_COMPACT_BYTES",
     "MEMORY_JSONL_COMPACT_DIRTY",

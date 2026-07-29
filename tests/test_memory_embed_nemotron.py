@@ -209,10 +209,13 @@ def test_nemotron_media_soft_skip_without_mm_utils():
     assert result.embeddings is not None
     assert result.embeddings.emb_text is not None
     assert result.embeddings.emb_image is None
-    assert result.embeddings.emb_joint is None
+    # KD-R1: after media soft-skip only text remains → joint = copy(text).
+    # Never label a text-only pool as emb_image (still soft-skipped).
+    assert result.embeddings.emb_joint is not None
+    assert result.embeddings.emb_joint == result.embeddings.emb_text
     assert "text" in result.embeddings.channels_present
     assert "image" not in result.embeddings.channels_present
-    assert "joint" not in result.embeddings.channels_present
+    assert "joint" in result.embeddings.channels_present
     assert any(
         "mm_utils" in s for s in (result.meta.get("embed_media_skipped") or [])
     )

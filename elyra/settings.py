@@ -22,6 +22,7 @@ from elyra.memory.config import (
     MEMORY_BACKENDS,
     MEMORY_EMBED_BACKENDS,
     MEMORY_EMBED_DEVICES,
+    MEMORY_SEARCH_CHANNELS,
     MemorySettings,
 )
 
@@ -31,6 +32,7 @@ _CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
 _MEMORY_BACKENDS = MEMORY_BACKENDS
 _MEMORY_EMBED_BACKENDS = MEMORY_EMBED_BACKENDS
 _MEMORY_EMBED_DEVICES = MEMORY_EMBED_DEVICES
+_MEMORY_SEARCH_CHANNELS = MEMORY_SEARCH_CHANNELS
 
 
 @dataclass(frozen=True)
@@ -370,6 +372,14 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                     f"{path}: expected one of {sorted(_MEMORY_EMBED_DEVICES)}, "
                     f"got {coerced!r}"
                 )
+        if path == "memory.semantic_search_channel":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_SEARCH_CHANNELS:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(_MEMORY_SEARCH_CHANNELS)}, "
+                    f"got {coerced!r}"
+                )
         if path in (
             "memory.semantic_fraction",
             "memory.episodic_fraction_with_semantic",
@@ -404,6 +414,8 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.embed_media_max_bytes",
             "memory.embed_catchup_max",
             "memory.embed_catchup_per_tick",
+            "memory.joint_repair_max_per_open",
+            "memory.joint_repair_max_per_tick",
         ) and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         filtered[k] = coerced
