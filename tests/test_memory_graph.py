@@ -22,6 +22,8 @@ from elyra.memory.graph import (
     REASON_NO_HITS,
     REASON_NO_INDEX,
     REASON_PARENT_OF_UNAVAILABLE,
+    REASON_SEMANTIC_DISABLED,
+    REASON_TIMEOUT,
 )
 from elyra.memory.index import MemoryEmbeddingIndex, NullEmbeddingIndex
 from elyra.memory.store import open_memory_store
@@ -384,6 +386,64 @@ def test_parent_of_omit_when_no_meta_and_no_moment(store):
     assert gv.last_expand_meta.get("parent_of_reason") == REASON_PARENT_OF_UNAVAILABLE
 
 
+def test_parent_of_stale_first_parcel_falls_through_to_moment(store):
+    """Broken first_parcel_id still finds children via moment filter."""
+    p_id = "a_stale_p"
+    c_id = "a_stale_c"
+    store.put_atom(
+        Atom(
+            atom_id=p_id,
+            t_start="2026-07-28T10:00:00Z",
+            kind="observation",
+            content_text="parent",
+            content_ref="inline",
+            moment_id="mStale",
+            meta={
+                "first_parcel_id": "a_missing_parcel",
+                "parcel_count": 1,
+                "has_parcels": True,
+            },
+        )
+    )
+    store.put_atom(
+        _atom(
+            atom_id=c_id,
+            kind="parcel",
+            text="chunk",
+            moment_id="mStale",
+            parent_atom_id=p_id,
+        )
+    )
+    gv = GraphView(store, now="2026-07-28T10:00:00Z")
+    edges = gv.neighbors(
+        p_id, kinds=[EDGE_PARENT_OF], k=10, allow_semantic=False
+    )
+    assert {e.dst_atom_id for e in edges} == {c_id}
+    assert gv.last_expand_meta.get("parent_of_reason") is None
+
+
+def test_parent_of_stale_first_parcel_no_moment_sets_unavailable(store):
+    """Stale first_parcel_id + no moment_id → omit with parent_of_unavailable."""
+    p_id = "a_stale_nm"
+    store.put_atom(
+        Atom(
+            atom_id=p_id,
+            t_start="2026-07-28T10:00:00Z",
+            kind="observation",
+            content_text="parent",
+            content_ref="inline",
+            moment_id=None,
+            meta={"first_parcel_id": "a_gone", "parcel_count": 2},
+        )
+    )
+    gv = GraphView(store, now="2026-07-28T10:00:00Z")
+    edges = gv.neighbors(
+        p_id, kinds=[EDGE_PARENT_OF], k=10, allow_semantic=False
+    )
+    assert edges == []
+    assert gv.last_expand_meta.get("parent_of_reason") == REASON_PARENT_OF_UNAVAILABLE
+
+
 def test_parent_of_respects_parcel_child_cap(store):
     p_id = "a_cap_p"
     cap = 2
@@ -616,13 +676,9 @@ def test_structural_works_without_index_jsonl(store):
     kinds = {e.edge_kind for e in edges}
     assert EDGE_SEQUENTIAL in kinds
     assert EDGE_SAME_MOMENT in kinds or EDGE_SEQUENTIAL in kinds
-    # Semantic skipped
+    # Semantic skipped — Null index is no_index (not encoder_cold / disabled).
     assert EDGE_SEMANTIC_HOP not in kinds
-    assert gv.last_expand_meta.get("semantic_reason") in (
-        REASON_NO_INDEX,
-        REASON_ENCODER_COLD,
-        None,  # if semantic not in default expand when cold — still structural ok
-    ) or True
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_NO_INDEX
 
 
 def test_expand_deadline_zero_disables_wall(store):
@@ -640,6 +696,121 @@ def test_expand_deadline_zero_disables_wall(store):
     )
     assert any(e.dst_atom_id == "a_dl2" for e in edges)
     assert gv.last_expand_meta.get("expand_truncated") is False
+
+
+def test_expand_deadline_truncates_structural(store, monkeypatch):
+    """Forced wall: sequential packs under budget; later kinds truncated."""
+    a, b = (
+        _atom(atom_id="a_to1", t="2026-07-28T10:00:00Z"),
+        _atom(atom_id="a_to2", t="2026-07-28T10:01:00Z"),
+    )
+    _link_chain(store, [a, b])
+    ticks = {"n": 0}
+
+    def fake_now() -> float:
+        ticks["n"] += 1
+        # Calls 1–3 stay under a 5ms wall (t0, over-before-seq, seq deadline
+        # check); later calls exceed so same_moment is skipped.
+        if ticks["n"] <= 3:
+            return float(ticks["n"] - 1)  # 0, 1, 2
+        return 100.0
+
+    monkeypatch.setattr("elyra.memory.graph._now_ms", fake_now)
+    gv = GraphView(store, now="2026-07-28T10:02:00Z")
+    edges = gv.neighbors(
+        "a_to1",
+        kinds=[EDGE_SEQUENTIAL, EDGE_SAME_MOMENT],
+        expand_deadline_ms=5,
+        allow_semantic=False,
+    )
+    assert gv.last_expand_meta.get("expand_truncated") is True
+    assert any(e.dst_atom_id == "a_to2" and e.edge_kind == EDGE_SEQUENTIAL for e in edges)
+    assert all(e.edge_kind == EDGE_SEQUENTIAL for e in edges)
+
+
+def test_semantic_hop_timeout_before_encode(store, monkeypatch):
+    """Deadline already exceeded when semantic leg starts → timeout reason."""
+    store.put_atom(_atom(atom_id="a_sem_to", text="hello theme"))
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    vec = mock_vector("text|hello theme", dim=EMBED_DIM)
+    idx.upsert(
+        EmbeddingSet(
+            atom_id="a_sem_to",
+            dim=EMBED_DIM,
+            emb_text=vec,
+            emb_joint=vec,
+            model_id="mock",
+            encoded_at="2026-07-28T10:00:00Z",
+        )
+    )
+    ticks = {"n": 0}
+
+    def fake_now() -> float:
+        ticks["n"] += 1
+        # t0 on first call; immediately over wall for subsequent checks
+        # so sequential (none) and semantic entry both see over deadline.
+        return 0.0 if ticks["n"] == 1 else 100.0
+
+    monkeypatch.setattr("elyra.memory.graph._now_ms", fake_now)
+    gv = GraphView(
+        store, index=idx, embedder=emb, now="2026-07-28T10:05:00Z"
+    )
+    edges = gv.neighbors(
+        "a_sem_to",
+        kinds=[EDGE_SEMANTIC_HOP],
+        k=5,
+        allow_semantic=True,
+        expand_deadline_ms=1,
+    )
+    assert edges == []
+    assert gv.last_expand_meta.get("expand_truncated") is True
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_TIMEOUT
+
+
+def test_seed_from_text_timeout(store, monkeypatch):
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    ticks = {"n": 0}
+
+    def fake_now() -> float:
+        ticks["n"] += 1
+        return 0.0 if ticks["n"] == 1 else 50.0
+
+    monkeypatch.setattr("elyra.memory.graph._now_ms", fake_now)
+    gv = GraphView(store, index=idx, embedder=emb)
+    seeds = gv.seed_from_text("any query", k=5, expand_deadline_ms=1)
+    assert seeds == []
+    assert gv.last_expand_meta.get("expand_truncated") is True
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_TIMEOUT
+
+
+def test_semantic_disabled_settings_reason(store):
+    store.put_atom(_atom(atom_id="a_dis", text="hello"))
+    settings = MemorySettings(traverse_allow_semantic_hops=False)
+    gv = GraphView(
+        store,
+        index=MemoryEmbeddingIndex(store=store),
+        embedder=MockEmbedder(),
+        settings=settings,
+    )
+    edges = gv.neighbors("a_dis", kinds=[EDGE_SEMANTIC_HOP], k=5)
+    assert edges == []
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_SEMANTIC_DISABLED
+
+
+def test_semantic_disabled_allow_flag_reason(store):
+    store.put_atom(_atom(atom_id="a_dis2", text="hello"))
+    gv = GraphView(
+        store,
+        index=MemoryEmbeddingIndex(store=store),
+        embedder=MockEmbedder(),
+    )
+    edges = gv.neighbors(
+        "a_dis2", kinds=[EDGE_SEMANTIC_HOP], k=5, allow_semantic=False
+    )
+    assert edges == []
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_SEMANTIC_DISABLED
 
 
 def test_graph_edge_is_frozen():

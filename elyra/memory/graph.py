@@ -46,6 +46,8 @@ REASON_ENCODER_COLD = "encoder_cold"
 REASON_TIMEOUT = "timeout"
 REASON_NO_HITS = "no_hits"
 REASON_PARENT_OF_UNAVAILABLE = "parent_of_unavailable"
+# Distinct from no_index: settings or call-site disabled semantic hops (Issue 3).
+REASON_SEMANTIC_DISABLED = "semantic_disabled"
 
 STRUCTURAL_KINDS: frozenset[str] = frozenset(
     {EDGE_SEQUENTIAL, EDGE_PARENT_OF, EDGE_CHILD_OF, EDGE_SAME_MOMENT}
@@ -301,10 +303,24 @@ class GraphView:
         )
         return [e] if e is not None else []
 
+    def _children_via_moment(self, parent: Atom, *, cap: int) -> list[Atom]:
+        """Moment-filter reverse: list_by_moment + parent_atom_id match (capped)."""
+        if not parent.moment_id or cap <= 0:
+            return []
+        rows = self._store.list_by_moment(parent.moment_id)
+        return [
+            a
+            for a in rows
+            if a.parent_atom_id == parent.atom_id and a.atom_id != parent.atom_id
+        ][:cap]
+
     def _resolve_parent_children(self, parent: Atom) -> tuple[list[Atom], str | None]:
         """Normative parent_of reverse: first_parcel_id chain → moment filter → omit.
 
-        Returns ``(children, omit_reason)``. omit_reason is set when no children
+        Prefer ``meta.first_parcel_id`` when present. If that chain is empty or
+        stale (zero matching children) and the parent has a ``moment_id``, fall
+        through to the moment filter so real children remain visible under
+        partial/corrupt promote meta. omit_reason is set only when no children
         can be resolved without a full-table scan.
         """
         cap = self._parcel_child_cap()
@@ -322,26 +338,23 @@ class GraphView:
             except (TypeError, ValueError):
                 parcel_count = cap
             n = max(0, min(cap, parcel_count if parcel_count > 0 else cap))
-            if n <= 0:
-                return [], None
-            chain = self._store.walk_next(str(first_id), n=n)
-            children: list[Atom] = []
-            for a in chain:
-                if a.parent_atom_id == parent.atom_id:
-                    children.append(a)
-                if len(children) >= n:
-                    break
-            return children, None
+            if n > 0:
+                chain = self._store.walk_next(str(first_id), n=n)
+                children: list[Atom] = []
+                for a in chain:
+                    if a.parent_atom_id == parent.atom_id:
+                        children.append(a)
+                    if len(children) >= n:
+                        break
+                if children:
+                    return children, None
+            # Stale/broken first_parcel_id: fall through to moment filter.
 
         if parent.moment_id:
-            rows = self._store.list_by_moment(parent.moment_id)
-            children = [
-                a
-                for a in rows
-                if a.parent_atom_id == parent.atom_id and a.atom_id != parent.atom_id
-            ][:cap]
+            children = self._children_via_moment(parent, cap=cap)
             return children, None
 
+        # No moment and (no meta or empty/stale meta chain).
         return [], REASON_PARENT_OF_UNAVAILABLE
 
     def _project_parent_of(
@@ -397,7 +410,8 @@ class GraphView:
             for a in rows
             if a.atom_id != atom.atom_id and a.atom_id not in exclude
         ]
-        # Weight all candidates then take top-k (temporal distance in moment).
+        # Weight all candidates then take top-k (v1: destination-age decay via
+        # edge_weight, not |src.t_start − dst.t_start| within-moment distance).
         scored: list[GraphEdge] = []
         for peer in candidates:
             if deadline is not None and (_now_ms() - t0) > deadline:
@@ -417,9 +431,17 @@ class GraphView:
     # ── Semantic hop ───────────────────────────────────────────────────────
 
     def _semantic_unavailable_reason(self) -> str | None:
-        """Return skip reason if semantic hops cannot run, else None."""
+        """Return skip reason if semantic hops cannot run, else None.
+
+        Vocabulary:
+        - ``semantic_disabled`` — settings ``traverse_allow_semantic_hops=False``
+        - ``no_index`` — missing / NullEmbeddingIndex
+        - ``encoder_cold`` — embedder None / not warm
+        Call-site ``allow_semantic=False`` is handled in ``neighbors`` (same
+        ``semantic_disabled`` reason) so A2 can tell “off” from “no ANN.”
+        """
         if not self._allow_semantic():
-            return REASON_NO_INDEX  # disabled treated as unavailable
+            return REASON_SEMANTIC_DISABLED
         if self._index is None or _index_is_null(self._index):
             return REASON_NO_INDEX
         if not _embedder_is_warm(self._embedder):
@@ -556,9 +578,17 @@ class GraphView:
         """1-hop expand sorted by weight desc (then dst_atom_id for stability).
 
         Semantic hops only if index present AND embedder warm AND
-        ``allow_semantic`` and settings allow. On deadline exceed returns
-        structural edges gathered so far (+ partial semantic if any);
-        ``last_expand_meta["expand_truncated"]`` is set.
+        ``allow_semantic`` and settings allow. Skip reasons in
+        ``last_expand_meta["semantic_reason"]``:
+
+        - ``semantic_disabled`` — settings off or ``allow_semantic=False``
+        - ``no_index`` — missing / Null index
+        - ``encoder_cold`` — embedder cold / encode fail
+        - ``timeout`` — expand deadline exceeded on semantic leg
+        - ``no_hits`` — empty body / empty search / all below min weight
+
+        On deadline exceed returns structural edges gathered so far (+ partial
+        semantic if any); ``last_expand_meta["expand_truncated"]`` is set.
         """
         t0 = _now_ms()
         deadline = (
@@ -634,7 +664,7 @@ class GraphView:
             expand_meta["expand_truncated"] = True
             expand_meta.setdefault("semantic_reason", REASON_TIMEOUT)
         elif EDGE_SEMANTIC_HOP in wanted and not allow_semantic:
-            expand_meta.setdefault("semantic_reason", REASON_NO_INDEX)
+            expand_meta.setdefault("semantic_reason", REASON_SEMANTIC_DISABLED)
 
         if over():
             expand_meta["expand_truncated"] = True
@@ -668,7 +698,9 @@ class GraphView:
     ) -> list[tuple[str, float, str]]:
         """Vector seeds → ``(atom_id, score, reason)``.
 
-        Empty reasons: ``no_index`` | ``encoder_cold`` | ``timeout`` | ``no_hits``.
+        Empty reasons in ``last_expand_meta["semantic_reason"]``:
+        ``no_index`` | ``encoder_cold`` | ``timeout`` | ``no_hits`` |
+        ``semantic_disabled``.
         """
         t0 = _now_ms()
         deadline = (
@@ -865,6 +897,7 @@ __all__ = [
     "REASON_NO_HITS",
     "REASON_NO_INDEX",
     "REASON_PARENT_OF_UNAVAILABLE",
+    "REASON_SEMANTIC_DISABLED",
     "REASON_TIMEOUT",
     "STRUCTURAL_KINDS",
 ]
