@@ -23,11 +23,11 @@ export LANCE_DEBUG_DATA_DIR=/tmp/lance-q-YYYYMMDD/data
 export LANCE_DEBUG_URI=$LANCE_DEBUG_DATA_DIR/memory/lance
 # Marker must be: $LANCE_DEBUG_DATA_DIR/../.lance-debug1-quarantine
 
-# PYTHONPATH: repo root so `elyra` imports work for W1 scripts (later PRs)
+# PYTHONPATH: repo root so `elyra` imports work for W1 scripts
 export PYTHONPATH=.
 ```
 
-Prefer **Python 3.12** for R1 probes if 3.14 native lancedb connect segfaults (`env_check.py` reports interpreter).
+Prefer **Python 3.12** for R1/W1 probes if 3.14 native lancedb connect segfaults (`env_check.py` reports interpreter).
 
 ---
 
@@ -36,12 +36,13 @@ Prefer **Python 3.12** for R1 probes if 3.14 native lancedb connect segfaults (`
 - Read [../SAFETY.md](../SAFETY.md) before running anything beyond R0.
 - **Allowlist (R1):** `connect`, `open_table`, `table_names`, `count_rows`, `head`, bare `to_arrow`, `to_lance`, `list_versions`, schema inspect; optional private async query only inside H1b step 2.
 - **Deny-list:** `merge_insert`, `add`, `delete`, `drop_table`, `compact_files`, `cleanup_old_versions`, `optimize`, live migrate. (`create_table` only in `fixtures/` builders.)
-- **W1** scripts require marker at `{data_dir}/../.lance-debug1-quarantine` only.
-- **No dual live connect** while the writer is open (default path: glass R2 + quarantine R1).
+- **W1** scripts require marker at `{data_dir}/../.lance-debug1-quarantine` only (never optional).
+- **No dual live connect** while the writer is open (default path: glass R2 + quarantine R1/W1).
+- **version_sample.py:** list_versions / read-only checkout only — never compact/optimize/cleanup.
 
 ---
 
-## PR2 available now
+## PR2 available
 
 ```bash
 # Versions / paths
@@ -66,4 +67,34 @@ python docs/lance-debug1/scripts/caller_grep_report.py
 
 See [../REPRO-RECIPES.md](../REPRO-RECIPES.md) R1 and [../procedures/P01-offline-api-matrix.md](../procedures/P01-offline-api-matrix.md).
 
-Later PRs add `load_parity.py` / `version_sample.py`; do not invent product entrypoints under top-level `scripts/`.
+---
+
+## PR3 available
+
+```bash
+export PYTHONPATH=.
+export LANCE_DEBUG_DATA_DIR=/tmp/lance-q-YYYYMMDD/data
+export LANCE_DEBUG_URI=$LANCE_DEBUG_DATA_DIR/memory/lance
+RUN=docs/lance-debug1/evidence/$(date +%Y-%m-%d)-run-01
+
+# W1 load parity (requires marker at $LANCE_DEBUG_DATA_DIR/../.lance-debug1-quarantine)
+python docs/lance-debug1/scripts/load_parity.py \
+  --data-dir "$LANCE_DEBUG_DATA_DIR" \
+  --api-matrix "$RUN/api-matrix.json" \
+  --out "$RUN/load-parity.json"
+
+# R1 version sample (optional if H1a+H1b already proven; never compact)
+python docs/lance-debug1/scripts/version_sample.py \
+  --uri "$LANCE_DEBUG_URI" \
+  --samples 5 \
+  --out "$RUN/version-sample.json"
+```
+
+| Script | Key rules |
+|--------|-----------|
+| `load_parity.py` | Marker **required**; opens `LanceMemoryStore` on quarantine only; proves H2 (process ≈ `n_arrow` ≪ `n_full`) |
+| `version_sample.py` | `list_versions` + optional read-only checkout; H10 residual framing; no compact/optimize/delete |
+
+See [../procedures/P02-load-path-parity.md](../procedures/P02-load-path-parity.md), [../procedures/P08-version-sampling.md](../procedures/P08-version-sampling.md), [../VERSION-ARCHAEOLOGY.md](../VERSION-ARCHAEOLOGY.md), [../API-COMPARISON.md](../API-COMPARISON.md).
+
+Later PRs add `consumer_compare.py`; do not invent product entrypoints under top-level `scripts/`.

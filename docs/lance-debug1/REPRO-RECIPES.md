@@ -5,8 +5,9 @@ Step-by-step operator recipes. Prefer quarantine for R1; never run deny-list ops
 | Recipe | Class | Proves | Scripts |
 |--------|-------|--------|---------|
 | **R1** | R1 | H1 / H1a / H1b (offline smoking gun) | `quarantine_copy.sh`, `env_check.py`, `api_matrix.py` |
-| R2 | R2 + R1 | Process thin vs disk full (glass + snapshot) | glass HTTP + R1 on snapshot (PR3+) |
-| R3+ | — | Later procedures | see procedures/ |
+| R2 | R2 + R1 | Process thin vs disk full (glass + snapshot) | glass HTTP + R1 on snapshot (P03) |
+| **R3** | **W1** | H2 / H5 (load inherits thin set) | `load_parity.py` (+ prior api_matrix) |
+| R3b | R1 | H3 / H10 residual (optional if H1a+H1b) | `version_sample.py` |
 
 Normative design: [design-inspection-plan.md](design-inspection-plan.md). Safety: [SAFETY.md](SAFETY.md).
 
@@ -72,18 +73,59 @@ python docs/lance-debug1/scripts/api_matrix.py --uri /tmp/tiny-lance --out /tmp/
 
 ---
 
-## Recipe R2 — Process restart thin world (stub; PR3+)
+## Recipe R2 — Process restart thin world (glass + offline; P03)
 
 1. Restart Elyra; before heavy promote, capture glass `GET /api/memory` atom_count.
 2. Take quarantine snapshot (idle preferred) and run **R1** on the snapshot.
 3. Compare glass process count ≈ `n_arrow` ≪ snapshot `n_full`.
 
-Details: [procedures/P03-inprocess-vs-oop.md](procedures/P03-inprocess-vs-oop.md).
+Details: [procedures/P03-inprocess-vs-oop.md](procedures/P03-inprocess-vs-oop.md) (adjacency PR4).
+
+---
+
+## Recipe R3 — Load path parity (W1 quarantine; P02)
+
+**Safety:** **W1** — marker required at `$QUARANTINE_ROOT/.lance-debug1-quarantine` only. Never open live unmarked store.
+
+```bash
+# After R1 quarantine + api_matrix on the same snapshot:
+export PYTHONPATH=.
+export LANCE_DEBUG_DATA_DIR=/tmp/lance-q-YYYYMMDD/data
+RUN=docs/lance-debug1/evidence/$(date +%Y-%m-%d)-run-01
+
+python docs/lance-debug1/scripts/load_parity.py \
+  --data-dir "$LANCE_DEBUG_DATA_DIR" \
+  --api-matrix "$RUN/api-matrix.json" \
+  --out "$RUN/load-parity.json"
+```
+
+**Expect (H2):** `process.atom_count ≈ n_arrow` (typically ~10); `n_full ≫ process`; skip-corrupt ≪ gap (H5 disconfirm).
+
+Details: [procedures/P02-load-path-parity.md](procedures/P02-load-path-parity.md), [API-COMPARISON.md](API-COMPARISON.md).
+
+---
+
+## Recipe R3b — Version sample (R1 optional; P08)
+
+**When:** After H1a/H1b; optional polish if default-limit proven. **Never** compact/optimize/cleanup.
+
+```bash
+python docs/lance-debug1/scripts/version_sample.py \
+  --uri "$LANCE_DEBUG_URI" \
+  --samples 5 \
+  --out "$RUN/version-sample.json"
+```
+
+**H10 residual:** migration sites still use bare `to_arrow`; historical collapse only if samples are non-monotonic. Active process-thin when full APIs already large is **not** H10.
+
+Details: [procedures/P08-version-sampling.md](procedures/P08-version-sampling.md), [VERSION-ARCHAEOLOGY.md](VERSION-ARCHAEOLOGY.md).
 
 ---
 
 ## Related
 
 - [procedures/P01-offline-api-matrix.md](procedures/P01-offline-api-matrix.md)
+- [procedures/P02-load-path-parity.md](procedures/P02-load-path-parity.md)
+- [procedures/P08-version-sampling.md](procedures/P08-version-sampling.md)
 - [scripts/README.md](scripts/README.md)
 - [HYPOTHESES.md](HYPOTHESES.md)
