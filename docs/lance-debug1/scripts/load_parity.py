@@ -177,6 +177,31 @@ def _load_api_matrix(path: Path | None) -> dict[str, Any] | None:
     return data
 
 
+def _pick_id_list(
+    candidates: list[list[Any] | None],
+    *,
+    expected_len: int | None,
+) -> list[str] | None:
+    """Prefer an id list whose length matches ``expected_len`` (full materialization).
+
+    api_matrix caps ``atom_ids_all`` at 50; truncated lists must not win over
+    full ``h1a.arrow_ids`` or direct R1 when lengths disagree.
+    """
+    lists: list[list[str]] = []
+    for raw in candidates:
+        if not raw:
+            continue
+        lists.append([str(x) for x in raw])
+    if not lists:
+        return None
+    if expected_len is not None and expected_len >= 0:
+        for lst in lists:
+            if len(lst) == expected_len:
+                return lst
+    # No exact match: prefer longest (least truncated) candidate.
+    return max(lists, key=len)
+
+
 def _counts_from_api_matrix(am: dict[str, Any]) -> dict[str, Any]:
     summary = am.get("summary") or {}
     probes = am.get("probes") or {}
@@ -185,24 +210,54 @@ def _counts_from_api_matrix(am: dict[str, Any]) -> dict[str, Any]:
     n_head = summary.get("n_head")
     arrow_ids = None
     head_ids = None
-    if isinstance(probes.get("to_arrow"), dict):
-        ta = probes["to_arrow"]
-        # Prefer full list when small; api_matrix stores atom_ids / atom_ids_all
-        arrow_ids = ta.get("atom_ids_all") or ta.get("atom_ids") or ta.get("ids")
+    ta = probes.get("to_arrow") if isinstance(probes.get("to_arrow"), dict) else {}
+    hd = probes.get("head") if isinstance(probes.get("head"), dict) else {}
+    if ta:
         if n_arrow is None and ta.get("n_arrow") is not None:
             n_arrow = ta.get("n_arrow")
-    if isinstance(probes.get("head"), dict):
-        hd = probes["head"]
-        head_ids = hd.get("atom_ids_prefix") or hd.get("atom_ids") or hd.get("ids")
+    if hd:
         if n_head is None and hd.get("n_head") is not None:
             n_head = hd.get("n_head")
     # Fallback nested shapes from api_matrix
     if n_full is None and isinstance(probes.get("count_rows"), dict):
         cr = probes["count_rows"]
         n_full = cr.get("n_full") or cr.get("n") or cr.get("num_rows")
-    # h1a may hold full arrow_ids list
-    if not arrow_ids and isinstance(am.get("h1a"), dict):
-        arrow_ids = (am["h1a"] or {}).get("arrow_ids")
+
+    try:
+        n_arrow_i = int(n_arrow) if n_arrow is not None else None
+    except (TypeError, ValueError):
+        n_arrow_i = None
+
+    h1a_ids = None
+    if isinstance(am.get("h1a"), dict):
+        h1a_ids = (am["h1a"] or {}).get("arrow_ids")
+
+    # Prefer full-length lists: h1a.arrow_ids (full when H1a ran) over capped
+    # atom_ids_all (PR2 stores [:50] when n_arrow > 50).
+    arrow_ids = _pick_id_list(
+        [
+            h1a_ids,
+            ta.get("atom_ids_all") if ta else None,
+            ta.get("atom_ids") if ta else None,
+            ta.get("ids") if ta else None,
+        ],
+        expected_len=n_arrow_i,
+    )
+    head_ids = _pick_id_list(
+        [
+            hd.get("atom_ids_prefix") if hd else None,
+            hd.get("atom_ids") if hd else None,
+            hd.get("ids") if hd else None,
+        ],
+        expected_len=None,  # prefix samples are intentionally short
+    )
+    # Mark when arrow_ids still look truncated vs n_arrow (caller may fill direct_r1).
+    arrow_ids_truncated = bool(
+        arrow_ids is not None
+        and n_arrow_i is not None
+        and n_arrow_i > 0
+        and len(arrow_ids) < n_arrow_i
+    )
     return {
         "source": "api_matrix",
         "n_full": n_full,
@@ -210,6 +265,7 @@ def _counts_from_api_matrix(am: dict[str, Any]) -> dict[str, Any]:
         "n_head": n_head,
         "arrow_ids": list(arrow_ids) if arrow_ids else None,
         "head_ids": list(head_ids) if head_ids else None,
+        "arrow_ids_truncated": arrow_ids_truncated,
         "h1_ok": (am.get("h1") or {}).get("ok"),
         "h1a_ok": (am.get("h1a") or {}).get("ok"),
         "h1b_ok": (am.get("h1b") or {}).get("ok"),
@@ -309,7 +365,12 @@ def _open_store(data_dir: Path):
 
 
 class _SkipCounter(logging.Handler):
-    """Count 'skipping corrupt lance row' warnings from LanceMemoryStore._load."""
+    """Count 'skipping corrupt lance row' warnings from LanceMemoryStore._load.
+
+    Attach **only** to ``logging.getLogger("elyra.memory.lance_store")`` — not
+    also to the root logger. Product loggers propagate by default; dual-attach
+    double-counts each warning and can corrupt H5 thresholds.
+    """
 
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
@@ -322,6 +383,22 @@ class _SkipCounter(logging.Handler):
             self.count += 1
             if len(self.messages) < 50:
                 self.messages.append(msg)
+
+
+def _smoke_skip_counter_once() -> None:
+    """Sanity: one warning → count == 1 when handler is on lance_store only."""
+    handler = _SkipCounter()
+    lance_logger = logging.getLogger("elyra.memory.lance_store")
+    # Avoid dual-count if root also has handlers that re-emit (we only attach once).
+    lance_logger.addHandler(handler)
+    try:
+        lance_logger.warning("skipping corrupt lance row atom_id=%r", "smoke")
+        if handler.count != 1:
+            raise RuntimeError(
+                f"_SkipCounter smoke failed: expected count=1, got {handler.count}"
+            )
+    finally:
+        lance_logger.removeHandler(handler)
 
 
 def run_parity(
@@ -378,9 +455,37 @@ def run_parity(
             direct = _direct_r1_counts(lance_uri, table_name=table_name)
             result["direct_r1"] = direct
             # Fill gaps from direct when api_matrix missing fields.
-            for key in ("n_full", "n_arrow", "n_head", "arrow_ids", "head_ids"):
+            # Also replace truncated arrow_ids (api_matrix atom_ids_all cap 50)
+            # when direct provides a full-length list.
+            for key in ("n_full", "n_arrow", "n_head", "head_ids"):
                 if offline.get(key) is None and direct.get(key) is not None:
                     offline[key] = direct[key]
+                    if offline.get("source") is None:
+                        offline["source"] = "direct_r1"
+                    elif offline["source"] == "api_matrix":
+                        offline["source"] = "api_matrix+direct_r1"
+            # arrow_ids: prefer full-length over truncated api_matrix sample
+            try:
+                n_arrow_i = (
+                    int(offline["n_arrow"]) if offline.get("n_arrow") is not None else None
+                )
+            except (TypeError, ValueError):
+                n_arrow_i = None
+            direct_ids = direct.get("arrow_ids")
+            offline_ids = offline.get("arrow_ids")
+            need_ids = offline_ids is None or bool(offline.get("arrow_ids_truncated"))
+            if need_ids and direct_ids:
+                chosen = _pick_id_list(
+                    [direct_ids, offline_ids],
+                    expected_len=n_arrow_i,
+                )
+                if chosen is not None and (
+                    offline_ids is None or len(chosen) > len(offline_ids)
+                ):
+                    offline["arrow_ids"] = chosen
+                    offline["arrow_ids_truncated"] = bool(
+                        n_arrow_i is not None and len(chosen) < n_arrow_i
+                    )
                     if offline.get("source") is None:
                         offline["source"] = "direct_r1"
                     elif offline["source"] == "api_matrix":
@@ -391,10 +496,10 @@ def run_parity(
     result["offline"] = offline
 
     # --- W1 open ---
+    # Attach skip handler ONLY to the product logger (not root): product uses
+    # getLogger(__name__) with propagate=True; dual-attach double-counts H5.
     skip_handler = _SkipCounter()
-    root_logger = logging.getLogger()
     lance_logger = logging.getLogger("elyra.memory.lance_store")
-    root_logger.addHandler(skip_handler)
     lance_logger.addHandler(skip_handler)
     store = None
     try:
@@ -431,7 +536,6 @@ def run_parity(
         process_count = -1
         process_ids = []
     finally:
-        root_logger.removeHandler(skip_handler)
         lance_logger.removeHandler(skip_handler)
         if store is not None:
             try:
@@ -578,17 +682,19 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         _assert_no_deny_calls_in_source()
+        _smoke_skip_counter_once()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    # Resolve data_dir: --data-dir > --paths-root/data > env
+    # Resolve data_dir: --data-dir > --paths-root/data > $LANCE_DEBUG_DATA_DIR only.
+    # Do NOT fall back to ELYRA_DATA_DIR (often live operator tree; footgun).
     if args.data_dir:
         data_dir = Path(args.data_dir)
     elif args.paths_root:
         data_dir = Path(args.paths_root) / "data"
     else:
-        env_dd = os.environ.get("LANCE_DEBUG_DATA_DIR") or os.environ.get("ELYRA_DATA_DIR")
+        env_dd = os.environ.get("LANCE_DEBUG_DATA_DIR")
         if not env_dd:
             print(
                 "error: --data-dir / --paths-root or LANCE_DEBUG_DATA_DIR required",

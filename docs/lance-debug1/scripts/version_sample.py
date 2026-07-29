@@ -127,6 +127,64 @@ def _version_id(v: Any) -> Any:
     return str(v)
 
 
+def _version_sort_key(v: Any) -> tuple[int, Any]:
+    """Sort key for ascending chronological order (int version preferred).
+
+    Returns (tier, key) so integers sort before non-int fallbacks of the same
+    numeric string, and unparseable entries stay stable at the end of their tier.
+    """
+    vid = _version_id(v)
+    if isinstance(vid, bool):
+        return (2, str(vid))
+    if isinstance(vid, int):
+        return (0, vid)
+    if isinstance(vid, float):
+        return (0, int(vid))
+    if isinstance(vid, str):
+        try:
+            return (0, int(vid))
+        except ValueError:
+            # Timestamp-ish strings sort lexicographically within tier 1.
+            return (1, vid)
+    # dict leftovers / unknown
+    if isinstance(vid, dict):
+        for key in ("timestamp", "ts", "created_at", "mtime"):
+            if key in vid:
+                return (1, str(vid[key]))
+    return (2, str(vid))
+
+
+def _sort_versions_ascending(versions: list[Any]) -> tuple[list[Any], dict[str, Any]]:
+    """Sort list_versions entries ascending by version id/timestamp.
+
+    Design assumes first→latest is chronological. Some lancedb builds may return
+    newest-first; sorting avoids labeling growth as H10 collapse.
+    """
+    meta: dict[str, Any] = {
+        "sort_key": "version_id int asc, then str, then repr",
+        "n_in": len(versions),
+    }
+    if not versions:
+        meta["sorted"] = True
+        meta["order_was"] = "empty"
+        return [], meta
+    # Detect pre-sort direction (best-effort) for evidence.
+    first_k = _version_sort_key(versions[0])
+    last_k = _version_sort_key(versions[-1])
+    if first_k < last_k:
+        meta["order_was"] = "ascending_or_mixed"
+    elif first_k > last_k:
+        meta["order_was"] = "descending_or_mixed"
+    else:
+        meta["order_was"] = "equal_endpoints"
+    sorted_v = sorted(versions, key=_version_sort_key)
+    meta["sorted"] = True
+    meta["n_out"] = len(sorted_v)
+    meta["first_version_id"] = _jsonable(_version_id(sorted_v[0]))
+    meta["latest_version_id"] = _jsonable(_version_id(sorted_v[-1]))
+    return sorted_v, meta
+
+
 def _pick_indices(n: int, samples: int) -> list[int]:
     """Pick sample indices: first, evenly spaced, latest. Always include 0 and n-1."""
     if n <= 0:
@@ -331,10 +389,14 @@ def run_sample(
         result["duration_ms"] = int((time.perf_counter() - t0) * 1000)
         return result
 
+    # Sort ascending by version id so first/25/50/75/latest fractions are chronological
+    # (avoids labeling growth as H10 collapse when API returns newest-first).
+    versions_raw, sort_meta = _sort_versions_ascending(versions_raw)
     n_versions = len(versions_raw)
     result["list_versions"] = {
         "present": True,
         "n_versions": n_versions,
+        "sort": sort_meta,
         "first": _jsonable(versions_raw[0]) if versions_raw else None,
         "latest": _jsonable(versions_raw[-1]) if versions_raw else None,
     }
