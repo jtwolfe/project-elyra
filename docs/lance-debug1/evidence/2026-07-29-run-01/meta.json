@@ -1,0 +1,69 @@
+{
+  "run_id": "2026-07-29-run-01",
+  "utc_start": "2026-07-29T09:38:25Z",
+  "utc_finish": "2026-07-29T09:38:40Z",
+  "operator": "lance-debug1 PR5 dogfood seal",
+  "host": "LuxPrimata",
+  "git_sha": "d57a200c86b5825a6288ecda755bced6d9b6ac10",
+  "git_sha_short": "d57a200",
+  "branch": "execute-plan/60b09de2-pr-5-dogfood-evidence-bug-dossier",
+  "python": "3.12.8",
+  "python_executable": "/home/jim/Workspace/project-elyra/.venv/bin/python3.12",
+  "packages": {
+    "lancedb": "0.20.0",
+    "lance": "0.23.2",
+    "pyarrow": "25.0.0"
+  },
+  "data_source": "quarantine",
+  "live_source": "/home/jim/Workspace/project-elyra/data/memory",
+  "LANCE_DEBUG_DATA_DIR": "/tmp/lance-q-20260729/data",
+  "LANCE_DEBUG_URI": "/tmp/lance-q-20260729/data/memory/lance",
+  "marker_path": "/tmp/lance-q-20260729/.lance-debug1-quarantine",
+  "marker_present": true,
+  "writer_idle_at_copy": true,
+  "possibly_torn": false,
+  "safety_classes_used": ["R0", "R1", "W1"],
+  "r2_glass": {
+    "attempted": true,
+    "available": false,
+    "note": "No elyra/glass process listening on 8787/8765/8080/8000; R2 glass atom_count not measured this run. Historical dogfood Snapshot B + load_parity process atom_count used."
+  },
+  "counts": {
+    "n_full": 386,
+    "n_head": 386,
+    "n_arrow": 10,
+    "n_lance": 386,
+    "n_versions_at_api_matrix": 1607,
+    "n_versions_at_version_sample": 1611,
+    "process_atom_count": 10,
+    "process_vectors_ready": 4,
+    "skip_corrupt": 0
+  },
+  "hypotheses": {
+    "H1": "supported",
+    "H1a": "supported",
+    "H1b": "supported",
+    "H2": "supported",
+    "H3": "supported",
+    "H4": "demoted",
+    "H5": "refuted",
+    "H6": "disconfirmed_as_primary",
+    "H7": "disconfirmed_as_primary",
+    "H8": "disconfirmed_as_primary",
+    "H9": "supported_cascade",
+    "H10": "unsupported_historical_residual_only",
+    "H11": "partial_historical",
+    "H12": "partial_historical"
+  },
+  "artifacts": [
+    "meta.json",
+    "notes.md",
+    "counts-ids.json",
+    "env-check.json",
+    "api-matrix.json",
+    "load-parity.json",
+    "version-sample.json",
+    "consumer-compare.json"
+  ],
+  "privacy": "counts / atom_ids / kinds / timestamps only; no full atom bodies"
+}

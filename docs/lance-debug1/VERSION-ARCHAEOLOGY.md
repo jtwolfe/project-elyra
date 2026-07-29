@@ -1,6 +1,6 @@
 # Version archaeology
 
-**Status:** Template + procedure ready (PR3). Fill results from sealed dogfood runs (typically PR5).
+**Status:** Results sealed from run `2026-07-29-run-01` (PR5).
 
 **Script:** [`scripts/version_sample.py`](scripts/version_sample.py)  
 **Procedure:** [procedures/P08-version-sampling.md](procedures/P08-version-sampling.md)  
@@ -40,35 +40,35 @@ python docs/lance-debug1/scripts/version_sample.py \
 
 ---
 
-## Results template (fill per sealed run)
+## Results — run `2026-07-29-run-01`
 
 | Field | Value |
 |-------|--------|
-| Run id | `YYYY-MM-DD-run-NN` |
-| URI | quarantine preferred |
-| Packages | lancedb / lance / pyarrow / Python |
-| `n_versions` | |
-| Latest `num_rows` (full path) | |
-| Sample row counts (first→latest) | |
-| Non-monotonic collapses | none / list |
-| `possibly_torn` quarantine? | |
+| Run id | `2026-07-29-run-01` |
+| URI | `/tmp/lance-q-20260729/data/memory/lance` (quarantine) |
+| Packages | lancedb **0.20.0** / lance **0.23.2** / pyarrow **25.0.0** / Python **3.12.8** |
+| `n_versions` | **1611** at version_sample (api_matrix saw **1607** pre-W1) |
+| Latest `num_rows` (full path) | **386** (`count_rows` / `to_lance`) |
+| Sample row counts (first→latest) | 10 → 103 → 197 → 320 → 386 |
+| Non-monotonic collapses | **none** |
+| `possibly_torn` quarantine? | **false** |
 
 ### Sample table
 
 | Index | Fraction | version_id | num_rows | path |
 |-------|----------|------------|----------|------|
-| 0 | 0.00 | | | |
-| … | 0.25 | | | |
-| … | 0.50 | | | |
-| … | 0.75 | | | |
-| n-1 | 1.00 | | | |
+| 0 | 0.00 | 1 | 10 | count_rows / checkout |
+| 402 | 0.25 | 403 | 103 | count_rows / checkout |
+| 805 | 0.50 | 806 | 197 | count_rows / checkout |
+| 1208 | 0.75 | 1209 | 320 | count_rows / checkout |
+| 1610 | 1.00 | 1611 | 386 | count_rows / checkout |
 
 ### Interpretation checklist
 
-- [ ] H3: large version history + large latest full count
-- [ ] H4: demoted if H1a+H1b hold (default-limit explains bare thinness)
-- [ ] H10 historical: collapse present? (yes → document; no → unsupported for history)
-- [ ] H10 residual: migrate sites still bare `to_arrow` (always note)
+- [x] H3: large version history + large latest full count
+- [x] H4: demoted if H1a+H1b hold (default-limit explains bare thinness)
+- [x] H10 historical: collapse present? **no** → unsupported for history
+- [x] H10 residual: migrate sites still bare `to_arrow` (always note)
 
 ---
 
@@ -100,7 +100,7 @@ Design-era observation (not a pass constant): `_versions` manifests often **1000
 
 | Run | Evidence file | H3 | H10 historical | Notes |
 |-----|---------------|----|----------------|-------|
-| _(pending)_ | `evidence/…/version-sample.json` | | | |
+| `2026-07-29-run-01` | [evidence/2026-07-29-run-01/version-sample.json](evidence/2026-07-29-run-01/version-sample.json) | supported (1611 vers, latest 386) | no collapse; residual only | post-W1 version bump 1607→1611 |
 
 ---
 

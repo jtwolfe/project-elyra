@@ -1,0 +1,298 @@
+{
+  "deny_list": [
+    "add",
+    "cleanup_old_versions",
+    "compact_files",
+    "create_table",
+    "delete",
+    "drop",
+    "drop_table",
+    "merge_insert",
+    "optimize"
+  ],
+  "duration_ms": 1712,
+  "errors": [],
+  "h1": {
+    "n_arrow": 10,
+    "n_full": 386,
+    "n_head": 386,
+    "note": "bare to_arrow thin vs count_rows/full APIs (n_arrow <= 10 or n_arrow <= n_full//10)",
+    "ok": true
+  },
+  "h1a": {
+    "arrow_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "a_3f56d48cafdd423eb028099c24145176"
+    ],
+    "note": "order-sensitive equality; haiku skew not required",
+    "ok": true,
+    "prefix_10": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "a_3f56d48cafdd423eb028099c24145176"
+    ]
+  },
+  "h1b": {
+    "attempts": [
+      "query_public_missing",
+      "private_async",
+      "head_n_full"
+    ],
+    "bare_thin": true,
+    "details": {
+      "bare_thin_rule": "n_arrow < n_full and (n_arrow <= 10 or n_arrow <= max(1, n_full//10))",
+      "head_n_full": {
+        "capped": false,
+        "note": "bare to_arrow is default-limit query; head(n) is explicit full/limited read",
+        "num_rows": 386,
+        "requested": 386
+      },
+      "private_async": {
+        "note": "discovery only; not preferred h1b.path",
+        "num_rows": 386,
+        "present": true
+      },
+      "query_public": {
+        "present": false
+      }
+    },
+    "n_arrow": 10,
+    "n_full": 386,
+    "ok": true,
+    "path": "head_n_full"
+  },
+  "packages": {
+    "executable": "/home/jim/Workspace/project-elyra/.venv/bin/python3.12",
+    "lance": "0.23.2",
+    "lancedb": "0.20.0",
+    "pyarrow": "25.0.0",
+    "python": "3.12.8"
+  },
+  "probes": {
+    "count_rows": {
+      "n_full": 386
+    },
+    "deny_methods_present": {
+      "add": true,
+      "cleanup_old_versions": true,
+      "compact_files": true,
+      "create_table": false,
+      "delete": true,
+      "drop": false,
+      "drop_table": false,
+      "merge_insert": true,
+      "optimize": true
+    },
+    "has_public_query": false,
+    "has_scanner": false,
+    "head": {
+      "atom_ids_prefix": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+        "a_4be734287d114789ac0a21ed1d3d2d07",
+        "a_f1bf8ef68dd34320a675fabc185c24c7",
+        "a_3f56d48cafdd423eb028099c24145176",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_617f3eea82b146118daac91f357af3b0",
+        "a_4c73c1e77d61440688ce3640f9d5da52",
+        "a_3894066917d14485b8c2750c994bfea1",
+        "a_2f791ffc8255486cb89ee48194f9d12d",
+        "a_c686999252964e7a991f43239fb8cd0a",
+        "a_ff79ce62f1b24d9fb244e98f83d4d88e",
+        "as_b768223ef7ca9a70305c"
+      ],
+      "embedding_status_hist": {
+        "none": 36,
+        "ready": 350
+      },
+      "kind_hist": {
+        "ledger": 35,
+        "model": 13,
+        "observation": 36,
+        "speak": 46,
+        "summary": 36,
+        "tool": 220
+      },
+      "n_head": 386,
+      "requested": 386
+    },
+    "head_10": {
+      "atom_ids": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+        "a_4be734287d114789ac0a21ed1d3d2d07",
+        "a_f1bf8ef68dd34320a675fabc185c24c7",
+        "a_3f56d48cafdd423eb028099c24145176"
+      ],
+      "kind_hist": {
+        "summary": 6,
+        "tool": 4
+      },
+      "num_rows": 10
+    },
+    "head_n_requested": 386,
+    "list_versions": {
+      "n_versions": 1607,
+      "sample": [
+        {
+          "metadata": {},
+          "timestamp": "2026-07-28T19:23:33.674823",
+          "version": 1
+        },
+        {
+          "metadata": {},
+          "timestamp": "2026-07-29T17:52:11.592428",
+          "version": 1607
+        }
+      ]
+    },
+    "scanner": {
+      "note": "not on sync LanceTable 0.20.0 \u2014 skipped",
+      "present": false
+    },
+    "schema": {
+      "has_emb_columns": true,
+      "names": [
+        "atom_id",
+        "t_start",
+        "kind",
+        "content_text",
+        "content_ref",
+        "t_end",
+        "moment_id",
+        "media_ids_json",
+        "prev_atom_id",
+        "next_atom_id",
+        "parent_atom_id",
+        "scale",
+        "window_start",
+        "window_end",
+        "source_beat_ts",
+        "source_beat_type",
+        "embedding_status",
+        "meta_json",
+        "schema_version",
+        "emb_text",
+        "emb_image",
+        "emb_audio",
+        "emb_video",
+        "emb_joint",
+        "embed_model",
+        "encoded_at"
+      ]
+    },
+    "table_names": [
+      "atoms"
+    ],
+    "to_arrow": {
+      "atom_ids": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+        "a_4be734287d114789ac0a21ed1d3d2d07",
+        "a_f1bf8ef68dd34320a675fabc185c24c7",
+        "a_3f56d48cafdd423eb028099c24145176"
+      ],
+      "atom_ids_all": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+        "a_4be734287d114789ac0a21ed1d3d2d07",
+        "a_f1bf8ef68dd34320a675fabc185c24c7",
+        "a_3f56d48cafdd423eb028099c24145176"
+      ],
+      "embedding_status_hist": {
+        "none": 6,
+        "ready": 4
+      },
+      "kind_hist": {
+        "summary": 6,
+        "tool": 4
+      },
+      "n_arrow": 10
+    },
+    "to_lance": {
+      "atom_ids_prefix": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+        "a_4be734287d114789ac0a21ed1d3d2d07",
+        "a_f1bf8ef68dd34320a675fabc185c24c7",
+        "a_3f56d48cafdd423eb028099c24145176",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_617f3eea82b146118daac91f357af3b0",
+        "a_4c73c1e77d61440688ce3640f9d5da52",
+        "a_3894066917d14485b8c2750c994bfea1",
+        "a_2f791ffc8255486cb89ee48194f9d12d",
+        "a_c686999252964e7a991f43239fb8cd0a",
+        "a_ff79ce62f1b24d9fb244e98f83d4d88e",
+        "as_b768223ef7ca9a70305c"
+      ],
+      "count_rows": 386,
+      "kind_hist": {
+        "ledger": 35,
+        "model": 13,
+        "observation": 36,
+        "speak": 46,
+        "summary": 36,
+        "tool": 220
+      },
+      "to_table_num_rows": 386
+    }
+  },
+  "safety_class": "R1",
+  "summary": {
+    "h1_ok": true,
+    "h1a_ok": true,
+    "h1b_ok": true,
+    "h1b_path": "head_n_full",
+    "h4_demoted_if_h1a_h1b": true,
+    "n_arrow": 10,
+    "n_full": 386,
+    "n_head": 386
+  },
+  "table": "atoms",
+  "uri": "/tmp/lance-q-20260729/data/memory/lance",
+  "utc": "2026-07-29T09:38:26Z"
+}

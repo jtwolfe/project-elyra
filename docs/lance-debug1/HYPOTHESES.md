@@ -12,20 +12,20 @@ Status values: `untested` | `supported` | `refuted` | `partial` | `blocked`.
 
 | ID | Hypothesis | Primary bucket | Priority | Status | Confidence | Evidence |
 |----|------------|----------------|----------|--------|------------|----------|
-| **H1** | Bare `lancedb.Table.to_arrow()` returns a thin subset (~**default limit 10**) while full-read APIs (`count_rows`, `head(n)`, `to_lance().to_table()`, H1b chain) return full corpus — product uses wrong full-scan API | A | P0 | `untested` | — | P01 |
-| **H1a** | Bare `to_arrow` rows equal **`head(10)` prefix** (same atom_ids / order), not a random or haiku-filtered subset | A | P0 (sub) | `untested` | — | P01 |
-| **H1b** | Full row count is recoverable without bare `to_arrow`, proving the thin read is a **limit/API choice**, not missing data. Pass if **any** step of the H1b fallback chain yields `num_rows == n_full`. Prefer recording which path worked. On 0.20.0, sync `head(n_full)` is an accepted primary public proof | A | P0 (sub) | `untested` | — | P01 |
-| **H2** | `LanceMemoryStore._load` inherits H1 and builds `_by_id` from that subset; `health.atom_count` reflects process only | B | P0 | `untested` | — | P02 |
-| **H3** | Live `put_atom` / `merge_insert` correctly appends/updates disk (disk grows; promote works) | C (healthy) | P0 disconfirm | `untested` | — | P04, R3 |
-| **H4** | Version growth / multi-fragment layout contributes to bare `to_arrow` thinness **beyond** default limit (e.g. only latest fragment) | A+C | P1 **after** H1a/H1b; demote if both hold | `untested` | — | P01 then P08 |
-| **H5** | Row skip/corrupt path in `_load` drops hundreds of rows | B | P1 disconfirm | `untested` | — | P02 |
-| **H6** | Embed queue / `upsert_vectors` independently lose vectors for atoms **present in `_by_id`** while disk emb ready | D | P1 disconfirm | `untested` | — | P05 |
-| **H7** | Glass serialization further truncates beyond store | F | P1 disconfirm | `untested` | — | P07 |
-| **H8** | Graph/traverse/meal have independent filtering that hides non-haiku atoms even when store is full | E | P1 disconfirm | `untested` | — | P06 |
-| **H9** | Post-restart promote weave only links among survivors, amplifying haiku skew for subsequent sessions | G | P2 cascade | `untested` | — | P09 |
-| **H10** | Migration path (`_migrate_vector_schema` / staging promote using bare `to_arrow`) is a **residual future risk** and only explains **historical** disk collapse if version archaeology shows non-monotonic row-count drop. **Does not** explain today’s full disk vs thin process when full APIs already show large corpus | A+B+C | P1 residual / historical | `untested` | — | P08 |
-| **H11** | Expand_ms overruns are primarily BUG-mem-gpu-01 / CPU Nemotron, not load truncation | D (adj.) | P2 separate | `untested` | — | P05/P06 |
-| **H12** | BUG-wake-02 is a consumer of residual glass + thin meal, not the cause of missing Lance rows | E/F adj. | P2 separate | `untested` | — | adjacency |
+| **H1** | Bare `lancedb.Table.to_arrow()` returns a thin subset (~**default limit 10**) while full-read APIs (`count_rows`, `head(n)`, `to_lance().to_table()`, H1b chain) return full corpus — product uses wrong full-scan API | A | P0 | `supported` | high | P01 `2026-07-29-run-01` n_arrow=10 n_full=386 |
+| **H1a** | Bare `to_arrow` rows equal **`head(10)` prefix** (same atom_ids / order), not a random or haiku-filtered subset | A | P0 (sub) | `supported` | high | P01 order-equal; kinds summary×6+tool×4 |
+| **H1b** | Full row count is recoverable without bare `to_arrow`, proving the thin read is a **limit/API choice**, not missing data. Pass if **any** step of the H1b fallback chain yields `num_rows == n_full`. Prefer recording which path worked. On 0.20.0, sync `head(n_full)` is an accepted primary public proof | A | P0 (sub) | `supported` | high | P01 path=`head_n_full`; private_async also 386 |
+| **H2** | `LanceMemoryStore._load` inherits H1 and builds `_by_id` from that subset; `health.atom_count` reflects process only | B | P0 | `supported` | high | P02 process=10 == n_arrow; id set equal |
+| **H3** | Live `put_atom` / `merge_insert` correctly appends/updates disk (disk grows; promote works) | C (healthy) | P0 disconfirm | `supported` | high | P08 n_versions 1611; latest full 386; monotonic |
+| **H4** | Version growth / multi-fragment layout contributes to bare `to_arrow` thinness **beyond** default limit (e.g. only latest fragment) | A+C | P1 **after** H1a/H1b; demote if both hold | `demoted` | high | H1a+H1b hold; default-limit explains |
+| **H5** | Row skip/corrupt path in `_load` drops hundreds of rows | B | P1 disconfirm | `refuted` | high | P02 skip_corrupt=0 ≪ gap 376 |
+| **H6** | Embed queue / `upsert_vectors` independently lose vectors for atoms **present in `_by_id`** while disk emb ready | D | P1 disconfirm | `partial` | medium | cascade: vectors_ready=4 on thin; no independent hole as primary |
+| **H7** | Glass serialization further truncates beyond store | F | P1 disconfirm | `partial` | medium | R2 glass down this run; code+hist: glass reports process |
+| **H8** | Graph/traverse/meal have independent filtering that hides non-haiku atoms even when store is full | E | P1 disconfirm | `refuted` | high | P06 consumer_compare: full kinds/neighbors absent from thin |
+| **H9** | Post-restart promote weave only links among survivors, amplifying haiku skew for subsequent sessions | G | P2 cascade | `supported` | high | P09: 4 edges one-endpoint outside thin |
+| **H10** | Migration path (`_migrate_vector_schema` / staging promote using bare `to_arrow`) is a **residual future risk** and only explains **historical** disk collapse if version archaeology shows non-monotonic row-count drop. **Does not** explain today’s full disk vs thin process when full APIs already show large corpus | A+B+C | P1 residual / historical | `partial` | high | no collapse; residual migrate risk only |
+| **H11** | Expand_ms overruns are primarily BUG-mem-gpu-01 / CPU Nemotron, not load truncation | D (adj.) | P2 separate | `partial` | low | historical OBSERVED-FACTS; not re-measured this run |
+| **H12** | BUG-wake-02 is a consumer of residual glass + thin meal, not the cause of missing Lance rows | E/F adj. | P2 separate | `partial` | medium | adjacency + known-bugs; not Lance row root |
 
 ---
 

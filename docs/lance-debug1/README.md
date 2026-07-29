@@ -1,14 +1,16 @@
 # Lance debug package 1 (`docs/lance-debug1`)
 
-**Status:** PR4 ready — adjacency procedures P03–P07/P09 + `adjacency/*` + EVIDENCE-MATRIX + optional `consumer_compare.py` + glass curl notes; dogfood evidence seal still PR5.
+**Status:** **Complete** — dogfood evidence sealed (`2026-07-29-run-01`) + [BUG-DOSSIER.md](BUG-DOSSIER.md). Inspection only; **no product fix authorized**.
 
 | Field | Value |
 |-------|--------|
 | **Intent** | Inspection and fault isolation only — **no product fix** |
 | **Isolation** | All work product lives under `docs/lance-debug1/`; do not modify `elyra/memory/**` |
-| **Primary mechanism candidate** | Bare `Table.to_arrow()` = default query limit **10** (H1 / H1a / H1b) |
+| **Primary mechanism** | Bare `Table.to_arrow()` = default query limit **10** (H1 / H1a / H1b) → thin `_load` (H2) |
+| **Sealed run** | [evidence/2026-07-29-run-01/](evidence/2026-07-29-run-01/) — n_full=**386**, n_arrow=**10**, process=**10** |
 | **Origin** | `/design` run `ed40fbd4` (2026-07-29); plan `60b09de2` |
 | **Normative design** | [design-inspection-plan.md](design-inspection-plan.md) |
+| **Exit artifact** | [BUG-DOSSIER.md](BUG-DOSSIER.md) |
 
 ---
 
@@ -42,19 +44,19 @@ docs/lance-debug1/
 ├── design-inspection-plan.md    # Normative design (keep)
 ├── SAFETY.md
 ├── OBSERVED-FACTS.md            # Snapshot-labeled facts (not absolute pass constants)
-├── HYPOTHESES.md                # H1 / H1a / H1b – H12
+├── HYPOTHESES.md                # H1 / H1a / H1b – H12 (statuses sealed PR5)
 ├── FAULT-BUCKETS.md             # Buckets A–G
 ├── CODE-PATH-MAP.md             # Open/load/write/consumer + line pins
 ├── TO-ARROW-CALLERS.md          # Every to_arrow / head / count_rows site
-├── API-COMPARISON.md            # Template: offline + process comparison (PR3)
-├── VERSION-ARCHAEOLOGY.md       # Version sampling plan + H10 residual (PR3)
-├── procedures/                  # P01–P09 filled (P08 optional polish)
-├── adjacency/                   # Embed / graph / meal / glass / promote-weave (PR4)
-├── EVIDENCE-MATRIX.md           # Observation × hypothesis × bucket (PR4)
-├── evidence/                    # Run dirs + templates
-├── scripts/                     # Hermetic helpers (api_matrix, load_parity, consumer_compare, …)
+├── API-COMPARISON.md            # Filled offline + process comparison
+├── VERSION-ARCHAEOLOGY.md       # Version sampling + H10 residual
+├── procedures/                  # P01–P09
+├── adjacency/                   # Embed / graph / meal / glass / promote-weave
+├── EVIDENCE-MATRIX.md           # Observation × hypothesis × bucket (filled)
+├── evidence/                    # Sealed run dirs + templates
+├── scripts/                     # Hermetic helpers
 ├── REPRO-RECIPES.md             # R1–R3b + R2 glass path
-└── (later) BUG-DOSSIER.md
+└── BUG-DOSSIER.md               # Final bug description (exit; not a fix auth)
 ```
 
 ---
@@ -66,19 +68,19 @@ docs/lance-debug1/
 | [design-inspection-plan.md](design-inspection-plan.md) | Normative inspection design | design |
 | [SAFETY.md](SAFETY.md) | R0–W1 / FORBIDDEN, quarantine, deny-list | PR1 |
 | [OBSERVED-FACTS.md](OBSERVED-FACTS.md) | Frozen dogfood snapshots (relative relations) | PR1 |
-| [HYPOTHESES.md](HYPOTHESES.md) | H1–H12 status board | PR1 |
+| [HYPOTHESES.md](HYPOTHESES.md) | H1–H12 status board | PR1; statuses PR5 |
 | [FAULT-BUCKETS.md](FAULT-BUCKETS.md) | Buckets A–G | PR1 |
 | [CODE-PATH-MAP.md](CODE-PATH-MAP.md) | Call graph + fresh line pins | PR1 |
 | [TO-ARROW-CALLERS.md](TO-ARROW-CALLERS.md) | `to_arrow` / related call matrix | PR1 |
-| [procedures/](procedures/) | P01–P09 (P01–P04/P05–P07/P09 ready; P08 optional) | PR1–PR4 |
-| [evidence/](evidence/) | Templates + per-run evidence | PR1 templates; fill PR5 |
-| [scripts/](scripts/) | Probe helpers (`env_check`, `api_matrix`, `load_parity`, `consumer_compare`, …) | PR1+ |
-| [API-COMPARISON.md](API-COMPARISON.md) | Structured API comparison results | PR3 |
+| [procedures/](procedures/) | P01–P09 (P08 optional polish) | PR1–PR4 |
+| [evidence/](evidence/) | Templates + sealed run `2026-07-29-run-01` | PR1 templates; **PR5 seal** |
+| [scripts/](scripts/) | Probe helpers | PR1+ |
+| [API-COMPARISON.md](API-COMPARISON.md) | Structured API comparison results | PR3; filled PR5 |
 | [REPRO-RECIPES.md](REPRO-RECIPES.md) | Step-by-step repros (R1–R3b) | PR2+ |
-| [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md) | Observation × hypothesis × bucket | PR4 |
-| [VERSION-ARCHAEOLOGY.md](VERSION-ARCHAEOLOGY.md) | Version sampling plan/results + H10 residual | PR3 |
+| [EVIDENCE-MATRIX.md](EVIDENCE-MATRIX.md) | Observation × hypothesis × bucket | PR4; filled PR5 |
+| [VERSION-ARCHAEOLOGY.md](VERSION-ARCHAEOLOGY.md) | Version sampling + H10 residual | PR3; filled PR5 |
 | [adjacency/](adjacency/) | Embed / graph / meal / glass / promote-weave cascade | PR4 |
-| `BUG-DOSSIER.md` | Final bug description (exit; **not** a fix auth) | PR5 |
+| **[BUG-DOSSIER.md](BUG-DOSSIER.md)** | Final bug description (exit; **not** a fix auth) | **PR5** |
 
 ---
 
@@ -90,9 +92,9 @@ docs/lance-debug1/
 | P01 `api_matrix` + quarantine_copy + env_check | **Done (PR2)** |
 | P02 load_parity + P08 version_sample | **Done (PR3)** |
 | Adjacency P03–P07, P09 + EVIDENCE-MATRIX + consumer_compare | **Done (PR4)** |
-| Dogfood evidence + BUG-DOSSIER | Pending PR5 |
+| Dogfood evidence + BUG-DOSSIER | **Done (PR5)** — Complete |
 
-**Hypothesis sequencing (critical path):** H1a → H1b → H2 first. If high-confidence, provisional root-cause may be drafted early; H4/P08 demoted if default-limit proven. **Adjacency (H6–H9, H11–H12)** documents cascade for the dossier and must not block that provisional statement.
+**Hypothesis sequencing (critical path):** H1a → H1b → H2 first — **sealed supported** on `2026-07-29-run-01`. H4 demoted; H5 refuted; H10 residual only. Adjacency cascade documented; H8 primary refuted.
 
 ---
 

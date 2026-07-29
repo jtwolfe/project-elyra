@@ -1,0 +1,207 @@
+{
+  "api_matrix_summary": {
+    "h1_ok": true,
+    "h1a_ok": true,
+    "h1b_ok": true,
+    "h1b_path": "head_n_full"
+  },
+  "data_dir": "/tmp/lance-q-20260729/data",
+  "direct_r1": {
+    "arrow_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "a_3f56d48cafdd423eb028099c24145176"
+    ],
+    "errors": null,
+    "head_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "a_3f56d48cafdd423eb028099c24145176",
+      "a_2f1c70f4039c40258dd81067e42bfe88",
+      "a_014f9c2d4d6647a8af2fc897083e3379",
+      "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+      "a_617f3eea82b146118daac91f357af3b0",
+      "a_4c73c1e77d61440688ce3640f9d5da52",
+      "a_3894066917d14485b8c2750c994bfea1",
+      "a_2f791ffc8255486cb89ee48194f9d12d",
+      "a_c686999252964e7a991f43239fb8cd0a",
+      "a_ff79ce62f1b24d9fb244e98f83d4d88e",
+      "as_b768223ef7ca9a70305c"
+    ],
+    "n_arrow": 10,
+    "n_full": 386,
+    "n_head": 386,
+    "source": "direct_r1"
+  },
+  "duration_ms": 1684,
+  "errors": [],
+  "finished_at": "2026-07-29T09:38:37Z",
+  "h2": {
+    "gap_full_minus_process": 376,
+    "gap_process_minus_arrow": 0,
+    "id_compare": {
+      "arrow_only": [],
+      "arrow_size": 10,
+      "intersection_size": 10,
+      "process_equals_arrow": true,
+      "process_only": [],
+      "process_size": 10
+    },
+    "n_arrow": 10,
+    "n_full": 386,
+    "note": "H2: process _by_id / health.atom_count tracks bare to_arrow (n_arrow), not n_full (count_rows / head full)",
+    "ok": true,
+    "process_atom_count": 10,
+    "thin_vs_full": true,
+    "tracks_arrow": true
+  },
+  "h5": {
+    "disconfirmed": true,
+    "gap_full_minus_process": 376,
+    "note": "H5 disconfirm if skip_count \u226a gap (mass missing rows not corrupt-skip)",
+    "ok_as_mass_drop": false,
+    "skip_count": 0
+  },
+  "lance_uri": "/tmp/lance-q-20260729/data/memory/lance",
+  "marker": "/tmp/lance-q-20260729/.lance-debug1-quarantine",
+  "marker_body": {
+    "copied_at_utc": "2026-07-29T09:38:25Z",
+    "kind": "lance-debug1-quarantine",
+    "possibly_torn": false,
+    "quarantine_root": "/tmp/lance-q-20260729",
+    "source": "/home/jim/Workspace/project-elyra/data/memory",
+    "writer_detection": "high-confidence cmdline only (python -m elyra / uvicorn elyra / elyra.runtime); advisory",
+    "writer_match": null,
+    "writer_pid": null
+  },
+  "offline": {
+    "api_matrix_path": "docs/lance-debug1/evidence/2026-07-29-run-01/api-matrix.json",
+    "arrow_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "a_3f56d48cafdd423eb028099c24145176"
+    ],
+    "arrow_ids_truncated": false,
+    "h1_ok": true,
+    "h1a_ok": true,
+    "h1b_ok": true,
+    "h1b_path": "head_n_full",
+    "head_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "a_3f56d48cafdd423eb028099c24145176",
+      "a_2f1c70f4039c40258dd81067e42bfe88",
+      "a_014f9c2d4d6647a8af2fc897083e3379",
+      "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+      "a_617f3eea82b146118daac91f357af3b0",
+      "a_4c73c1e77d61440688ce3640f9d5da52",
+      "a_3894066917d14485b8c2750c994bfea1",
+      "a_2f791ffc8255486cb89ee48194f9d12d",
+      "a_c686999252964e7a991f43239fb8cd0a",
+      "a_ff79ce62f1b24d9fb244e98f83d4d88e",
+      "as_b768223ef7ca9a70305c"
+    ],
+    "n_arrow": 10,
+    "n_full": 386,
+    "n_head": 386,
+    "source": "api_matrix"
+  },
+  "packages": {
+    "executable": "/home/jim/Workspace/project-elyra/.venv/bin/python3.12",
+    "lance": "0.23.2",
+    "lancedb": "0.20.0",
+    "pyarrow": "25.0.0",
+    "python": "3.12.8"
+  },
+  "paths": {
+    "data_dir": "/tmp/lance-q-20260729/data",
+    "lance_dir": "/tmp/lance-q-20260729/data/memory/lance",
+    "memory_dir": "/tmp/lance-q-20260729/data/memory",
+    "settings_backend": "lance"
+  },
+  "probe": "load_parity",
+  "process": {
+    "atom_count": 10,
+    "backend": "lance",
+    "by_id_len": 10,
+    "health": {
+      "atom_count": 10,
+      "backend": "lance",
+      "joint_repair_last_batch": 4,
+      "joint_repair_remaining": 0,
+      "lance_dir": "/tmp/lance-q-20260729/data/memory/lance",
+      "ok": true,
+      "vector_schema_version": 1,
+      "vectors": true,
+      "vectors_by_channel": {
+        "audio": 0,
+        "image": 0,
+        "joint": 4,
+        "text": 4,
+        "video": 0
+      },
+      "vectors_ready": 4
+    },
+    "id_sample": [
+      "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+      "a_3f56d48cafdd423eb028099c24145176",
+      "a_4be734287d114789ac0a21ed1d3d2d07",
+      "a_f1bf8ef68dd34320a675fabc185c24c7",
+      "as_6dd22f3855cafbb7ab86",
+      "as_80dd0ca21a6e4e8db42d",
+      "as_853184c93f7d44dbe6d6",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_e64939f1bf9b944d6100"
+    ],
+    "id_set_sha256": "00d7c4cd4d68a635753ba03499e4b0ad3473ad2b67a9e481048069cc387c70ff",
+    "lance_dir": "/tmp/lance-q-20260729/data/memory/lance",
+    "vectors_ready": 4
+  },
+  "safety_class": "W1",
+  "skip_corrupt": {
+    "count": 0,
+    "messages": [],
+    "note": "H5: expect skip count \u226a gap between n_full and process count"
+  },
+  "started_at": "2026-07-29T09:38:35Z",
+  "summary": {
+    "h2_ok": true,
+    "h5_disconfirmed": true,
+    "marker": "/tmp/lance-q-20260729/.lance-debug1-quarantine",
+    "n_arrow": 10,
+    "n_full": 386,
+    "process_atom_count": 10,
+    "safety_class": "W1",
+    "skip_corrupt": 0
+  },
+  "table": "atoms"
+}

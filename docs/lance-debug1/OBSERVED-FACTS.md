@@ -107,4 +107,4 @@ Re-record host, git sha, and package versions in every `evidence/.../meta.json`.
 | Date | Run | `n_full` | `n_arrow` | H1a | H1b path | process `atom_count` | Notes |
 |------|-----|----------|-----------|-----|----------|----------------------|-------|
 | 2026-07-29 | design Snapshot B | 386 | 10 | (expected true) | head / to_lance | ~10–13 after restart | Pre-package; not evidence dir |
-| *(later runs)* | | | | | | | |
+| 2026-07-29 | **`2026-07-29-run-01`** | **386** | **10** | **true** | **`head_n_full`** | **10** | Quarantine of live operator memory; H2/H5 sealed; n_versions 1607→1611 post-W1; R2 glass down; see `evidence/2026-07-29-run-01/` |

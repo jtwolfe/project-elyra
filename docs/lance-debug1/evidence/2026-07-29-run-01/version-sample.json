@@ -1,0 +1,214 @@
+{
+  "current": {
+    "counts": {
+      "count_rows": 386,
+      "num_rows": 386,
+      "path": "count_rows",
+      "to_lance_count_rows": 386
+    },
+    "max_t_start_sample": "2026-07-29T07:51:06.972679Z"
+  },
+  "deny_list": [
+    "add",
+    "cleanup_old_versions",
+    "compact_files",
+    "create_table",
+    "delete",
+    "drop",
+    "drop_table",
+    "merge_insert",
+    "optimize"
+  ],
+  "deny_list_presence": {
+    "add": true,
+    "cleanup_old_versions": true,
+    "compact_files": true,
+    "create_table": false,
+    "delete": true,
+    "drop": false,
+    "drop_table": false,
+    "merge_insert": true,
+    "optimize": true
+  },
+  "duration_ms": 915,
+  "errors": [],
+  "finished_at": "2026-07-29T09:38:38Z",
+  "h10": {
+    "explains_active_process_thin": false,
+    "historical_collapse": false,
+    "latest_num_rows": 386,
+    "migration_sites_still_use_bare_to_arrow": [
+      "elyra/memory/lance_store.py:_migrate_vector_schema",
+      "elyra/memory/lance_store.py:_promote_staging_table"
+    ],
+    "non_monotonic_collapses": [],
+    "note": "No collapse observed in samples \u2192 H10 unsupported for history; residual bare-to_arrow migrate risk remains for future ops.",
+    "residual_framing": "H10 is residual risk for future migrate/reopen using bare to_arrow. It is NOT the active process-thin bug when latest full APIs already show a large corpus. Supported only for non-monotonic historical row-count collapse.",
+    "sampled_num_rows": [
+      10,
+      103,
+      197,
+      320,
+      386
+    ]
+  },
+  "h3": {
+    "large_version_history": true,
+    "n_versions": 1611,
+    "note": "H3: healthy write / version growth under merge_insert. Large n_versions with large latest full count supports durable disk."
+  },
+  "list_versions": {
+    "first": {
+      "metadata": {},
+      "timestamp": "2026-07-28T19:23:33.674823",
+      "version": 1
+    },
+    "latest": {
+      "metadata": {},
+      "timestamp": "2026-07-29T19:38:37.504935",
+      "version": 1611
+    },
+    "n_versions": 1611,
+    "present": true,
+    "sort": {
+      "first_version_id": 1,
+      "latest_version_id": 1611,
+      "n_in": 1611,
+      "n_out": 1611,
+      "order_was": "ascending_or_mixed",
+      "sort_key": "version_id int asc, then str, then repr",
+      "sorted": true
+    }
+  },
+  "note": "Read-only sampling. Never compact/optimize/cleanup. H10 residual: non-monotonic historical collapse only; not active process-thin when latest full APIs already large.",
+  "packages": {
+    "executable": "/home/jim/Workspace/project-elyra/.venv/bin/python3.12",
+    "lance": "0.23.2",
+    "lancedb": "0.20.0",
+    "pyarrow": "25.0.0",
+    "python": "3.12.8"
+  },
+  "probe": "version_sample",
+  "safety_class": "R1",
+  "samples": [
+    {
+      "checkout": {
+        "counts": {
+          "count_rows": 10,
+          "num_rows": 10,
+          "path": "count_rows",
+          "to_lance_count_rows": 10
+        },
+        "ok": true,
+        "present": true
+      },
+      "fraction": 0.0,
+      "index": 0,
+      "num_rows": 10,
+      "version_entry": {
+        "metadata": {},
+        "timestamp": "2026-07-28T19:23:33.674823",
+        "version": 1
+      },
+      "version_id": 1
+    },
+    {
+      "checkout": {
+        "counts": {
+          "count_rows": 103,
+          "num_rows": 103,
+          "path": "count_rows",
+          "to_lance_count_rows": 103
+        },
+        "ok": true,
+        "present": true
+      },
+      "fraction": 0.2497,
+      "index": 402,
+      "num_rows": 103,
+      "version_entry": {
+        "metadata": {},
+        "timestamp": "2026-07-29T11:50:21.747455",
+        "version": 403
+      },
+      "version_id": 403
+    },
+    {
+      "checkout": {
+        "counts": {
+          "count_rows": 197,
+          "num_rows": 197,
+          "path": "count_rows",
+          "to_lance_count_rows": 197
+        },
+        "ok": true,
+        "present": true
+      },
+      "fraction": 0.5,
+      "index": 805,
+      "num_rows": 197,
+      "version_entry": {
+        "metadata": {},
+        "timestamp": "2026-07-29T14:59:09.242990",
+        "version": 806
+      },
+      "version_id": 806
+    },
+    {
+      "checkout": {
+        "counts": {
+          "count_rows": 320,
+          "num_rows": 320,
+          "path": "count_rows",
+          "to_lance_count_rows": 320
+        },
+        "ok": true,
+        "present": true
+      },
+      "fraction": 0.7503,
+      "index": 1208,
+      "num_rows": 320,
+      "version_entry": {
+        "metadata": {},
+        "timestamp": "2026-07-29T15:54:21.783513",
+        "version": 1209
+      },
+      "version_id": 1209
+    },
+    {
+      "checkout": {
+        "counts": {
+          "count_rows": 386,
+          "num_rows": 386,
+          "path": "count_rows",
+          "to_lance_count_rows": 386
+        },
+        "ok": true,
+        "present": true
+      },
+      "fraction": 1.0,
+      "index": 1610,
+      "num_rows": 386,
+      "version_entry": {
+        "metadata": {},
+        "timestamp": "2026-07-29T19:38:37.504935",
+        "version": 1611
+      },
+      "version_id": 1611
+    }
+  ],
+  "samples_requested": 5,
+  "started_at": "2026-07-29T09:38:38Z",
+  "summary": {
+    "h10_explains_active_process_thin": false,
+    "historical_collapse": false,
+    "latest_num_rows": 386,
+    "n_versions": 1611,
+    "samples": 5
+  },
+  "table": "atoms",
+  "table_names": [
+    "atoms"
+  ],
+  "uri": "/tmp/lance-q-20260729/data/memory/lance"
+}

@@ -1,0 +1,288 @@
+{
+  "ts": "2026-07-29T09:38:40Z",
+  "safety_class": "R1",
+  "script": "consumer_compare.py",
+  "uri": "/tmp/lance-q-20260729/data/memory/lance",
+  "table": "atoms",
+  "packages": {
+    "python": "3.12.8",
+    "executable": "/home/jim/Workspace/project-elyra/.venv/bin/python3.12",
+    "lancedb": "0.20.0",
+    "lance": "0.23.2",
+    "pyarrow": "25.0.0"
+  },
+  "materialize": {
+    "n_full": 386,
+    "n_arrow": 10,
+    "n_full_materialized": 386,
+    "h1b_path": "head",
+    "thin_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_2f1c70f4039c40258dd81067e42bfe88",
+      "a_014f9c2d4d6647a8af2fc897083e3379",
+      "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+      "a_617f3eea82b146118daac91f357af3b0"
+    ],
+    "head10_ids": [
+      "as_e64939f1bf9b944d6100",
+      "as_96ae3c59935c2e7543f5",
+      "as_d944de9463e49f968410",
+      "as_6dd22f3855cafbb7ab86",
+      "as_853184c93f7d44dbe6d6",
+      "as_80dd0ca21a6e4e8db42d",
+      "a_2f1c70f4039c40258dd81067e42bfe88",
+      "a_014f9c2d4d6647a8af2fc897083e3379",
+      "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+      "a_617f3eea82b146118daac91f357af3b0"
+    ],
+    "h1a_ok": true,
+    "thin_kind_hist": {
+      "summary": 6,
+      "tool": 4
+    },
+    "full_kind_hist": {
+      "tool": 220,
+      "speak": 46,
+      "summary": 36,
+      "observation": 36,
+      "ledger": 35,
+      "model": 13
+    },
+    "thin_haiku_rows": 2,
+    "full_haiku_rows": 60
+  },
+  "split_expectation": {
+    "A_to_arrow_prefix_kinds": {
+      "summary": 6,
+      "tool": 4
+    },
+    "note": "Glass newest-first haiku among process maps is consumer order (C), not required to match bare to_arrow prefix kinds (A)."
+  },
+  "neighbors": {
+    "thin_store": {
+      "seeds_requested": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_617f3eea82b146118daac91f357af3b0"
+      ],
+      "seeds_present": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_617f3eea82b146118daac91f357af3b0"
+      ],
+      "neighbor_dst_ids": [
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_617f3eea82b146118daac91f357af3b0",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db"
+      ],
+      "neighbor_kinds": {
+        "tool": 4
+      },
+      "edge_kinds": {
+        "sequential": 6,
+        "same_moment": 12
+      },
+      "non_haiku_dst": 3,
+      "haiku_dst": 1,
+      "errors": [],
+      "graphview": true
+    },
+    "full_store_from_thin_seeds": {
+      "seeds_requested": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_617f3eea82b146118daac91f357af3b0"
+      ],
+      "seeds_present": [
+        "as_e64939f1bf9b944d6100",
+        "as_96ae3c59935c2e7543f5",
+        "as_d944de9463e49f968410",
+        "as_6dd22f3855cafbb7ab86",
+        "as_853184c93f7d44dbe6d6",
+        "as_80dd0ca21a6e4e8db42d",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_617f3eea82b146118daac91f357af3b0"
+      ],
+      "neighbor_dst_ids": [
+        "a_014f9c2d4d6647a8af2fc897083e3379",
+        "a_2f1c70f4039c40258dd81067e42bfe88",
+        "a_2f791ffc8255486cb89ee48194f9d12d",
+        "a_3894066917d14485b8c2750c994bfea1",
+        "a_3f56d48cafdd423eb028099c24145176",
+        "a_4c73c1e77d61440688ce3640f9d5da52",
+        "a_617f3eea82b146118daac91f357af3b0",
+        "a_c3bdba1e3e0247fd84cfb5c5b547a2db",
+        "a_c686999252964e7a991f43239fb8cd0a",
+        "a_ff79ce62f1b24d9fb244e98f83d4d88e"
+      ],
+      "neighbor_kinds": {
+        "tool": 8,
+        "model": 1,
+        "speak": 1
+      },
+      "edge_kinds": {
+        "sequential": 8,
+        "same_moment": 16
+      },
+      "non_haiku_dst": 5,
+      "haiku_dst": 5,
+      "errors": [],
+      "graphview": true
+    },
+    "full_store_from_full_only_seeds": {
+      "seeds_requested": [
+        "a_4c73c1e77d61440688ce3640f9d5da52",
+        "a_3894066917d14485b8c2750c994bfea1",
+        "a_2f791ffc8255486cb89ee48194f9d12d",
+        "a_c686999252964e7a991f43239fb8cd0a",
+        "a_ff79ce62f1b24d9fb244e98f83d4d88e",
+        "as_b768223ef7ca9a70305c",
+        "as_d54980e32ae3017ed187",
+        "a_ae3f986c5c5b49e5acdcc893a4203e12",
+        "a_25e582dc91a44e57b82b045aceedc580",
+        "a_5962e9e8c5a147d59f0d3b76386de5e8"
+      ],
+      "seeds_present": [
+        "a_4c73c1e77d61440688ce3640f9d5da52",
+        "a_3894066917d14485b8c2750c994bfea1",
+        "a_2f791ffc8255486cb89ee48194f9d12d",
+        "a_c686999252964e7a991f43239fb8cd0a",
+        "a_ff79ce62f1b24d9fb244e98f83d4d88e",
+        "as_b768223ef7ca9a70305c",
+        "as_d54980e32ae3017ed187",
+        "a_ae3f986c5c5b49e5acdcc893a4203e12",
+        "a_25e582dc91a44e57b82b045aceedc580",
+        "a_5962e9e8c5a147d59f0d3b76386de5e8"
+      ],
+      "neighbor_dst_ids": [
+        "a_0851b157c02a4904a332259757d43389",
+        "a_25e582dc91a44e57b82b045aceedc580",
+        "a_2f791ffc8255486cb89ee48194f9d12d",
+        "a_3613a88da0e541d1b397e90818820ea2",
+        "a_3894066917d14485b8c2750c994bfea1",
+        "a_4c73c1e77d61440688ce3640f9d5da52",
+        "a_5962e9e8c5a147d59f0d3b76386de5e8",
+        "a_617f3eea82b146118daac91f357af3b0",
+        "a_a602793d8c494a6b8c168f322ee7d582",
+        "a_ae3f986c5c5b49e5acdcc893a4203e12",
+        "a_c686999252964e7a991f43239fb8cd0a",
+        "a_ff79ce62f1b24d9fb244e98f83d4d88e"
+      ],
+      "neighbor_kinds": {
+        "tool": 5,
+        "model": 2,
+        "speak": 3,
+        "observation": 2
+      },
+      "edge_kinds": {
+        "sequential": 15,
+        "same_moment": 24
+      },
+      "non_haiku_dst": 4,
+      "haiku_dst": 8,
+      "errors": [],
+      "graphview": true
+    }
+  },
+  "h8": {
+    "claim": "Graph/traverse/meal independently filter non-haiku even when store is full",
+    "kinds_only_on_full_corpus": [
+      "ledger",
+      "model",
+      "observation",
+      "speak"
+    ],
+    "thin_kind_hist": {
+      "summary": 6,
+      "tool": 4
+    },
+    "full_kind_hist": {
+      "tool": 220,
+      "speak": 46,
+      "summary": 36,
+      "observation": 36,
+      "ledger": 35,
+      "model": 13
+    },
+    "neighbor_dst_count_thin": 4,
+    "neighbor_dst_count_full_from_thin_seeds": 10,
+    "full_only_seed_neighbors": 12,
+    "disconfirm_hint": "If full corpus has kinds/neighbors absent from thin set, H8 as primary is disconfirmed \u2014 consumers reflect store contents.",
+    "h8_primary_disconfirmed": true
+  },
+  "weave": {
+    "thin_id_count": 10,
+    "full_id_count": 386,
+    "edges_total": 692,
+    "both_endpoints_in_thin": 6,
+    "one_endpoint_outside_thin": 4,
+    "both_endpoints_outside_thin": 682,
+    "missing_endpoint_on_disk": 0,
+    "h9_cascade_signal": true,
+    "examples": [
+      {
+        "src": "a_2f1c70f4039c40258dd81067e42bfe88",
+        "dst": "a_3f56d48cafdd423eb028099c24145176",
+        "field": "prev_atom_id",
+        "src_in_thin": true,
+        "dst_in_thin": false
+      },
+      {
+        "src": "a_617f3eea82b146118daac91f357af3b0",
+        "dst": "a_4c73c1e77d61440688ce3640f9d5da52",
+        "field": "next_atom_id",
+        "src_in_thin": true,
+        "dst_in_thin": false
+      },
+      {
+        "src": "a_4c73c1e77d61440688ce3640f9d5da52",
+        "dst": "a_617f3eea82b146118daac91f357af3b0",
+        "field": "prev_atom_id",
+        "src_in_thin": false,
+        "dst_in_thin": true
+      },
+      {
+        "src": "a_3f56d48cafdd423eb028099c24145176",
+        "dst": "a_2f1c70f4039c40258dd81067e42bfe88",
+        "field": "next_atom_id",
+        "src_in_thin": false,
+        "dst_in_thin": true
+      }
+    ]
+  },
+  "h9": {
+    "claim": "Post-restart promote weave only links among survivors (cascade)",
+    "signal": true,
+    "one_endpoint_outside_thin": 4,
+    "note": "Cascade of B when mid-session promote was healthy (H3); not product fix"
+  }
+}

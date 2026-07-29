@@ -1,0 +1,46 @@
+{
+  "packages": {
+    "lance": {
+      "error": null,
+      "import_ok": true,
+      "version": "0.23.2"
+    },
+    "lancedb": {
+      "error": null,
+      "import_ok": true,
+      "version": "0.20.0"
+    },
+    "pyarrow": {
+      "error": null,
+      "import_ok": true,
+      "version": "25.0.0"
+    }
+  },
+  "paths": {
+    "ELYRA_DATA_DIR": null,
+    "ELYRA_LANCE_ALLOW_WRITE": null,
+    "LANCE_DEBUG_DATA_DIR": "/tmp/lance-q-20260729/data",
+    "LANCE_DEBUG_URI": "/tmp/lance-q-20260729/data/memory/lance",
+    "data_dir_resolved": "/tmp/lance-q-20260729/data",
+    "marker_expected": "/tmp/lance-q-20260729/.lance-debug1-quarantine",
+    "marker_present": true,
+    "uri_exists": true
+  },
+  "python": {
+    "executable": "/home/jim/Workspace/project-elyra/.venv/bin/python3.12",
+    "implementation": "cpython",
+    "version": "3.12.8"
+  },
+  "safety": {
+    "class_note": "env_check is R0 (versions/paths); does not connect or write",
+    "deny_list": [
+      "merge_insert",
+      "add",
+      "delete",
+      "drop_table",
+      "compact_files",
+      "cleanup_old_versions",
+      "optimize"
+    ]
+  }
+}

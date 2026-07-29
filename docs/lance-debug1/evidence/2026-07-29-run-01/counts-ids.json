@@ -1,0 +1,70 @@
+{
+  "run_id": "2026-07-29-run-01",
+  "note": "Counts and atom_ids only — no content bodies",
+  "n_full": 386,
+  "n_head": 386,
+  "n_arrow": 10,
+  "n_lance": 386,
+  "h1a_ok": true,
+  "h1b": {"ok": true, "path": "head_n_full"},
+  "h2": {"ok": true, "process_atom_count": 10, "tracks_arrow": true},
+  "skip_corrupt": 0,
+  "arrow_ids": [
+    "as_e64939f1bf9b944d6100",
+    "as_96ae3c59935c2e7543f5",
+    "as_d944de9463e49f968410",
+    "as_6dd22f3855cafbb7ab86",
+    "as_853184c93f7d44dbe6d6",
+    "as_80dd0ca21a6e4e8db42d",
+    "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+    "a_4be734287d114789ac0a21ed1d3d2d07",
+    "a_f1bf8ef68dd34320a675fabc185c24c7",
+    "a_3f56d48cafdd423eb028099c24145176"
+  ],
+  "head10_ids": [
+    "as_e64939f1bf9b944d6100",
+    "as_96ae3c59935c2e7543f5",
+    "as_d944de9463e49f968410",
+    "as_6dd22f3855cafbb7ab86",
+    "as_853184c93f7d44dbe6d6",
+    "as_80dd0ca21a6e4e8db42d",
+    "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+    "a_4be734287d114789ac0a21ed1d3d2d07",
+    "a_f1bf8ef68dd34320a675fabc185c24c7",
+    "a_3f56d48cafdd423eb028099c24145176"
+  ],
+  "process_id_sample_sorted": [
+    "a_0fd7bce0c43d4eccbb4c35c1f14cbe84",
+    "a_3f56d48cafdd423eb028099c24145176",
+    "a_4be734287d114789ac0a21ed1d3d2d07",
+    "a_f1bf8ef68dd34320a675fabc185c24c7",
+    "as_6dd22f3855cafbb7ab86",
+    "as_80dd0ca21a6e4e8db42d",
+    "as_853184c93f7d44dbe6d6",
+    "as_96ae3c59935c2e7543f5",
+    "as_d944de9463e49f968410",
+    "as_e64939f1bf9b944d6100"
+  ],
+  "kind_hist_arrow": {"summary": 6, "tool": 4},
+  "kind_hist_full": {
+    "tool": 220,
+    "speak": 46,
+    "summary": 36,
+    "observation": 36,
+    "ledger": 35,
+    "model": 13
+  },
+  "version_samples": [
+    {"fraction": 0.0, "version_id": 1, "num_rows": 10},
+    {"fraction": 0.25, "version_id": 403, "num_rows": 103},
+    {"fraction": 0.5, "version_id": 806, "num_rows": 197},
+    {"fraction": 0.75, "version_id": 1209, "num_rows": 320},
+    {"fraction": 1.0, "version_id": 1611, "num_rows": 386}
+  ],
+  "weave": {
+    "edges_total": 692,
+    "both_endpoints_in_thin": 6,
+    "one_endpoint_outside_thin": 4,
+    "both_endpoints_outside_thin": 682
+  }
+}
