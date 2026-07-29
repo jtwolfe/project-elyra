@@ -143,3 +143,77 @@ rocBLAS error: Cannot read .../torch/lib/rocblas/library/TensileLibrary.dat:
 ---
 
 *Operator dogfood record for PR3. A5 hard stop honored; no 03.*
+
+---
+
+## PR4 — A6–A7 blocked; dogfood template completeness (2026-07-29)
+
+**Scope of this addendum:** document A6–A7 hard stop, fill the required BUG-mem-gpu-01 dogfood template fields, and record Gate B / product decisions. **No re-run of the venv switch. No run of `03_nemotron_encode.py`. No product worker dogfood.**
+
+### A6–A7 — NOT RUN (A5 hard stop)
+
+| Gate | Script | Result |
+|------|--------|--------|
+| **A6** | model load (`03_nemotron_encode.py` phase) | **NOT RUN** |
+| **A7** | encode + G1–G9 asserts | **NOT RUN** |
+
+**Reason:** A5 (`02_matmul_smoke.py` / fp16 matmul) **FAIL** — rocBLAS TensileLibrary has **no gfx906**. Design KD17 / VENV-ROCM-SWITCH §A5 hard process gate: **do not load Nemotron / do not run 03** until matmul is green.
+
+- No model weights loaded
+- No `load_ms` / `encode_ms` / `vram_peak_bytes` measurements
+- No attn_impl observation
+- Encode dogfood **re-opens only after A5 is green** (alternate wheel indexes and/or source Tensile with gfx906 — see “Optional next experiments” above)
+
+### Required dogfood template (mirrored → `docs/known-bugs.md`)
+
+### Dogfood — venv ROCm smoke (2026-07-29)
+
+| Field | Value |
+|-------|--------|
+| Status of BUG-mem-gpu-01 | **Still Open** (script path only / product worker: not exercised) |
+| torch_version | 2.13.0+rocm7.2 |
+| hip_version | 7.2.53211 |
+| device_name | AMD Radeon VII (gfx906); torch name may say "AMD Radeon Graphics" |
+| A1–A7 pass/fail | A1–A4 PASS; A5 FAIL (rocBLAS no gfx906 Tensile); A6–A7 NOT RUN (A5 hard stop) |
+| load_ms | n/a (model not loaded) |
+| encode_ms | n/a |
+| vram_peak_bytes | n/a |
+| attn_impl if known | n/a |
+| product worker path | **not exercised** |
+| Notes | Official rocm7.2 wheel enumerates HIP device but matmul aborts; no "GPU embed fixed"; standalone smoke only under docs/radeon-vii-dev |
+
+### Spike Gate B checkbox
+
+| Checkbox | State |
+|----------|--------|
+| “ROCm attempt succeeded” / smoke encode green | **Unchecked** — smoke did **not** pass encode (A5 fail → A6–A7 not run) |
+| Gate B ready for product semantic default-on | **No** — remains blocked on real GPU encode path |
+
+Do **not** check Gate B from this session. HIP probe green alone is insufficient; encode smoke did not complete.
+
+### Decision — product pin vs intentional GPU dogfood
+
+| Decision | Value |
+|----------|--------|
+| Product pin | Keep local uncommitted `embed_device=cpu` while ROCm torch remains in `.venv` for ISA experiments |
+| Intentional product worker GPU dogfood this session | **No** |
+| Product worker path | **not exercised** |
+| `elyra.toml` committed? | **No** |
+| Language | No “GPU embed fixed”; BUG-mem-gpu-01 stays **Open** |
+
+### Re-open condition for encode dogfood
+
+1. A5 green on LuxPrimata (gfx906 matmul works under some torch/rocBLAS build).
+2. Then run `03_nemotron_encode.py` only (A6–A7 / G1–G9).
+3. Fill `load_ms` / `encode_ms` / `vram_peak_bytes` / `attn_impl` from real 03 output.
+4. Still keep BUG-mem-gpu-01 **Open** until a deliberate product-path decision — scripts-only success does not close the bug alone.
+
+### Cross-links
+
+- Full A5 error text: [§ A5 hard stop](#a5-hard-stop--exact-error) above; freezes/`post-rocm-host-stack.txt`
+- Bug entry: [docs/known-bugs.md](../known-bugs.md) **BUG-mem-gpu-01**
+- Inventory: [STACK-INVENTORY.md](STACK-INVENTORY.md)
+
+---
+
+*PR4 ops record: A6–A7 blocked on A5 red; dogfood template filled; Gate B unchecked; bug stays Open; product worker not exercised.*

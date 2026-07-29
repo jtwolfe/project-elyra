@@ -6,7 +6,7 @@
 **Purpose:** Hardware + package + venv baseline for an isolated Radeon VII embed shim.  
 **Policy:** Python ML libs stay in the **project venv** (not system `python-pytorch-rocm`). Host ROCm is system packages only.
 
-> **PR3 status (2026-07-29):** Project `.venv` switched to `torch==2.13.0+rocm7.2`. **A1–A4 green; A5 HARD FAIL** — official rocm7.2 wheel rocBLAS has **no gfx906** TensileLibrary (available: gfx908/90a/942/950 + RDNA3/4). See [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md). `03` not run. BUG-mem-gpu-01 remains **Open**.
+> **PR3+PR4 status (2026-07-29):** Project `.venv` switched to `torch==2.13.0+rocm7.2`. **A1–A4 green; A5 HARD FAIL** — official rocm7.2 wheel rocBLAS has **no gfx906** TensileLibrary (available: gfx908/90a/942/950 + RDNA3/4). A6–A7 / `03` **not run** (A5 hard stop). BUG-mem-gpu-01 dogfood template filled; bug remains **Open**. See [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md).
 
 ---
 
@@ -256,7 +256,8 @@ If `rocm7.2` wheel install fails or `is_available` stays false:
 | 5 | Install Tier B only if dynamic linker / missing `librocblas` errors (not for ISA) | Low — not applicable to current A5 |
 | 6 | Keep product `embed_device=cpu` pin until compute works | **High** safety |
 | 7 | Isolated Radeon VII shim only after A5 green | Blocked on A5 |
-| 8 | `03_nemotron_encode` + BUG-mem-gpu-01 update after A5 green | Blocked on A5 |
+| 8 | `03_nemotron_encode` after A5 green | **Blocked on A5** — A6–A7 not run (PR4) |
+| 9 | BUG-mem-gpu-01 dogfood template | **Done (PR4)** — fields filled; bug stays **Open** |
 
 ---
 
@@ -269,8 +270,11 @@ If `rocm7.2` wheel install fails or `is_available` stays false:
 | Host Tier B (BLAS/MIOpen) | **Not installed** — not used for ISA miss |
 | Venv ROCm torch | **Installed** `2.13.0+rocm7.2` — HIP OK |
 | A5 matmul / gfx906 kernels | **FAIL** — no rocBLAS Tensile for gfx906 in wheel |
+| A6–A7 / encode smoke | **NOT RUN** (A5 hard stop) — see [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) PR4 |
+| Gate B “ROCm attempt succeeded” | **Unchecked** |
 | Embed path effective device | **CPU** (local pin); library `auto` would choose **rocm** |
+| BUG-mem-gpu-01 | **Open** — dogfood template filled 2026-07-29 |
 
 ---
 
-*Updated after LuxPrimata operator switch (PR3). See NOTES-DOGFOOD.md for A5 evidence.*
+*Updated after LuxPrimata operator switch (PR3) + PR4 dogfood NOTES. See [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) for A5 evidence and full template; [known-bugs.md](../known-bugs.md) BUG-mem-gpu-01.*

@@ -609,15 +609,17 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | Field | Value |
 |-------|--------|
 | **Status** | **Open** (defer to Gate B / runtime) |
-| **Severity now** | Med — dogfood encode slow on CPU; mock path fine for CI |
+| **Severity now** | Med — dogfood encode on CPU; ROCm torch installs but **gfx906 matmul fails** (no Tensile), so GPU encode is unusable on official rocm7.2 wheel |
 | **Severity later** | High when product default-on wants real Nemotron latency under meal budgets |
 | **Area** | `elyra/memory/embed/runtime.py`, device select (`embed_device`), optional `memory-embed` extra / ROCm wheels |
-| **Dogfood** | 2026-07-28 — Radeon VII / ROCm environment; Nemotron encode effective device CPU |
+| **Dogfood** | 2026-07-28 — Radeon VII / ROCm env; Nemotron effective CPU. **2026-07-29** — venv ROCm smoke: A1–A4 PASS, A5 FAIL (rocBLAS no gfx906), A6–A7 NOT RUN; product worker **not exercised**. Ops record: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
 | **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md); **not** Phase 2 rectification core (KD-R10). Rectification only optional device honesty in health |
 
 ### Symptom
 
 Operator requests GPU/ROCm for Omni-Embed-Nemotron; runtime lands on CPU (or mock). Idle encode and optional warm paths are slower than hardware suggests; does not by itself empty joint search once PR-R1 repair/encode is in place.
+
+**2026-07-29 addendum:** Official `torch 2.13.0+rocm7.2` on LuxPrimata enumerates the HIP device (`rocm=True`) but **aborts on matmul** — wheel rocBLAS has no TensileLibrary for **gfx906**. Standalone encode smoke was not run (A5 hard stop). This is stronger than “fell back to CPU”: GPU compute is currently **broken** on this wheel for Radeon VII, not merely unused.
 
 ### Related design intent
 
@@ -625,14 +627,34 @@ Portable encode contract: CUDA / ROCm / CPU fallback without hard-failing presen
 
 ### Fix directions (later)
 
-1. ROCm wheel / quant matrix validation on operator hardware.
+1. ROCm wheel / quant matrix validation on operator hardware — **try older indexes or source Tensile with gfx906** after the 7.2 failure is recorded (see NOTES).
 2. Vectors health: requested vs effective device honesty (optional polish).
 3. Do **not** block meal/channel product path on GPU presence.
-4. Gate B checklist before product default-on of semantic flags.
+4. Gate B checklist before product default-on of semantic flags — **Gate B remains unchecked** (encode smoke did not pass).
+
+### Dogfood — venv ROCm smoke (2026-07-29)
+
+| Field | Value |
+|-------|--------|
+| Status of BUG-mem-gpu-01 | **Still Open** (script path only / product worker: not exercised) |
+| torch_version | 2.13.0+rocm7.2 |
+| hip_version | 7.2.53211 |
+| device_name | AMD Radeon VII (gfx906); torch name may say "AMD Radeon Graphics" |
+| A1–A7 pass/fail | A1–A4 PASS; A5 FAIL (rocBLAS no gfx906 Tensile); A6–A7 NOT RUN (A5 hard stop) |
+| load_ms | n/a (model not loaded) |
+| encode_ms | n/a |
+| vram_peak_bytes | n/a |
+| attn_impl if known | n/a |
+| product worker path | **not exercised** |
+| Notes | Official rocm7.2 wheel enumerates HIP device but matmul aborts; no "GPU embed fixed"; standalone smoke only under docs/radeon-vii-dev |
+
+Full A5 error, freezes, and A6–A7 block decision: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md). Spike Gate B “ROCm attempt succeeded” stays **unchecked**. Local product pin `embed_device=cpu` kept (uncommitted) while ROCm torch remains for ISA experiments.
 
 ### Related
 
 - **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
+- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — PR3 switch + PR4 template; bug stays **Open**.
+- [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii-dev/STACK-INVENTORY.md) — post-switch inventory / A5 status.
 
 ---
 

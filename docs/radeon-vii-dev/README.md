@@ -13,11 +13,12 @@
 |-------|--------|
 | Hardware Radeon VII / gfx906 | **OK** — seen by `rocminfo` |
 | Host ROCm 7.2.4 Tier A | **OK** |
-| Host Tier B (rocBLAS / MIOpen) | Not installed (OK until dlopen needs it) |
-| Venv ROCm torch | **Not yet** — still `2.13.0+cu130` (CUDA build) |
-| Embed path effective device | **CPU** (`select_device(auto)→cpu`) |
-| Standalone smoke scripts | **Planned** (PR2) |
-| Freeze artifacts | **Planned** (operator PR3 after swap) |
+| Host Tier B (rocBLAS / MIOpen) | Not installed (ISA miss — not used as workaround) |
+| Venv ROCm torch | **Installed** `2.13.0+rocm7.2` — HIP OK; A1–A4 PASS |
+| A5 matmul / gfx906 kernels | **FAIL** — rocBLAS no gfx906 Tensile |
+| A6–A7 / encode smoke | **NOT RUN** (A5 hard stop) |
+| Embed path effective device | **CPU** (local `embed_device=cpu` pin; uncommitted) |
+| BUG-mem-gpu-01 | **Open** — dogfood template filled; see [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) |
 
 See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package baseline.
 
@@ -34,7 +35,7 @@ See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package basel
 | [scripts/README.md](scripts/README.md) | Smoke scripts overview (G1–G9, exit codes, prereqs) |
 | `freezes/*.txt` | Operator freezes (post-swap; LuxPrimata/ROCm-only) |
 | `scripts/01_*.py` … | Standalone probes (land in scripts PR) |
-| `NOTES-DOGFOOD.md` | Measurements / dogfood notes (after encode smoke) |
+| [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) | PR3 switch + PR4 A6–A7 block + dogfood template (encode re-opens after A5 green) |
 
 ---
 
