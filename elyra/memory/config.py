@@ -117,6 +117,11 @@ class MemorySettings:
     ann_optimize_every_n_encodes: int = 64
     ann_optimize_interval_s: int = 300
     ann_optimize_max_ms: int = 200
+    # KD-R3: skip IVF/create_index when channel vector count is below this.
+    # Full scan remains correct — not a product error. 0 = always attempt IVF.
+    ann_ivf_min_vectors: int = 256
+    # KD-R3: columns to build ANN on (channel names ⊂ CHANNEL_SET). Default joint only.
+    ann_index_channels: tuple[str, ...] = ("joint",)
 
 
 def memory_root(paths: ElyraPaths) -> Path:

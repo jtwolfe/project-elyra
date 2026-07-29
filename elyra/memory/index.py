@@ -204,6 +204,10 @@ class AnnSettings:
     optimize_interval_s: int = 300
     optimize_max_ms: int = 200
     force_full: bool = False
+    # KD-R3: never IVF when channel n < ivf_min_vectors (0 = always attempt).
+    ivf_min_vectors: int = 256
+    # KD-R3: channel names to target for create_index (subset of CHANNEL_SET).
+    index_channels: tuple[str, ...] = ("joint",)
 
 
 def _int_field(obj: Any, name: str, default: int) -> int:
@@ -214,6 +218,28 @@ def _int_field(obj: Any, name: str, default: int) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _index_channels_field(
+    obj: Any, name: str, default: tuple[str, ...]
+) -> tuple[str, ...]:
+    raw = getattr(obj, name, default)
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        return default
+    out: list[str] = []
+    for item in items:
+        ch = str(item).strip().lower()
+        if ch.startswith("emb_"):
+            ch = ch[len("emb_") :]
+        if ch in CHANNEL_SET and ch not in out:
+            out.append(ch)
+    return tuple(out) if out else default
 
 
 def ann_settings_from(obj: Any | None = None, **overrides: Any) -> AnnSettings:
@@ -231,9 +257,20 @@ def ann_settings_from(obj: Any | None = None, **overrides: Any) -> AnnSettings:
             ),
             optimize_max_ms=max(0, _int_field(obj, "ann_optimize_max_ms", base.optimize_max_ms)),
             force_full=bool(getattr(obj, "ann_force_full", False)),
+            ivf_min_vectors=max(
+                0, _int_field(obj, "ann_ivf_min_vectors", base.ivf_min_vectors)
+            ),
+            index_channels=_index_channels_field(
+                obj, "ann_index_channels", base.index_channels
+            ),
         )
     if not overrides:
         return base
+    index_channels = overrides.get("index_channels", base.index_channels)
+    if isinstance(index_channels, str):
+        index_channels = (index_channels,)
+    elif not isinstance(index_channels, tuple):
+        index_channels = tuple(index_channels)
     return AnnSettings(
         recent_buffer_max=int(overrides.get("recent_buffer_max", base.recent_buffer_max)),
         full_search_below=int(overrides.get("full_search_below", base.full_search_below)),
@@ -245,6 +282,10 @@ def ann_settings_from(obj: Any | None = None, **overrides: Any) -> AnnSettings:
         ),
         optimize_max_ms=int(overrides.get("optimize_max_ms", base.optimize_max_ms)),
         force_full=bool(overrides.get("force_full", base.force_full)),
+        ivf_min_vectors=max(
+            0, int(overrides.get("ivf_min_vectors", base.ivf_min_vectors))
+        ),
+        index_channels=tuple(index_channels) if index_channels else base.index_channels,
     )
 
 
@@ -419,6 +460,9 @@ class _FreshnessState:
         self.last_optimize_mono: float | None = None
         self.seed_incomplete = False
         self.ann_index_built = False
+        # Channels with a successfully built ANN index (health honesty KD-R3).
+        self.ann_index_channels: list[str] = []
+        self.last_optimize_notes: list[str] = []
         self._opened = False
 
     def mark_upsert(self) -> None:
@@ -460,7 +504,14 @@ class _FreshnessState:
             return True
         return False
 
-    def mark_optimized(self, *, watermark: str, ann_built: bool = False) -> int:
+    def mark_optimized(
+        self,
+        *,
+        watermark: str,
+        ann_built: bool = False,
+        built_channels: Sequence[str] | None = None,
+        notes: Sequence[str] | None = None,
+    ) -> int:
         """Advance watermark and drop buffer entries now covered by the index.
 
         Only call when optimize actually succeeded (ANN built or exhaustive
@@ -476,8 +527,17 @@ class _FreshnessState:
         self.encodes_since_optimize = 0
         self.last_optimize_at = wm or watermark
         self.last_optimize_mono = time.monotonic()
+        if notes is not None:
+            self.last_optimize_notes = [str(n) for n in notes]
         if ann_built:
             self.ann_index_built = True
+            if built_channels is not None:
+                merged = list(self.ann_index_channels)
+                for ch in built_channels:
+                    c = str(ch).strip().lower()
+                    if c and c not in merged:
+                        merged.append(c)
+                self.ann_index_channels = merged
         return removed
 
     def health_fields(
@@ -499,6 +559,8 @@ class _FreshnessState:
             "last_optimize": self.last_optimize_at,
             "seed_incomplete": self.seed_incomplete,
             "ann_index_built": self.ann_index_built,
+            "ann_index_channels": list(self.ann_index_channels),
+            "last_optimize_notes": list(self.last_optimize_notes),
             "vectors_by_channel": dict(
                 vectors_by_channel
                 if vectors_by_channel is not None
@@ -616,7 +678,16 @@ class NullEmbeddingIndex:
         return []
 
     def optimize(self, *, max_ms: int | None = None) -> dict[str, Any]:
-        return {"ok": True, "backend": "null", "optimized": False}
+        del max_ms
+        notes = ["null index; no ANN"]
+        return {
+            "ok": True,
+            "backend": "null",
+            "optimized": False,
+            "notes": notes,
+            "note": notes[0],
+            "ann_index_built": False,
+        }
 
     def repair_joint_copies(self, *, limit: int = 64) -> dict[str, Any]:
         return {
@@ -995,9 +1066,15 @@ class MemoryEmbeddingIndex:
 
     def optimize(self, *, max_ms: int | None = None) -> dict[str, Any]:
         del max_ms
+        notes = ["in-memory index; watermark advanced (no IVF)"]
         with self._lock:
             watermark = to_iso_z(datetime.now(UTC))
-            removed = self._fresh.mark_optimized(watermark=watermark, ann_built=True)
+            removed = self._fresh.mark_optimized(
+                watermark=watermark,
+                ann_built=True,
+                built_channels=list(self._fresh.ann.index_channels or ("joint",)),
+                notes=notes,
+            )
             n = len(self._by_id)
             return {
                 "ok": True,
@@ -1007,7 +1084,10 @@ class MemoryEmbeddingIndex:
                 "buffer_trimmed": removed,
                 "recent_buffer": len(self._fresh.buffer),
                 "last_optimize": self._fresh.last_optimize_at,
-                "note": "in-memory index; watermark advanced (no IVF)",
+                "ann_index_built": self._fresh.ann_index_built,
+                "notes": list(notes),
+                "note": notes[0],
+                "last_optimize_notes": list(notes),
             }
 
     def health(self) -> dict[str, Any]:
@@ -1465,91 +1545,130 @@ class LanceEmbeddingIndex:
                 return main[: max(0, int(k))]
             return _merge_hits(main, buf_hits, k=k)
 
+    def _create_index_for_channel(
+        self, channel: str, *, max_ms: int | None
+    ) -> str:
+        """Best-effort IVF create for one emb column. Raises on hard failure.
+
+        Returns a short success note. Callers must gate on n>0 / IVF min first
+        (KD-R3 — never call when channel has zero vectors).
+        """
+        col = f"emb_{channel}" if not channel.startswith("emb_") else channel
+        ch = col[len("emb_") :] if col.startswith("emb_") else channel
+        create = getattr(self._store, "create_vector_index", None)
+        if callable(create):
+            create(channel=ch, max_ms=max_ms)
+            return f"built:{col}"
+        table = getattr(self._store, "_table", None)
+        if table is not None and hasattr(table, "create_index"):
+            try:
+                table.create_index(
+                    metric="cosine",
+                    vector_column_name=col,
+                    replace=True,
+                )
+                return f"built:{col}"
+            except TypeError:
+                table.create_index(col)
+                return f"built:{col}"
+        raise RuntimeError("no create_vector_index / create_index on store")
+
     def optimize(self, *, max_ms: int | None = None) -> dict[str, Any]:
-        """Idle-only: best-effort Lance vector index + buffer trim (KD4).
+        """Idle-only: best-effort Lance vector index + buffer trim (KD4 / KD-R3).
 
         Never call mid-hop. Soft max_ms only — ANN create may exceed; caller
         (worker idle tick) owns scheduling.
 
-        Buffer is cleared **only** when ANN create succeeds (safe to drop
-        recent entries). Failed optimize leaves buffer + ``index_stale`` intact.
+        KD-R3 safety:
+        - Never IVF/create_index when channel has n=0 vectors.
+        - Skip IVF when n < ``ann_ivf_min_vectors`` (full scan remains correct).
+        - Never claim ``ann_index_built`` or trim buffer on skip / false success.
         """
         t0 = time.monotonic()
         budget = max_ms
         if budget is None:
             budget = self._fresh.ann.optimize_max_ms
-        ann_built = False
-        note = "ann not built"
-        # Best-effort create IVF / auto vector index on emb_joint.
-        try:
-            create = getattr(self._store, "create_vector_index", None)
-            table = getattr(self._store, "_table", None)
-            if callable(create):
-                create(channel="joint", max_ms=budget)
-                ann_built = True
-                note = "store.create_vector_index"
-            elif table is not None and hasattr(table, "create_index"):
-                try:
-                    # lancedb 0.20: create_index on vector column (may no-op / err).
-                    table.create_index(
-                        metric="cosine",
-                        vector_column_name="emb_joint",
-                        replace=True,
-                    )
-                    ann_built = True
-                    note = "table.create_index emb_joint"
-                except TypeError:
-                    try:
-                        table.create_index("emb_joint")
-                        ann_built = True
-                        note = "table.create_index(emb_joint)"
-                    except Exception as exc:  # noqa: BLE001
-                        note = f"create_index skipped: {exc!s}"[:160]
-                except Exception as exc:  # noqa: BLE001
-                    note = f"create_index skipped: {exc!s}"[:160]
-            else:
-                note = "no create_vector_index / create_index on store"
-        except Exception as exc:  # noqa: BLE001
-            note = f"optimize ann attempt failed: {exc!s}"[:160]
-            _LOG.debug("LanceEmbeddingIndex.optimize ann: %s", exc)
+        counts = self._vectors_by_channel()
+        targets = self._fresh.ann.index_channels or ("joint",)
+        ivf_min = max(0, int(self._fresh.ann.ivf_min_vectors))
+        notes: list[str] = []
+        built_channels: list[str] = []
 
+        for ch in targets:
+            channel = str(ch).strip().lower()
+            if channel.startswith("emb_"):
+                channel = channel[len("emb_") :]
+            if channel not in CHANNEL_SET:
+                notes.append(f"invalid_channel:{ch}")
+                continue
+            col = f"emb_{channel}"
+            n = int(counts.get(channel) or 0)
+            if n == 0:
+                notes.append(f"no_vectors:{col}")
+                continue
+            if n < ivf_min:
+                notes.append(f"below_ivf_min:{col}:{n}")
+                continue
+            try:
+                built_note = self._create_index_for_channel(channel, max_ms=budget)
+                built_channels.append(channel)
+                notes.append(f"{built_note}:{n}")
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"error:{col}:{exc!s}"[:160])
+                _LOG.debug("LanceEmbeddingIndex.optimize %s: %s", col, exc)
+
+        any_built = bool(built_channels)
         elapsed_ms = (time.monotonic() - t0) * 1000.0
+        note = "; ".join(notes) if notes else "ann not built"
+
         with self._lock:
-            n = self._vectors_ready_count()
-            if not ann_built:
-                # Failed optimize: do not clear buffer or claim freshness.
+            n_ready = self._vectors_ready_count()
+            if not any_built:
+                # CRITICAL: leave ann_index_built unchanged; do NOT trim buffer.
+                self._fresh.last_optimize_notes = list(notes)
                 return {
                     "ok": True,
                     "backend": "lance",
                     "optimized": False,
-                    "vectors_ready": n,
+                    "vectors_ready": n_ready,
+                    "vectors_by_channel": dict(counts),
                     "buffer_trimmed": 0,
                     "recent_buffer": len(self._fresh.buffer),
                     "last_optimize": self._fresh.last_optimize_at,
                     "ann_index_built": self._fresh.ann_index_built,
-                    "index_stale": self._fresh.is_stale(vectors_ready=n),
+                    "ann_index_channels": list(self._fresh.ann_index_channels),
+                    "index_stale": self._fresh.is_stale(vectors_ready=n_ready),
                     "elapsed_ms": elapsed_ms,
                     "max_ms": budget,
+                    "notes": list(notes),
                     "note": note,
+                    "last_optimize_notes": list(notes),
                 }
 
             watermark = to_iso_z(datetime.now(UTC))
             removed = self._fresh.mark_optimized(
-                watermark=watermark, ann_built=True
+                watermark=watermark,
+                ann_built=True,
+                built_channels=built_channels,
+                notes=notes,
             )
             return {
                 "ok": True,
                 "backend": "lance",
                 "optimized": True,
-                "vectors_ready": n,
+                "vectors_ready": n_ready,
+                "vectors_by_channel": dict(counts),
                 "buffer_trimmed": removed,
                 "recent_buffer": len(self._fresh.buffer),
                 "last_optimize": self._fresh.last_optimize_at,
                 "ann_index_built": self._fresh.ann_index_built,
-                "index_stale": self._fresh.is_stale(vectors_ready=n),
+                "ann_index_channels": list(self._fresh.ann_index_channels),
+                "index_stale": self._fresh.is_stale(vectors_ready=n_ready),
                 "elapsed_ms": elapsed_ms,
                 "max_ms": budget,
+                "notes": list(notes),
                 "note": note,
+                "last_optimize_notes": list(notes),
             }
 
     def health(self) -> dict[str, Any]:

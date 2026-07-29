@@ -25,6 +25,7 @@ from elyra.memory.config import (
     MEMORY_SEARCH_CHANNELS,
     MemorySettings,
 )
+from elyra.memory.embed.types import CHANNEL_SET
 
 _CLOSE_GATES = frozenset({"soft", "hard"})
 _PROVIDER_NAMES = frozenset({"xai", "local"})
@@ -33,6 +34,7 @@ _MEMORY_BACKENDS = MEMORY_BACKENDS
 _MEMORY_EMBED_BACKENDS = MEMORY_EMBED_BACKENDS
 _MEMORY_EMBED_DEVICES = MEMORY_EMBED_DEVICES
 _MEMORY_SEARCH_CHANNELS = MEMORY_SEARCH_CHANNELS
+_MEMORY_ANN_CHANNELS = CHANNEL_SET
 
 
 @dataclass(frozen=True)
@@ -410,6 +412,7 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.ann_optimize_every_n_encodes",
             "memory.ann_optimize_interval_s",
             "memory.ann_optimize_max_ms",
+            "memory.ann_ivf_min_vectors",
             "memory.parcel_threshold_chars",
             "memory.embed_media_max_bytes",
             "memory.embed_catchup_max",
@@ -418,6 +421,26 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.joint_repair_max_per_tick",
         ) and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ann_index_channels":
+            # Normalize emb_* prefixes; require non-empty ⊂ CHANNEL_SET.
+            if not isinstance(coerced, tuple) or not coerced:
+                raise ValueError(
+                    f"{path}: expected non-empty list/tuple of channel names "
+                    f"from {sorted(_MEMORY_ANN_CHANNELS)}, got {coerced!r}"
+                )
+            normalized: list[str] = []
+            for i, item in enumerate(coerced):
+                ch = str(item).strip().lower()
+                if ch.startswith("emb_"):
+                    ch = ch[len("emb_") :]
+                if ch not in _MEMORY_ANN_CHANNELS:
+                    raise ValueError(
+                        f"{path}[{i}]: expected one of "
+                        f"{sorted(_MEMORY_ANN_CHANNELS)}, got {item!r}"
+                    )
+                if ch not in normalized:
+                    normalized.append(ch)
+            coerced = tuple(normalized)
         filtered[k] = coerced
 
     # Cross-field usage constraints use the post-merge effective values.

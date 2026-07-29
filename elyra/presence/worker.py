@@ -1431,6 +1431,14 @@ class PresenceWorker:
             out = dict(result)
             out["health"] = health if isinstance(health, dict) else {}
             out.setdefault("ok", True)
+            # KD-R3 rebuild honesty: always expose notes[] (and legacy note join).
+            notes = out.get("notes")
+            if not isinstance(notes, list):
+                legacy = out.get("note")
+                notes = [str(legacy)] if legacy else []
+                out["notes"] = notes
+            if "note" not in out or not out.get("note"):
+                out["note"] = "; ".join(str(n) for n in notes) if notes else ""
             _LOG.info("memory vector index rebuild: %s", out)
             return out
         except Exception as exc:  # noqa: BLE001
@@ -1439,6 +1447,8 @@ class PresenceWorker:
                 "ok": False,
                 "error": str(exc) or type(exc).__name__,
                 "optimized": False,
+                "notes": [str(exc) or type(exc).__name__],
+                "note": str(exc) or type(exc).__name__,
             }
 
     def _idle_memory_joint_repair(self) -> None:

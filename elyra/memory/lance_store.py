@@ -30,6 +30,7 @@ from elyra.memory.config import (
     memory_root,
 )
 from elyra.memory.embed.types import (
+    CHANNEL_SET,
     CHANNELS,
     EMBED_DIM,
     EmbeddingSet,
@@ -1088,6 +1089,42 @@ class LanceMemoryStore:
         with self._lock:
             self._check_open()
             return self._vectors_by_channel_unlocked()
+
+    def create_vector_index(
+        self, channel: str = "joint", max_ms: int | None = None
+    ) -> dict[str, Any]:
+        """Best-effort Lance IVF/ANN create on ``emb_{channel}`` (KD-R3).
+
+        Callers (``LanceEmbeddingIndex.optimize``) must pre-check n>0 and
+        ``ann_ivf_min_vectors``. This method does **not** claim index readiness
+        itself — it only invokes Lance ``create_index`` when a table is present.
+
+        Raises on hard failure so the index façade can record ``error:{col}:…``
+        without setting ``ann_index_built``.
+        """
+        del max_ms  # soft budget owned by caller; create_index is blocking
+        ch = (channel or "joint").strip().lower()
+        if ch.startswith("emb_"):
+            ch = ch[len("emb_") :]
+        if ch not in CHANNEL_SET:
+            raise ValueError(f"unknown embed channel for ANN: {channel!r}")
+        col = f"emb_{ch}"
+        with self._lock:
+            self._check_open()
+            if not self._vector_schema_ok:
+                raise RuntimeError("vector schema unavailable; cannot create_index")
+            table = self._table
+            if table is None or not hasattr(table, "create_index"):
+                raise RuntimeError("no Lance table.create_index available")
+            try:
+                table.create_index(
+                    metric="cosine",
+                    vector_column_name=col,
+                    replace=True,
+                )
+            except TypeError:
+                table.create_index(col)
+            return {"ok": True, "channel": ch, "column": col}
 
     def joint_repair_remaining(self) -> int:
         """Count ready sole-modality rows still missing emb_joint."""

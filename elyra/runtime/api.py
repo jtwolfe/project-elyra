@@ -1030,6 +1030,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
         if not isinstance(result, dict):
             result = {"ok": True, "result": result}
+        # KD-R3: rebuild honesty — notes[] (keep note as join for one release).
+        notes = result.get("notes")
+        if not isinstance(notes, list):
+            legacy = result.get("note")
+            notes = [str(legacy)] if legacy else []
+            result["notes"] = notes
+        if not result.get("note"):
+            result["note"] = "; ".join(str(n) for n in notes) if notes else ""
         # Attach fresh index health for glass.
         try:
             _emb, _q, index = self._vectors_worker_handles()
@@ -1037,7 +1045,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             result.setdefault("index", {})
         result["memory"] = flags
-        # 200 even on optimized:false so glass can show note without throwing.
+        # 200 even on optimized:false so glass can show notes without throwing.
         self._json(200, result)
 
     def _get_memory_vectors_atoms(self, qs: dict[str, list[str]]) -> None:

@@ -109,6 +109,8 @@ def test_default_settings_match_design():
     assert s.memory.ann_optimize_every_n_encodes == 64
     assert s.memory.ann_optimize_interval_s == 300
     assert s.memory.ann_optimize_max_ms == 200
+    assert s.memory.ann_ivf_min_vectors == 256
+    assert s.memory.ann_index_channels == ("joint",)
     assert s.memory.parcel_threshold_chars == 8000
     assert s.memory.embed_media_max_bytes == 8_000_000
     assert s.memory.embed_media_max_seconds == 30
@@ -1033,3 +1035,84 @@ def test_allowed_repo_roots_rejects_non_str_elements():
             default_settings(),
             {"tools": {"allowed_repo_roots": ["/ok", 1]}},
         )
+
+
+def test_memory_ann_ivf_min_and_index_channels_defaults():
+    from elyra.settings import default_settings
+
+    s = default_settings()
+    assert s.memory.ann_ivf_min_vectors == 256
+    assert s.memory.ann_index_channels == ("joint",)
+
+
+def test_memory_ann_ivf_min_and_channels_toml(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+ann_ivf_min_vectors = 128
+ann_index_channels = ["joint", "text"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_ivf_min_vectors == 128
+    assert s.memory.ann_index_channels == ("joint", "text")
+
+
+def test_memory_ann_ivf_min_zero_allowed(tmp_path):
+    """0 is valid (always attempt IVF); must not be rewritten to default 256."""
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_ivf_min_vectors = 0\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_ivf_min_vectors == 0
+
+
+def test_memory_ann_ivf_min_negative_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_ivf_min_vectors = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_ivf_min_vectors"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_index_channels_invalid_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_index_channels = ["joint", "not_a_channel"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_index_channels"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_index_channels_empty_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_index_channels = []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_index_channels"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_index_channels_normalizes_emb_prefix(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_index_channels = ["emb_joint", "text"]\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_index_channels == ("joint", "text")

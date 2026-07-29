@@ -982,6 +982,19 @@ class _FakeLanceStore:
         if not self._create_index_ok:
             raise RuntimeError("create_vector_index disabled for test")
 
+    def vectors_by_channel(self) -> dict[str, int]:
+        from elyra.memory.embed.types import CHANNELS
+
+        counts = {c: 0 for c in CHANNELS}
+        for aid, emb in self._embs.items():
+            atom = self._atoms.get(aid)
+            if atom is None or atom.embedding_status != "ready":
+                continue
+            for ch in CHANNELS:
+                if emb.channel_vector(ch) is not None:
+                    counts[ch] = counts.get(ch, 0) + 1
+        return counts
+
     def search_vectors(
         self,
         query: Any,
@@ -1120,7 +1133,8 @@ def test_restart_hybrid_seed_returns_recent():
     """
     store = _FakeLanceStore(create_index_ok=True)
     # full_search_below=0 → above threshold immediately; seed last N on open.
-    ann = AnnSettings(full_search_below=0, recent_buffer_max=8)
+    # ivf_min_vectors=0 so small-N tests can exercise successful create_index.
+    ann = AnnSettings(full_search_below=0, recent_buffer_max=8, ivf_min_vectors=0)
     idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
     for i in range(4):
         aid = f"h{i}"
@@ -1164,7 +1178,8 @@ def test_restart_hybrid_seed_returns_recent():
 def test_lance_optimize_failed_keeps_buffer_and_stale():
     """Failed ANN create must not clear buffer or claim freshness (Issue 3)."""
     store = _FakeLanceStore(create_index_ok=False)
-    ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2)
+    # ivf_min=0 so we reach create_vector_index (which raises).
+    ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2, ivf_min_vectors=0)
     idx = LanceEmbeddingIndex(store, ann=ann)
     store.put_atom(_atom(text="s", atom_id="st1"))
     emb = _emb_set("st1", seed="st")
@@ -1177,11 +1192,12 @@ def test_lance_optimize_failed_keeps_buffer_and_stale():
     assert idx.health()["recent_buffer"] == 1
     assert idx.health()["index_stale"] is True
     assert idx.health()["ann_index_built"] is False
+    assert any(str(n).startswith("error:emb_joint:") for n in r.get("notes") or [])
 
 
 def test_lance_optimize_success_trims_buffer():
     store = _FakeLanceStore(create_index_ok=True)
-    ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2)
+    ann = AnnSettings(full_search_below=2000, optimize_every_n_encodes=2, ivf_min_vectors=0)
     idx = LanceEmbeddingIndex(store, ann=ann)
     store.put_atom(_atom(text="s", atom_id="st1"))
     emb = _emb_set("st1", seed="st")
@@ -1192,12 +1208,13 @@ def test_lance_optimize_success_trims_buffer():
     assert idx.health()["recent_buffer"] == 0
     assert idx.health()["ann_index_built"] is True
     assert idx.health()["index_stale"] is False
+    assert any(str(n).startswith("built:emb_joint") for n in r.get("notes") or [])
 
 
 def test_use_full_search_until_ann_built():
     """Issue 2: hybrid only when above threshold AND ann_index_built."""
     store = _FakeLanceStore(create_index_ok=True)
-    ann = AnnSettings(full_search_below=2, recent_buffer_max=8)
+    ann = AnnSettings(full_search_below=2, recent_buffer_max=8, ivf_min_vectors=0)
     idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
     for i in range(3):
         store.put_atom(
@@ -1553,3 +1570,123 @@ def test_upsert_require_joint_when_flag_on():
         encoded_at="2026-07-28T10:00:00Z",
     )
     assert idx.upsert(with_joint) is True
+
+
+# ── PR-R3 / KD-R3: optimize guards (n=0 / below IVF min; no false success) ─
+
+
+def test_optimize_n0_no_vectors_skips_create_and_does_not_claim():
+    """KD-R3: n=0 → optimized=false, ann_index_built unchanged, buffer not trimmed."""
+    store = _FakeLanceStore(create_index_ok=True)
+    ann = AnnSettings(full_search_below=2000, ivf_min_vectors=256)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
+    assert idx.health()["ann_index_built"] is False
+    assert idx.health()["recent_buffer"] == 0
+    r = idx.optimize(max_ms=50)
+    assert r["optimized"] is False
+    assert r["buffer_trimmed"] == 0
+    assert r["ann_index_built"] is False
+    notes = r.get("notes") or []
+    assert any(n == "no_vectors:emb_joint" for n in notes), notes
+    assert store.create_vector_index_calls == 0
+    h = idx.health()
+    assert h["ann_index_built"] is False
+    assert h["recent_buffer"] == 0
+    assert "no_vectors:emb_joint" in (h.get("last_optimize_notes") or [])
+
+
+def test_optimize_n0_with_preexisting_ann_built_unchanged():
+    """Skip path must leave ann_index_built True if it was already True."""
+    store = _FakeLanceStore(create_index_ok=True)
+    # First succeed with vectors, then wipe store vectors and re-optimize empty.
+    ann = AnnSettings(full_search_below=2000, ivf_min_vectors=0)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
+    store.put_atom(_atom(text="s", atom_id="st1"))
+    assert idx.upsert(_emb_set("st1", seed="st")) is True
+    r1 = idx.optimize(max_ms=50)
+    assert r1["optimized"] is True
+    assert idx.health()["ann_index_built"] is True
+    # Simulate empty channel after rebuild target wipe (count goes to 0).
+    store._embs.clear()  # noqa: SLF001
+    buf_before = idx.health()["recent_buffer"]
+    # Force buffer so we can prove trim does not happen on skip.
+    if buf_before == 0:
+        # re-add one to buffer via upsert then clear store counts path
+        store.put_atom(_atom(text="s2", atom_id="st2"))
+        emb = EmbeddingSet(
+            atom_id="st2",
+            emb_joint=mock_vector("joint:st2", dim=EMBED_DIM),
+            emb_text=mock_vector("text:st2", dim=EMBED_DIM),
+            model_id="mock",
+            encoded_at="2026-07-28T12:00:00Z",
+        )
+        idx.upsert(emb)
+        store._embs.clear()  # noqa: SLF001 — counts see 0; buffer still has entry
+    assert idx.health()["recent_buffer"] >= 1
+    ann_before = idx.health()["ann_index_built"]
+    r2 = idx.optimize(max_ms=50)
+    assert r2["optimized"] is False
+    assert r2["ann_index_built"] is ann_before is True
+    assert r2["buffer_trimmed"] == 0
+    assert idx.health()["recent_buffer"] >= 1
+    assert any(n == "no_vectors:emb_joint" for n in (r2.get("notes") or []))
+
+
+def test_optimize_below_ivf_min_skips_without_false_success():
+    """KD-R3: n < ann_ivf_min_vectors → below_ivf_min note; no create_index."""
+    store = _FakeLanceStore(create_index_ok=True)
+    ann = AnnSettings(full_search_below=2000, ivf_min_vectors=256)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
+    for i in range(3):
+        aid = f"b{i}"
+        store.put_atom(_atom(text=f"b{i}", atom_id=aid))
+        assert idx.upsert(_emb_set(aid, seed=f"b{i}")) is True
+    buf_before = idx.health()["recent_buffer"]
+    assert buf_before >= 1
+    assert idx.health()["ann_index_built"] is False
+    r = idx.optimize(max_ms=50)
+    assert r["optimized"] is False
+    assert r["buffer_trimmed"] == 0
+    assert r["ann_index_built"] is False
+    notes = r.get("notes") or []
+    assert any(n.startswith("below_ivf_min:emb_joint:") for n in notes), notes
+    # n=3
+    assert any("below_ivf_min:emb_joint:3" == n for n in notes), notes
+    assert store.create_vector_index_calls == 0
+    assert idx.health()["recent_buffer"] == buf_before
+    assert idx.health()["ann_index_built"] is False
+    # Full scan still works (search not broken by skipped IVF).
+    hits = idx.search(mock_vector("joint:b0", dim=EMBED_DIM), k=5)
+    assert any(h.atom_id == "b0" for h in hits)
+
+
+def test_optimize_at_ivf_min_attempts_create():
+    """n >= ivf_min → create_index called; success claims ann_index_built."""
+    store = _FakeLanceStore(create_index_ok=True)
+    ann = AnnSettings(full_search_below=2000, ivf_min_vectors=2)
+    idx = LanceEmbeddingIndex(store, ann=ann, seed_on_open=False)
+    for i in range(2):
+        aid = f"m{i}"
+        store.put_atom(_atom(text=f"m{i}", atom_id=aid))
+        assert idx.upsert(_emb_set(aid, seed=f"m{i}")) is True
+    r = idx.optimize(max_ms=50)
+    assert r["optimized"] is True
+    assert store.create_vector_index_calls >= 1
+    assert r["ann_index_built"] is True
+    assert "joint" in (r.get("ann_index_channels") or [])
+    assert any(str(n).startswith("built:emb_joint") for n in (r.get("notes") or []))
+
+
+def test_ann_settings_from_ivf_and_channels():
+    settings = MemorySettings(
+        ann_ivf_min_vectors=128,
+        ann_index_channels=("joint", "text"),
+    )
+    ann = AnnSettings()  # defaults
+    assert ann.ivf_min_vectors == 256
+    assert ann.index_channels == ("joint",)
+    ann2 = open_embedding_index(
+        _FakeLanceStore(), settings=settings
+    )._fresh.ann  # noqa: SLF001
+    assert ann2.ivf_min_vectors == 128
+    assert ann2.index_channels == ("joint", "text")
