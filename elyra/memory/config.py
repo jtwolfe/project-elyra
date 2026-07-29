@@ -51,6 +51,26 @@ SEMANTIC_WAIT_MAX_MS_MIN = 1_000
 SEMANTIC_WAIT_MAX_MS_MAX = 120_000
 SEMANTIC_WAIT_MAX_MS_DEFAULT = 15_000
 
+# Phase 2a traverse hard maxes (settings validation; design budgets table).
+TRAVERSE_EXPAND_MAX_MS_MAX = 500
+TRAVERSE_MAX_DEPTH_MAX = 6
+TRAVERSE_MAX_NODES_MAX = 128
+TRAVERSE_MAX_STEPS_MAX = 16
+TRAVERSE_MAX_SEEDS_MAX = 16
+TRAVERSE_FRONTIER_MAX_MAX = 32
+TRAVERSE_MAX_EXPAND_PER_STEP_MAX = 8
+TRAVERSE_KEEP_MAX_MAX = 32
+TRAVERSE_SESSION_TTL_S_MAX = 3600
+TRAVERSE_LABEL_CHARS_MAX = 160
+TRAVERSE_PREVIEW_CHARS_MAX = 800
+TRAVERSE_INSPECT_CHARS_PER_ID_MAX = 2000
+TRAVERSE_INSPECT_MAX_IDS_MAX = 8
+TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX = 6000
+TRAVERSE_SCRATCHPAD_CHARS_MAX = 400
+TRAVERSE_SEMANTIC_K_MAX = 16
+TRAVERSE_PARCEL_CHILD_CAP_MAX = 128
+TRAVERSE_SAME_MOMENT_K_MAX = 16
+
 
 def clamp_semantic_wait_max_ms(value: float | int) -> int:
     """Clamp wait-for-select ceiling to the product [1000, 120000] ms band."""
@@ -60,6 +80,28 @@ def clamp_semantic_wait_max_ms(value: float | int) -> int:
     if v > SEMANTIC_WAIT_MAX_MS_MAX:
         return SEMANTIC_WAIT_MAX_MS_MAX
     return v
+
+
+def is_directed_traversal_enabled(settings: MemorySettings | None) -> bool:
+    """True when directed traversal tools/session may run."""
+    if settings is None:
+        return False
+    return bool(getattr(settings, "directed_traversal_enabled", False))
+
+
+def is_directed_keep_enabled(settings: MemorySettings | None) -> bool:
+    """Effective directed_keep flag (OQ-A1: follows traversal when on).
+
+    Both flags default false out of box. When ``directed_traversal_enabled``
+    is true, keep is treated as on for dogfood (single operator knob).
+    Explicit ``directed_keep_enabled=true`` also activates keep without
+    requiring traversal tools.
+    """
+    if settings is None:
+        return False
+    if bool(getattr(settings, "directed_keep_enabled", False)):
+        return True
+    return bool(getattr(settings, "directed_traversal_enabled", False))
 
 
 @dataclass(frozen=True)
@@ -152,17 +194,42 @@ class MemorySettings:
     # Small-N under lance_native reports search_mode=full_lance (not full_python).
     ann_search_backend: str = "lance_native"  # lance_native | python
 
-    # --- Phase 2a GraphView read-only knobs (PR-A1; session flags in PR-A2) ---
-    # Directed-traversal feature flags stay off until PR-A2; these only tune
-    # neighbourhood / weight projection when GraphView is constructed in tests
-    # or later worker wiring.
+    # --- Phase 2a directed traversal (PR-A1 GraphView + PR-A2 session) ---
+    # Feature flags default OFF (KD-A10). OQ-A1: directed_keep follows
+    # directed_traversal when the latter is on (helper; both still false OOB).
+    directed_traversal_enabled: bool = False
+    directed_keep_enabled: bool = False
+    directed_keep_fraction: float = 0.08  # meal residual share when channel active
+
+    # Per-step expand compute (NOT multi-hop session wall-clock — KD-A18).
     traverse_expand_max_ms: int = 80  # soft wall for neighbors / seed_from_text
+    # Start seed_from_text budget; 0 = same as traverse_expand_max_ms.
+    traverse_start_expand_max_ms: int = 0
     traverse_parcel_child_cap: int = 32  # parent_of reverse chain / moment cap
     traverse_same_moment_k: int = 4  # OQ-A4 same_moment soft edge cap
     traverse_semantic_k: int = 8  # semantic_hop / seed_from_text top-k
     traverse_allow_semantic_hops: bool = True  # no-ops without index / cold encoder
     traverse_temporal_half_life_hours: float = 72.0  # weight model half-life
     traverse_min_expand_weight: float = 0.05  # drop edges below this floor
+
+    # Session budgets (hard maxes enforced in settings validation).
+    traverse_max_depth: int = 3
+    traverse_max_nodes: int = 48
+    traverse_max_steps: int = 8
+    traverse_max_seeds: int = 8
+    traverse_frontier_max: int = 16
+    traverse_max_expand_per_step: int = 3
+    traverse_keep_max: int = 16
+    traverse_keep_adjacent: bool = True  # finish: sequential ±1 if slots remain
+    traverse_session_ttl_s: int = 900  # idle TTL for active only (KD-A18)
+
+    # Thin surface / inspect caps (KD-A17).
+    traverse_label_chars: int = 80
+    traverse_preview_chars: int = 400
+    traverse_inspect_chars_per_id: int = 800
+    traverse_inspect_max_ids: int = 4
+    traverse_inspect_max_total_chars: int = 2400
+    traverse_scratchpad_chars: int = 200
 
 
 def memory_root(paths: ElyraPaths) -> Path:
@@ -226,12 +293,32 @@ __all__ = [
     "SEMANTIC_WAIT_MAX_MS_DEFAULT",
     "SEMANTIC_WAIT_MAX_MS_MAX",
     "SEMANTIC_WAIT_MAX_MS_MIN",
+    "TRAVERSE_EXPAND_MAX_MS_MAX",
+    "TRAVERSE_FRONTIER_MAX_MAX",
+    "TRAVERSE_INSPECT_CHARS_PER_ID_MAX",
+    "TRAVERSE_INSPECT_MAX_IDS_MAX",
+    "TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX",
+    "TRAVERSE_KEEP_MAX_MAX",
+    "TRAVERSE_LABEL_CHARS_MAX",
+    "TRAVERSE_MAX_DEPTH_MAX",
+    "TRAVERSE_MAX_EXPAND_PER_STEP_MAX",
+    "TRAVERSE_MAX_NODES_MAX",
+    "TRAVERSE_MAX_SEEDS_MAX",
+    "TRAVERSE_MAX_STEPS_MAX",
+    "TRAVERSE_PARCEL_CHILD_CAP_MAX",
+    "TRAVERSE_PREVIEW_CHARS_MAX",
+    "TRAVERSE_SAME_MOMENT_K_MAX",
+    "TRAVERSE_SCRATCHPAD_CHARS_MAX",
+    "TRAVERSE_SEMANTIC_K_MAX",
+    "TRAVERSE_SESSION_TTL_S_MAX",
     "MemorySettings",
     "atoms_blob_root",
     "atoms_jsonl_path",
     "blob_relpath_for_atom",
     "clamp_semantic_wait_max_ms",
     "ensure_memory_dirs",
+    "is_directed_keep_enabled",
+    "is_directed_traversal_enabled",
     "ladder_dir",
     "lance_root",
     "memory_meta_path",

@@ -116,6 +116,31 @@ def test_default_settings_match_design():
     assert s.memory.parcel_threshold_chars == 8000
     assert s.memory.embed_media_max_bytes == 8_000_000
     assert s.memory.embed_media_max_seconds == 30
+    # Phase 2a directed traversal defaults OFF (KD-A10).
+    assert s.memory.directed_traversal_enabled is False
+    assert s.memory.directed_keep_enabled is False
+    assert s.memory.directed_keep_fraction == 0.08
+    assert s.memory.traverse_expand_max_ms == 80
+    assert s.memory.traverse_start_expand_max_ms == 0
+    assert s.memory.traverse_max_depth == 3
+    assert s.memory.traverse_max_nodes == 48
+    assert s.memory.traverse_max_steps == 8
+    assert s.memory.traverse_max_seeds == 8
+    assert s.memory.traverse_frontier_max == 16
+    assert s.memory.traverse_max_expand_per_step == 3
+    assert s.memory.traverse_keep_max == 16
+    assert s.memory.traverse_keep_adjacent is True
+    assert s.memory.traverse_session_ttl_s == 900
+    assert s.memory.traverse_label_chars == 80
+    assert s.memory.traverse_preview_chars == 400
+    assert s.memory.traverse_inspect_chars_per_id == 800
+    assert s.memory.traverse_inspect_max_ids == 4
+    assert s.memory.traverse_inspect_max_total_chars == 2400
+    assert s.memory.traverse_scratchpad_chars == 200
+    assert s.memory.traverse_parcel_child_cap == 32
+    assert s.memory.traverse_same_moment_k == 4
+    assert s.memory.traverse_semantic_k == 8
+    assert s.memory.traverse_allow_semantic_hops is True
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert not hasattr(s, "context_tokens")
@@ -551,6 +576,93 @@ semantic_wait_max_ms = 8000
     )
     s_off = load_settings(tmp_path)
     assert s_off.memory.semantic_wait_for_select is False
+
+
+def test_memory_traverse_settings_toml_and_validation(tmp_path):
+    """Phase 2a directed traversal knobs load + hard-max validation."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+directed_traversal_enabled = true
+directed_keep_enabled = true
+directed_keep_fraction = 0.10
+traverse_expand_max_ms = 120
+traverse_start_expand_max_ms = 100
+traverse_max_depth = 4
+traverse_max_nodes = 64
+traverse_max_steps = 10
+traverse_max_seeds = 12
+traverse_frontier_max = 20
+traverse_max_expand_per_step = 5
+traverse_keep_max = 20
+traverse_keep_adjacent = false
+traverse_session_ttl_s = 600
+traverse_label_chars = 100
+traverse_preview_chars = 500
+traverse_inspect_chars_per_id = 1000
+traverse_inspect_max_ids = 6
+traverse_inspect_max_total_chars = 3000
+traverse_scratchpad_chars = 300
+traverse_semantic_k = 10
+traverse_parcel_child_cap = 16
+traverse_same_moment_k = 2
+traverse_allow_semantic_hops = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.directed_traversal_enabled is True
+    assert s.memory.directed_keep_enabled is True
+    assert s.memory.directed_keep_fraction == 0.10
+    assert s.memory.traverse_expand_max_ms == 120
+    assert s.memory.traverse_start_expand_max_ms == 100
+    assert s.memory.traverse_max_depth == 4
+    assert s.memory.traverse_max_nodes == 64
+    assert s.memory.traverse_max_steps == 10
+    assert s.memory.traverse_keep_adjacent is False
+    assert s.memory.traverse_session_ttl_s == 600
+    assert s.memory.traverse_allow_semantic_hops is False
+
+    # Explicit false must not flip via or-default (past issue).
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+directed_traversal_enabled = false
+directed_keep_enabled = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s_off = load_settings(tmp_path)
+    assert s_off.memory.directed_traversal_enabled is False
+    assert s_off.memory.directed_keep_enabled is False
+
+    # Hard max rejects (design budgets table).
+    for key, bad in (
+        ("traverse_expand_max_ms", 501),
+        ("traverse_max_depth", 7),
+        ("traverse_max_nodes", 129),
+        ("traverse_max_steps", 17),
+        ("traverse_session_ttl_s", 3601),
+        ("traverse_label_chars", 161),
+        ("traverse_preview_chars", 801),
+        ("directed_keep_fraction", 1.5),
+    ):
+        (tmp_path / "elyra.toml").write_text(
+            f"[memory]\n{key} = {bad}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=f"memory\\.{key}"):
+            load_settings(tmp_path)
+
+    # Negative rejected.
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\ntraverse_max_steps = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.traverse_max_steps"):
+        load_settings(tmp_path)
 
 
 def test_load_settings_provider_and_usage_toml(tmp_path):

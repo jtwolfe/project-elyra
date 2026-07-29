@@ -477,6 +477,13 @@ class PresenceWorker:
         self._embed_catchup_marked: int = 0  # process-life OQ4 none→pending count
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
+        # Phase 2a directed traversal (PR-A2): process-local session registry.
+        # Flags default off — registry is inert until directed_traversal_enabled.
+        from elyra.memory.traverse import TraversalRegistry
+
+        self._traversal: TraversalRegistry = TraversalRegistry(
+            settings=self.settings.memory
+        )
 
         self._phase: str = PHASE_IDLE
         self._busy = False
@@ -1092,6 +1099,8 @@ class PresenceWorker:
                         self._idle_memory_joint_repair()
                         # ANN optimize OUTSIDE lock — never mid-hop (KD4).
                         self._idle_memory_optimize()
+                        # Phase 2a: abandon idle active TraversalSession (TTL).
+                        self._idle_traversal_ttl()
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
@@ -1335,6 +1344,68 @@ class PresenceWorker:
         with self._lock:
             snap = self._last_meal_snapshot
             return dict(snap) if isinstance(snap, dict) else None
+
+    # ------------------------------------------------------------------
+    # Phase 2a GraphView + TraversalSession (PR-A2)
+    # ------------------------------------------------------------------
+
+    @property
+    def traversal(self) -> Any:
+        """Process-local TraversalRegistry (tools inject via extras later)."""
+        return self._traversal
+
+    def graph_view(self) -> Any | None:
+        """Build a GraphView from the open store + warm embedder if available.
+
+        Never cold-loads torch. Returns None when the memory store is down.
+        Structural walks work without index/embedder; semantic hops require
+        a non-null index and already-warm embedder (GraphView policy).
+        """
+        store = self._ensure_memory_store()
+        if store is None:
+            return None
+        try:
+            from elyra.memory.graph import GraphView
+
+            mem_cfg = self.settings.memory
+            self._traversal.bind_settings(mem_cfg)
+            index = self._ensure_embedding_index()
+            # Warm only: never call open_encoder solely for graph hops.
+            embedder = self._embedder
+            if embedder is None and mem_cfg.embed_enabled:
+                # Only reuse if already opened elsewhere; do not force load.
+                pass
+            return GraphView(
+                store,
+                index=index,
+                embedder=embedder,
+                settings=mem_cfg,
+            )
+        except Exception:  # noqa: BLE001 — fail closed for tools/glass
+            _LOG.exception("graph_view factory failed")
+            return None
+
+    def _idle_traversal_ttl(self) -> None:
+        """Abandon active traversal session when idle past traverse_session_ttl_s."""
+        try:
+            self._traversal.bind_settings(self.settings.memory)
+            dropped = self._traversal.sweep_idle()
+            if dropped is not None:
+                _LOG.info(
+                    "traversal idle TTL: timed_out session_id=%s",
+                    dropped.session_id,
+                )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("traversal idle TTL sweep failed")
+
+    def _close_traversal_for_moment(self, moment_id: str | None) -> None:
+        """Moment end hygiene: abandon active; clear sticky keep + last_session."""
+        try:
+            self._traversal.on_moment_close(moment_id)
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "traversal moment-close cleanup failed moment_id=%s", moment_id
+            )
 
     def _record_last_meal_snapshot(
         self,
@@ -2035,6 +2106,9 @@ class PresenceWorker:
             if result and result.error:
                 self._worker_error = result.error
 
+            # Phase 2a: moment end clears active + sticky last_session/keep.
+            self._close_traversal_for_moment(moment_id)
+
         # After close (outside long critical sections): refresh 15m window for
         # the just-ended moment when atom writes or meal are active.
         self._finalize_memory_ladder_15m()
@@ -2205,6 +2279,7 @@ class PresenceWorker:
             self._phase = self._phase_from_pending_waits_unlocked()
             self._busy = False
             self._active_moment_id = None
+            self._close_traversal_for_moment(moment_id)
 
     @staticmethod
     def _close_browser_sessions_for_moment(moment_id: str) -> None:
@@ -2546,6 +2621,10 @@ class PresenceWorker:
             self._last_tool = None
             self._continue_injects = 0
             self._last_meal_snapshot = None
+            try:
+                self._traversal.reset()
+            except Exception:  # noqa: BLE001
+                _LOG.exception("traversal reset failed")
             self._phase = PHASE_IDLE
 
             pending = self._queue.pending()

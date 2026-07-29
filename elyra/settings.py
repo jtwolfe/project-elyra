@@ -24,6 +24,24 @@ from elyra.memory.config import (
     MEMORY_EMBED_BACKENDS,
     MEMORY_EMBED_DEVICES,
     MEMORY_SEARCH_CHANNELS,
+    TRAVERSE_EXPAND_MAX_MS_MAX,
+    TRAVERSE_FRONTIER_MAX_MAX,
+    TRAVERSE_INSPECT_CHARS_PER_ID_MAX,
+    TRAVERSE_INSPECT_MAX_IDS_MAX,
+    TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX,
+    TRAVERSE_KEEP_MAX_MAX,
+    TRAVERSE_LABEL_CHARS_MAX,
+    TRAVERSE_MAX_DEPTH_MAX,
+    TRAVERSE_MAX_EXPAND_PER_STEP_MAX,
+    TRAVERSE_MAX_NODES_MAX,
+    TRAVERSE_MAX_SEEDS_MAX,
+    TRAVERSE_MAX_STEPS_MAX,
+    TRAVERSE_PARCEL_CHILD_CAP_MAX,
+    TRAVERSE_PREVIEW_CHARS_MAX,
+    TRAVERSE_SAME_MOMENT_K_MAX,
+    TRAVERSE_SCRATCHPAD_CHARS_MAX,
+    TRAVERSE_SEMANTIC_K_MAX,
+    TRAVERSE_SESSION_TTL_S_MAX,
     MemorySettings,
 )
 from elyra.memory.embed.types import CHANNEL_SET
@@ -466,6 +484,48 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                 if ch not in normalized:
                     normalized.append(ch)
             coerced = tuple(normalized)
+        # Phase 2a directed traversal budgets (hard maxes — design table).
+        if path == "memory.directed_keep_fraction":
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path == "memory.traverse_min_expand_weight":
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path == "memory.traverse_temporal_half_life_hours" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        _traverse_int_caps = {
+            "memory.traverse_expand_max_ms": TRAVERSE_EXPAND_MAX_MS_MAX,
+            "memory.traverse_start_expand_max_ms": TRAVERSE_EXPAND_MAX_MS_MAX,
+            "memory.traverse_max_depth": TRAVERSE_MAX_DEPTH_MAX,
+            "memory.traverse_max_nodes": TRAVERSE_MAX_NODES_MAX,
+            "memory.traverse_max_steps": TRAVERSE_MAX_STEPS_MAX,
+            "memory.traverse_max_seeds": TRAVERSE_MAX_SEEDS_MAX,
+            "memory.traverse_frontier_max": TRAVERSE_FRONTIER_MAX_MAX,
+            "memory.traverse_max_expand_per_step": TRAVERSE_MAX_EXPAND_PER_STEP_MAX,
+            "memory.traverse_keep_max": TRAVERSE_KEEP_MAX_MAX,
+            "memory.traverse_session_ttl_s": TRAVERSE_SESSION_TTL_S_MAX,
+            "memory.traverse_label_chars": TRAVERSE_LABEL_CHARS_MAX,
+            "memory.traverse_preview_chars": TRAVERSE_PREVIEW_CHARS_MAX,
+            "memory.traverse_inspect_chars_per_id": TRAVERSE_INSPECT_CHARS_PER_ID_MAX,
+            "memory.traverse_inspect_max_ids": TRAVERSE_INSPECT_MAX_IDS_MAX,
+            "memory.traverse_inspect_max_total_chars": (
+                TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX
+            ),
+            "memory.traverse_scratchpad_chars": TRAVERSE_SCRATCHPAD_CHARS_MAX,
+            "memory.traverse_semantic_k": TRAVERSE_SEMANTIC_K_MAX,
+            "memory.traverse_parcel_child_cap": TRAVERSE_PARCEL_CHILD_CAP_MAX,
+            "memory.traverse_same_moment_k": TRAVERSE_SAME_MOMENT_K_MAX,
+        }
+        if path in _traverse_int_caps:
+            hi = _traverse_int_caps[path]
+            if coerced < 0 or coerced > hi:
+                raise ValueError(
+                    f"{path}: expected int in [0, {hi}], got {coerced!r}"
+                )
         filtered[k] = coerced
 
     # Cross-field usage constraints use the post-merge effective values.
