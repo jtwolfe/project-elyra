@@ -554,26 +554,107 @@ def test_neighbors_auto_resolves_text_only_corpus(paths):
         ids = [n["atom_id"] for n in body["neighbors"]]
         assert a2.atom_id in ids
 
-        # Explicit joint against text-only → no soft-fallback; empty + no_vector/no_hits.
+        # Explicit joint against text-only seed → no_vector (no encode_text invent).
         code, joint = h.get(
             f"/api/memory/vectors/neighbors?atom_id={a1.atom_id}&k=5&channel=joint"
         )
         assert code == 200, joint
         assert joint["query"]["resolved_channel"] == "joint"
         assert joint["query"]["channel_reason"] == "explicit"
-        # Seed has no emb_joint; encode_text fallback may still search joint
-        # corpus (empty) → no_hits, or omit no_vector if encode also cold.
-        if joint["neighbors"]:
-            # encode fallback found something unexpected — still ok if score_kind set
-            for n in joint["neighbors"]:
-                assert n.get("score_kind") == "cosine"
-        else:
-            assert joint["omitted_reason"] in (
-                "no_vector",
-                "no_hits",
-                "encode_failed",
-                "encoder",
+        assert joint["query"]["source"] == "atom"
+        assert joint["neighbors"] == []
+        assert joint["omitted_reason"] == "no_vector"
+        assert joint["count"] == 0
+    finally:
+        h.close()
+
+
+def test_neighbors_atom_id_no_encode_text_on_missing_channel(paths):
+    """Text-only seed + joint peer: channel=joint must not invent atom_text hits.
+
+    Repro from PR-R5 review Issue 1: encode_text soft path returned near-zero
+    cosine noise against joint corpus. Design: missing channel → no_vector.
+    """
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+        ),
+    )
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        seed = promote_wake_observation(
+            store,
+            "m_mix_seed",
+            content="mixed corpus text-only seed about cats",
+            message_id="msg_mix_seed",
+            settings=h.worker.settings.memory,
+        )
+        peer = promote_wake_observation(
+            store,
+            "m_mix_peer",
+            content="mixed corpus joint-only peer about dogs",
+            message_id="msg_mix_peer",
+            settings=h.worker.settings.memory,
+        )
+        assert seed and peer
+        emb = MockEmbedder()
+        h.worker._embedder = emb  # noqa: SLF001 — warm encoder must not change outcome
+        index = MemoryEmbeddingIndex(store, joint_repair_max_per_open=0)
+        h.worker._embedding_index = index  # noqa: SLF001
+
+        seed_text = tuple(l2_normalize(emb.encode_text(seed.content_text or "")))
+        peer_joint = tuple(
+            l2_normalize(emb.encode_text(f"joint|{peer.content_text or ''}"))
+        )
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=seed.atom_id,
+                emb_text=seed_text,
+                emb_joint=None,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
             )
+        )
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=peer.atom_id,
+                emb_text=None,
+                emb_joint=peer_joint,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
+            )
+        )
+
+        code, body = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={seed.atom_id}&k=5&channel=joint"
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["query"]["channel"] == "joint"
+        assert body["query"]["resolved_channel"] == "joint"
+        assert body["query"]["channel_reason"] == "explicit"
+        assert body["query"]["source"] == "atom"
+        assert body["query"]["source"] != "atom_text"
+        assert body["neighbors"] == []
+        assert body["count"] == 0
+        assert body["omitted_reason"] == "no_vector"
+
+        # Free-text q= still encodes and may hit joint peer (design-normative).
+        code, free = h.get(
+            "/api/memory/vectors/neighbors?"
+            + "q="
+            + urllib.parse.quote("joint|" + (peer.content_text or ""))
+            + "&k=5&channel=joint"
+        )
+        assert code == 200, free
+        assert free["query"]["source"] == "text"
+        assert free["omitted_reason"] in (None, "no_hits") or free["count"] >= 0
     finally:
         h.close()
 

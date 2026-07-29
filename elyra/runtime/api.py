@@ -1230,48 +1230,35 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if atom_id:
             # Query vector for concrete resolved channel only (no cross-channel
-            # soft-fallback — aligns seed with corpus search).
+            # soft-fallback, no encode_text invent — PR-R5 review Issue 1).
+            # Missing channel vector → omitted_reason=no_vector (empty neighbors).
+            # Free-text q= keeps encode_text; atom_id uses stored vectors only.
             query_vec, omit_reason = query_vector_for_atom(
                 atom_id,
                 index=index,
                 store=store,
                 channel=resolved_channel,
             )
-            if query_vec is None and store is not None:
-                # Fall back: encode atom content_text when encoder is warm.
-                try:
-                    atom = store.get_atom(atom_id)
-                except Exception:  # noqa: BLE001
-                    atom = None
-                if atom is None:
-                    self._json(
-                        404,
-                        {
-                            "ok": False,
-                            "error": "atom not found",
-                            "neighbors": [],
-                            "memory": flags,
-                            "query": _query_block(source=source),
-                        },
-                    )
-                    return
-                text = (atom.content_text or "").strip()
-                if text and embedder is None:
-                    ensure_emb = getattr(self.worker, "_ensure_embedder", None)
-                    if callable(ensure_emb):
-                        try:
-                            embedder = ensure_emb()
-                        except Exception:  # noqa: BLE001
-                            embedder = None
-                if text and embedder is not None:
+            if query_vec is None:
+                omit_reason = omit_reason or "no_vector"
+                # 404 only when the atom itself is missing (not merely unembedded).
+                if store is not None:
                     try:
-                        query_vec = list(embedder.encode_text(text))
-                        omit_reason = None
-                        source = "atom_text"
+                        atom = store.get_atom(atom_id)
                     except Exception:  # noqa: BLE001
-                        omit_reason = "encode_failed"
-                elif query_vec is None:
-                    omit_reason = omit_reason or "no_vector"
+                        atom = None
+                    if atom is None:
+                        self._json(
+                            404,
+                            {
+                                "ok": False,
+                                "error": "atom not found",
+                                "neighbors": [],
+                                "memory": flags,
+                                "query": _query_block(source=source),
+                            },
+                        )
+                        return
         else:
             # Free-text query — encode_text then search resolved channel.
             if embedder is None:
