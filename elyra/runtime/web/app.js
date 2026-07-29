@@ -2295,6 +2295,15 @@ function renderMemoryContext(data) {
     memoryContextBody.appendChild(p);
   }
 
+  // PR-A3: one muted line for directed_keep omit / pack meta.
+  const dkLine = formatDirectedKeepLine(meal);
+  if (dkLine) {
+    const p = document.createElement("p");
+    p.className = "muted memory-directed-keep-meta";
+    p.textContent = dkLine;
+    memoryContextBody.appendChild(p);
+  }
+
   // Fixed system/orient if present.
   const fixed = meal.fixed || {};
   for (const key of ["system", "orient"]) {
@@ -2347,6 +2356,33 @@ function formatSemanticSelectLine(meal) {
     parts.push("matched but already in temporal/episodic");
   } else if (reason === "no_hits" && sm && sm.channel) {
     parts.push(`no candidates on ${sm.channel}`);
+  }
+  return parts.join(" · ");
+}
+
+/** One muted Context line: directed_keep omit / pack (PR-A3). */
+function formatDirectedKeepLine(meal) {
+  if (!meal) return "";
+  const reason = meal.directed_keep_omitted_reason || null;
+  const dm = meal.directed_keep_meta || null;
+  if (!reason && !dm) return "";
+  const parts = ["directed_keep"];
+  if (reason) {
+    parts.push(`omitted (${reason})`);
+  } else if (dm && dm.packed != null) {
+    parts.push(`packed=${dm.packed}`);
+  }
+  if (dm && dm.keep_ids_in != null) {
+    parts.push(`keeps_in=${dm.keep_ids_in}`);
+  }
+  if (reason === "deduped") {
+    parts.push("already in temporal/episodic/semantic");
+  } else if (reason === "disabled") {
+    parts.push("flag off");
+  } else if (reason === "empty") {
+    parts.push("no confirmed keep-set");
+  } else if (reason === "budget") {
+    parts.push("cap too small");
   }
   return parts.join(" · ");
 }

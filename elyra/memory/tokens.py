@@ -1,9 +1,10 @@
-"""Token estimate and meal budget helpers (Phase 1 + Phase 2 semantic).
+"""Token estimate and meal budget helpers (Phase 1–2a).
 
 Scope: ``len//4`` heuristic matching ``elyra.loop.context.estimate_tokens``;
 section budget split after fixed system+orient cost.
-In scope: pure math, no I/O; ``split_memory_budget`` (Phase 1) and
-``split_memory_budget_v2`` (Phase 2 semantic channel + temporal floor).
+In scope: pure math, no I/O; ``split_memory_budget`` (Phase 1),
+``split_memory_budget_v2`` (Phase 2 semantic), ``split_memory_budget_v3``
+(Phase 2a directed_keep + temporal floor).
 Out of scope: multimodal content estimates (media expand lives in meal).
 """
 
@@ -122,10 +123,101 @@ def split_memory_budget_v2(
     return fixed, semantic_cap, episodic_cap, temporal_cap
 
 
+def split_memory_budget_v3(
+    budget_tokens: int,
+    *,
+    system_text: str = "",
+    orient_text: str = "",
+    semantic_enabled: bool = False,
+    directed_keep_active: bool = False,
+    semantic_fraction: float = 0.12,
+    directed_keep_fraction: float = 0.08,
+    episodic_fraction: float = 0.20,
+    episodic_fraction_with_semantic: float = 0.18,
+    temporal_min_fraction: float = 0.55,
+) -> tuple[int, int, int, int, int]:
+    """Split meal budget: fixed + semantic + directed_keep + episodic + temporal.
+
+    Returns
+    ``(fixed, semantic_cap, directed_keep_cap, episodic_cap, temporal_cap)``.
+
+    When ``directed_keep_active`` is false, delegates to
+    :func:`split_memory_budget_v2` bit-identically (``directed_keep_cap=0``).
+    Active means flag on **and** a non-empty last-confirmed keep-set (caller).
+
+    When active, applies ``directed_keep_fraction`` of residual R. Episodic
+    uses ``episodic_fraction_with_semantic`` when semantic is also on, else
+    Phase-1 ``episodic_fraction``. Temporal floor cut order (KD-A7)::
+
+        semantic → directed_keep → episodic
+
+    Invariant after clamp::
+
+        semantic + directed_keep + episodic + temporal == remaining
+    """
+    if not directed_keep_active:
+        fixed, sem, epi, temp = split_memory_budget_v2(
+            budget_tokens,
+            system_text=system_text,
+            orient_text=orient_text,
+            semantic_enabled=semantic_enabled,
+            semantic_fraction=semantic_fraction,
+            episodic_fraction=episodic_fraction,
+            episodic_fraction_with_semantic=episodic_fraction_with_semantic,
+            temporal_min_fraction=temporal_min_fraction,
+        )
+        return fixed, sem, 0, epi, temp
+
+    fixed = estimate_tokens(system_text) + estimate_tokens(orient_text)
+    remaining = max(0, int(budget_tokens) - fixed)
+    if remaining == 0:
+        return fixed, 0, 0, 0, 0
+
+    dk_f = _clamp01(directed_keep_fraction)
+    t_min = _clamp01(temporal_min_fraction)
+
+    if semantic_enabled:
+        semantic_cap = int(remaining * _clamp01(semantic_fraction))
+        directed_keep_cap = int(remaining * dk_f)
+        episodic_cap = int(remaining * _clamp01(episodic_fraction_with_semantic))
+    else:
+        semantic_cap = 0
+        directed_keep_cap = int(remaining * dk_f)
+        episodic_cap = int(remaining * _clamp01(episodic_fraction))
+
+    temporal_cap = remaining - semantic_cap - directed_keep_cap - episodic_cap
+
+    # Floor: cut supports semantic → directed_keep → episodic (never steal
+    # temporal below floor while residual allows).
+    floor = int(remaining * t_min)
+    if temporal_cap < floor:
+        deficit = floor - temporal_cap
+        take = min(deficit, semantic_cap)
+        semantic_cap -= take
+        deficit -= take
+        take = min(deficit, directed_keep_cap)
+        directed_keep_cap -= take
+        deficit -= take
+        take = min(deficit, episodic_cap)
+        episodic_cap -= take
+        deficit -= take
+        temporal_cap = (
+            remaining - semantic_cap - directed_keep_cap - episodic_cap
+        )
+        if temporal_cap < floor:
+            semantic_cap = 0
+            directed_keep_cap = 0
+            episodic_cap = 0
+            temporal_cap = remaining
+
+    return fixed, semantic_cap, directed_keep_cap, episodic_cap, temporal_cap
+
+
 __all__ = [
     "DEFAULT_MEAL_BUDGET_TOKENS",
     "EPISODIC_SUMMARY_SHARE",
     "estimate_tokens",
     "split_memory_budget",
     "split_memory_budget_v2",
+    "split_memory_budget_v3",
 ]

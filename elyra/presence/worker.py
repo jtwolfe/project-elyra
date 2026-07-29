@@ -1407,6 +1407,25 @@ class PresenceWorker:
                 "traversal moment-close cleanup failed moment_id=%s", moment_id
             )
 
+    def _last_confirmed_keep_for_meal(
+        self, moment_id: str | None = None
+    ) -> tuple[list[str], str | None]:
+        """Thin keep-set for next compose_meal (KD-A16 — no soft re-outer).
+
+        Returns ``(keep_ids, walk_summary_nl)`` from sticky
+        ``last_confirmed_keep`` only (not active provisional keeps).
+        """
+        try:
+            snap = self._traversal.get_last_confirmed_keep(moment_id)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("read last_confirmed_keep for meal failed")
+            return [], None
+        if snap is None:
+            return [], None
+        ids = [str(i) for i in (snap.keep_ids or ()) if i]
+        summary = (snap.walk_summary_nl or "").strip() or None
+        return ids, summary
+
     def _record_last_meal_snapshot(
         self,
         package: Any,
@@ -1949,6 +1968,11 @@ class PresenceWorker:
                     if mem_cfg.semantic_enabled:
                         meal_index = self._ensure_embedding_index()
                         meal_embedder = self._embedder
+                    # PR-A3 / KD-A16: directed_keep from last_confirmed_keep on
+                    # next natural compose only (no soft re-outer on finish).
+                    dk_ids, dk_summary = self._last_confirmed_keep_for_meal(
+                        moment_id
+                    )
                     package = compose_meal(
                         self._memory,
                         open_moment_id=moment_id,
@@ -1958,6 +1982,8 @@ class PresenceWorker:
                         settings=mem_cfg,
                         index=meal_index,
                         embedder=meal_embedder,
+                        directed_keep_ids=dk_ids or None,
+                        directed_keep_summary=dk_summary,
                     )
                     self._record_last_meal_snapshot(
                         package,
@@ -1976,6 +2002,8 @@ class PresenceWorker:
                         package=package,
                         index=meal_index,
                         embedder=meal_embedder,
+                        directed_keep_ids=dk_ids or None,
+                        directed_keep_summary=dk_summary,
                     )
                     expanded = expand_memory_meal_for_provider(
                         meal,

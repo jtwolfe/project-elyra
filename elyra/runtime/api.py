@@ -778,6 +778,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             loop = self.worker.settings.loop
             budget = int(getattr(loop, "sliding_input_tokens", 50_000))
             # Avoid loading full prompts on inspect poll — empty fixed cost.
+            # Include last_confirmed keep so Context can show directed_keep.
+            dk_ids: list[str] = []
+            dk_summary: str | None = None
+            try:
+                dk_ids, dk_summary = self.worker._last_confirmed_keep_for_meal(  # noqa: SLF001
+                    str(open_mid) if open_mid else None
+                )
+            except Exception:  # noqa: BLE001
+                dk_ids, dk_summary = [], None
             package = compose_meal(
                 store,
                 open_moment_id=str(open_mid) if open_mid else None,
@@ -785,6 +794,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 system_text="",
                 orient_text="",
                 settings=mem_cfg,
+                directed_keep_ids=dk_ids or None,
+                directed_keep_summary=dk_summary,
             )
             return meal_package_to_inspect(
                 package,

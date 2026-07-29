@@ -2,9 +2,11 @@
 
 Scope: pure package assembly over MemoryStore (mock-friendly). Phase 1
 deterministic episodic selection (KD17); Phase 2 supporting semantic channel
-(KD1/KD10/KD11/KD20); slide-off never deletes store atoms.
-In scope: MealItem/MealPackage, select_episodic, select_semantic, slide-off,
-compose_meal, compose_outer_messages, expand_memory_meal_for_provider.
+(KD1/KD10/KD11/KD20); Phase 2a directed_keep (KD-A7/A8/A16); slide-off never
+deletes store atoms.
+In scope: MealItem/MealPackage, select_episodic, select_semantic,
+select_directed_keep, slide-off, compose_meal, compose_outer_messages,
+expand_memory_meal_for_provider.
 Out of scope: promote, presence/loop drop-in (rebuild_outer lives in worker).
 """
 
@@ -18,13 +20,13 @@ from typing import Any, Mapping, Sequence
 
 _LOG = logging.getLogger(__name__)
 
-from elyra.memory.config import MemorySettings
+from elyra.memory.config import MemorySettings, is_directed_keep_enabled
 from elyra.memory.store import MemoryStore
 from elyra.memory.tokens import (
     DEFAULT_MEAL_BUDGET_TOKENS,
     EPISODIC_SUMMARY_SHARE,
     estimate_tokens,
-    split_memory_budget_v2,
+    split_memory_budget_v3,
 )
 from elyra.memory.types import (
     PERIOD_SCALE_ORDER,
@@ -75,13 +77,19 @@ SEMANTIC_OMIT_MIN_SCORE = "min_score"
 SEMANTIC_OMIT_NO_HITS = "no_hits"
 SEMANTIC_OMIT_DEDUPED = "deduped"
 
+# directed_keep omit reasons (Phase 2a / PR-A3).
+DIRECTED_KEEP_OMIT_DISABLED = "disabled"
+DIRECTED_KEEP_OMIT_EMPTY = "empty"
+DIRECTED_KEEP_OMIT_DEDUPED = "deduped"
+DIRECTED_KEEP_OMIT_BUDGET = "budget"
+
 
 @dataclass(frozen=True)
 class MealItem:
     """One labeled row or section fragment in the meal package."""
 
     atom_id: str | None  # None for ephemeral compact / multi-atom blocks
-    channel: str  # temporal | episodic | semantic | orient | system | chain
+    channel: str  # temporal | episodic | semantic | directed_keep | orient | system | chain
     label: str  # e.g. "temporal/moment", "episodic/summary 1h", "semantic"
     role: str  # user | assistant | system
     content: str
@@ -106,6 +114,9 @@ class MealPackage:
     semantic_omitted_reason: str | None = None
     # PR-R2: channel + hit counters from select_semantic (additive).
     semantic_select_meta: dict[str, Any] | None = None
+    # PR-A3: directed_keep omit reason + pack meta (additive).
+    directed_keep_omitted_reason: str | None = None
+    directed_keep_meta: dict[str, Any] | None = None
 
 
 def moment_id_short(moment_id: str | None) -> str:
@@ -1328,6 +1339,159 @@ def _probe_deduped_against_exclude(
 
 
 # ---------------------------------------------------------------------------
+# Directed-keep selection (Phase 2a — confirmed keep-set only)
+# ---------------------------------------------------------------------------
+
+
+def select_directed_keep(
+    store: MemoryStore,
+    *,
+    keep_ids: Sequence[str] | None,
+    walk_summary: str | None = None,
+    cap_tokens: int,
+    settings: MemorySettings | None = None,
+    exclude_atom_ids: set[str] | None = None,
+    enabled: bool | None = None,
+) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
+    """Pack confirmed keep-set atoms as the ``directed_keep`` meal channel.
+
+    Returns ``(items, omitted_reason, meta)``. Keep order is preserved.
+    Parcel ids map to parent (KD21). Dedupe drops ids already in temporal /
+    episodic / semantic (caller supplies ``exclude_atom_ids``). Prepends a
+    single summary item when ``walk_summary`` is non-empty and fits.
+
+    Omit reasons: ``disabled`` / ``empty`` / ``deduped`` / ``budget``.
+    """
+    cfg = settings or MemorySettings()
+    channel_on = (
+        bool(enabled)
+        if enabled is not None
+        else is_directed_keep_enabled(cfg)
+    )
+    cap = max(0, int(cap_tokens))
+    ids = [str(i).strip() for i in (keep_ids or ()) if str(i or "").strip()]
+    exclude: set[str] = set(exclude_atom_ids or ())
+    summary = (walk_summary or "").strip()
+
+    def _meta(**extra: Any) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "keep_ids_in": len(ids),
+            "packed": 0,
+            "deduped": 0,
+            "missing": 0,
+            "cap_tokens": cap,
+            "enabled": channel_on,
+        }
+        base.update(extra)
+        return base
+
+    if not channel_on:
+        return [], DIRECTED_KEEP_OMIT_DISABLED, _meta()
+
+    if not ids:
+        return [], DIRECTED_KEEP_OMIT_EMPTY, _meta()
+
+    if cap <= 0:
+        return [], DIRECTED_KEEP_OMIT_BUDGET, _meta()
+
+    atom_items: list[MealItem] = []
+    used = 0
+    deduped = 0
+    missing = 0
+    skipped_budget = 0
+    candidates = 0  # loadable non-excluded keeps considered for pack
+    seen: set[str] = set(exclude)
+
+    # Reserve summary first when present so atom lines pack under remaining.
+    summary_item: MealItem | None = None
+    if summary:
+        summary_item = _item_from_parts(
+            atom_id=None,
+            channel="directed_keep",
+            label="directed-keep/summary",
+            content=summary,
+            meta={"kind": "walk_summary"},
+        )
+        if summary_item.token_estimate <= cap:
+            used = summary_item.token_estimate
+        else:
+            summary_item = None  # cannot afford summary; try atoms alone
+
+    for aid in ids:
+        if aid in seen:
+            deduped += 1
+            continue
+        try:
+            atom = store.get_atom(aid)
+        except Exception:  # noqa: BLE001
+            atom = None
+        if atom is None:
+            missing += 1
+            continue
+
+        parent, via_parcel = _map_parcel_to_parent(store, atom)
+        if parent is None:
+            missing += 1
+            continue
+        if parent.kind in ("moment_meta", "summary"):
+            missing += 1
+            continue
+        if parent.atom_id in seen:
+            deduped += 1
+            continue
+
+        candidates += 1
+        label = (
+            "directed-keep/parcel→parent" if via_parcel else "directed-keep"
+        )
+        body = format_atom_line(parent)
+        item = _item_from_parts(
+            atom_id=parent.atom_id,
+            channel="directed_keep",
+            label=label,
+            content=body,
+            t_start=parent.t_start,
+            meta={
+                "via_parcel": via_parcel,
+                "hit_atom_id": atom.atom_id,
+                "kind": parent.kind,
+                "moment_id": parent.moment_id,
+            },
+        )
+        if used + item.token_estimate > cap:
+            skipped_budget += 1
+            continue
+        atom_items.append(item)
+        seen.add(parent.atom_id)
+        used += item.token_estimate
+
+    meta = _meta(
+        packed=len(atom_items),
+        deduped=deduped,
+        missing=missing,
+        skipped_budget=skipped_budget,
+        summary_packed=False,
+        tokens_used=used if atom_items or summary_item else 0,
+    )
+
+    if atom_items:
+        packed: list[MealItem] = []
+        if summary_item is not None:
+            packed.append(summary_item)
+            meta["summary_packed"] = True
+        packed.extend(atom_items)
+        meta["tokens_used"] = sum(i.token_estimate for i in packed)
+        return packed, None, meta
+
+    # No atom bodies packed — honest omit (summary alone is not a channel fill).
+    if candidates == 0 and deduped > 0:
+        return [], DIRECTED_KEEP_OMIT_DEDUPED, meta
+    if candidates == 0:
+        return [], DIRECTED_KEEP_OMIT_EMPTY, meta
+    return [], DIRECTED_KEEP_OMIT_BUDGET, meta
+
+
+# ---------------------------------------------------------------------------
 # Compose
 # ---------------------------------------------------------------------------
 
@@ -1344,16 +1508,18 @@ def compose_meal(
     open_moment_atoms: Sequence[Atom] | None = None,
     index: Any | None = None,
     embedder: Any | None = None,
+    directed_keep_ids: Sequence[str] | None = None,
+    directed_keep_summary: str | None = None,
 ) -> MealPackage:
-    """Compose labeled temporal + episodic [+ semantic] package under budget.
+    """Compose labeled temporal + episodic [+ semantic] [+ directed_keep] package.
 
     Does not load prompts; pass ``system_text`` / ``orient_text`` for fixed cost.
     Does **not** mutate the store (slide-off is meal-only).
 
-    When ``settings.semantic_enabled`` is false, Phase 1 budget math and
-    channels only (golden parity). When true, ``split_memory_budget_v2`` and
-    optional ``select_semantic`` (pass ``index`` / warm ``embedder``).
-    Message order (KD10): episodic → semantic → temporal.
+    When ``settings.semantic_enabled`` is false and directed_keep inactive,
+    Phase 1/2 budget math (golden parity). ``directed_keep_active`` requires
+    effective keep flag **and** non-empty ``directed_keep_ids`` (KD-A7).
+    Message order (KD-A8): episodic → semantic → directed_keep → temporal.
     """
     cfg = settings or MemorySettings()
     if now is None:
@@ -1362,12 +1528,30 @@ def compose_meal(
         now = utc_now_iso()
     now_dt = parse_iso_z(now)
 
-    _fixed, semantic_cap, episodic_cap, temporal_cap = split_memory_budget_v2(
+    keep_ids_list = [
+        str(i).strip()
+        for i in (directed_keep_ids or ())
+        if str(i or "").strip()
+    ]
+    dk_flag = is_directed_keep_enabled(cfg)
+    directed_keep_active = dk_flag and bool(keep_ids_list)
+
+    (
+        _fixed,
+        semantic_cap,
+        directed_keep_cap,
+        episodic_cap,
+        temporal_cap,
+    ) = split_memory_budget_v3(
         budget_tokens,
         system_text=system_text,
         orient_text=orient_text,
         semantic_enabled=bool(cfg.semantic_enabled),
+        directed_keep_active=directed_keep_active,
         semantic_fraction=cfg.semantic_fraction,
+        directed_keep_fraction=float(
+            getattr(cfg, "directed_keep_fraction", 0.08) or 0.08
+        ),
         episodic_fraction=cfg.episodic_fraction,
         episodic_fraction_with_semantic=cfg.episodic_fraction_with_semantic,
         temporal_min_fraction=cfg.temporal_min_fraction,
@@ -1435,8 +1619,34 @@ def compose_meal(
             exclude_atom_ids=exclude,
         )
 
-    # Message order (KD10): episodic → semantic → temporal (compact in temporal).
-    items = list(episodic_items) + list(semantic_items) + list(temporal_items)
+    # Directed-keep supporting channel (Phase 2a) — after semantic so
+    # semantic wins same-id dedupe (KD-A8 priority).
+    directed_items: list[MealItem] = []
+    directed_omitted: str | None = None
+    directed_meta: dict[str, Any] | None = None
+    # Always surface meta when flag on (even empty keep) so glass can show
+    # omit reason; when flag off and no ids, leave meta None for Phase 1/2 parity.
+    if dk_flag or keep_ids_list:
+        exclude_dk = open_ids | _atom_ids_in_meal_items(episodic_items)
+        exclude_dk |= _atom_ids_in_meal_items(temporal_items)
+        exclude_dk |= _atom_ids_in_meal_items(semantic_items)
+        directed_items, directed_omitted, directed_meta = select_directed_keep(
+            store,
+            keep_ids=keep_ids_list,
+            walk_summary=directed_keep_summary,
+            cap_tokens=directed_keep_cap if directed_keep_active else 0,
+            settings=cfg,
+            exclude_atom_ids=exclude_dk,
+            enabled=dk_flag,
+        )
+
+    # Message order (KD-A8): episodic → semantic → directed_keep → temporal.
+    items = (
+        list(episodic_items)
+        + list(semantic_items)
+        + list(directed_items)
+        + list(temporal_items)
+    )
     total = sum(i.token_estimate for i in items)
     channels = tuple(dict.fromkeys(i.channel for i in items))
 
@@ -1449,6 +1659,8 @@ def compose_meal(
         open_moment_id=open_moment_id,
         semantic_omitted_reason=semantic_omitted,
         semantic_select_meta=semantic_meta,
+        directed_keep_omitted_reason=directed_omitted,
+        directed_keep_meta=directed_meta,
     )
 
 
@@ -1507,8 +1719,10 @@ def compose_outer_messages(
     package: MealPackage | None = None,
     index: Any | None = None,
     embedder: Any | None = None,
+    directed_keep_ids: Sequence[str] | None = None,
+    directed_keep_summary: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Build outer message list: system → episodic → semantic → temporal → orient.
+    """Build outer message list: system → epi → sem → directed_keep → temp → orient.
 
     Chain (tool hops) is owned by doloop and is **not** included here.
     Pass prebuilt ``package`` to avoid re-compose when caller already has one.
@@ -1525,6 +1739,8 @@ def compose_outer_messages(
             open_moment_atoms=open_moment_atoms,
             index=index,
             embedder=embedder,
+            directed_keep_ids=directed_keep_ids,
+            directed_keep_summary=directed_keep_summary,
         )
 
     messages: list[dict[str, Any]] = []
@@ -1749,6 +1965,10 @@ def expand_memory_meal_for_provider(
 
 
 __all__ = [
+    "DIRECTED_KEEP_OMIT_BUDGET",
+    "DIRECTED_KEEP_OMIT_DEDUPED",
+    "DIRECTED_KEEP_OMIT_DISABLED",
+    "DIRECTED_KEEP_OMIT_EMPTY",
     "EPISODIC_MAX_PRIOR_MOMENTS",
     "SEMANTIC_OMIT_DEDUPED",
     "SEMANTIC_OMIT_EMPTY_SEED",
@@ -1767,6 +1987,7 @@ __all__ = [
     "format_atom_line",
     "meal_item_to_message",
     "moment_id_short",
+    "select_directed_keep",
     "select_episodic",
     "select_semantic",
     "slide_off_temporal",
