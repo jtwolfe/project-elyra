@@ -112,8 +112,10 @@ const brandNameEl = $("#brand-name");
 const brandSubEl = $("#brand-sub");
 const sessionUserSelect = $("#session-user-select");
 const sessionNewGuestBtn = $("#session-new-guest-btn");
+// Styled switch class is shared; exclude non-continuous controls so their
+// change handlers stay on their own PATCH paths (BUG-status-02 / #77).
 const continuousToggles = document.querySelectorAll(
-  ".continuous-toggle:not(#usage-override-toggle)"
+  ".continuous-toggle:not(#usage-override-toggle):not(#dev-speed-toggle):not(#semantic-wait-toggle)"
 );
 const continuousMetaEls = [$("#continuous-status-rail")].filter(Boolean);
 const continuousSummary = $("#continuous-summary");
