@@ -976,7 +976,7 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 | **Severity now** | — (resolved) |
 | **Severity later** | Monitor cost/latency at 250k; optional ceiling via override |
 | **Area** | `meal_budget_fraction`, `sliding_input_tokens`, meal compose budget, `in_turn_max_tokens`, glass context rail |
-| **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §5.6 |
+| **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §5.6 |; **product implement:** [`design-instance-continuity-product-implement.md`](stretch-2/design-instance-continuity-product-implement.md)
 
 ### Goal
 

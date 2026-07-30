@@ -18,6 +18,8 @@
 
 ---
 
+> **Superseded for implementation by** [`design-instance-continuity-product-implement.md`](design-instance-continuity-product-implement.md) (full product implement design + PR plan, 2026-07-30). Keep this sketch as historical S1–S6 outline only.
+
 ## Overview
 
 This document is the **implementation contract** for `/execute-plan` on **instance continuity**. It does **not** re-litigate fault isolation from the review report. It turns the refined product draft into an ordered product PR DAG (S1–S6) with:
