@@ -19,7 +19,7 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 
 Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md).
 
-**Programme name (working):** *Project Elyra — Committee of Self-Development* (runtime stays “Elyra”; branding open with Colin — see governance §6).
+**Programme name (working):** *Project Elyra — Autopoiesis Commons* (runtime stays “Elyra”; short label *Autopoiesis Commons* / *Elyra AC* — see [governance §6](development-governance.md#6-naming--project-identity)).
 
 ---
 
@@ -362,9 +362,9 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 
 ## 7. Immediate checklist (promotion program)
 
-- [ ] Create GitHub Project (**Committee of Self-Development** programme label) + **v0.1** milestone; seed issues from §3.3  
+- [ ] Create GitHub Project **Project Elyra — Autopoiesis Commons** + **v0.1** milestone; seed issues from §3.3  
 - [ ] Stage 1 process: light `main` protection, branch hygiene, link [development-governance.md](development-governance.md)  
-- [ ] Agree with Colin: programme name, review/promote roles, dual-instance operating pins  
+- [ ] Confirm with Colin: programme name, review/promote roles, dual-instance operating pins  
 - [ ] Refresh [project-status-pass.md](../project-status-pass.md) or replace with link to this folder  
 - [ ] Branch FF/merge plan: product tip includes memory + radeon dogfood  
 - [ ] Dogfood: Phase 2 semantic smoke; moment encode; note chat-chain inclusion  

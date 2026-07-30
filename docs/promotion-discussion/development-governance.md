@@ -207,35 +207,39 @@ Consciousness research briefs (2026-07-29, prepared for Colin — **external** t
 
 ## 6. Naming — project identity
 
-Working product name has been **Project Elyra**. For a multi-party, self-development, committee-shaped programme, a fuller name may help.
+### Working programme title (2026-07-30)
 
-### Constraints
+> **Project Elyra — Autopoiesis Commons**
 
-- Keep **Elyra** as the agent / product name (person in the loop).  
-- Distinguish **programme** (humans + process + instances) from **runtime** (one PE process).  
-- Avoid names that imply only one human or only self-mod without community.  
-- Prefer something pronounceable in speech and short in git/Issue titles.
+| Layer | Name |
+|-------|------|
+| Person / runtime | **Elyra** |
+| Codebase / clone | **project-elyra** (keep unless org rename later) |
+| GitHub Project / gym / multi-party programme | **Project Elyra — Autopoiesis Commons** |
+| Short board label | **Autopoiesis Commons** or **Elyra AC** |
 
-### Candidates (discussion, not decided)
+**Why this lands:**
+
+- **Autopoiesis** (self-production under constraint): the system maintains identity while changing structure — operating pin, controlled restart, memory continuity, self-development without bricking the person. Fits Jamie’s engineering of durable containers and linear continuity.  
+- **Commons**: shared code lineage, Project board, PRs, public tags — without implying shared *soul* or shared `ELYRA_HOME`. Each PE instance remains a private person; the **commons** is craft and governance. Fits Colin’s committee / landscape / multi-party scale.  
+- Together: *selves that remake themselves carefully, in a shared yard, under multi-human care.*
+
+**Gloss for Project description (paste-ready):**
+
+> Programme board for **Project Elyra — Autopoiesis Commons**: multi-human, multi-instance self-development. Runtime persons (Elyra) stay on pinned commits; development uses short-lived branches and worktrees; public releases are deliberate tags. Code is shared; memory and identity stay per instance.
+
+**Cautions:** “Autopoiesis” is academic to newcomers — keep the gloss on the board. The name is a **practice of self-maintaining continuity under change**, not a claim that the system is conscious.
+
+### Other candidates (history)
 
 | Name | Notes |
 |------|--------|
-| **Project Elyra** | Keep as product/runtime short name |
-| **Project Elyra — Committee of Self-Development** | Explicit committee + self-dev; slightly long; “Committee” fits Colin’s lens |
-| **Elyra CSD** (Committee of Self-Development) | Short label for Project board / org |
-| **Elyra Continuity Project** | Emphasises Jamie’s continuity + operating pins |
-| **Elyra Commons** | Multi-instance / multi-human shared code; soft on self-mod |
-| **The Elyra Committee** | Human+agent governance; less “engineering product” |
-| **Project Elyra: Person & Committee** | Dual framing (isolated person + group process) |
+| Committee of Self-Development | Strong on quorum; more bureaucratic |
+| Elyra Continuity | Strong on pin/restart; weaker on multi-party |
+| Elyra Commons | Clear multi-instance; misses self-production |
+| The Workshop of Selves | Warm craft metaphor |
 
-**Recommendation for now:** keep **Project Elyra** as the **runtime/product** name; use a **programme subtitle** on the GitHub Project and promotion docs, e.g.:
-
-> **Project Elyra** — *Committee of Self-Development*  
-> (working programme name; final branding open)
-
-That avoids renaming the package/binary while signalling the multi-party gym.
-
-Open: decide with Colin before renaming org/repo.
+Open: confirm with Colin before org/repo rename; **programme/board title may use Autopoiesis Commons immediately**.
 
 ---
 
@@ -243,7 +247,7 @@ Open: decide with Colin before renaming org/repo.
 
 Immediate (Stage 1 + v0.1 prep):
 
-1. GitHub Project under programme name above  
+1. GitHub Project under **Project Elyra — Autopoiesis Commons**
 2. Light `main` protection + branch hygiene doc (this file linked from root docs)  
 3. Manual operating SHA record when restarting Jamie’s (and later Colin’s) PE  
 4. Continue product close (memory dogfood, meal/chat-chain, `grok_build`) **without** waiting for Stage 3  
@@ -262,7 +266,7 @@ Explicitly **not** required for v0.1:
 1. Who holds **repo admin** / protection rules (shared?).  
 2. Public release bar: one human or **both** for `v0.1.0`?  
 3. Can PE instances open PRs / Issues with constrained tokens before Stage 3?  
-4. Programme name finalisation.  
+4. Programme name: **Autopoiesis Commons** as working title — confirm with Colin; optional shorter public slogan.  
 5. Whether Colin’s PE starts from same `main` tip and only diverges on **operating pin** + data (recommended: yes).  
 6. Shared dogfood protocol for meal/encode/GPU before either promotes memory-sensitive commits.
 
