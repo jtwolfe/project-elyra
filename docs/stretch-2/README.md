@@ -160,6 +160,8 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
 | [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | **Soft guidance** — IIT/sheaf/holographic and reconstructive influences; not goals |
 | [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — open moment vs episodic, slide-off, labels, dedup, re-gather |
+| [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md) | **Draft** instance continuity for #93 — glass-tail + sticky directed keep + path parity |
+| [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) | **Executable review methodology** (inspection + fault isolation) refining the #93 draft — not product code |
 | [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
 | [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |

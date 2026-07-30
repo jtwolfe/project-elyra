@@ -256,6 +256,14 @@ Even with a good outer meal, `enforce_in_turn_budget` can drop/compress oldest c
 4. **Design option C:** on moment continue / social wake, seed temporal from last K glass messages.  
 5. Do not fix by only raising budget if the **selection set** excludes chat (larger budget won’t pull missing channels).
 
+### 4.7 Design draft (2026-07-30) — #93 expanded
+
+Normative draft for **instance continuity** (glass-tail + sticky directed keep + path matrix):
+
+→ [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](../stretch-2/design-instance-continuity-glass-tail-directed-keep.md)
+
+Issue: [#93](https://github.com/jtwolfe/project-elyra/issues/93). Next: meal-formation / continuation review report, then refine draft → implement.
+
 ---
 
 ## 5. Meal reconstruction & fractional breakdown

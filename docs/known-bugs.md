@@ -44,7 +44,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — LLM period summary atoms (not template-only) |
-| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — glass-tail / immediate chat history in memory meal |
+| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — instance continuity: glass-tail + sticky directed keep (draft design) |
 
 ---
 
@@ -1010,20 +1010,27 @@ Replace (or supplement) template-first period summaries with **budgeted LLM narr
 
 ---
 
-## BUG-meal-03 — Persistent immediate chat history in memory meal (glass-tail)
+## BUG-meal-03 — Instance continuity: glass-tail + sticky directed keep
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **In Progress** |
+| **Status** | Open — **In Progress** (draft design; implement after continuity review report) |
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) |
-| **Severity now** | High for dogfood (chat-amnesic when memory meal on) |
-| **Severity later** | High for multi-moment continuity |
-| **Area** | Memory meal rebuild vs sliding glass; glass-tail band; durable `messages.jsonl` |
-| **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §4 |
+| **Severity now** | High for dogfood (chat-amnesic / wrong wait-reply framing when memory meal on) |
+| **Severity later** | High for multi-moment + multi-hour instance memory |
+| **Area** | Memory meal rebuild; glass-tail band; wait/interject/restart paths; directed_keep tray TTL/LRU |
+| **Design home** | [stretch-2/design-instance-continuity-glass-tail-directed-keep.md](stretch-2/design-instance-continuity-glass-tail-directed-keep.md) |
+| **Also** | [promotion-discussion/README.md](promotion-discussion/README.md) §4; Phase 2a keep channel |
 
 ### Goal
 
-When memory meal is active, include a durable **immediate chat / glass-tail** band so recent user↔assistant turns survive **moment boundaries and restarts** (not load-only). Coordinate with **BUG-meal-01** budget. Adjacent: **#68** wake-02 (wrong work thread), not the same fix.
+When memory meal is active, preserve a **well-formed instance continuity package** for every next hop:
+
+1. **Glass-tail** — durable immediate chat (roles + order) across moments/restarts.  
+2. **Sticky directed keep** — intentional pins with slow decay (hours ≤ day), token LRU, restart-safe.  
+3. **Path parity** — wait_reply / interject / timeout / restart cannot shatter the tip while episodic bulk still looks healthy.
+
+Coordinate with meal budget (**BUG-meal-01**, fixed). Adjacent: **#68** wake-02 (wrong work thread sanitation), not the same fix. Dogfood anchor: wait_reply rockets moment `e6d460f2-…` (2026-07-30).
 
 ---
 
