@@ -8,7 +8,7 @@
 | **Status** | **Draft** — to be refined after a meal-formation / continuation review report |
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` (scope expanded) |
 | **Bug id** | `BUG-meal-03` |
-| **Branch** | `design/BUG-meal-03-93-instance-continuity` |
+| **Branch** | Content origin: `design/BUG-meal-03-93-instance-continuity`; landed on main via docs PR |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
 | **Related design** | [design-context-meal-composition.md](design-context-meal-composition.md), [design-phase-2a-implementation.md](design-phase-2a-implementation.md), [promotion-discussion/README.md](../promotion-discussion/README.md) §4–5 |
 | **Adjacent issues** | [#68](https://github.com/jtwolfe/project-elyra/issues/68) wake-02 (post-restart wrong work thread); [#92](https://github.com/jtwolfe/project-elyra/issues/92) LLM summaries (episodic quality, not tip); provider timeout board draft |

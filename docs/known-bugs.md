@@ -1020,7 +1020,7 @@ Replace (or supplement) template-first period summaries with **budgeted LLM narr
 | **Severity later** | High for multi-moment + multi-hour instance memory |
 | **Area** | Memory meal rebuild; glass-tail band; wait/interject/restart paths; directed_keep tray TTL/LRU |
 | **Design home** | [stretch-2/design-instance-continuity-glass-tail-directed-keep.md](stretch-2/design-instance-continuity-glass-tail-directed-keep.md) |
-| **Also** | [promotion-discussion/README.md](promotion-discussion/README.md) §4; Phase 2a keep channel |
+| **Also** | [stretch-2/design-meal-formation-continuity-review-plan.md](stretch-2/design-meal-formation-continuity-review-plan.md) (review method; execute before implement); [promotion-discussion/README.md](promotion-discussion/README.md) §4; Phase 2a keep channel |
 
 ### Goal
 
@@ -1030,7 +1030,7 @@ When memory meal is active, preserve a **well-formed instance continuity package
 2. **Sticky directed keep** — intentional pins with slow decay (hours ≤ day), token LRU, restart-safe.  
 3. **Path parity** — wait_reply / interject / timeout / restart cannot shatter the tip while episodic bulk still looks healthy.
 
-Coordinate with meal budget (**BUG-meal-01**, fixed). Adjacent: **#68** wake-02 (wrong work thread sanitation), not the same fix. Dogfood anchor: wait_reply rockets moment `e6d460f2-…` (2026-07-30).
+Coordinate with meal budget (**BUG-meal-01**, fixed). Adjacent: **#68** wake-02 (wrong work thread sanitation), not the same fix. Dogfood anchor: wait_reply rockets moment `e6d460f2-4087-42cd-870f-d34a89b6feaf` (2026-07-30).
 
 ---
 
