@@ -485,7 +485,7 @@ Nav click, Memory tab/Apply, catalog Rescan, secret save/delete/grants, identity
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Dogfood OK** on `fix/known-bugs` (2026-07-30) — merge then close |
+| **Status** | **Done** (dogfood 2026-07-30; code on `fix/known-bugs`) |
 | **Issue** | [#75](https://github.com/jtwolfe/project-elyra/issues/75) |
 | **Severity now** | Low residual (edge TeX / currency `$` false positives) |
 | **Severity later** | Med if models change delimiter style |
@@ -514,7 +514,7 @@ Math in chat showed as raw `\[…\]` / `$…$` instead of rendered equations.
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Dogfood OK** on `fix/known-bugs` (2026-07-30) — merge then close |
+| **Status** | **Done** (dogfood 2026-07-30; code on `fix/known-bugs`) |
 | **Issue** | [#84](https://github.com/jtwolfe/project-elyra/issues/84) |
 | **Severity now** | — |
 | **Severity later** | — |
