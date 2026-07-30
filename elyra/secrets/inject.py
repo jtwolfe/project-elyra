@@ -1,12 +1,14 @@
 """Secret inject resolve + redaction helpers.
 
-Scope: resolve_for_tool (call-local env dict), redact_tool_call_arguments,
-redact payload values. Never merges into guest/host-stub env.
+Scope: resolve_for_tool (call-local env dict), resolve_access_token_for_tool
+(OAuth access-only allowlist hook for future host builtins), redact helpers.
+Never merges into guest/host-stub env. Never invents inject_class meta fields.
 """
 
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 from typing import Any
 
 from elyra.secrets.policy import (
@@ -16,6 +18,11 @@ from elyra.secrets.policy import (
     env_var_for_secret,
 )
 from elyra.secrets.store import SecretsStore
+
+# Future host-builtin allowlist for OAuth access inject (PR6 / KD20).
+# Access-only — never refresh_token. Not wired into registry secret_env yet;
+# no grok_build tool package in this PR.
+GROK_BUILD_TOOL_NAMES: frozenset[str] = frozenset({"grok_build"})
 
 
 def resolve_for_tool(tool_name: str, store: SecretsStore) -> dict[str, str]:
@@ -54,6 +61,35 @@ def resolve_for_tool(tool_name: str, store: SecretsStore) -> dict[str, str]:
         except Exception:  # noqa: BLE001 — never fail inject on meta touch
             pass
     return env
+
+
+def resolve_access_token_for_tool(tool_name: str, data_dir: Path) -> str | None:
+    """Return a fresh OAuth **access** token for an allowlisted tool, or None.
+
+    Access-only: never returns ``refresh_token``. Guest/host-stub paths must not
+    merge this into process env via ``secret_env`` (registry guest scrub still
+    ignores ``secret_env``). Fail-closed on missing/reauth/refresh failure.
+
+    No ``inject_class`` meta; allowlist is code-only (``GROK_BUILD_TOOL_NAMES``).
+    """
+    if not isinstance(tool_name, str) or not tool_name:
+        return None
+    if tool_name not in GROK_BUILD_TOOL_NAMES:
+        return None
+    try:
+        from elyra.llm.xai_oauth import ensure_fresh_access
+    except Exception:  # noqa: BLE001 — fail closed if oauth layer unavailable
+        return None
+    try:
+        result = ensure_fresh_access(Path(data_dir))
+    except Exception:  # noqa: BLE001 — never raise into tool dispatch
+        return None
+    if not result.ok:
+        return None
+    access = result.access_token
+    if not isinstance(access, str) or not access.strip():
+        return None
+    return access.strip()
 
 
 def redact_tool_call_arguments(
@@ -115,9 +151,11 @@ def redact_tool_result_payload(
 
 
 __all__ = [
+    "GROK_BUILD_TOOL_NAMES",
     "redact_payload",
     "redact_string",
     "redact_tool_call_arguments",
     "redact_tool_result_payload",
+    "resolve_access_token_for_tool",
     "resolve_for_tool",
 ]

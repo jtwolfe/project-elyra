@@ -13,8 +13,10 @@ from elyra.config import resolve_paths
 from elyra.llm.client import ChatCompletionResult, ToolCall as LlmToolCall
 from elyra.loop.doloop import assistant_message_from_result
 from elyra.secrets.inject import (
+    GROK_BUILD_TOOL_NAMES,
     redact_tool_call_arguments,
     redact_tool_result_payload,
+    resolve_access_token_for_tool,
     resolve_for_tool,
 )
 from elyra.secrets.store import SecretsStore
@@ -334,3 +336,109 @@ def test_redact_payload_recursive() -> None:
     payload = {"a": secret, "b": [secret, {"c": secret}]}
     out = redact_tool_result_payload(payload, [secret])
     assert out == {"a": "***", "b": ["***", {"c": "***"}]}
+
+
+# --- PR6: resolve_access_token_for_tool (access-only allowlist hook) ---
+
+
+def _oauth_bundle_for_inject(
+    *,
+    access: str = "oauth-access-token-for-tool-AAA",
+    refresh: str | None = "oauth-refresh-token-for-tool-BBB",
+    reauth: bool = False,
+):
+    from datetime import datetime, timedelta, timezone
+
+    from elyra.llm.oauth_store import OAuthBundle
+    from elyra.llm.xai_oauth import XAI_OAUTH_CLIENT_ID, XAI_OAUTH_SCOPE
+
+    future = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    return OAuthBundle(
+        version=1,
+        client_id=XAI_OAUTH_CLIENT_ID,
+        access_token=access,
+        refresh_token=refresh,
+        token_type="Bearer",
+        scope=XAI_OAUTH_SCOPE,
+        expires_at=future,
+        email="op@example.com",
+        subject="sub",
+        obtained_at=past,
+        updated_at=past,
+        auth_method="device_code",
+        reauth_required=reauth,
+    )
+
+
+def test_resolve_access_token_for_tool_allowlist_and_access_only(paths) -> None:
+    """grok_build gets access; never refresh; other tools None; no inject_class."""
+    from elyra.llm.oauth_store import save_oauth_bundle
+
+    access = "oauth-access-token-for-tool-AAA"
+    refresh = "oauth-refresh-token-for-tool-BBB"
+    save_oauth_bundle(
+        paths.data_dir,
+        _oauth_bundle_for_inject(access=access, refresh=refresh),
+    )
+
+    assert "grok_build" in GROK_BUILD_TOOL_NAMES
+
+    got = resolve_access_token_for_tool("grok_build", paths.data_dir)
+    assert got == access
+    assert got != refresh
+    assert refresh not in (got or "")
+
+    # Non-allowlisted tools — including secrets/gh tools — must not receive access.
+    for name in ("gh_pr_create", "secrets_set", "sandbox_shell", "read_file", ""):
+        assert resolve_access_token_for_tool(name, paths.data_dir) is None
+
+    # Case-sensitive allowlist (exact name only).
+    assert resolve_access_token_for_tool("Grok_Build", paths.data_dir) is None
+    assert resolve_access_token_for_tool("GROK_BUILD", paths.data_dir) is None
+
+
+def test_resolve_access_token_for_tool_missing_and_reauth(paths) -> None:
+    """Fail-closed: missing bundle / durable reauth → None (no access)."""
+    from elyra.llm.oauth_store import save_oauth_bundle
+
+    assert resolve_access_token_for_tool("grok_build", paths.data_dir) is None
+
+    save_oauth_bundle(
+        paths.data_dir,
+        _oauth_bundle_for_inject(reauth=True),
+    )
+    assert resolve_access_token_for_tool("grok_build", paths.data_dir) is None
+
+
+def test_resolve_access_token_for_tool_does_not_merge_into_guest_env(paths) -> None:
+    """Guest/host-stub scrub still ignores secret_env; hook is not auto-merged."""
+    from elyra.llm.oauth_store import save_oauth_bundle
+    from elyra.tools.guest_exec import _scrubbed_host_env
+
+    access = "must-not-appear-in-guest-env-oauth-access"
+    refresh = "must-not-appear-in-guest-env-oauth-refresh"
+    save_oauth_bundle(
+        paths.data_dir,
+        _oauth_bundle_for_inject(access=access, refresh=refresh),
+    )
+
+    # Hook itself returns access for allowlisted tool (host-builtin path later).
+    assert resolve_access_token_for_tool("grok_build", paths.data_dir) == access
+
+    # Even if a caller stuffed access into secret_env-shaped extra, scrubbed
+    # guest env must not contain it unless explicitly passed (and registry
+    # still does not pass secret_env into guest).
+    env = _scrubbed_host_env(home=paths.home, extra={"FOO": "bar"})
+    assert access not in env.values()
+    assert refresh not in env.values()
+    assert "XAI_ACCESS_TOKEN" not in env
+    assert env.get("FOO") == "bar"
+
+    # resolve_for_tool (named grants) is orthogonal — no auto oauth inject.
+    store = SecretsStore(paths.data_dir)
+    assert resolve_for_tool("grok_build", store) == {}
