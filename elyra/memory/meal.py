@@ -2,11 +2,11 @@
 
 Scope: pure package assembly over MemoryStore (mock-friendly). Phase 1
 deterministic episodic selection (KD17); Phase 2 supporting semantic channel
-(KD1/KD10/KD11/KD20); Phase 2a directed_keep (KD-A7/A8/A16); slide-off never
-deletes store atoms.
+(KD1/KD10/KD11/KD20); Phase 2a directed_keep (KD-A7/A8/A16); glass-tail
+band (S1 / #93); slide-off never deletes store atoms.
 In scope: MealItem/MealPackage, select_episodic, select_semantic,
-select_directed_keep, slide-off, compose_meal, compose_outer_messages,
-expand_memory_meal_for_provider.
+select_directed_keep, select_glass_tail, slide-off, compose_meal,
+compose_outer_messages, expand_memory_meal_for_provider.
 Out of scope: promote, presence/loop drop-in (rebuild_outer lives in worker).
 """
 
@@ -26,7 +26,7 @@ from elyra.memory.tokens import (
     DEFAULT_MEAL_BUDGET_TOKENS,
     EPISODIC_SUMMARY_SHARE,
     estimate_tokens,
-    split_memory_budget_v3,
+    split_memory_budget_v4,
 )
 from elyra.memory.types import (
     PERIOD_SCALE_ORDER,
@@ -83,13 +83,18 @@ DIRECTED_KEEP_OMIT_EMPTY = "empty"
 DIRECTED_KEEP_OMIT_DEDUPED = "deduped"
 DIRECTED_KEEP_OMIT_BUDGET = "budget"
 
+# Glass-tail band (S1 / #93 instance continuity).
+GLASS_TAIL_CHANNEL = "glass_tail"
+GLASS_TAIL_LABEL = "glass-tail"
+SOCIAL_WAKE_KINDS = frozenset({"user_message", "wait_reply", "wait_timeout"})
+
 
 @dataclass(frozen=True)
 class MealItem:
     """One labeled row or section fragment in the meal package."""
 
     atom_id: str | None  # None for ephemeral compact / multi-atom blocks
-    channel: str  # temporal | episodic | semantic | directed_keep | orient | system | chain
+    channel: str  # temporal | episodic | semantic | directed_keep | glass_tail | orient | system | chain
     label: str  # e.g. "temporal/moment", "episodic/summary 1h", "semantic"
     role: str  # user | assistant | system
     content: str
@@ -117,6 +122,8 @@ class MealPackage:
     # PR-A3: directed_keep omit reason + pack meta (additive).
     directed_keep_omitted_reason: str | None = None
     directed_keep_meta: dict[str, Any] | None = None
+    # S1: glass-tail pack meta (packed count, floor, tokens).
+    glass_tail_meta: dict[str, Any] | None = None
 
 
 def moment_id_short(moment_id: str | None) -> str:
@@ -895,33 +902,116 @@ def _embedder_is_warm(embedder: Any) -> bool:
     return True
 
 
+def _last_glass_user_text(
+    glass_rows: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    glass_items: Sequence[MealItem] | None = None,
+) -> str | None:
+    """Newest non-empty user glass content (rows preferred; else packed items)."""
+    if glass_rows:
+        for row in reversed(list(glass_rows)):
+            if str(row.get("role") or "") != "user":
+                continue
+            body = _glass_row_content(row).strip()
+            if body:
+                return body
+    if glass_items:
+        for item in reversed(list(glass_items)):
+            if item.role != "user":
+                continue
+            body = (item.content or "").strip()
+            if body:
+                return body
+    return None
+
+
+def _semantic_seed_source(*, glass_used: bool, open_used: bool) -> str:
+    """Classify seed provenance for semantic_select_meta.seed_source."""
+    if glass_used and open_used:
+        return "mixed"
+    if glass_used:
+        return "glass_tail"
+    if open_used:
+        return "open_moment"
+    return "empty"
+
+
 def build_semantic_query_seed(
     open_moment_atoms: Sequence[Atom],
     *,
     max_chars: int = _SEMANTIC_SEED_MAX_CHARS,
+    glass_tail_user_text: str | None = None,
+    social_wake: bool = False,
 ) -> str:
-    """Build query text from open-moment seed (latest obs/speak/model, ≤2k)."""
+    """Prefer glass-tail last user text when social and present; else open-moment.
+
+    Priority concat (within ``max_chars``):
+
+    1. Glass-tail last user text when ``social_wake`` and non-empty text.
+    2. Open-moment obs/speak/model (latest-first walk, chronological join).
+
+    Returns query text only; callers that need provenance should use
+    :func:`build_semantic_query_seed_with_source`.
+    """
+    seed, _src = build_semantic_query_seed_with_source(
+        open_moment_atoms,
+        max_chars=max_chars,
+        glass_tail_user_text=glass_tail_user_text,
+        social_wake=social_wake,
+    )
+    return seed
+
+
+def build_semantic_query_seed_with_source(
+    open_moment_atoms: Sequence[Atom],
+    *,
+    max_chars: int = _SEMANTIC_SEED_MAX_CHARS,
+    glass_tail_user_text: str | None = None,
+    social_wake: bool = False,
+) -> tuple[str, str]:
+    """Like :func:`build_semantic_query_seed` plus seed_source tag.
+
+    ``seed_source`` is one of ``glass_tail`` | ``open_moment`` | ``mixed`` | ``empty``.
+    """
+    limit = max(0, int(max_chars))
+    parts: list[str] = []
+    total = 0
+    glass_used = False
+    open_used = False
+
+    # 1. Social tip: glass-tail last user (prefer when present).
+    glass = (glass_tail_user_text or "").strip() if social_wake else ""
+    if glass and limit > 0:
+        piece = glass[:limit]
+        if piece:
+            parts.append(piece)
+            total += len(piece)
+            glass_used = True
+
+    # 2. Open-moment obs/speak/model (prefer latest; concat chronological).
     candidates = [
         a
         for a in open_moment_atoms
         if a.kind in _SEMANTIC_SEED_KINDS and (a.content_text or "").strip()
     ]
     candidates.sort(key=lambda a: (to_iso_z(a.t_start), a.atom_id))
-    chunks: list[str] = []
-    total = 0
-    # Prefer latest: walk reverse, then reverse for chronological concat.
+    open_chunks: list[str] = []
     for atom in reversed(candidates):
-        if total >= max_chars:
+        if total >= limit:
             break
         body = (atom.content_text or "").strip()
-        remain = max_chars - total
+        remain = limit - total
         piece = body[:remain]
         if not piece:
             continue
-        chunks.append(piece)
+        open_chunks.append(piece)
         total += len(piece)
-    chunks.reverse()
-    return "\n".join(chunks)
+        open_used = True
+    open_chunks.reverse()
+    parts.extend(open_chunks)
+
+    seed = "\n".join(parts)
+    return seed, _semantic_seed_source(glass_used=glass_used, open_used=open_used)
 
 
 def _atom_ids_in_meal_items(items: Sequence[MealItem]) -> set[str]:
@@ -974,6 +1064,8 @@ def select_semantic(
     deadline_ms: int | None = None,
     wait_for_completion: bool | None = None,
     wait_max_ms: int | None = None,
+    glass_tail_user_text: str | None = None,
+    social_wake: bool = False,
 ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
     """Select supporting semantic neighbours under a hard wall-clock budget.
 
@@ -983,13 +1075,20 @@ def select_semantic(
     ``exclude_atom_ids`` (KD11). Parcel hits map to parent atoms (label
     ``semantic/parcel→parent``).
 
+    When ``social_wake`` and ``glass_tail_user_text`` are set, the query seed
+    prefers the glass tip user text so social hops avoid ``empty_seed`` while
+    open-moment promote is still pending (S5 / OQ8). ``select_meta.seed_source``
+    reports ``glass_tail`` | ``open_moment`` | ``mixed`` | ``empty``.
+
     Wait-for-select (CPU dogfood): when ``wait_for_completion`` / settings
     ``semantic_wait_for_select`` is on, use ``semantic_wait_max_ms`` as the
     ceiling, drop the snappy encode sub-budget discard, and keep a finished
     encode when the vector is usable — including when encode alone already
     exceeded the ceiling (search+pack still run). Under wait, mid-pack does
     not hard-timeout an empty pack after a good encode. Fail-fast paths
-    (no_index / cold encoder / empty_seed) are unchanged.
+    (no_index / cold encoder / empty_seed) are unchanged. Encode lag: new
+    observations may still miss ANN until indexed — tip + keep carry
+    immediate recall; semantic is support only.
 
     Empty-pack omit priority (KD-R6): timeout > encoder > no_index >
     empty_seed > min_score > deduped > no_hits. ``select_meta`` carries
@@ -1011,6 +1110,7 @@ def select_semantic(
             "cap_tokens": 0,
             "wait": wait,
             "deadline_ms": 0,
+            "seed_source": "empty",
         }
 
     # Absolute ceiling: explicit deadline wins; else wait ceiling or snappy budget.
@@ -1053,12 +1153,22 @@ def select_semantic(
     if not _embedder_is_warm(embedder):
         return early(SEMANTIC_OMIT_ENCODER)
 
-    seed = build_semantic_query_seed(open_moment_atoms)
+    seed, seed_source = build_semantic_query_seed_with_source(
+        open_moment_atoms,
+        glass_tail_user_text=glass_tail_user_text,
+        social_wake=bool(social_wake),
+    )
+    seed_meta: dict[str, Any] = {"seed_source": seed_source}
+    # Light encode-lag awareness: tip seed does not wait for reindex of new atoms.
+    if seed_source in ("glass_tail", "mixed"):
+        seed_meta["encode_lag_note"] = (
+            "new observations may lag ANN index; tip+keep carry immediate recall"
+        )
     if not seed.strip():
-        return early(SEMANTIC_OMIT_EMPTY_SEED)
+        return early(SEMANTIC_OMIT_EMPTY_SEED, meta=seed_meta)
 
     if over_deadline():
-        return early(SEMANTIC_OMIT_TIMEOUT)
+        return early(SEMANTIC_OMIT_TIMEOUT, meta=seed_meta)
 
     # Query encode. Wait mode keeps a finished good vector even past max_ms
     # (paid for encode → search+pack). Snappy mode caps with encode_query_max_ms
@@ -1074,12 +1184,12 @@ def select_semantic(
         query_vec = embedder.encode_text(seed)
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic query encode failed")
-        return early(SEMANTIC_OMIT_ENCODER)
+        return early(SEMANTIC_OMIT_ENCODER, meta=seed_meta)
     enc_elapsed = _now_ms() - t_enc0
     if not query_vec:
-        return early(SEMANTIC_OMIT_ENCODER)
+        return early(SEMANTIC_OMIT_ENCODER, meta=seed_meta)
     if not wait and (enc_elapsed > encode_budget or over_deadline()):
-        return early(SEMANTIC_OMIT_TIMEOUT)
+        return early(SEMANTIC_OMIT_TIMEOUT, meta=seed_meta)
 
     if now is None:
         from elyra.memory.types import utc_now_iso
@@ -1112,7 +1222,7 @@ def select_semantic(
         if str(health.get("backend") or "").lower() == "null":
             return early(
                 SEMANTIC_OMIT_NO_INDEX,
-                meta={"backend": "null", "joint_repair_remaining": 0},
+                meta={**seed_meta, "backend": "null", "joint_repair_remaining": 0},
             )
         joint_repair_remaining = int(health.get("joint_repair_remaining") or 0)
         channel_req = str(
@@ -1135,6 +1245,7 @@ def select_semantic(
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic index.search failed")
         fail_meta: dict[str, Any] = {
+            **seed_meta,
             "joint_repair_remaining": joint_repair_remaining,
         }
         if concrete is not None:
@@ -1144,6 +1255,7 @@ def select_semantic(
         return early(SEMANTIC_OMIT_NO_INDEX, meta=fail_meta)
 
     channel_meta: dict[str, Any] = {
+        **seed_meta,
         "joint_repair_remaining": joint_repair_remaining,
     }
     if concrete is not None:
@@ -1352,13 +1464,17 @@ def select_directed_keep(
     settings: MemorySettings | None = None,
     exclude_atom_ids: set[str] | None = None,
     enabled: bool | None = None,
+    soft_aged_ids: set[str] | Sequence[str] | None = None,
+    entry_ages_s: Mapping[str, float] | None = None,
 ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
     """Pack confirmed keep-set atoms as the ``directed_keep`` meal channel.
 
-    Returns ``(items, omitted_reason, meta)``. Keep order is preserved.
-    Parcel ids map to parent (KD21). Dedupe drops ids already in temporal /
-    episodic / semantic (caller supplies ``exclude_atom_ids``). Prepends a
-    single summary item when ``walk_summary`` is non-empty and fits.
+    Returns ``(items, omitted_reason, meta)``. Keep order is preserved, but
+    soft-aged ids (when provided) are packed **after** young ones so budget
+    pressure cuts age-soft entries first. Parcel ids map to parent (KD21).
+    Dedupe drops ids already in temporal / episodic / semantic (caller supplies
+    ``exclude_atom_ids``). Prepends a single summary item when ``walk_summary``
+    is non-empty and fits. No open-moment equality filter (B5b — tray ids).
 
     Omit reasons: ``disabled`` / ``empty`` / ``deduped`` / ``budget``.
     """
@@ -1369,18 +1485,29 @@ def select_directed_keep(
         else is_directed_keep_enabled(cfg)
     )
     cap = max(0, int(cap_tokens))
-    ids = [str(i).strip() for i in (keep_ids or ()) if str(i or "").strip()]
+    ids_raw = [str(i).strip() for i in (keep_ids or ()) if str(i or "").strip()]
+    soft_set: set[str] = {str(x) for x in (soft_aged_ids or ()) if x}
+    # Prefer young before soft-aged under pressure (age-soft cut first).
+    if soft_set:
+        young = [i for i in ids_raw if i not in soft_set]
+        aged = [i for i in ids_raw if i in soft_set]
+        ids = young + aged
+    else:
+        ids = list(ids_raw)
     exclude: set[str] = set(exclude_atom_ids or ())
     summary = (walk_summary or "").strip()
+    ages = dict(entry_ages_s or {})
 
     def _meta(**extra: Any) -> dict[str, Any]:
         base: dict[str, Any] = {
-            "keep_ids_in": len(ids),
+            "keep_ids_in": len(ids_raw),
             "packed": 0,
             "deduped": 0,
             "missing": 0,
             "cap_tokens": cap,
             "enabled": channel_on,
+            "soft_aged_in": len(soft_set),
+            "soft_aged_skipped": 0,
         }
         base.update(extra)
         return base
@@ -1399,6 +1526,7 @@ def select_directed_keep(
     deduped = 0
     missing = 0
     skipped_budget = 0
+    soft_aged_skipped = 0
     candidates = 0  # loadable non-excluded keeps considered for pack
     seen: set[str] = set(exclude)
 
@@ -1445,21 +1573,30 @@ def select_directed_keep(
             "directed-keep/parcel→parent" if via_parcel else "directed-keep"
         )
         body = format_atom_line(parent)
+        is_soft = aid in soft_set or parent.atom_id in soft_set
+        item_meta: dict[str, Any] = {
+            "via_parcel": via_parcel,
+            "hit_atom_id": atom.atom_id,
+            "kind": parent.kind,
+            "moment_id": parent.moment_id,
+            "soft_aged": is_soft,
+        }
+        if aid in ages:
+            item_meta["age_seconds"] = ages[aid]
+        elif parent.atom_id in ages:
+            item_meta["age_seconds"] = ages[parent.atom_id]
         item = _item_from_parts(
             atom_id=parent.atom_id,
             channel="directed_keep",
             label=label,
             content=body,
             t_start=parent.t_start,
-            meta={
-                "via_parcel": via_parcel,
-                "hit_atom_id": atom.atom_id,
-                "kind": parent.kind,
-                "moment_id": parent.moment_id,
-            },
+            meta=item_meta,
         )
         if used + item.token_estimate > cap:
             skipped_budget += 1
+            if is_soft:
+                soft_aged_skipped += 1
             continue
         atom_items.append(item)
         seen.add(parent.atom_id)
@@ -1470,6 +1607,7 @@ def select_directed_keep(
         deduped=deduped,
         missing=missing,
         skipped_budget=skipped_budget,
+        soft_aged_skipped=soft_aged_skipped,
         summary_packed=False,
         tokens_used=used if atom_items or summary_item else 0,
     )
@@ -1492,6 +1630,234 @@ def select_directed_keep(
 
 
 # ---------------------------------------------------------------------------
+# Glass-tail selection (S1 — durable glass tip band with true roles)
+# ---------------------------------------------------------------------------
+
+
+def _glass_row_eligible(row: Mapping[str, Any]) -> bool:
+    """KD19: keep user/assistant rows with non-empty content OR attachments."""
+    role = row.get("role")
+    if role not in ("user", "assistant"):
+        return False
+    content = row.get("content") or ""
+    if not isinstance(content, str):
+        content = str(content)
+    atts = row.get("attachments")
+    has_atts = isinstance(atts, list) and len(atts) > 0
+    return bool(content) or has_atts
+
+
+def _glass_row_content(row: Mapping[str, Any]) -> str:
+    content = row.get("content") or ""
+    if not isinstance(content, str):
+        return str(content)
+    return content
+
+
+def _glass_row_media_ids(row: Mapping[str, Any]) -> list[str]:
+    """Extract attachment content ids from a glass row (best-effort)."""
+    atts = row.get("attachments")
+    if not isinstance(atts, list):
+        return []
+    out: list[str] = []
+    for att in atts:
+        if isinstance(att, Mapping):
+            aid = att.get("id")
+            if aid is not None and str(aid).strip():
+                out.append(str(aid))
+        elif isinstance(att, str) and att.strip():
+            out.append(att.strip())
+    return out
+
+
+def _glass_tail_item_from_row(row: Mapping[str, Any]) -> MealItem:
+    """Build one glass-tail MealItem with true role + wake_message_id stamp."""
+    role = str(row.get("role") or "user")
+    if role not in ("user", "assistant"):
+        role = "user"
+    content = _glass_row_content(row)
+    mid = row.get("id")
+    mid_s = str(mid) if mid is not None else None
+    atts = row.get("attachments")
+    has_atts = isinstance(atts, list) and len(atts) > 0
+    media_ids = _glass_row_media_ids(row)
+    meta: dict[str, Any] = {"source": "glass"}
+    if mid_s:
+        meta["wake_message_id"] = mid_s
+        meta["message_id"] = mid_s
+    if has_atts:
+        meta["attachments"] = list(atts)
+    if media_ids:
+        meta["media_ids"] = media_ids
+    # Explicit role — never host default user for glass-tail (KD-ROLE).
+    return _item_from_parts(
+        atom_id=None,
+        channel=GLASS_TAIL_CHANNEL,
+        label=GLASS_TAIL_LABEL,
+        content=content,
+        t_start=row.get("created_at") if isinstance(row.get("created_at"), str) else None,
+        meta=meta,
+        role=role,
+    )
+
+
+def estimate_glass_tail_floor_tokens(
+    glass_rows: Sequence[Mapping[str, Any]],
+    *,
+    floor_messages: int = 4,
+    max_messages: int = 16,
+    exclude_message_ids: set[str] | None = None,
+) -> int:
+    """Token cost of packing the floor message set (newest eligible rows)."""
+    exclude = {str(x) for x in (exclude_message_ids or ()) if x is not None}
+    eligible = [
+        r
+        for r in glass_rows
+        if _glass_row_eligible(r)
+        and (
+            r.get("id") is None
+            or str(r.get("id")) not in exclude
+        )
+    ]
+    if not eligible or floor_messages <= 0:
+        return 0
+    window = eligible[-max_messages:] if max_messages > 0 else list(eligible)
+    floor_n = min(int(floor_messages), len(window))
+    floor_rows = window[-floor_n:]
+    return sum(_glass_tail_item_from_row(r).token_estimate for r in floor_rows)
+
+
+def select_glass_tail(
+    glass_rows: Sequence[Mapping[str, Any]],
+    *,
+    cap_tokens: int,
+    floor_messages: int = 4,
+    max_messages: int = 16,
+    social_wake: bool = False,
+    exclude_message_ids: set[str] | None = None,
+) -> tuple[list[MealItem], dict[str, Any]]:
+    """Select + pack last-K glass messages into glass_tail MealItems.
+
+    - Filter to role in {user, assistant}; keep non-empty content OR attachments
+      (KD19 media-only rule).
+    - Take newest-first window up to ``max_messages``, reverse to chronological
+      (oldest → newest) so newest sits just before orient when placed before temporal.
+    - Pack under ``cap_tokens``, preferring newest under pressure. When
+      ``social_wake`` and rows exist, never drop below ``floor_messages`` when
+      the cap allows (Prince Rupert floor). If still short, pack best-effort and
+      set ``floor_shortfall=true``.
+    - Each item uses original role and stamps ``meta.wake_message_id`` when id
+      is present (hybrid skip / OQ6 prerequisite).
+    """
+    exclude = {str(x) for x in (exclude_message_ids or ()) if x is not None}
+    cap = max(0, int(cap_tokens))
+    max_n = max(0, int(max_messages))
+    floor_n = max(0, int(floor_messages)) if social_wake else 0
+
+    eligible = [
+        r
+        for r in glass_rows
+        if _glass_row_eligible(r)
+        and (r.get("id") is None or str(r.get("id")) not in exclude)
+    ]
+    window = eligible[-max_n:] if max_n > 0 else []
+    # Pack newest-first so tip is preferred under token pressure.
+    packed_newest_first: list[MealItem] = []
+    used = 0
+    floor_shortfall = False
+    target_floor = min(floor_n, len(window)) if floor_n > 0 else 0
+
+    for row in reversed(window):
+        item = _glass_tail_item_from_row(row)
+        under_floor = len(packed_newest_first) < target_floor
+        if used + item.token_estimate > cap:
+            if under_floor:
+                # Floor messages must fit under (possibly raised) cap; stop.
+                floor_shortfall = True
+                break
+            # Drop this older non-floor; try still-older rows that may fit.
+            continue
+        packed_newest_first.append(item)
+        used += item.token_estimate
+
+    if target_floor > 0 and len(packed_newest_first) < target_floor:
+        floor_shortfall = True
+
+    items = list(reversed(packed_newest_first))
+    tokens_used = sum(i.token_estimate for i in items)
+    floor_applied = (
+        social_wake
+        and target_floor > 0
+        and len(items) >= min(target_floor, len(window))
+        and not floor_shortfall
+    )
+    last_user = _last_glass_user_text(window if window else eligible)
+    meta: dict[str, Any] = {
+        "packed": len(items),
+        "available": len(eligible),
+        "window": len(window),
+        "cap_tokens": cap,
+        "tokens_used": tokens_used,
+        "floor_messages": floor_n,
+        "floor_applied": floor_applied,
+        "floor_shortfall": floor_shortfall,
+        "social_wake": bool(social_wake),
+        # S5: tip user text for semantic seed (not logged at INFO; meta only).
+        "last_user_text": last_user,
+    }
+    return items, meta
+
+
+def _raise_glass_tail_cap_for_floor(
+    *,
+    glass_tail_cap: int,
+    floor_cost: int,
+    semantic_cap: int,
+    directed_keep_cap: int,
+    episodic_cap: int,
+) -> tuple[int, int, int, int, int]:
+    """Steal support tokens for glass-tail message floor (never temporal).
+
+    Cut order: semantic → directed_keep → episodic.
+    Returns (glass_tail_cap, semantic_cap, directed_keep_cap, episodic_cap, stolen).
+    """
+    need = max(0, int(floor_cost) - int(glass_tail_cap))
+    if need <= 0:
+        return glass_tail_cap, semantic_cap, directed_keep_cap, episodic_cap, 0
+    stolen = 0
+    take = min(need, semantic_cap)
+    semantic_cap -= take
+    need -= take
+    stolen += take
+    take = min(need, directed_keep_cap)
+    directed_keep_cap -= take
+    need -= take
+    stolen += take
+    take = min(need, episodic_cap)
+    episodic_cap -= take
+    need -= take
+    stolen += take
+    glass_tail_cap = int(glass_tail_cap) + stolen
+    return glass_tail_cap, semantic_cap, directed_keep_cap, episodic_cap, stolen
+
+
+def _suppress_temporal_by_tail_ids(
+    atoms: Sequence[Atom],
+    tail_ids: set[str],
+) -> list[Atom]:
+    """OQ6: drop open-moment atoms whose wake_message_id is on glass-tail."""
+    if not tail_ids:
+        return list(atoms)
+    out: list[Atom] = []
+    for atom in atoms:
+        wid = (atom.meta or {}).get("wake_message_id")
+        if wid is not None and str(wid) in tail_ids:
+            continue
+        out.append(atom)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Compose
 # ---------------------------------------------------------------------------
 
@@ -1510,16 +1876,24 @@ def compose_meal(
     embedder: Any | None = None,
     directed_keep_ids: Sequence[str] | None = None,
     directed_keep_summary: str | None = None,
+    directed_keep_soft_aged_ids: Sequence[str] | set[str] | None = None,
+    directed_keep_ages_s: Mapping[str, float] | None = None,
+    glass_rows: Sequence[Mapping[str, Any]] | None = None,
+    social_wake: bool = False,
+    glass_tail_active: bool | None = None,
 ) -> MealPackage:
-    """Compose labeled temporal + episodic [+ semantic] [+ directed_keep] package.
+    """Compose labeled temporal + episodic [+ semantic] [+ directed_keep] [+ glass_tail] package.
 
     Does not load prompts; pass ``system_text`` / ``orient_text`` for fixed cost.
     Does **not** mutate the store (slide-off is meal-only).
 
-    When ``settings.semantic_enabled`` is false and directed_keep inactive,
-    Phase 1/2 budget math (golden parity). ``directed_keep_active`` requires
-    effective keep flag **and** non-empty ``directed_keep_ids`` (KD-A7).
-    Message order (KD-A8): episodic → semantic → directed_keep → temporal.
+    When ``settings.semantic_enabled`` is false and directed_keep inactive and
+    glass_tail inactive, Phase 1/2 budget math (golden parity).
+    ``directed_keep_active`` requires effective keep flag **and** non-empty
+    ``directed_keep_ids`` (KD-A7). Glass-tail is active whenever ``glass_rows``
+    is non-empty (unless ``glass_tail_active`` overrides).
+    Message order (KD-ORD): episodic → semantic → directed_keep → glass_tail
+    → temporal.
     """
     cfg = settings or MemorySettings()
     if now is None:
@@ -1536,18 +1910,29 @@ def compose_meal(
     dk_flag = is_directed_keep_enabled(cfg)
     directed_keep_active = dk_flag and bool(keep_ids_list)
 
+    glass_list = list(glass_rows) if glass_rows else []
+    if glass_tail_active is None:
+        gt_active = bool(glass_list)
+    else:
+        gt_active = bool(glass_tail_active) and bool(glass_list)
+
     (
         _fixed,
         semantic_cap,
         directed_keep_cap,
         episodic_cap,
+        glass_tail_cap,
         temporal_cap,
-    ) = split_memory_budget_v3(
+    ) = split_memory_budget_v4(
         budget_tokens,
         system_text=system_text,
         orient_text=orient_text,
         semantic_enabled=bool(cfg.semantic_enabled),
         directed_keep_active=directed_keep_active,
+        glass_tail_active=gt_active,
+        glass_tail_fraction=float(
+            getattr(cfg, "glass_tail_fraction", 0.08) or 0.08
+        ),
         semantic_fraction=cfg.semantic_fraction,
         directed_keep_fraction=float(
             getattr(cfg, "directed_keep_fraction", 0.08) or 0.08
@@ -1556,6 +1941,54 @@ def compose_meal(
         episodic_fraction_with_semantic=cfg.episodic_fraction_with_semantic,
         temporal_min_fraction=cfg.temporal_min_fraction,
     )
+
+    floor_messages = int(
+        getattr(cfg, "glass_tail_floor_messages", 4) or 4
+    )
+    max_messages = int(getattr(cfg, "glass_tail_max_messages", 16) or 16)
+
+    # Message floor raise (social wakes): steal supports, never temporal.
+    floor_stolen = 0
+    if gt_active and social_wake and glass_list:
+        floor_cost = estimate_glass_tail_floor_tokens(
+            glass_list,
+            floor_messages=floor_messages,
+            max_messages=max_messages,
+        )
+        (
+            glass_tail_cap,
+            semantic_cap,
+            directed_keep_cap,
+            episodic_cap,
+            floor_stolen,
+        ) = _raise_glass_tail_cap_for_floor(
+            glass_tail_cap=glass_tail_cap,
+            floor_cost=floor_cost,
+            semantic_cap=semantic_cap,
+            directed_keep_cap=directed_keep_cap,
+            episodic_cap=episodic_cap,
+        )
+
+    # Glass-tail first so OQ6 can suppress matching temporal wake atoms.
+    glass_tail_items: list[MealItem] = []
+    glass_tail_meta: dict[str, Any] | None = None
+    tail_ids: set[str] = set()
+    if gt_active and glass_list:
+        glass_tail_items, glass_tail_meta = select_glass_tail(
+            glass_list,
+            cap_tokens=glass_tail_cap,
+            floor_messages=floor_messages,
+            max_messages=max_messages,
+            social_wake=bool(social_wake),
+        )
+        if glass_tail_meta is not None and floor_stolen:
+            glass_tail_meta = dict(glass_tail_meta)
+            glass_tail_meta["floor_stolen_tokens"] = floor_stolen
+            glass_tail_meta["cap_tokens_effective"] = glass_tail_cap
+        for item in glass_tail_items:
+            wid = (item.meta or {}).get("wake_message_id")
+            if wid is not None:
+                tail_ids.add(str(wid))
 
     # Open moment atoms.
     if open_moment_atoms is not None:
@@ -1569,6 +2002,10 @@ def compose_meal(
         a for a in temporal_atoms if a.kind not in _RAW_EXCLUDE_KINDS
     ]
     temporal_atoms.sort(key=lambda a: (to_iso_z(a.t_start), a.atom_id))
+    # open_ids for epi/sem/dk dedupe uses full open moment (pre-OQ6 suppress).
+    open_ids = {a.atom_id for a in temporal_atoms}
+    # OQ6: glass-tail wins social message_id vs temporal observation.
+    temporal_atoms = _suppress_temporal_by_tail_ids(temporal_atoms, tail_ids)
 
     # Episodic first (shrink under pressure before temporal slide-off).
     episodic_items = select_episodic(
@@ -1579,7 +2016,6 @@ def compose_meal(
         settings=cfg,
     )
     # Dedup: if an atom appears in both, keep temporal (open moment wins).
-    open_ids = {a.atom_id for a in temporal_atoms}
     episodic_items = _dedup_episodic_against_open(episodic_items, open_ids)
 
     # If episodic still over cap after select, already shrunk; if total memory
@@ -1600,6 +2036,13 @@ def compose_meal(
     temporal_items = _temporal_items(kept, compact, open_moment_id)
 
     # Semantic supporting channel (Phase 2).
+    # S5: prefer glass-tail last user as query seed on social wakes (OQ8).
+    glass_seed_text: str | None = None
+    if glass_tail_meta and isinstance(glass_tail_meta.get("last_user_text"), str):
+        glass_seed_text = glass_tail_meta.get("last_user_text") or None
+    if not glass_seed_text and glass_list:
+        glass_seed_text = _last_glass_user_text(glass_list)
+
     semantic_items: list[MealItem] = []
     semantic_omitted: str | None = None
     semantic_meta: dict[str, Any] | None = None
@@ -1617,6 +2060,8 @@ def compose_meal(
             settings=cfg,
             now=now_dt,
             exclude_atom_ids=exclude,
+            glass_tail_user_text=glass_seed_text,
+            social_wake=bool(social_wake),
         )
 
     # Directed-keep supporting channel (Phase 2a) — after semantic so
@@ -1638,13 +2083,16 @@ def compose_meal(
             settings=cfg,
             exclude_atom_ids=exclude_dk,
             enabled=dk_flag,
+            soft_aged_ids=directed_keep_soft_aged_ids,
+            entry_ages_s=directed_keep_ages_s,
         )
 
-    # Message order (KD-A8): episodic → semantic → directed_keep → temporal.
+    # Message order (KD-ORD): epi → sem → dk → glass_tail → temporal.
     items = (
         list(episodic_items)
         + list(semantic_items)
         + list(directed_items)
+        + list(glass_tail_items)
         + list(temporal_items)
     )
     total = sum(i.token_estimate for i in items)
@@ -1661,6 +2109,7 @@ def compose_meal(
         semantic_select_meta=semantic_meta,
         directed_keep_omitted_reason=directed_omitted,
         directed_keep_meta=directed_meta,
+        glass_tail_meta=glass_tail_meta,
     )
 
 
@@ -1721,8 +2170,11 @@ def compose_outer_messages(
     embedder: Any | None = None,
     directed_keep_ids: Sequence[str] | None = None,
     directed_keep_summary: str | None = None,
+    glass_rows: Sequence[Mapping[str, Any]] | None = None,
+    social_wake: bool = False,
+    glass_tail_active: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """Build outer message list: system → epi → sem → directed_keep → temp → orient.
+    """Build outer message list: system → epi → sem → dk → glass_tail → temp → orient.
 
     Chain (tool hops) is owned by doloop and is **not** included here.
     Pass prebuilt ``package`` to avoid re-compose when caller already has one.
@@ -1741,6 +2193,9 @@ def compose_outer_messages(
             embedder=embedder,
             directed_keep_ids=directed_keep_ids,
             directed_keep_summary=directed_keep_summary,
+            glass_rows=glass_rows,
+            social_wake=social_wake,
+            glass_tail_active=glass_tail_active,
         )
 
     messages: list[dict[str, Any]] = []
@@ -1970,6 +2425,8 @@ __all__ = [
     "DIRECTED_KEEP_OMIT_DISABLED",
     "DIRECTED_KEEP_OMIT_EMPTY",
     "EPISODIC_MAX_PRIOR_MOMENTS",
+    "GLASS_TAIL_CHANNEL",
+    "GLASS_TAIL_LABEL",
     "SEMANTIC_OMIT_DEDUPED",
     "SEMANTIC_OMIT_EMPTY_SEED",
     "SEMANTIC_OMIT_ENCODER",
@@ -1977,18 +2434,22 @@ __all__ = [
     "SEMANTIC_OMIT_NO_HITS",
     "SEMANTIC_OMIT_NO_INDEX",
     "SEMANTIC_OMIT_TIMEOUT",
+    "SOCIAL_WAKE_KINDS",
     "MealItem",
     "MealPackage",
     "build_compact_text",
     "build_semantic_query_seed",
+    "build_semantic_query_seed_with_source",
     "compose_meal",
     "compose_outer_messages",
+    "estimate_glass_tail_floor_tokens",
     "expand_memory_meal_for_provider",
     "format_atom_line",
     "meal_item_to_message",
     "moment_id_short",
     "select_directed_keep",
     "select_episodic",
+    "select_glass_tail",
     "select_semantic",
     "slide_off_temporal",
 ]

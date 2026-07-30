@@ -22,6 +22,8 @@ from elyra.memory.meal import (
     SEMANTIC_OMIT_NO_HITS,
     SEMANTIC_OMIT_NO_INDEX,
     SEMANTIC_OMIT_TIMEOUT,
+    build_semantic_query_seed,
+    build_semantic_query_seed_with_source,
     compose_meal,
     compose_outer_messages,
     select_semantic,
@@ -1478,3 +1480,197 @@ def test_select_semantic_wait_on_dedupe_probe_past_deadline(store):
     assert meta["deduped"] >= 1
     assert meta.get("dedupe_probe") is True
     assert idx.search_calls >= 2  # primary + probe
+
+
+# ---------------------------------------------------------------------------
+# S5 — semantic seed from glass-tail + seed_source meta
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_seed_prefers_glass_tail_last_user():
+    """Social + glass tip user text wins seed priority over open-moment (OQ8)."""
+    open_atoms = [
+        _atom(t="2026-07-28T12:00:00Z", text="open moment about gardens"),
+    ]
+    seed, source = build_semantic_query_seed_with_source(
+        open_atoms,
+        glass_tail_user_text="What do you remember about rockets?",
+        social_wake=True,
+    )
+    assert seed.startswith("What do you remember about rockets?")
+    assert "gardens" in seed
+    assert source == "mixed"
+
+    glass_only, src_g = build_semantic_query_seed_with_source(
+        [],  # empty open moment (promote pending)
+        glass_tail_user_text="What do you remember about rockets?",
+        social_wake=True,
+    )
+    assert glass_only == "What do you remember about rockets?"
+    assert src_g == "glass_tail"
+
+    # Non-social: glass text ignored even if provided.
+    non_social = build_semantic_query_seed(
+        open_atoms,
+        glass_tail_user_text="What do you remember about rockets?",
+        social_wake=False,
+    )
+    assert non_social == "open moment about gardens"
+    assert "rockets" not in non_social
+
+
+def test_semantic_social_wake_not_empty_seed_when_glass_user(store):
+    """Social wake with glass user text avoids empty_seed when open atoms empty."""
+    emb = MockEmbedder()
+    idx = _FixedHitIndex([])
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_wait_for_select=False,
+        semantic_select_max_ms=200,
+    )
+    # Tool-only / empty-of-seed kinds → would be empty_seed without glass tip.
+    items, reason, meta = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", kind="tool", text="tool noise")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        glass_tail_user_text="Remind me what we said about the launch",
+        social_wake=True,
+    )
+    # Encoded with glass seed → may no_hits but must not empty_seed.
+    assert reason != SEMANTIC_OMIT_EMPTY_SEED
+    assert meta is not None
+    assert meta.get("seed_source") == "glass_tail"
+    assert "encode_lag_note" in meta
+    # Empty fixed index → no_hits after successful seed.
+    assert reason == SEMANTIC_OMIT_NO_HITS
+    assert items == []
+
+    # Same open atoms without glass still empty_seed.
+    items2, reason2, meta2 = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", kind="tool", text="tool noise")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        social_wake=True,
+    )
+    assert reason2 == SEMANTIC_OMIT_EMPTY_SEED
+    assert meta2 is not None
+    assert meta2.get("seed_source") == "empty"
+
+
+def test_semantic_select_meta_seed_source(store):
+    """semantic_select_meta.seed_source reflects glass_tail|open_moment|mixed|empty."""
+    emb = MockEmbedder()
+    idx = _FixedHitIndex([])
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_wait_for_select=False,
+        semantic_select_max_ms=200,
+    )
+
+    # open_moment only
+    _, reason_om, meta_om = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed about gardens")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        social_wake=False,
+    )
+    assert reason_om == SEMANTIC_OMIT_NO_HITS
+    assert meta_om is not None
+    assert meta_om["seed_source"] == "open_moment"
+
+    # mixed
+    _, reason_mx, meta_mx = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="seed about gardens")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+        glass_tail_user_text="What about rockets?",
+        social_wake=True,
+    )
+    assert reason_mx == SEMANTIC_OMIT_NO_HITS
+    assert meta_mx is not None
+    assert meta_mx["seed_source"] == "mixed"
+    assert "encode_lag_note" in meta_mx
+
+    # empty
+    _, reason_e, meta_e = select_semantic(
+        store,
+        index=idx,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", kind="tool", text="noise")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert reason_e == SEMANTIC_OMIT_EMPTY_SEED
+    assert meta_e is not None
+    assert meta_e["seed_source"] == "empty"
+
+    # compose_meal wires glass last_user into seed on social wake
+    glass = [
+        {
+            "id": "g1",
+            "role": "assistant",
+            "content": "Earlier reply",
+            "created_at": "2026-07-30T08:00:00Z",
+        },
+        {
+            "id": "g2",
+            "role": "user",
+            "content": "What do you remember about the rockets plan?",
+            "created_at": "2026-07-30T08:01:00Z",
+        },
+    ]
+    pkg = compose_meal(
+        store,
+        open_moment_id="m_open",
+        open_moment_atoms=[
+            _atom(t="2026-07-30T08:01:00Z", kind="tool", text="tool only")
+        ],
+        budget_tokens=4000,
+        system_text="sys",
+        orient_text="orient",
+        settings=MemorySettings(
+            semantic_enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            semantic_wait_for_select=False,
+        ),
+        index=idx,
+        embedder=emb,
+        glass_rows=glass,
+        social_wake=True,
+    )
+    assert pkg.glass_tail_meta is not None
+    assert (
+        pkg.glass_tail_meta.get("last_user_text")
+        == "What do you remember about the rockets plan?"
+    )
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta.get("seed_source") == "glass_tail"
+    assert pkg.semantic_omitted_reason != SEMANTIC_OMIT_EMPTY_SEED

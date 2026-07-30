@@ -200,6 +200,17 @@ class MemorySettings:
     directed_traversal_enabled: bool = False
     directed_keep_enabled: bool = False
     directed_keep_fraction: float = 0.08  # meal residual share when channel active
+    # Sticky directed-keep tray TTL / cap (S3 / #93 B5+B5b). Host-owned.
+    directed_keep_hard_ttl_hours: float = 24.0  # hard drop on load + compose
+    directed_keep_soft_ttl_hours: float = 3.0  # prefer cut under meal pressure
+    directed_keep_entry_cap: int = 32  # hard safety LRU cap
+
+    # --- Glass-tail band (S1 / #93 instance continuity) ---
+    # Soft residual share + absolute message floor for social wakes (KD-SOC).
+    glass_tail_fraction: float = 0.08  # soft % of residual R (5–12% band)
+    glass_tail_floor_messages: int = 4  # social wakes only; ≥2 full turns
+    glass_tail_max_messages: int = 16  # hard cap — prevent unbounded dump
+    glass_tail_list_limit: int = 80  # align with rebuild_outer list_messages
 
     # Per-step expand compute (NOT multi-hop session wall-clock — KD-A18).
     traverse_expand_max_ms: int = 80  # soft wall for neighbors / seed_from_text

@@ -23,6 +23,7 @@ from elyra.memory.store import open_memory_store
 from elyra.memory.tokens import (
     split_memory_budget_v2,
     split_memory_budget_v3,
+    split_memory_budget_v4,
 )
 from elyra.memory.types import Atom, new_atom_id
 
@@ -233,6 +234,75 @@ def test_split_v3_impossible_floor_all_to_temporal():
     assert dk == 0
     assert epi == 0
     assert temp == 500
+
+
+# ---------------------------------------------------------------------------
+# split_memory_budget_v4 golden cases (S1 glass-tail)
+# ---------------------------------------------------------------------------
+
+
+def test_split_v4_inactive_bit_identical_v3():
+    """glass_tail_active=False → bit-identical to existing v3 goldens."""
+    cases = [
+        dict(
+            budget_tokens=10_000,
+            system_text="sys",
+            orient_text="orient",
+            semantic_enabled=False,
+            directed_keep_active=False,
+            episodic_fraction=0.20,
+        ),
+        dict(
+            budget_tokens=10_000,
+            system_text="sys",
+            orient_text="orient",
+            semantic_enabled=True,
+            directed_keep_active=True,
+            semantic_fraction=0.12,
+            directed_keep_fraction=0.08,
+            episodic_fraction_with_semantic=0.18,
+            temporal_min_fraction=0.55,
+        ),
+        dict(
+            budget_tokens=1000,
+            semantic_enabled=True,
+            directed_keep_active=True,
+            semantic_fraction=0.25,
+            directed_keep_fraction=0.20,
+            episodic_fraction_with_semantic=0.20,
+            temporal_min_fraction=0.55,
+        ),
+        dict(budget_tokens=0, semantic_enabled=True, directed_keep_active=True),
+    ]
+    for kwargs in cases:
+        f3, s3, d3, e3, t3 = split_memory_budget_v3(**kwargs)
+        f4, s4, d4, e4, g4, t4 = split_memory_budget_v4(
+            glass_tail_active=False, **kwargs
+        )
+        assert (f4, s4, d4, e4, g4, t4) == (f3, s3, d3, e3, 0, t3)
+
+
+def test_split_v4_active_identity_all_supports_on():
+    """All supports on: five residual caps sum to R; glass soft ≈ 0.08R."""
+    R = 10_000
+    # Keep soft sum under (1 - temporal_min) so no floor cut muddies identity.
+    fixed, sem, dk, epi, gt, temp = split_memory_budget_v4(
+        R,
+        system_text="",
+        orient_text="",
+        semantic_enabled=True,
+        directed_keep_active=True,
+        glass_tail_active=True,
+        glass_tail_fraction=0.08,
+        semantic_fraction=0.10,
+        directed_keep_fraction=0.08,
+        episodic_fraction_with_semantic=0.15,
+        temporal_min_fraction=0.55,
+    )
+    assert fixed == 0
+    assert sem + dk + epi + gt + temp == R
+    assert gt == int(R * 0.08)
+    assert temp >= int(R * 0.55)
 
 
 # ---------------------------------------------------------------------------
@@ -647,4 +717,102 @@ def test_compose_meal_traversal_flag_enables_keep_oq_a1(store):
         directed_keep_summary="walk",
     )
     assert "directed_keep" in pkg.channels_present
+
+
+def test_directed_keep_packs_across_moment_ids(store):
+    """B5b / cross-moment: keep atoms from moment A pack into open moment B."""
+    open_id = "m_open_b"
+    store.put_atom(
+        _atom(t="2026-07-28T14:50:00Z", text="open B", moment_id=open_id)
+    )
+    store.put_atom(
+        _atom(
+            t="2026-07-20T10:00:00Z",
+            text="pinned from moment A",
+            moment_id="m_a",
+            atom_id="a_from_a",
+        )
+    )
+    cfg = MemorySettings(
+        directed_keep_enabled=True,
+        semantic_enabled=False,
+        episodic_horizon_hours=1.0,
+    )
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=datetime(2026, 7, 28, 15, 0, tzinfo=UTC),
+        settings=cfg,
+        directed_keep_ids=["a_from_a"],
+        directed_keep_summary="cross moment pin",
+    )
+    assert "directed_keep" in pkg.channels_present
+    dk_ids = [i.atom_id for i in pkg.items if i.channel == "directed_keep" and i.atom_id]
+    assert "a_from_a" in dk_ids
+
+
+def test_directed_keep_soft_age_cut_before_tip_floor(store):
+    """Under tight dk cap, soft-aged ids skip while young pack (age-soft first)."""
+    young = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="young pin body " + ("y" * 40),
+        atom_id="a_young",
+        moment_id="m_k",
+    )
+    soft = _atom(
+        t="2026-07-26T10:00:00Z",
+        text="soft aged pin body " + ("s" * 40),
+        atom_id="a_soft",
+        moment_id="m_k",
+    )
+    store.put_atom(young)
+    store.put_atom(soft)
+    # Cap large enough for one body + tiny summary, not both.
+    items, reason, meta = select_directed_keep(
+        store,
+        keep_ids=["a_soft", "a_young"],  # soft listed first; reordered young-first
+        walk_summary="",
+        cap_tokens=40,  # ~one short line
+        enabled=True,
+        soft_aged_ids={"a_soft"},
+    )
+    assert reason is None or meta is not None
+    packed_ids = [i.atom_id for i in items if i.atom_id]
+    # Young should win under pressure; soft cut first.
+    assert "a_young" in packed_ids
+    assert "a_soft" not in packed_ids
+    assert meta is not None
+    assert meta.get("soft_aged_skipped", 0) >= 1
+
+
+def test_directed_keep_flags_off_budget_parity(store):
+    """Flags off / empty tray: Phase 1/2 parity (no directed_keep channel)."""
+    open_id = "m_openmoment02"
+    store.put_atom(
+        _atom(
+            t="2026-07-28T14:50:00Z",
+            text="wake hi",
+            moment_id=open_id,
+        )
+    )
+    now = datetime(2026, 7, 28, 15, 0, tzinfo=UTC)
+    cfg = MemorySettings(
+        semantic_enabled=False,
+        directed_keep_enabled=False,
+        directed_traversal_enabled=False,
+    )
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        system_text="SYS",
+        orient_text="ORIENT",
+        now=now,
+        settings=cfg,
+        directed_keep_ids=None,
+    )
+    assert "directed_keep" not in pkg.channels_present
+    assert pkg.directed_keep_omitted_reason is None
+    assert any(i.channel == "temporal" for i in pkg.items)
     assert pkg.directed_keep_omitted_reason is None

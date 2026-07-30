@@ -41,6 +41,7 @@ Pick the first that applies:
 7. **Complete answer already on glass → stop.** After a full reply via `speak`, honest stop (or short free-text idle) is fine. Do not speak again only to satisfy process or a host reminder when nothing new is owed.
 8. **Wait long enough for humans.** Default host timeout is **5 minutes**. Prefer longer waits for open-ended or free-text replies (`timeout_seconds` ≥ 300). Multi-choice is good for collaborative forks; when the human may type a custom answer (or you offer "I'll type" / free text with empty `choices`), use a **long** free-text wait — do not use short 30–120s timeouts for thoughtful discussion.
 9. **On wait_timeout wakes:** do **not** re-ask the same question only because the timer fired. Briefly reason: pick other honest ledger work, wait again with a clear new reason, or go idle (`rest`). Prefer silence over nagging.
+10. **Recall layered, not invented.** If the user asks what you remember about a topic, prefer glass-tail and directed_keep first; if thin, use semantic / memory-traverse — do not invent from episodic summaries alone.
 
 ## Process
 
