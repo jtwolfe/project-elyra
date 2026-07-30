@@ -80,38 +80,24 @@ Treat the Grok Web structure as **loose architectural guidance** to grow into, n
 
 ### 3.1 `main` protection status (2026-07-30)
 
-**GitHub hard branch protection / rulesets** on a **private** personal repo require **GitHub Pro** (or org Team/Enterprise), or the repository to be **public**. API response:
+**Done:** repository is **public**; **`main` is branch-protected**.
 
-```text
-Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)
-```
+| Rule | Setting |
+|------|---------|
+| Visibility | **Public** (`jtwolfe/project-elyra`) |
+| Require pull request | **Yes** (no direct merge without PR for non-admins) |
+| Required approving reviews | **1** |
+| Require code owner review | **Yes** — [`.github/CODEOWNERS`](../../.github/CODEOWNERS) is `* @jtwolfe` |
+| Dismiss stale reviews | **Yes** |
+| Allow force-push | **No** |
+| Allow deleting `main` | **No** |
+| Required status checks (Actions) | **None** (local verify for now) |
+| Enforce for admins | **Off** — owner can admin-bypass in emergency / solo land; **do not use casually** |
+| Delete head branch on merge | **Off** (operator preference) |
 
-| Intended rule (Stage 1) | Hard enforce now? | Soft / free-tier substitute |
-|-------------------------|-------------------|-----------------------------|
-| No direct push to `main` | No (needs Pro/public) | Process: always PR; do not push `main` locally |
-| Require PR before merge | No | Same — human/PE habit + Project board |
-| Optional 1 review | No | Dual review for risky changes when Colin available |
-| No required CI status checks yet | N/A | Local `pytest -m 'not llm'` before merge |
-| Delete head branch after merge | **Off** (operator preference 2026-07-30) | Manual branch cleanup; may re-enable later |
-| No force-push to main | No hard | Never force-push `main`; lease-only elsewhere |
+**Meaning of “only Jamie approves”:** only `@jtwolfe` is code owner. Collaborator approvals do **not** satisfy the code-owner requirement. You still cannot approve your *own* PR as the sole review — for solo work, use a PR for visibility and **admin merge** only when necessary, or get a second account/reviewer later.
 
-**To enable real protection later (pick one):**
-
-1. **GitHub Pro** on the owner account → Settings → Branches → add rule for `main`, or:  
-   ```bash
-   gh api -X PUT repos/jtwolfe/project-elyra/branches/main/protection \
-     -H "Accept: application/vnd.github+json" \
-     -f required_status_checks='null' \
-     -F enforce_admins=false \
-     -f required_pull_request_reviews='{"required_approving_review_count":1}' \
-     -f restrictions='null' \
-     -F allow_force_pushes=false \
-     -F allow_deletions=false
-   ```
-2. **Make the repository public** (product/policy decision — not automatic).  
-3. **Move to a GitHub Team org** with protection included in plan.
-
-Until then, treat the table above as **policy law** even without the red padlock in GitHub UI.
+**Do not** grant write access lightly: anyone with write can open PRs; only your code-owner approval completes the gate.
 
 ### Stage 2 — Intermediate (while shipping v0.1)
 
