@@ -1346,9 +1346,15 @@ body {
   min-height: 0;
 }
 
-#panel-moments.moment-detail-open #moments-list {
+/* Moments lives under Memory (BUG-glass-02); same list/detail split as Atoms. */
+#panel-memory.moment-detail-open #moments-list {
   flex: 0 1 36%;
   max-height: min(40vh, 42%);
+}
+
+.memory-moments-hint {
+  padding: 0.5rem 1.5rem 0.25rem;
+  margin: 0;
 }
 
 .detail-panel {
@@ -1479,11 +1485,76 @@ body {
   background: var(--bg);
 }
 
+/* Kind accent (BUG-glass-01 / #70) */
+.beat.beat-kind-speak {
+  border-color: color-mix(in srgb, var(--gold-primary) 45%, var(--border));
+}
+.beat.beat-kind-tool {
+  border-color: color-mix(in srgb, #6ea8fe 40%, var(--border));
+}
+.beat.beat-kind-obs {
+  border-color: color-mix(in srgb, var(--muted) 50%, var(--border));
+}
+.beat.beat-kind-stop {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.beat.beat-kind-user {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+}
+
 .beat-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.35rem;
+}
+
+.beat-kind-chip {
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.beat-ts {
+  font-variant-numeric: tabular-nums;
+}
+
+.beat-prose {
+  margin: 0.25rem 0 0.15rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 48rem;
+}
+
+.beat-prose p {
+  margin: 0 0 0.45rem;
+}
+
+.beat-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.beat-tool-line {
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.beat-error {
+  margin-top: 0.25rem;
+  color: var(--warn);
+  font-size: 0.85rem;
+}
+
+.beat-raw-fold {
+  margin-top: 0.35rem;
+}
+
+.beat-raw-fold > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .beat-body {
@@ -1494,6 +1565,19 @@ body {
   color: rgba(245, 240, 225, 0.85);
   overflow: auto;
   max-height: 240px;
+}
+
+/* Tool result body: same pretty structure as raw fields (compact wire → indent). */
+.beat-json-body {
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-soft) 80%, transparent);
+  max-height: min(28rem, 55vh);
+  overflow: auto;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .link-btn {
@@ -1670,6 +1754,15 @@ body {
 
 .continuous-card {
   max-width: none;
+}
+
+/* Status body scrolls; panel-head stays pinned (BUG-status-01 / #76). */
+#panel-status .status-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.5rem;
 }
 
 .status-cards {
@@ -2843,6 +2936,25 @@ body {
   min-height: 0;
 }
 
+.memory-channel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.memory-channel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.15rem;
+  font-size: 0.85rem;
+  color: var(--cream);
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+}
+
 .memory-channel-card {
   margin-bottom: 0.15rem;
 }
@@ -2854,7 +2966,8 @@ body {
   margin: 0.15rem 0 0.45rem;
 }
 
-/* Semantic select note on Memory → Context (omit / dedupe visibility). */
+/* Channel status notes on Memory → Context (semantic + directed_keep).
+   Shared chrome: title case head, state badge, muted meta body, left accent. */
 .memory-semantic-note {
   border-left: 3px solid var(--border);
 }
@@ -2874,6 +2987,13 @@ body {
   color: var(--muted);
   word-break: break-word;
 }
+/* Subtle channel tint on the shared status bubble (state border still wins). */
+.memory-channel-status-directed.memory-semantic-note-ok {
+  border-left-color: color-mix(in srgb, #c084fc 55%, var(--ok, #3d9a5f));
+}
+.memory-channel-status-directed.memory-semantic-note-deduped {
+  border-left-color: color-mix(in srgb, #c084fc 35%, var(--warn, #c9a227));
+}
 
 .memory-snippet {
   margin: 0;
@@ -2884,6 +3004,115 @@ body {
   color: var(--text);
   max-height: 12rem;
   overflow: auto;
+}
+
+.memory-snippet-prose {
+  font-family: var(--font);
+  max-height: 16rem;
+}
+
+.memory-snippet-prose p {
+  margin: 0 0 0.4rem;
+}
+
+.memory-snippet-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.memory-trunc-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+}
+
+.memory-channel-actions {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+/* Context in-place atom inspect (unified with Atoms tab chrome). */
+.memory-atom-inspect-fold {
+  margin-top: 0.45rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: 0.35rem;
+}
+
+.memory-atom-inspect-fold > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.82rem;
+  user-select: none;
+  list-style: none;
+}
+
+.memory-atom-inspect-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.memory-atom-inspect-fold > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.memory-atom-inspect-fold[open] > summary::before {
+  content: "▾ ";
+}
+
+.memory-atom-inspect-panel {
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-soft) 75%, transparent);
+}
+
+.memory-atom-inspect-nested {
+  margin-top: 0.25rem;
+  border-top: none;
+  padding-top: 0;
+}
+
+.memory-atom-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+
+.memory-atom-member-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.memory-atom-member-row code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.memory-channel-card.memory-ch-directed_keep {
+  border-left: 3px solid color-mix(in srgb, #c084fc 45%, var(--border));
+}
+
+.memory-channel-card.memory-ch-temporal {
+  border-left: 3px solid color-mix(in srgb, var(--gold-primary) 55%, var(--border));
+}
+.memory-channel-card.memory-ch-episodic {
+  border-left: 3px solid color-mix(in srgb, #6ea8fe 50%, var(--border));
+}
+.memory-channel-card.memory-ch-semantic {
+  border-left: 3px solid color-mix(in srgb, var(--good) 50%, var(--border));
+}
+.memory-channel-card.memory-ch-system,
+.memory-channel-card.memory-ch-orient {
+  border-left: 3px solid color-mix(in srgb, var(--muted) 60%, var(--border));
 }
 
 .memory-atoms-toolbar {

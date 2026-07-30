@@ -7,9 +7,39 @@ essays. When an item is fixed, mark **Status** and leave a one-line resolution
 
 | Field | Value |
 |-------|--------|
-| **Branch** | `grok-improvement` |
+| **Branch** | `main` (product tip after known-bugs Glass batch) |
+| **Project** | [Autopoiesis Commons #2](https://github.com/users/jtwolfe/projects/2) |
+| **Epic** | [#59](https://github.com/jtwolfe/project-elyra/issues/59) — break-out into issues |
 | **Audience** | Operators + implementers |
 | **Conflict** | Code + [stretch-1.md](stretch-1.md) win if this note drifts |
+
+---
+
+## Issue index
+
+Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwolfe/project-elyra/issues/59)) on the project board.
+
+| Bug ID | Issue | Doc status (summary) |
+|--------|-------|----------------------|
+| `BUG-wake-01` | [#67](https://github.com/jtwolfe/project-elyra/issues/67) (open) | Open (defer) |
+| `BUG-wake-02` | [#68](https://github.com/jtwolfe/project-elyra/issues/68) (open) | Open (defer) |
+| `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
+| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on main (Moments pretty-print) |
+| `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (closed) | **Fixed** on main — Moments tab under Memory |
+| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (closed) | **Fixed** on main (Context chrome + inspect); residual: ladder narrative |
+| `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
+| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (closed) | **Fixed** on main (Atoms soft-skip under glass-03) |
+| `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | **Partial** on main — knip soft-skip shipped; residual poll architecture later |
+| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
+| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
+| `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
+| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** on main |
+| `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** on main |
+| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (closed) | **Fixed** on main |
+| `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
+| `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
+| `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
+| `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 
 ---
 
@@ -18,6 +48,7 @@ essays. When an item is fixed, mark **Status** and leave a one-line resolution
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#67](https://github.com/jtwolfe/project-elyra/issues/67) |
 | **Severity now** | Low nuisance (glass/moments spam, short rest loops) |
 | **Severity later** | **Med** — repeated storms bloat **moments index + tapes + wake/timer history**, which becomes painful when Phase 3 memory / denser recall lands |
 | **Area** | Presence wake queue, timers, ledger `task_ready`, model use of `schedule_wake` |
@@ -128,6 +159,7 @@ notion in `scripts/live_eval` — any fix should extend or reuse that language.
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#68](https://github.com/jtwolfe/project-elyra/issues/68) |
 | **Severity now** | Med nuisance — after restart (or after long idle), timed-out waits and stale context can resume **old** threads (e.g. haiku collection) instead of recent work |
 | **Severity later** | Med–High when denser memory + continuous make “zombie” threads more common |
 | **Area** | Presence startup (`_startup_recover`, `_fire_due_unlocked`), wait/timer rehydrate, orient / meal seed, rest vs work skills on `wait_timeout` |
@@ -190,6 +222,7 @@ Same class can apply without restart if a long wait expires while glass still sh
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — **better than Phase 0 linear bricks, still not the product outcome wanted** |
+| **Issue** | [#69](https://github.com/jtwolfe/project-elyra/issues/69) |
 | **Severity now** | Med (operator trust + dogfood pacing; hard-stop override papers over pain) |
 | **Severity later** | High if memory / continuous work increases Completions spend without honest pacing |
 | **Area** | `elyra/llm/usage.py`, credits poll, Glass usage rail + Status card, settings (`UsageSettings`) |
@@ -243,7 +276,8 @@ Also: gates care about **overall weekly limit + cumulative Elyra spend**; produc
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs` — tool JSON pretty-print; pending main)|
+| **Issue** | [#70](https://github.com/jtwolfe/project-elyra/issues/70) |
 | **Severity now** | Low–Med (operator readability; dogfood friction) |
 | **Severity later** | Med if Moments remain a primary debug surface |
 | **Area** | Glass Moments panel (`elyra/runtime/web/`, moments API payload render) |
@@ -265,27 +299,29 @@ Moments UI presents beats / payload in a raw or near-JSON shape that is hard to 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) — product IA, not a functional defect |
-| **Severity now** | Low (nav clutter / split brain: Moments vs Memory) |
-| **Severity later** | Med once Memory (context/atoms/vectors/graph) is the default operator mental model |
-| **Area** | Glass nav + panels; Memory tabs (context / atoms / vectors / graph) |
-| **Dogfood** | 2026-07-28 operator request: Moments should sit next to Context, Atoms, Vectors, Graph |
+| **Status** | **Fixed** on main |
+| **Issue** | [#71](https://github.com/jtwolfe/project-elyra/issues/71) |
+| **Severity now** | — |
+| **Severity later** | — |
+| **Area** | Glass nav + Memory tabs |
+| **Dogfood** | 2026-07-28 request; 2026-07-30 IA move |
 
 ### Symptom
 
-Moments is a top-level nav peer of Memory. After Stretch 2 Phase 1, operators think “history / tape / meal” as one place; two panels force context-switching and duplicate mental models (moment tape vs atom store).
+Moments was a top-level nav peer of Memory; operators wanted one place for meal / tape / store.
 
-### Fix directions
+### Fix (landed)
 
-1. Add a **Moments** (or **Tape**) tab under Memory next to Context / Atoms / Vectors / Graph.
-2. Retire or demote top-level Moments nav once the subsection is at parity.
-3. Preserve deep-link / refresh behavior; do not break moment-id filters used by Atoms.
-4. Pair with **BUG-glass-01** beautify so the moved panel is worth opening.
+1. **Moments** tab under Memory: order **Context · Moments · Atoms · Vectors · Graph**.
+2. Top-level Moments nav + `#panel-moments` removed.
+3. `refreshMemory` / tick poll Moments when that Memory tab is active; soft-refresh unchanged.
+4. List/detail open class on `#panel-memory` (same pattern as Atoms).
+5. Element ids (`#moments-list`, `#moment-detail`) and `/api/moments` unchanged.
 
 ### Explicit non-goals
 
 - Do not delete the moment store or change moment = do-loop semantics.
-- Do not block on Vectors/Graph product before the IA move.
+- No hash deep-link router in this pass.
 
 ---
 
@@ -293,7 +329,8 @@ Moments is a top-level nav peer of Memory. After Stretch 2 Phase 1, operators th
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | **Fixed** on main (Glass Context chrome + inspect soft-refresh). Residual: template ladder / narrative summary quality — open separately if needed. |
+| **Issue** | [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
 | **Severity now** | Med (hard to understand what the model is “eating”) |
 | **Severity later** | High if Context is the primary trust surface for meal/ladder correctness |
 | **Area** | Glass Memory → Context (`inspect.meal_*`, `app.js` `renderMemoryContext`); ladder (`elyra/memory/ladder.py`) |
@@ -311,9 +348,9 @@ Context cards are hard to read: snipped text, channel labels without hierarchy, 
 
 ### Fix directions
 
-1. **Beautify:** channel sections, scale/window badges, token budget bars, expandable full content (use `content_chars` / detail endpoint).
-2. **Generation review:** when ladder runs (idle `refresh_due` vs on-compose), skip-unchanged behavior, child-preference vs raw, highlight ranking, whether template-only is enough for dogfood.
-3. Document operator-visible “this is a snippet of N chars” so truncation is not mistaken for empty memory.
+1. **Beautify:** channel sections, scale/window badges, token budget bars, expandable full content (use `content_chars` / detail endpoint). **Done on branch:** channel groups, truncation honesty (`snippet k/N chars`), prose body, open-atom link; inspect snippet 480 chars.
+2. **Generation review:** when ladder runs (idle `refresh_due` vs on-compose), skip-unchanged behavior, child-preference vs raw, highlight ranking, whether template-only is enough for dogfood. **Residual:** still template-first / no LLM summaries — intentional until dogfood asks for richer narrative.
+3. Document operator-visible “this is a snippet of N chars” so truncation is not mistaken for empty memory. **Done on branch.**
 4. Optional later: richer narrative summaries (LLM) only after template path is trustworthy and budgeted.
 
 ---
@@ -323,6 +360,7 @@ Context cards are hard to read: snipped text, channel labels without hierarchy, 
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#73](https://github.com/jtwolfe/project-elyra/issues/73) |
 | **Severity now** | Low–Med |
 | **Severity later** | Med as atom volume grows |
 | **Area** | Glass Memory → Atoms (`atom_to_list_row` / detail, `app.js` atoms timeline) |
@@ -344,26 +382,100 @@ Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time vis
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
-| **Severity now** | Med (actively interferes with inspection) |
-| **Severity later** | Med |
-| **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active); possibly status/system strip re-render |
-| **Dogfood** | 2026-07-28 — inspector keeps flashing; system update also impacts ability to select text |
+| **Status** | **Fixed** on main (list + soft detail under BUG-glass-03) |
+| **Issue** | [#74](https://github.com/jtwolfe/project-elyra/issues/74) |
+| **Severity now** | — (status-rail thrash residual under #86 if still felt) |
+| **Severity later** | Med if soft-skip regresses |
+| **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active) |
+| **Dogfood** | 2026-07-28 — inspector flash; 2026-07-30 — list + detail soft-skip on branch |
+| **Related** | Same root class as Context inspect flash. Implement under **BUG-glass-03** (#86). |
 
 ### Symptom
 
-While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular cadence. Selecting text for copy is interrupted or reset — likely full DOM rebuild from the global poll. Operator also reports **system update** (status rail / status refresh) interfering with text selection.
+While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular cadence. Selecting text for copy is interrupted or reset — full DOM rebuild from the global poll.
 
-### Likely cause (unverified)
+### Fix (landed on `fix/known-bugs`)
 
-`setInterval(tick, 1500)` always runs `refreshStatus()` + `refreshMessages()`, and when `activePanel === "memory"` also `refreshMemory()`, which rebuilds Context/Atoms DOM even when data is unchanged.
+1. `refreshMemoryAtoms` fingerprints list payload; skip list wipe when unchanged.
+2. Open detail uses soft `loadAtomDetail` with body fingerprint — no loading flash / re-paint when body stable.
+3. Manual Apply / kind filter / nav still `force: true`.
+4. Residual: status rail thrash and any larger poll architecture review deferred to #86 residual / later.
 
-### Fix directions
+---
 
-1. Diff-then-patch or skip re-render when payload hash/etag unchanged.
-2. Do not replace nodes that contain an active text selection / focus.
-3. Pause aggressive panel refresh while pointer is selecting or detail is focused.
-4. Audit status/system strip updates for the same full-replace pattern.
+## BUG-glass-03 — Glass poll hard-rebuilds active panels (inspectors flash; text selection dies)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **Partial** on main — catalog soft-skip knip shipped; residual poll architecture / status strip later |
+| **Issue** | [#86](https://github.com/jtwolfe/project-elyra/issues/86) |
+| **Severity now** | Low–Med residual (status strip; larger poll architecture) |
+| **Severity later** | High if soft-skip regresses or new panels omit the pattern |
+| **Area** | `elyra/runtime/web/app.js`: `tick` → soft `refreshActivePanel`; nav/mutations use `force: true` |
+| **Dogfood** | 2026-07-30 — patch pass; operator verify selection survives idle poll |
+
+### Symptom
+
+While a Glass catalog panel is open, UI **rebuilded on a regular ~1.5s period** (inspectors flash, text selection dies). Root is **one poll architecture** that always hard-rebuilt DOM.
+
+### Root cause (confirmed)
+
+```text
+tick (1.5s)
+  → refreshStatus() + refreshMessages()   // always
+  → if active panel is catalog:
+        refreshGoals | refreshMoments | refreshMemory* |
+        refreshTools | refreshIdentity | refreshSecrets
+```
+
+Most paths used to **always** do destructive DOM updates even when data was unchanged.
+
+### Soft-skip surfaces (do not regress)
+
+| Surface | Mechanism |
+|---------|-----------|
+| **Chat messages** | `messagesFingerprint` |
+| **Memory → Context** | `fingerprintMemoryMeal` + preserve open inspect folds |
+| **Moments detail** | Soft `loadMomentDetail` / snapshot |
+| **Goals** | `stableFingerprint` list skip |
+| **Moments list** | list meta fingerprint (detail remains soft) |
+| **Memory → Atoms** | list FP + soft detail (**#74**) |
+| **Memory → Vectors / Graph** | payload fingerprint |
+| **Tools / Skills** | catalog list FP + soft inspector |
+| **Identity** | payload FP + `setTextIfChanged` |
+| **Secrets** | list FP (open grant editors preserved when unchanged) |
+
+### Force paths (must rebuild after write / nav)
+
+Nav click, Memory tab/Apply, catalog Rescan, secret save/delete/grants, identity chip switch / promote / session user switch, `refreshAllPanels` (reset). Tick stays soft (`refreshActivePanel()` without force).
+
+### Residual / later (not this patch)
+
+- Full poll architecture review (whether tick should refresh every catalog panel this way)
+- Status strip thrash / selection during `refreshStatus`
+- Diff-patch DOM instead of skip-or-full-rebuild
+- Selection-aware pause while pointer is selecting
+
+### Success criteria
+
+- [x] Shared `stableFingerprint` / force-vs-soft convention on catalog panels
+- [ ] Operator dogfood: Goals / Tools inspector / Identity / Secrets / Atoms detail — text selection survives ≥10s idle poll with unchanged data
+- [ ] New server data still appears without manual nav re-click
+- [ ] Context + chat soft-skip still work
+- [ ] #74 closable after dogfood
+- [x] Doc note in known-bugs
+
+### Related
+
+- **#74** BUG-mem-ui-03 — Atoms instance (soft-skip in this patch)
+- **#72** BUG-mem-ui-01 — Context inspect meal soft-refresh
+- Moments soft detail / chat `messagesFingerprint` — patterns copied
+
+### Explicit non-goals
+
+- Do not disable live updates entirely
+- Do not require per-tool output contracts
+- Do not rewrite Glass as a framework — knip soft-skip only
 
 ---
 
@@ -372,6 +484,7 @@ While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular ca
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — feature gap |
+| **Issue** | [#75](https://github.com/jtwolfe/project-elyra/issues/75) |
 | **Severity now** | Low–Med (depends on dogfood topics; calculator / STEM chats unreadable) |
 | **Severity later** | Med for teaching / technical work |
 | **Area** | Glass chat message render (`app.js` message HTML); speak / model content pipeline |
@@ -395,11 +508,108 @@ Math in chat shows as raw `$...$` / `$$...$$` / `\(...\)` (or similar) instead o
 
 ---
 
+## BUG-chat-02 — Soft newlines from chat input missing in Glass history (present in atoms)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open |
+| **Issue** | [#84](https://github.com/jtwolfe/project-elyra/issues/84) |
+| **Severity now** | Low–Med (multi-line chat composition looks flattened in history) |
+| **Severity later** | Med for any structured prompts / poetry / lists typed with Enter in the composer |
+| **Area** | Glass chat history render (`elyra/runtime/web/app.js` `renderMarkdown` / message bubbles); user social text path is fine into store |
+| **Dogfood** | 2026-07-30 operator: newlines typed in chat input **do not appear** in Glass chat history, but **do appear** in Memory atoms |
+
+### Symptom
+
+Operator composes a multi-line message in the Glass chat input (soft line breaks via Enter). After send:
+
+- **Glass Chat** history shows the text as a **single run-on paragraph** (line breaks collapsed / invisible).
+- **Memory atoms** (and likely raw store / meal) still contain the **real newlines** — so fidelity is not lost on the backend, only on Glass chat presentation.
+
+Confirms storage path is OK; defect is **display** of user (and possibly assistant) bubbles after markdown-ish rendering.
+
+### Likely cause (unverified — dig on fix)
+
+`renderMarkdown` flushes paragraph lines with `para.join(" ")` — single newlines become spaces, Markdown-style. Chat soft-breaks are not converted to `<br>` and message CSS may not use `white-space: pre-wrap` for user bubbles. Atoms UI shows raw-ish text, so newlines survive there.
+
+### Fix directions
+
+1. For **chat history bubbles**, preserve soft line breaks: either treat single `\n` as `<br>` (GFM-style / chat-composer style) or render user messages with `white-space: pre-wrap` and skip aggressive join-space collapse.
+2. Prefer fixing **user** role first (composer source of truth); then decide if assistant speak should match.
+3. Regression: multi-line user message still looks multi-line after refresh / re-open Glass; atom body unchanged.
+4. Do not strip newlines from the wire format or atom promote path.
+
+### Explicit non-goals
+
+- Do not change atom schema or meal composition for this bug.
+- Do not require full CommonMark hard-break rules unless we adopt them product-wide.
+- Separate from **BUG-chat-01** (math); fix can land without KaTeX.
+
+### Related
+
+- **BUG-chat-01** — math rendering (same chat bubble pipeline).
+- **BUG-mem-ui-*** — atoms already show newlines; good contrast for dogfood.
+
+---
+
+## BUG-tts-01 — TTS needs sanitation before text is sent to the service
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open |
+| **Issue** | [#85](https://github.com/jtwolfe/project-elyra/issues/85) |
+| **Severity now** | Med (broken / chaotic audio for common Glass speak payloads) |
+| **Severity later** | High if TTS is a default listen path for long agent turns with tables, links, UI chrome |
+| **Area** | `elyra/media/tts.py` (`validate_text_for_tts` / `synthesize` / `get_or_synthesize`); Glass play-on-message path that feeds **saved** message text to xAI TTS |
+| **Dogfood** | 2026-07-30 operator: non-language / non-speech characters create **generation chaos**. Example class: Grok UI / glass elements like *“you can see the table in our conversation history”* (and similar chrome, tables, markup) when included in text sent to TTS |
+
+### Symptom
+
+Text is handed to the TTS service with little or no **speech-oriented sanitation**. Current guard in product is mainly **empty / length** (`validate_text_for_tts`), not content hygiene. Result:
+
+- Tables, markdown, URLs, code fences, emoji-heavy chrome, and **UI meta-phrases** (e.g. affordance copy about “conversation history” / “see the table”) get spoken or scramble prosody.
+- Audio sounds broken, robotic-garble, or reads control/UI prose that was never meant for ears.
+- Operator loses trust in play-on-message for real multi-part agent replies.
+
+Storage of the original message can stay intact; this is a **TTS ingress** problem (what we send on the wire), not necessarily a glass-display bug.
+
+### Likely cause (unverified)
+
+`validate_text_for_tts` returns full stored content after empty/length checks; `synthesize` posts that string as `text` to `POST /v1/tts`. No strip of:
+
+- markdown / table syntax
+- bare URLs and attachment tokens
+- code fences
+- glass/system chrome strings and non-linguistic punctuation runs
+- optional: role labels, citation chips, “see table in history” style meta
+
+### Fix directions
+
+1. **Sanitize pipeline** before `synthesize` / cache key material that should reflect *spoken* form: strip or rewrite non-speech structures to short spoken equivalents (or drop).
+2. Prefer **fail soft**: if after sanitation text is empty, refuse with a clear reason rather than calling the service.
+3. Inventory dogfood offenders: tables, lists, code, URLs, emoji, UI meta lines (including Grok-style *“you can see the table in our conversation history”* elements).
+4. Keep original message on disk; cache key may need to include a **sanitized hash** or version suffix so old chaotic caches do not stick after the fix.
+5. Optional operator toggle later (“read raw”); default must be sanitized.
+
+### Explicit non-goals
+
+- Do not change STT.
+- Do not require perfect SSML for v1 — plain cleaned prose is enough.
+- Do not delete original chat/atom text.
+
+### Related
+
+- Glass play-on-message / media TTS cache (`tts_cache` kind).
+- **BUG-chat-01** / **BUG-chat-02** — chat *display* issues; TTS is the *listen* path (related multi-modal surface, separate fix).
+
+---
+
 ## BUG-status-01 — Status page does not scroll
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs`; pending main) |
+| **Issue** | [#76](https://github.com/jtwolfe/project-elyra/issues/76) |
 | **Severity now** | Med (lower half of Status unreachable on typical viewports) |
 | **Severity later** | Med |
 | **Area** | Glass Status panel layout/CSS (`#panel-status`, `.status-cards`, main content overflow) |
@@ -421,7 +631,8 @@ Status panel content that exceeds the viewport cannot be scrolled; cards below t
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs`; pending main) |
+| **Issue** | [#77](https://github.com/jtwolfe/project-elyra/issues/77) |
 | **Severity now** | Low–Med (confusing control; one affordance appears dead) |
 | **Severity later** | Low |
 | **Area** | Glass Status → Dev speed card (`#dev-speed-toggle` in `index.html` / `app.js` `renderDevSpeed`) |
@@ -447,7 +658,8 @@ Hard-stop override / continuous use `input.continuous-toggle` + `.toggle-track` 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs`; pending main) |
+| **Issue** | [#78](https://github.com/jtwolfe/project-elyra/issues/78) |
 | **Severity now** | Med (budget safety + operator trust; override ON is dangerous if sticky) |
 | **Severity later** | High if ON sticks unintentionally across restarts |
 | **Area** | `UsageMeter` / `usage.json` `hard_stop_override`; `PATCH /api/usage`; Status override toggle |
@@ -479,6 +691,7 @@ Hard-stop override can be switched ON successfully. Turning it OFF appears not t
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — **review after memory is up** (Phase 1 meal/store stable in dogfood) |
+| **Issue** | [#79](https://github.com/jtwolfe/project-elyra/issues/79) |
 | **Severity now** | Med (over-constrains presence / tone; feels like hard identity enforcement) |
 | **Severity later** | Med–High if hard walls fight natural self from memory + identity digests |
 | **Area** | `prompts/system.md` (loaded via `elyra/prompts/loader.py` → `loop/context.py`); possibly orient copy; tests that pin system-prompt wording (`tests/test_prompts_loader.py`, skill/tool name tests) |
@@ -526,6 +739,7 @@ The fixed **system** block (esp. the leading `# Elyra system` framing and **Hard
 | Field | Value |
 |-------|--------|
 | **Status** | **Fixed in code (PR-R1–R5, 2026-07-29)** — residual: **operator smoke dogfood verification pending** before full product sign-off |
+| **Issue** | [#80](https://github.com/jtwolfe/project-elyra/issues/80) |
 | **Severity now** | Low residual (code path restored; unconfirmed on live operator corpus) |
 | **Severity later** | High if regressed — 2a seeds and meal semantic go empty again |
 | **Area** | `elyra/memory/embed/*`, `index.py`, `lance_store.py`, `meal.py`, Vectors APIs / glass |
@@ -564,6 +778,7 @@ Architecture: [architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-
 | Field | Value |
 |-------|--------|
 | **Status** | **Fixed (2026-07-29, `fcb5130`)** — **restart required** so process maps rebuild from full disk |
+| **Issue** | [#81](https://github.com/jtwolfe/project-elyra/issues/81) |
 | **Severity now** | Low residual (code fixed; live process still thin until restart) |
 | **Severity later** | High if regressed — glass / meal / graph / traverse operate on ~10-atom prefix after every restart |
 | **Area** | `elyra/memory/lance_store.py` (`_load`, migrate, promote, empty-check, health dual-count) |
@@ -609,6 +824,7 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | Field | Value |
 |-------|--------|
 | **Status** | **Open** (defer to Gate B / runtime) |
+| **Issue** | [#82](https://github.com/jtwolfe/project-elyra/issues/82) |
 | **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **moment/meal encode path not verified**; wheel reinstall loses inject |
 | **Severity later** | High when product default-on wants durable multi-device embed (CUDA / modern ROCm / CPU) + encode during live moments under meal budgets |
 | **Area** | `elyra/memory/embed/runtime.py`, encode queue / idle worker, moment/meal integration, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |

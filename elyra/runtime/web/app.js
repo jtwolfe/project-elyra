@@ -71,6 +71,10 @@ let memoryActiveTab = "context";
 /** @type {string | null} */
 let selectedAtomId = null;
 let memoryAtomDetailLoadGen = 0;
+/** Last meal fingerprint for Context soft-refresh (avoid wiping open inspect). */
+let memoryContextMealFp = null;
+/** @type {Map<string, object>} atom_id → last fetched detail for Context inspect restore */
+const memoryContextAtomCache = new Map();
 const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const catalogInspector = $("#catalog-inspector");
@@ -112,8 +116,10 @@ const brandNameEl = $("#brand-name");
 const brandSubEl = $("#brand-sub");
 const sessionUserSelect = $("#session-user-select");
 const sessionNewGuestBtn = $("#session-new-guest-btn");
+// Styled switch class is shared; exclude non-continuous controls so their
+// change handlers stay on their own PATCH paths (BUG-status-02 / #77).
 const continuousToggles = document.querySelectorAll(
-  ".continuous-toggle:not(#usage-override-toggle)"
+  ".continuous-toggle:not(#usage-override-toggle):not(#dev-speed-toggle):not(#semantic-wait-toggle)"
 );
 const continuousMetaEls = [$("#continuous-status-rail")].filter(Boolean);
 const continuousSummary = $("#continuous-summary");
@@ -267,7 +273,14 @@ let oauthPollTimer = null;
 let lastOauthConfigured = false;
 /** True while PATCH /api/usage (hard-stop override) is in flight. */
 let usageOverrideInFlight = false;
-/** Last known hard_stop_override / override_active from status. */
+/**
+ * Desired override while a PATCH is in flight. If the operator toggles again
+ * before the first request finishes, we apply this after the in-flight call
+ * (BUG-status-03 / #78 — dropped OFF clicks left disk stuck ON).
+ * @type {boolean|null}
+ */
+let pendingOverrideTarget = null;
+/** Last known hard_stop_override / override_active from status (server truth). */
 let lastOverrideActive = false;
 /** Last known usage.hard_stop value (for transition notices). */
 let lastHardStop = null;
@@ -278,7 +291,7 @@ let lastProviderModel = null;
 let lastCredentialSource = null;
 /** Last *server-confirmed* reasoning effort (never set by optimistic paint). */
 let lastReasoningEffort = "high";
-/** Active nav panel name (chat | goals | moments | tools | identity | secrets | status). */
+/** Active nav panel name (chat | goals | memory | tools | identity | secrets | status). */
 let activePanel = "chat";
 /** True while secrets PUT/DELETE is in flight. */
 let secretsInFlight = false;
@@ -367,6 +380,37 @@ function messagesFingerprint(messages) {
     last.created_at || ""
   }|${(last.reasoning || "").length}|${attFp}`;
 }
+
+/**
+ * Stable JSON fingerprint for Glass soft-refresh (BUG-glass-03).
+ * Tick may fetch often; DOM replace only when this changes (unless force).
+ */
+function stableFingerprint(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** Set textContent only when the string actually changed (preserve selection). */
+function setTextIfChanged(el, text) {
+  if (!el) return;
+  const next = text == null ? "" : String(text);
+  if (el.textContent !== next) el.textContent = next;
+}
+
+// Soft-refresh fingerprints for catalog panels (BUG-glass-03 / #86).
+let lastGoalsFp = null;
+let lastMomentsListFp = null;
+let lastAtomsListFp = null;
+let lastAtomDetailFp = null;
+let lastVectorsFp = null;
+let lastGraphFp = null;
+let lastToolsCatalogFp = null;
+let lastCatalogDetailFp = null;
+let lastIdentityFp = null;
+let lastSecretsFp = null;
 
 /**
  * Resolve markdown media/link targets for glass CSP.
@@ -1917,7 +1961,11 @@ function renderUsageCard(s) {
     usageOverrideToggle.checked = overrideActive;
     usageOverrideToggle.disabled = !enabled;
   }
-  lastOverrideActive = overrideActive;
+  // Never clobber lastOverrideActive mid-PATCH with a concurrent status poll
+  // (stale ON would undo a successful OFF on error rollback).
+  if (!usageOverrideInFlight) {
+    lastOverrideActive = overrideActive;
+  }
   if (usageOverrideMeta) {
     usageOverrideMeta.textContent = overrideActive
       ? "override ON"
@@ -2012,20 +2060,43 @@ async function clearApiKey() {
 }
 
 async function setHardStopOverride(active) {
-  if (usageOverrideInFlight) return;
+  const want = Boolean(active);
+  // Coalesce toggles while a PATCH is in flight so OFF is never dropped.
+  if (usageOverrideInFlight) {
+    pendingOverrideTarget = want;
+    if (usageOverrideToggle) usageOverrideToggle.checked = want;
+    return;
+  }
   usageOverrideInFlight = true;
+  pendingOverrideTarget = null;
   if (usageOverrideToggle) {
     usageOverrideToggle.disabled = true;
-    usageOverrideToggle.checked = active;
+    usageOverrideToggle.checked = want;
   }
   try {
-    await fetchJson("/api/usage", {
+    const body = await fetchJson("/api/usage", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hard_stop_override: Boolean(active) }),
+      body: JSON.stringify({ hard_stop_override: want }),
     });
-    if (active) {
+    const serverActive = Boolean(
+      body && body.usage && body.usage.override_active
+    );
+    lastOverrideActive = serverActive;
+    if (usageOverrideToggle) usageOverrideToggle.checked = serverActive;
+    if (usageOverrideMeta) {
+      usageOverrideMeta.textContent = serverActive
+        ? "override ON"
+        : "default off";
+    }
+    if (serverActive !== want) {
+      showNotice(
+        "Hard-stop override did not stick on server — check Status after refresh."
+      );
+    } else if (want) {
       showNotice("Hard-stop override ON — model calls continue past budget.");
+    } else {
+      showNotice("Hard-stop override OFF — budget hard-stop enforced again.");
     }
     await refreshStatus();
   } catch (err) {
@@ -2033,7 +2104,19 @@ async function setHardStopOverride(active) {
     showNotice(String(err.message || err));
   } finally {
     usageOverrideInFlight = false;
-    if (usageOverrideToggle) usageOverrideToggle.disabled = false;
+    if (usageOverrideToggle) {
+      usageOverrideToggle.disabled = false;
+    }
+    // Apply last click during flight (e.g. ON then OFF before first finished).
+    if (pendingOverrideTarget !== null) {
+      const next = pendingOverrideTarget;
+      pendingOverrideTarget = null;
+      if (next !== lastOverrideActive) {
+        void setHardStopOverride(next);
+      } else if (usageOverrideToggle) {
+        usageOverrideToggle.checked = lastOverrideActive;
+      }
+    }
   }
 }
 
@@ -2365,9 +2448,21 @@ function renderGoals(goals) {
   }
 }
 
-async function refreshGoals() {
+async function refreshGoals(opts = {}) {
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/goals");
-  renderGoals(data.goals || []);
+  const goals = data.goals || [];
+  const fp = stableFingerprint(goals);
+  if (
+    !force &&
+    fp === lastGoalsFp &&
+    goalsList &&
+    goalsList.childElementCount > 0
+  ) {
+    return;
+  }
+  lastGoalsFp = fp;
+  renderGoals(goals);
 }
 
 function escapeHtml(s) {
@@ -2437,6 +2532,87 @@ function renderMoments(moments) {
   }
 }
 
+function formatBeatTs(ts) {
+  if (!ts) return "";
+  const s = String(ts);
+  // Compact ISO for operators: 2026-07-30T12:34:56Z → 07-30 12:34:56Z
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (m) return `${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}Z`;
+  return s.length > 24 ? s.slice(0, 24) : s;
+}
+
+function beatKindClass(type) {
+  const t = String(type || "beat").toLowerCase();
+  if (t === "speak" || t === "assistant" || t === "model") return "beat-kind-speak";
+  if (t === "tool" || t === "tool_call" || t === "tool_result") return "beat-kind-tool";
+  if (t === "obs" || t === "observation" || t === "host") return "beat-kind-obs";
+  if (t === "stop" || t === "error") return "beat-kind-stop";
+  if (t === "user" || t === "social") return "beat-kind-user";
+  return "beat-kind-other";
+}
+
+function appendBeatRawFold(row, label, text) {
+  if (text == null || text === "") return;
+  const details = document.createElement("details");
+  details.className = "reason-fold beat-raw-fold";
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  details.appendChild(summary);
+  const pre = document.createElement("pre");
+  pre.className = "beat-body";
+  pre.textContent = String(text);
+  details.appendChild(pre);
+  row.appendChild(details);
+}
+
+/**
+ * Best-effort pretty-print for tool (and other) beat bodies.
+ * Host stores tool content as compact json.dumps (no indent); Moments should
+ * show the same delimited structure as "raw fields" (BUG-glass-01 residual).
+ * @returns {string|null} pretty JSON, or null if not parseable object/array JSON
+ */
+function tryPrettyJsonContent(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  // Compact dumps always start with { or [; skip playbooks / prose.
+  if (s[0] !== "{" && s[0] !== "[") return null;
+  try {
+    const parsed = JSON.parse(s);
+    if (parsed === null || typeof parsed !== "object") return null;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    // Truncated tool_result_max_chars may break JSON — fall back to plain pre.
+    return null;
+  }
+}
+
+function appendBeatContentBody(row, content, { preferJson } = {}) {
+  const text = String(content);
+  const pretty = preferJson || text.trimStart().startsWith("{") || text.trimStart().startsWith("[")
+    ? tryPrettyJsonContent(text)
+    : null;
+  if (pretty != null) {
+    const pre = document.createElement("pre");
+    pre.className = "beat-body beat-json-body";
+    pre.textContent = pretty;
+    row.appendChild(pre);
+    return;
+  }
+  if (preferJson) {
+    // Tool/playbook path: never markdown-collapse; preserve newlines.
+    const pre = document.createElement("pre");
+    pre.className = "beat-body";
+    pre.textContent = text;
+    row.appendChild(pre);
+    return;
+  }
+  const prose = document.createElement("div");
+  prose.className = "beat-prose";
+  prose.innerHTML = renderMarkdown(text);
+  row.appendChild(prose);
+}
+
 function renderBeats(beats) {
   const wrap = document.createElement("div");
   wrap.className = "beats";
@@ -2448,70 +2624,109 @@ function renderBeats(beats) {
   const ordered = beats.slice().reverse();
   for (const b of ordered) {
     const row = document.createElement("div");
-    row.className = "beat";
     const type = b.type || "beat";
+    const isTool =
+      type === "tool" || type === "tool_call" || type === "tool_result";
+    row.className = `beat ${beatKindClass(type)}`;
     const head = document.createElement("div");
     head.className = "beat-head";
-    head.innerHTML = `<span class="badge">${escapeHtml(type)}</span>
-      <span class="meta">${escapeHtml(b.ts || "")}</span>`;
+    const okBadge =
+      isTool && typeof b.ok === "boolean"
+        ? `<span class="badge ${b.ok ? "badge-open" : "badge-bad"}">${
+            b.ok ? "ok" : "fail"
+          }</span>`
+        : "";
+    head.innerHTML = `<span class="badge beat-kind-chip">${escapeHtml(
+      type
+    )}</span>${okBadge}
+      <span class="meta beat-ts">${escapeHtml(formatBeatTs(b.ts))}</span>`;
     row.appendChild(head);
+
+    // Tool name + host ok before body so the JSON isn't the only chrome.
+    const toolName = b.name || b.tool;
+    if (toolName) {
+      const toolLine = document.createElement("div");
+      toolLine.className = "beat-tool-line meta";
+      toolLine.textContent = `tool · ${toolName}`;
+      row.appendChild(toolLine);
+    }
+    if (b.error_reason) {
+      const err = document.createElement("div");
+      err.className = "beat-error";
+      err.textContent = `error · ${b.error_reason}`;
+      row.appendChild(err);
+    }
+    if (b.stop_reason) {
+      const stop = document.createElement("div");
+      stop.className = "meta";
+      stop.textContent = `stop · ${b.stop_reason}`;
+      row.appendChild(stop);
+    }
+
+    // Tool content: compact JSON from do-loop → pretty-print like raw fields.
+    // Speak/model: markdown. Obs with JSON: pretty if parseable.
+    if (b.content) {
+      appendBeatContentBody(row, b.content, {
+        preferJson: isTool || type === "obs",
+      });
+    }
 
     // Reasoning collapsed.
     if (b.reasoning) {
-      const details = document.createElement("details");
-      details.className = "reason-fold";
-      const summary = document.createElement("summary");
-      summary.textContent = "reasoning";
-      details.appendChild(summary);
-      const pre = document.createElement("pre");
-      pre.className = "beat-body";
-      pre.textContent = b.reasoning;
-      details.appendChild(pre);
-      row.appendChild(details);
+      appendBeatRawFold(row, "reasoning", b.reasoning);
     }
 
-    const bodyBits = [];
-    if (b.content) bodyBits.push(b.content);
-    if (b.name) bodyBits.push(`tool: ${b.name}`);
-    if (b.tool) bodyBits.push(`tool: ${b.tool}`);
-    if (b.error_reason) bodyBits.push(`error: ${b.error_reason}`);
-    if (b.stop_reason) bodyBits.push(`stop: ${b.stop_reason}`);
+    // Payload / residual keys as collapsible raw (not inline dump).
     if (b.payload != null && typeof b.payload === "object") {
       try {
-        bodyBits.push(JSON.stringify(b.payload, null, 2).slice(0, 1200));
+        appendBeatRawFold(
+          row,
+          "raw payload",
+          JSON.stringify(b.payload, null, 2).slice(0, 4000)
+        );
       } catch {
         /* ignore */
       }
     }
-    // Fallback dump of remaining keys (lean).
-    if (!bodyBits.length) {
-      const skip = new Set(["type", "ts", "reasoning"]);
-      const rest = {};
-      for (const [k, v] of Object.entries(b)) {
-        if (!skip.has(k)) rest[k] = v;
-      }
-      if (Object.keys(rest).length) {
-        try {
-          bodyBits.push(JSON.stringify(rest, null, 2).slice(0, 1200));
-        } catch {
-          /* ignore */
-        }
+    const skip = new Set([
+      "type",
+      "ts",
+      "reasoning",
+      "content",
+      "name",
+      "tool",
+      "error_reason",
+      "stop_reason",
+      "payload",
+      "ok", // already shown as badge for tools
+    ]);
+    const rest = {};
+    for (const [k, v] of Object.entries(b)) {
+      if (!skip.has(k) && v != null && v !== "") rest[k] = v;
+    }
+    if (Object.keys(rest).length) {
+      try {
+        appendBeatRawFold(
+          row,
+          "raw fields",
+          JSON.stringify(rest, null, 2).slice(0, 4000)
+        );
+      } catch {
+        /* ignore */
       }
     }
-    if (bodyBits.length) {
-      const pre = document.createElement("pre");
-      pre.className = "beat-body";
-      pre.textContent = bodyBits.join("\n");
-      row.appendChild(pre);
-    }
+
     wrap.appendChild(row);
   }
   return wrap;
 }
 
 function setMomentDetailOpen(on) {
-  const panel = document.getElementById("panel-moments");
+  // Moments is a Memory tab (BUG-glass-02); class lives on the Memory panel.
+  const panel = document.getElementById("panel-memory");
   if (panel) panel.classList.toggle("moment-detail-open", !!on);
+  const tab = document.getElementById("memory-tab-moments");
+  if (tab) tab.classList.toggle("moment-detail-open", !!on);
 }
 
 function closeMomentDetail() {
@@ -2647,10 +2862,30 @@ async function loadMomentDetail(id, opts = {}) {
   }
 }
 
-async function refreshMoments() {
+async function refreshMoments(opts = {}) {
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/moments?limit=40");
   const moments = data.moments || [];
-  renderMoments(moments);
+  // List fingerprint: identity + hop/end meta (not full beat bodies).
+  const listFp = stableFingerprint(
+    moments.map((m) => ({
+      id: m.id,
+      hop_count: m.hop_count,
+      ended_at: m.ended_at,
+      stop_reason: m.stop_reason,
+      why_now: m.why_now,
+      started_at: m.started_at,
+    }))
+  );
+  if (
+    force ||
+    listFp !== lastMomentsListFp ||
+    !momentsList ||
+    !momentsList.childElementCount
+  ) {
+    lastMomentsListFp = listFp;
+    renderMoments(moments);
+  }
   // Soft detail refresh while a moment is open.
   if (!selectedMomentId) return;
   const row = moments.find((m) => m.id === selectedMomentId);
@@ -2690,9 +2925,12 @@ function setMemoryTab(name) {
   });
 }
 
-function renderMemoryFlags(mem) {
+/** Last flags fingerprint so soft Context tick does not wipe the flags strip. */
+let lastMemoryFlagsFp = null;
+
+function renderMemoryFlags(mem, opts = {}) {
   if (!memoryContextFlags) return;
-  memoryContextFlags.innerHTML = "";
+  const force = Boolean(opts.force);
   const m = mem || {};
   const rows = [
     ["enabled", m.enabled === true ? "true" : "false", m.enabled === true],
@@ -2702,6 +2940,16 @@ function renderMemoryFlags(mem) {
     ["atoms", m.atom_count != null ? String(m.atom_count) : "—", null],
     ["open moment", m.active_moment_id || "—", null],
   ];
+  const fp = stableFingerprint(rows);
+  if (
+    !force &&
+    fp === lastMemoryFlagsFp &&
+    memoryContextFlags.childElementCount > 0
+  ) {
+    return;
+  }
+  lastMemoryFlagsFp = fp;
+  memoryContextFlags.innerHTML = "";
   for (const [label, value, good] of rows) {
     const row = document.createElement("div");
     row.className = "status-row";
@@ -2719,11 +2967,138 @@ function renderMemoryFlags(mem) {
   }
 }
 
+/**
+ * Stable fingerprint of the meal package (not flag/status churn).
+ * Used to skip full Context rebuild on the 1.5s poll (inspect flash).
+ *
+ * Intentionally omits meal.recorded_at: on-demand compose (no last-hop
+ * snapshot) re-stamps utc_now every GET even when channel content is
+ * identical — including it forced a full DOM wipe every tick and killed
+ * text selection / open inspect folds.
+ */
+function fingerprintMemoryMeal(data) {
+  const meal = (data && data.meal) || {};
+  const items = Array.isArray(meal.items) ? meal.items : [];
+  const fixed = meal.fixed || {};
+  const parts = [
+    // Prefer meal.source over envelope source (both stable when content is).
+    meal.source || (data && data.source),
+    meal.open_moment_id,
+    meal.total_tokens,
+    meal.budget_tokens,
+    meal.slid_off_count,
+    meal.semantic_omitted_reason,
+    meal.directed_keep_omitted_reason,
+    // sort_keys via stableFingerprint would be ideal; meta is small and
+    // server key order is stable enough for same process.
+    JSON.stringify(meal.semantic_select_meta || null),
+    JSON.stringify(meal.directed_keep_meta || null),
+    fixed.system && fixed.system.content_chars,
+    fixed.orient && fixed.orient.content_chars,
+    fixed.system && fixed.system.snippet,
+    fixed.orient && fixed.orient.snippet,
+  ];
+  for (const it of items) {
+    parts.push(
+      it.channel,
+      it.atom_id,
+      it.label,
+      it.token_estimate,
+      it.content_chars,
+      it.snippet,
+      it.t_start,
+      it.meta && it.meta.scale,
+      it.meta && it.meta.atom_count,
+      it.meta && Array.isArray(it.meta.atom_ids)
+        ? it.meta.atom_ids.join(",")
+        : ""
+    );
+  }
+  return parts.map((x) => (x == null ? "" : String(x))).join("|");
+}
+
+/** Capture open Context inspect folds before destructive re-render. */
+function captureMemoryContextUi() {
+  if (!memoryContextBody) return { openAtomIds: [], openChannels: [], scrollTop: 0 };
+  const openAtomIds = [];
+  memoryContextBody
+    .querySelectorAll("details.memory-atom-inspect-fold[data-inspect-atom-id][open]")
+    .forEach((el) => {
+      const id = el.getAttribute("data-inspect-atom-id");
+      if (id) openAtomIds.push(id);
+    });
+  const openChannels = [];
+  memoryContextBody
+    .querySelectorAll(
+      "details.memory-atom-inspect-fold[data-inspect-channel][open]"
+    )
+    .forEach((el) => {
+      const ch = el.getAttribute("data-inspect-channel");
+      if (ch) openChannels.push(ch);
+    });
+  const openMembers = [];
+  memoryContextBody
+    .querySelectorAll(
+      "details.memory-atom-inspect-fold[data-inspect-members][open]"
+    )
+    .forEach((el) => {
+      const key = el.getAttribute("data-inspect-members");
+      if (key) openMembers.push(key);
+    });
+  return {
+    openAtomIds,
+    openChannels,
+    openMembers,
+    scrollTop: memoryContextBody.scrollTop || 0,
+  };
+}
+
+/** Escape a value for use inside a double-quoted CSS attribute selector. */
+function cssAttrValue(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** Re-open inspect folds after rebuild; use cache to avoid loading flash. */
+function restoreMemoryContextUi(saved) {
+  if (!memoryContextBody || !saved) return;
+  for (const id of saved.openAtomIds || []) {
+    const details = memoryContextBody.querySelector(
+      `details.memory-atom-inspect-fold[data-inspect-atom-id="${cssAttrValue(id)}"]`
+    );
+    if (!details) continue;
+    details.open = true;
+    const panel = details.querySelector(".memory-atom-inspect-panel");
+    if (panel && memoryContextAtomCache.has(id)) {
+      fillAtomInspectInto(panel, memoryContextAtomCache.get(id), {
+        showClose: false,
+      });
+      panel.dataset.inspectLoaded = "1";
+    }
+  }
+  for (const ch of saved.openChannels || []) {
+    const details = memoryContextBody.querySelector(
+      `details.memory-atom-inspect-fold[data-inspect-channel="${cssAttrValue(ch)}"]`
+    );
+    if (details) details.open = true;
+  }
+  for (const key of saved.openMembers || []) {
+    const details = memoryContextBody.querySelector(
+      `details.memory-atom-inspect-fold[data-inspect-members="${cssAttrValue(key)}"]`
+    );
+    if (details) details.open = true;
+  }
+  if (typeof saved.scrollTop === "number") {
+    memoryContextBody.scrollTop = saved.scrollTop;
+  }
+}
+
 function renderMemoryContext(data) {
   if (!memoryContextBody) return;
+  const savedUi = captureMemoryContextUi();
   memoryContextBody.innerHTML = "";
   const mem = data.memory || {};
-  renderMemoryFlags(mem);
+  // Full context rebuild: always repaint flags strip with this payload.
+  renderMemoryFlags(mem, { force: true });
 
   if (!data.ok && !data.meal) {
     const p = document.createElement("p");
@@ -2758,20 +3133,7 @@ function renderMemoryContext(data) {
   head.appendChild(meta);
   memoryContextBody.appendChild(head);
 
-  // Semantic channel note (omit / packed) — always visible when select ran.
-  const semNote = renderSemanticChannelNote(meal);
-  if (semNote) memoryContextBody.appendChild(semNote);
-
-  // PR-A3: one muted line for directed_keep omit / pack meta.
-  const dkLine = formatDirectedKeepLine(meal);
-  if (dkLine) {
-    const p = document.createElement("p");
-    p.className = "muted memory-directed-keep-meta";
-    p.textContent = dkLine;
-    memoryContextBody.appendChild(p);
-  }
-
-  // Fixed system/orient if present.
+  // Fixed system/orient if present (same card chrome as meal channels).
   const fixed = meal.fixed || {};
   for (const key of ["system", "orient"]) {
     const block = fixed[key];
@@ -2794,11 +3156,80 @@ function renderMemoryContext(data) {
     p.textContent =
       "Meal has no labeled channels yet (empty store or meal not composed).";
     memoryContextBody.appendChild(p);
-    return;
+    // Still show channel status notes below if select ran.
   }
+
+  // Group variable meal items by channel for scan hierarchy (BUG-mem-ui-01).
+  const byChannel = new Map();
   for (const item of items) {
-    memoryContextBody.appendChild(renderMemoryChannelCard(item));
+    const ch = item.channel || item.label || "other";
+    if (!byChannel.has(ch)) byChannel.set(ch, []);
+    byChannel.get(ch).push(item);
   }
+  const channelOrder = [
+    "temporal",
+    "episodic",
+    "semantic",
+    "directed_keep",
+    "summary",
+  ];
+  const orderedKeys = [
+    ...channelOrder.filter((k) => byChannel.has(k)),
+    ...[...byChannel.keys()].filter((k) => !channelOrder.includes(k)),
+  ];
+
+  const semNote = renderSemanticChannelNote(meal);
+  const dkCard = renderDirectedKeepStatusCard(meal);
+
+  // Ensure status-only channels still appear in order when they have no items.
+  const ensureStatusChannel = (ch) => {
+    if (!orderedKeys.includes(ch)) orderedKeys.push(ch);
+  };
+  if (semNote && !byChannel.has("semantic")) ensureStatusChannel("semantic");
+  if (dkCard && !byChannel.has("directed_keep")) ensureStatusChannel("directed_keep");
+
+  // Re-sort keys with fixed channel order after possible status-only inserts.
+  const orderIndex = (ch) => {
+    const i = channelOrder.indexOf(ch);
+    return i === -1 ? 1000 : i;
+  };
+  orderedKeys.sort((a, b) => {
+    const d = orderIndex(a) - orderIndex(b);
+    if (d !== 0) return d;
+    return String(a).localeCompare(String(b));
+  });
+
+  for (const ch of orderedKeys) {
+    const group = byChannel.get(ch) || [];
+    const statusOnly =
+      !group.length &&
+      ((ch === "semantic" && semNote) || (ch === "directed_keep" && dkCard));
+    if (!group.length && !statusOnly) continue;
+
+    const section = document.createElement("div");
+    section.className = "memory-channel-section";
+    section.dataset.channel = ch;
+    const h = document.createElement("div");
+    h.className = "memory-channel-section-head";
+    const badge =
+      group.length > 0
+        ? String(group.length)
+        : ch === "semantic" || ch === "directed_keep"
+          ? "status"
+          : "0";
+    h.innerHTML = `<strong>${escapeHtml(ch)}</strong><span class="badge">${badge}</span>`;
+    section.appendChild(h);
+
+    if (ch === "semantic" && semNote) section.appendChild(semNote);
+    if (ch === "directed_keep" && dkCard) section.appendChild(dkCard);
+
+    for (const item of group) {
+      section.appendChild(renderMemoryChannelCard(item));
+    }
+    memoryContextBody.appendChild(section);
+  }
+
+  restoreMemoryContextUi(savedUi);
 }
 
 /**
@@ -2909,68 +3340,418 @@ function renderSemanticChannelNote(meal) {
   return card;
 }
 
-/** One muted Context line: directed_keep omit / pack (PR-A3). */
+/**
+ * Human-readable directed_keep select status (parity with formatSemanticSelectLine).
+ * No leading "directed_keep" token — the card title carries the channel name.
+ */
 function formatDirectedKeepLine(meal) {
   if (!meal) return "";
   const reason = meal.directed_keep_omitted_reason || null;
   const dm = meal.directed_keep_meta || null;
   if (!reason && !dm) return "";
-  const parts = ["directed_keep"];
+  const parts = [];
   if (reason) {
     parts.push(`omitted (${reason})`);
   } else if (dm && dm.packed != null) {
     parts.push(`packed=${dm.packed}`);
   }
-  if (dm && dm.keep_ids_in != null) {
-    parts.push(`keeps_in=${dm.keep_ids_in}`);
-  }
   if (reason === "deduped") {
-    parts.push("already in temporal/episodic/semantic");
+    parts.push(
+      "keeps already in temporal/episodic/semantic (not re-listed as directed_keep)"
+    );
   } else if (reason === "disabled") {
-    parts.push("flag off");
+    parts.push("directed keep is off for this run");
   } else if (reason === "empty") {
-    parts.push("no confirmed keep-set");
+    parts.push("no confirmed keep-set from traverse");
   } else if (reason === "budget") {
-    parts.push("cap too small");
+    parts.push("meal budget too small to pack keeps");
+  } else if (reason) {
+    parts.push("channel not packed this compose");
+  }
+  if (dm && dm.keep_ids_in != null) {
+    const n = Number(dm.keep_ids_in);
+    if (!Number.isNaN(n)) {
+      parts.push(
+        n === 1 ? "1 keep id in session" : `${n} keep ids in session`
+      );
+    }
+  }
+  if (dm && dm.packed != null && !reason) {
+    const n = Number(dm.packed);
+    if (!Number.isNaN(n) && n > 0) {
+      parts.push(
+        n === 1 ? "1 atom in meal" : `${n} atoms in meal`
+      );
+    }
   }
   return parts.join(" · ");
 }
 
-function renderMemoryChannelCard(item) {
+/**
+ * Status card for directed_keep — same bubble chrome as Semantic note.
+ */
+function renderDirectedKeepStatusCard(meal) {
+  const line = formatDirectedKeepLine(meal);
+  if (!line) return null;
+  const reason = meal.directed_keep_omitted_reason || null;
+  const dm = meal.directed_keep_meta || null;
   const card = document.createElement("div");
-  card.className = "card memory-channel-card";
+  // Reuse semantic note visual language (title + state badge + meta body).
+  card.className = "card memory-channel-card memory-semantic-note memory-channel-status-directed";
+  if (reason === "deduped") {
+    card.classList.add("memory-semantic-note-deduped");
+  } else if (reason) {
+    card.classList.add("memory-semantic-note-omit");
+  } else {
+    card.classList.add("memory-semantic-note-ok");
+  }
   const head = document.createElement("div");
   head.className = "card-head";
   const title = document.createElement("strong");
-  title.textContent = item.label || item.channel || "channel";
+  title.textContent = "Directed keep";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  if (reason === "deduped") {
+    badge.textContent = "deduped";
+  } else if (reason) {
+    badge.textContent = `omitted · ${reason}`;
+  } else if (dm && dm.packed != null) {
+    badge.textContent = `packed · ${dm.packed}`;
+  } else {
+    badge.textContent = "select";
+  }
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+  const body = document.createElement("p");
+  body.className = "memory-semantic-meta";
+  body.textContent = line;
+  card.appendChild(body);
+  return card;
+}
+
+/**
+ * Shared atom inspect chrome (Atoms tab detail + Context expand).
+ * @param {HTMLElement} container
+ * @param {object} a atom detail from GET /api/memory/atoms/:id
+ * @param {{ showClose?: boolean, onClose?: () => void }} opts
+ */
+function fillAtomInspectInto(container, a, opts = {}) {
+  container.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const strong = document.createElement("strong");
+  strong.textContent = a.kind || "atom";
+  head.appendChild(strong);
+  if (opts.showClose) {
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "link-btn";
+    closeBtn.id = "close-atom-detail";
+    closeBtn.textContent = "close";
+    if (typeof opts.onClose === "function") {
+      closeBtn.addEventListener("click", opts.onClose);
+    }
+    head.appendChild(closeBtn);
+  }
+  container.appendChild(head);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = [
+    a.atom_id,
+    a.moment_id ? `moment=${a.moment_id}` : null,
+    a.t_start ? formatBeatTs(a.t_start) || a.t_start : null,
+    a.scale ? `scale=${a.scale}` : null,
+    a.embedding_status ? `embed=${a.embedding_status}` : null,
+    a.prev_atom_id ? `prev=${a.prev_atom_id}` : null,
+    a.next_atom_id ? `next=${a.next_atom_id}` : null,
+    a.content_truncated ? "text truncated" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  container.appendChild(meta);
+  const text = a.content_text != null ? String(a.content_text) : "";
+  const pretty = tryPrettyJsonContent(text);
+  if (pretty != null) {
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet beat-json-body";
+    pre.textContent = pretty;
+    container.appendChild(pre);
+  } else {
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet memory-snippet-prose";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.textContent = text || "(empty)";
+    container.appendChild(pre);
+  }
+}
+
+/**
+ * Lazy-load atom into a Context inspect fold (does not switch tabs).
+ * @param {HTMLElement} panel
+ * @param {string} atomId
+ */
+function bindContextAtomInspect(panel, atomId) {
+  if (!panel || !atomId) return;
+  let gen = 0;
+  const run = async () => {
+    if (panel.dataset.inspectLoaded === "1" && panel.childElementCount) return;
+    // Prefer cache after soft restore / prior expand.
+    if (memoryContextAtomCache.has(atomId)) {
+      fillAtomInspectInto(panel, memoryContextAtomCache.get(atomId), {
+        showClose: false,
+      });
+      panel.dataset.inspectLoaded = "1";
+      return;
+    }
+    const my = ++gen;
+    panel.innerHTML = `<p class="muted">loading…</p>`;
+    try {
+      const data = await fetchJson(
+        `/api/memory/atoms/${encodeURIComponent(atomId)}`
+      );
+      if (my !== gen) return;
+      if (!data.ok || !data.atom) {
+        panel.innerHTML = `<p class="muted">${escapeHtml(
+          data.error || "not found"
+        )}</p>`;
+        return;
+      }
+      memoryContextAtomCache.set(atomId, data.atom);
+      // Cap cache size (simple LRU-ish drop of oldest keys).
+      if (memoryContextAtomCache.size > 40) {
+        const first = memoryContextAtomCache.keys().next().value;
+        if (first != null) memoryContextAtomCache.delete(first);
+      }
+      fillAtomInspectInto(panel, data.atom, { showClose: false });
+      panel.dataset.inspectLoaded = "1";
+    } catch (err) {
+      if (my !== gen) return;
+      panel.innerHTML = `<p class="muted">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+  };
+  const details = panel.closest("details");
+  if (details) {
+    details.addEventListener("toggle", () => {
+      if (details.open) void run();
+    });
+    if (details.open) void run();
+  } else {
+    void run();
+  }
+}
+
+function renderMemoryChannelCard(item) {
+  const card = document.createElement("div");
+  const ch = item.channel || "other";
+  card.className = `card memory-channel-card memory-ch-${String(ch).replace(
+    /[^a-z0-9_-]/gi,
+    "_"
+  )}`;
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = item.label || ch || "channel";
   const badge = document.createElement("span");
   badge.className = "badge";
   const tok =
     item.token_estimate != null ? `≈${item.token_estimate} tok` : "—";
-  badge.textContent = `${item.channel || "—"} · ${tok}`;
+  badge.textContent = `${ch || "—"} · ${tok}`;
   head.appendChild(title);
   head.appendChild(badge);
   card.appendChild(head);
+
+  const snippet = item.snippet != null ? String(item.snippet) : "";
+  const snipLen = snippet.length;
+  const fullChars =
+    item.content_chars != null && !Number.isNaN(Number(item.content_chars))
+      ? Number(item.content_chars)
+      : null;
+  const truncated = fullChars != null && fullChars > snipLen;
+  const metaObj = item.meta && typeof item.meta === "object" ? item.meta : {};
+  const memberIds = Array.isArray(metaObj.atom_ids)
+    ? metaObj.atom_ids.filter((x) => typeof x === "string" && x.trim())
+    : [];
+
   const meta = document.createElement("div");
   meta.className = "meta";
   const mbits = [];
   if (item.atom_id) mbits.push(item.atom_id);
-  if (item.t_start) mbits.push(item.t_start);
-  if (item.content_chars != null) mbits.push(`${item.content_chars} chars`);
-  if (item.meta && item.meta.atom_count != null) {
-    mbits.push(`${item.meta.atom_count} atoms`);
+  if (item.t_start) mbits.push(formatBeatTs(item.t_start) || item.t_start);
+  if (metaObj.scale) mbits.push(`scale=${metaObj.scale}`);
+  if (metaObj.moment_id) mbits.push(`moment=${metaObj.moment_id}`);
+  if (metaObj.atom_count != null) {
+    mbits.push(`${metaObj.atom_count} atoms`);
+  }
+  if (fullChars != null) {
+    mbits.push(
+      truncated
+        ? `snippet ${snipLen}/${fullChars} chars (inspect truncates; not empty memory)`
+        : `${fullChars} chars`
+    );
+  } else if (snipLen) {
+    mbits.push(`${snipLen} chars shown`);
   }
   meta.textContent = mbits.join(" · ") || "—";
   card.appendChild(meta);
-  const pre = document.createElement("pre");
-  pre.className = "memory-snippet";
-  pre.textContent = item.snippet || "(empty)";
-  card.appendChild(pre);
+
+  // Prose-friendly body for summaries / speak-like channels.
+  const proseCh = new Set([
+    "temporal",
+    "episodic",
+    "semantic",
+    "summary",
+    "system",
+    "orient",
+    "directed_keep",
+  ]);
+  const body = document.createElement(proseCh.has(ch) ? "div" : "pre");
+  body.className = proseCh.has(ch)
+    ? "memory-snippet memory-snippet-prose"
+    : "memory-snippet";
+  if (proseCh.has(ch) && snippet) {
+    body.innerHTML = renderMarkdown(snippet);
+  } else {
+    body.textContent = snippet || "(empty)";
+  }
+  card.appendChild(body);
+
+  if (truncated) {
+    const note = document.createElement("p");
+    note.className = "muted memory-trunc-note";
+    note.textContent =
+      "Showing Glass inspect snippet only — expand inspect or open atom for full body.";
+    card.appendChild(note);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "memory-channel-actions";
+  let hasAction = false;
+
+  if (item.atom_id) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link-btn";
+    btn.textContent = "open atom";
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      setMemoryTab("atoms");
+      void loadAtomDetail(item.atom_id);
+    });
+    actions.appendChild(btn);
+    hasAction = true;
+  }
+
+  if (hasAction) {
+    card.appendChild(actions);
+  }
+
+  if (item.atom_id) {
+    // In-place inspect fold (unified with Atoms detail chrome).
+    const details = document.createElement("details");
+    details.className = "memory-atom-inspect-fold";
+    details.setAttribute("data-inspect-atom-id", item.atom_id);
+    const summary = document.createElement("summary");
+    summary.textContent = "inspect atom";
+    details.appendChild(summary);
+    const panel = document.createElement("div");
+    panel.className = "memory-atom-inspect-panel";
+    details.appendChild(panel);
+    bindContextAtomInspect(panel, item.atom_id);
+    card.appendChild(details);
+  } else if (ch === "system" || ch === "orient") {
+    // Fixed blocks: expand shows meal snippet text (no store atom).
+    const details = document.createElement("details");
+    details.className = "memory-atom-inspect-fold";
+    details.setAttribute("data-inspect-channel", ch);
+    const summary = document.createElement("summary");
+    summary.textContent = "inspect";
+    details.appendChild(summary);
+    const panel = document.createElement("div");
+    panel.className = "memory-atom-inspect-panel";
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet memory-snippet-prose";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.textContent = snippet || "(empty)";
+    panel.appendChild(pre);
+    const note = document.createElement("p");
+    note.className = "muted memory-trunc-note";
+    note.textContent =
+      "Fixed meal channel (not a store atom). Body is the inspect snippet.";
+    panel.appendChild(note);
+    details.appendChild(panel);
+    card.appendChild(details);
+  }
+
+  // Multi-atom summaries: member list with per-id open + inspect.
+  if (memberIds.length && !item.atom_id) {
+    const details = document.createElement("details");
+    details.className = "memory-atom-inspect-fold";
+    const membersKey = `${ch}:${item.label || ""}:${memberIds[0] || ""}`;
+    details.setAttribute("data-inspect-members", membersKey);
+    const summary = document.createElement("summary");
+    summary.textContent = `inspect members (${memberIds.length}${
+      metaObj.atom_count != null && metaObj.atom_count > memberIds.length
+        ? ` of ${metaObj.atom_count}`
+        : ""
+    })`;
+    details.appendChild(summary);
+    const list = document.createElement("div");
+    list.className = "memory-atom-member-list";
+    for (const mid of memberIds) {
+      const row = document.createElement("div");
+      row.className = "memory-atom-member-row";
+      const idSpan = document.createElement("code");
+      idSpan.textContent = mid;
+      row.appendChild(idSpan);
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "link-btn";
+      openBtn.textContent = "open";
+      openBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        setMemoryTab("atoms");
+        void loadAtomDetail(mid);
+      });
+      row.appendChild(openBtn);
+      const sub = document.createElement("details");
+      sub.className = "memory-atom-inspect-fold memory-atom-inspect-nested";
+      sub.setAttribute("data-inspect-atom-id", mid);
+      const subSum = document.createElement("summary");
+      subSum.textContent = "inspect";
+      sub.appendChild(subSum);
+      const subPanel = document.createElement("div");
+      subPanel.className = "memory-atom-inspect-panel";
+      sub.appendChild(subPanel);
+      bindContextAtomInspect(subPanel, mid);
+      row.appendChild(sub);
+      list.appendChild(row);
+    }
+    details.appendChild(list);
+    card.appendChild(details);
+  }
+
   return card;
 }
 
-async function refreshMemoryContext() {
+async function refreshMemoryContext(opts = {}) {
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/memory/context");
+  const fp = fingerprintMemoryMeal(data);
+  // Soft path: meal content unchanged — keep body/inspect DOM + selection.
+  if (
+    !force &&
+    fp &&
+    fp === memoryContextMealFp &&
+    memoryContextBody &&
+    memoryContextBody.querySelector(".memory-channel-section, .memory-channel-card")
+  ) {
+    renderMemoryFlags(data.memory || {}, { force: false });
+    return;
+  }
+  memoryContextMealFp = fp;
   renderMemoryContext(data);
 }
 
@@ -2982,9 +3763,11 @@ function setAtomDetailOpen(on) {
 function closeAtomDetail() {
   memoryAtomDetailLoadGen += 1;
   selectedAtomId = null;
+  lastAtomDetailFp = null;
   if (memoryAtomDetail) {
     memoryAtomDetail.hidden = true;
     memoryAtomDetail.innerHTML = "";
+    delete memoryAtomDetail.dataset.atomId;
   }
   setAtomDetailOpen(false);
   if (memoryAtomsList) {
@@ -3042,17 +3825,20 @@ function renderAtomsList(atoms) {
   }
 }
 
-async function loadAtomDetail(id) {
+async function loadAtomDetail(id, opts = {}) {
   if (!id || !memoryAtomDetail) return;
+  const soft = Boolean(opts.soft);
   const gen = ++memoryAtomDetailLoadGen;
   selectedAtomId = id;
   memoryAtomDetail.hidden = false;
   setAtomDetailOpen(true);
-  memoryAtomDetail.innerHTML = `<div class="card-head"><strong>${escapeHtml(
-    id
-  )}</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">loading…</p>`;
-  const closeBtn = $("#close-atom-detail");
-  if (closeBtn) closeBtn.addEventListener("click", closeAtomDetail);
+  if (!soft) {
+    memoryAtomDetail.innerHTML = `<div class="card-head"><strong>${escapeHtml(
+      id
+    )}</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">loading…</p>`;
+    const closeBtn = $("#close-atom-detail");
+    if (closeBtn) closeBtn.addEventListener("click", closeAtomDetail);
+  }
   try {
     const data = await fetchJson(`/api/memory/atoms/${encodeURIComponent(id)}`);
     if (selectedAtomId !== id || gen !== memoryAtomDetailLoadGen) return;
@@ -3062,34 +3848,34 @@ async function loadAtomDetail(id) {
       )}</p>`;
       const c = $("#close-atom-detail");
       if (c) c.addEventListener("click", closeAtomDetail);
+      lastAtomDetailFp = null;
       return;
     }
     const a = data.atom;
-    const body = document.createDocumentFragment();
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML = `<strong>${escapeHtml(a.kind || "atom")}</strong>
-      <button type="button" class="link-btn" id="close-atom-detail">close</button>`;
-    body.appendChild(head);
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = [
-      a.atom_id,
-      a.moment_id ? `moment=${a.moment_id}` : null,
-      a.t_start || null,
-      a.scale ? `scale=${a.scale}` : null,
-      a.prev_atom_id ? `prev=${a.prev_atom_id}` : null,
-      a.next_atom_id ? `next=${a.next_atom_id}` : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    body.appendChild(meta);
-    const pre = document.createElement("pre");
-    pre.className = "memory-snippet";
-    pre.textContent = a.content_text || "(empty)";
-    body.appendChild(pre);
-    memoryAtomDetail.innerHTML = "";
-    memoryAtomDetail.appendChild(body);
+    const detailFp = stableFingerprint({
+      atom_id: a.atom_id,
+      kind: a.kind,
+      t_start: a.t_start,
+      content_text: a.content_text,
+      content_truncated: a.content_truncated,
+      embedding_status: a.embedding_status,
+      moment_id: a.moment_id,
+    });
+    // Soft poll: keep painted detail when body unchanged (BUG-glass-03 / #74).
+    if (
+      soft &&
+      detailFp === lastAtomDetailFp &&
+      memoryAtomDetail.dataset.atomId === id &&
+      memoryAtomDetail.childElementCount > 0
+    ) {
+      return;
+    }
+    lastAtomDetailFp = detailFp;
+    memoryAtomDetail.dataset.atomId = id;
+    fillAtomInspectInto(memoryAtomDetail, a, {
+      showClose: true,
+      onClose: closeAtomDetail,
+    });
     const c2 = $("#close-atom-detail");
     if (c2) c2.addEventListener("click", closeAtomDetail);
     if (memoryAtomsList) {
@@ -3111,7 +3897,8 @@ async function loadAtomDetail(id) {
   }
 }
 
-async function refreshMemoryAtoms() {
+async function refreshMemoryAtoms(opts = {}) {
+  const force = Boolean(opts.force);
   const params = new URLSearchParams();
   params.set("limit", "60");
   const kind = memoryAtomKind ? memoryAtomKind.value.trim() : "";
@@ -3125,11 +3912,26 @@ async function refreshMemoryAtoms() {
         data.error || "store unavailable"
       )}</p>`;
     }
+    lastAtomsListFp = null;
     return;
   }
-  renderAtomsList(data.atoms || []);
+  const atoms = data.atoms || [];
+  const listFp = stableFingerprint({ kind, moment, atoms });
+  if (
+    force ||
+    listFp !== lastAtomsListFp ||
+    !memoryAtomsList ||
+    !memoryAtomsList.childElementCount
+  ) {
+    lastAtomsListFp = listFp;
+    renderAtomsList(atoms);
+  } else if (selectedAtomId && memoryAtomsList) {
+    memoryAtomsList.querySelectorAll(".card-btn").forEach((el) => {
+      el.classList.toggle("card-selected", el.dataset.atomId === selectedAtomId);
+    });
+  }
   if (selectedAtomId) {
-    await loadAtomDetail(selectedAtomId);
+    await loadAtomDetail(selectedAtomId, { soft: !force });
   }
 }
 
@@ -3443,10 +4245,9 @@ function renderNeighborsList(data) {
   }
 }
 
-async function refreshMemoryVectors() {
+async function refreshMemoryVectors(opts = {}) {
+  const force = Boolean(opts.force);
   const health = await fetchJson("/api/memory/vectors");
-  renderVectorsHealth(health);
-
   const params = new URLSearchParams();
   params.set("limit", "50");
   const status = memoryVectorStatus ? memoryVectorStatus.value.trim() : "";
@@ -3454,7 +4255,19 @@ async function refreshMemoryVectors() {
   const data = await fetchJson(
     `/api/memory/vectors/atoms?${params.toString()}`
   );
-  if (!data.ok && !(data.atoms || []).length) {
+  const atoms = data.atoms || [];
+  const fp = stableFingerprint({ health, status, ok: data.ok, atoms });
+  if (
+    !force &&
+    fp === lastVectorsFp &&
+    memoryVectorsList &&
+    memoryVectorsList.childElementCount > 0
+  ) {
+    return;
+  }
+  lastVectorsFp = fp;
+  renderVectorsHealth(health);
+  if (!data.ok && !atoms.length) {
     if (memoryVectorsList) {
       memoryVectorsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
         data.error || "store unavailable"
@@ -3462,7 +4275,7 @@ async function refreshMemoryVectors() {
     }
     return;
   }
-  renderVectorsAtomsList(data.atoms || []);
+  renderVectorsAtomsList(atoms);
 }
 
 async function runNeighborSearch() {
@@ -3983,10 +4796,9 @@ async function runGraphNeighborSearch() {
   }
 }
 
-async function refreshMemoryGraph() {
+async function refreshMemoryGraph(opts = {}) {
+  const force = Boolean(opts.force);
   const overview = await fetchJson("/api/memory/graph");
-  renderGraphOverview(overview);
-
   const session = await fetchJson("/api/memory/graph/session");
   // Merge honesty from overview when session has none.
   if (!session.honesty && overview.honesty) {
@@ -3997,52 +4809,69 @@ async function refreshMemoryGraph() {
   if (session.has_last_session == null) {
     session.has_last_session = overview.has_last_session;
   }
+  const fp = stableFingerprint({ overview, session });
+  if (!force && fp === lastGraphFp) {
+    return;
+  }
+  lastGraphFp = fp;
+  renderGraphOverview(overview);
   renderGraphSession(session);
   renderGraphLists(session);
 }
 
-async function refreshMemory() {
+async function refreshMemory(opts = {}) {
+  const force = Boolean(opts.force);
+  if (memoryActiveTab === "moments") {
+    await refreshMoments({ force });
+    return;
+  }
   if (memoryActiveTab === "atoms") {
-    await refreshMemoryAtoms();
+    await refreshMemoryAtoms({ force });
     return;
   }
   if (memoryActiveTab === "vectors") {
-    await refreshMemoryVectors();
+    await refreshMemoryVectors({ force });
     return;
   }
   if (memoryActiveTab === "graph") {
-    await refreshMemoryGraph();
+    await refreshMemoryGraph({ force });
     return;
   }
-  await refreshMemoryContext();
+  await refreshMemoryContext({ force });
 }
 
 if (memoryRefreshBtn) {
   memoryRefreshBtn.addEventListener("click", () => {
-    refreshMemory().catch((e) => panelLoadError("Memory", e));
+    refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
   });
 }
 document.querySelectorAll(".memory-tab").forEach((btn) => {
   btn.addEventListener("click", () => {
     setMemoryTab(btn.dataset.memoryTab || "context");
-    refreshMemory().catch((e) => panelLoadError("Memory", e));
+    refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
   });
 });
 if (memoryAtomsApply) {
   memoryAtomsApply.addEventListener("click", () => {
-    refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+    refreshMemoryAtoms({ force: true }).catch((e) =>
+      panelLoadError("Memory atoms", e)
+    );
   });
 }
 if (memoryAtomKind) {
   memoryAtomKind.addEventListener("change", () => {
     if (memoryActiveTab === "atoms") {
-      refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+      refreshMemoryAtoms({ force: true }).catch((e) =>
+        panelLoadError("Memory atoms", e)
+      );
     }
   });
 }
 if (memoryVectorsApply) {
   memoryVectorsApply.addEventListener("click", () => {
-    refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+    refreshMemoryVectors({ force: true }).catch((e) =>
+      panelLoadError("Memory vectors", e)
+    );
   });
 }
 if (memoryVectorsRebuild) {
@@ -4053,7 +4882,9 @@ if (memoryVectorsRebuild) {
 if (memoryVectorStatus) {
   memoryVectorStatus.addEventListener("change", () => {
     if (memoryActiveTab === "vectors") {
-      refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+      refreshMemoryVectors({ force: true }).catch((e) =>
+        panelLoadError("Memory vectors", e)
+      );
     }
   });
 }
@@ -4117,7 +4948,7 @@ async function rebuildVectorIndex() {
           : `Vector index rebuild: ${notice}`
       );
     }
-    await refreshMemoryVectors();
+    await refreshMemoryVectors({ force: true });
   } finally {
     memoryVectorsRebuildInFlight = false;
     if (memoryVectorsRebuild) {
@@ -4328,8 +5159,9 @@ async function loadCatalogVersion(kind, name, versionId) {
   }
 }
 
-async function selectCatalogItem(kind, name) {
+async function selectCatalogItem(kind, name, opts = {}) {
   if (!name) return;
+  const soft = Boolean(opts.soft);
   catalogSelection = { kind, name };
   markCatalogSelectionHighlight();
   const base = kind === "tool" ? "/api/tools/" : "/api/skills/";
@@ -4339,41 +5171,61 @@ async function selectCatalogItem(kind, name) {
     hideCatalogInspector();
     catalogSelection = null;
     clearCatalogSelectionHighlight();
+    lastCatalogDetailFp = null;
     throw new Error(detail?.error || `${kind} not found`);
   }
+  const detailFp = stableFingerprint({ kind, name, detail });
+  if (soft && detailFp === lastCatalogDetailFp) {
+    return;
+  }
+  lastCatalogDetailFp = detailFp;
   setCatalogInspecting(true);
   renderCatalogInspector(kind, detail);
 }
 
-async function refreshTools() {
+async function refreshTools(opts = {}) {
+  const force = Boolean(opts.force);
   const [tools, skills] = await Promise.all([
     fetchJson("/api/tools"),
     fetchJson("/api/skills"),
   ]);
   const toolItems = tools.tools || [];
   const skillItems = skills.skills || [];
-  renderCatalog(toolsList, toolItems, "No tools.", "tool");
-  renderCatalog(skillsList, skillItems, "No skills.", "skill");
+  const listFp = stableFingerprint({ toolItems, skillItems });
+  if (
+    force ||
+    listFp !== lastToolsCatalogFp ||
+    !toolsList ||
+    !toolsList.childElementCount
+  ) {
+    lastToolsCatalogFp = listFp;
+    renderCatalog(toolsList, toolItems, "No tools.", "tool");
+    renderCatalog(skillsList, skillItems, "No skills.", "skill");
+  }
   markCatalogSelectionHighlight();
-  if (toolsCountEl) toolsCountEl.textContent = String(toolItems.length);
-  if (skillsCountEl) skillsCountEl.textContent = String(skillItems.length);
+  if (toolsCountEl) setTextIfChanged(toolsCountEl, String(toolItems.length));
+  if (skillsCountEl) setTextIfChanged(skillsCountEl, String(skillItems.length));
   if (catalogMeta) {
     const localTools = toolItems.filter((t) => t.source === "local").length;
     const localSkills = skillItems.filter((s) => s.source === "local").length;
-    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · select a package to inspect · rescanned from disk`;
+    setTextIfChanged(
+      catalogMeta,
+      `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · select a package to inspect · rescanned from disk`
+    );
   }
-  // Refresh open inspector if still selected
+  // Soft-refresh open inspector if still selected (skip re-render when detail unchanged).
   if (catalogSelection) {
     const stillThere =
       catalogSelection.kind === "tool"
         ? toolItems.some((t) => t.name === catalogSelection.name)
         : skillItems.some((s) => s.name === catalogSelection.name);
     if (stillThere) {
-      selectCatalogItem(catalogSelection.kind, catalogSelection.name).catch(
-        () => hideCatalogInspector()
-      );
+      selectCatalogItem(catalogSelection.kind, catalogSelection.name, {
+        soft: !force,
+      }).catch(() => hideCatalogInspector());
     } else {
       catalogSelection = null;
+      lastCatalogDetailFp = null;
       hideCatalogInspector();
     }
   }
@@ -4414,7 +5266,10 @@ function renderUserChips(users, selectedId) {
     btn.title = u.user_id;
     btn.addEventListener("click", () => {
       identityPanelUserId = u.user_id;
-      refreshIdentity().catch((e) => panelLoadError("Identity", e));
+      lastIdentityFp = null;
+      refreshIdentity({ force: true }).catch((e) =>
+        panelLoadError("Identity", e)
+      );
     });
     identityUserChips.appendChild(btn);
   }
@@ -4505,7 +5360,7 @@ async function switchSessionUser(userId) {
   await Promise.all([
     refreshLabelCache(),
     refreshMessages({ force: true }),
-    refreshIdentity().catch(() => {}),
+    refreshIdentity({ force: true }).catch(() => {}),
   ]);
 }
 
@@ -4579,7 +5434,7 @@ async function promoteSelfDraft() {
       identityGrantToken.textContent = "";
     }
     showNotice("Self identity promoted.");
-    await refreshIdentity();
+    await refreshIdentity({ force: true });
     await refreshLabelCache();
   } catch (err) {
     showNotice(String(err.message || err));
@@ -4605,7 +5460,7 @@ async function promoteUserDraft() {
       return;
     }
     showNotice(`User ${uid} identity promoted.`);
-    await refreshIdentity();
+    await refreshIdentity({ force: true });
     await refreshLabelCache();
   } catch (err) {
     showNotice(String(err.message || err));
@@ -4632,7 +5487,8 @@ function disablePromoteButtons() {
   });
 }
 
-async function refreshIdentity() {
+async function refreshIdentity(opts = {}) {
+  const force = Boolean(opts.force);
   try {
     const uid = identityPanelUserId || getSessionUserId();
     const [self, user, usersList] = await Promise.all([
@@ -4641,16 +5497,22 @@ async function refreshIdentity() {
       fetchJson("/api/users"),
     ]);
     const s = (self && self.self) || {};
-    if (identitySelf) {
-      identitySelf.textContent = s.body || s.digest || "(empty self digest)";
+    const users = (usersList && usersList.users) || [];
+    const fp = stableFingerprint({ uid, self, user, users });
+    if (!force && fp === lastIdentityFp) {
+      return;
     }
+    lastIdentityFp = fp;
+
+    setTextIfChanged(
+      identitySelf,
+      s.body || s.digest || "(empty self digest)"
+    );
     const selfName =
       s.display_name ||
       (s.meta && (s.meta.display_name || s.meta.goes_by)) ||
       "Elyra";
-    if (identitySelfLabel) {
-      identitySelfLabel.textContent = selfName;
-    }
+    setTextIfChanged(identitySelfLabel, selfName);
     labelCache.self = selfName;
     updateBrandChrome();
     const hasSelfDraft = Boolean(s.has_draft);
@@ -4660,7 +5522,7 @@ async function refreshIdentity() {
       // KD20: leave collapsed on has_draft; force closed when draft gone
       if (!hasSelfDraft) identitySelfDraftFold.open = false;
       if (identitySelfDraft) {
-        identitySelfDraft.textContent = s.draft_body || "(empty draft)";
+        setTextIfChanged(identitySelfDraft, s.draft_body || "(empty draft)");
       }
     }
     setPromoteBtnState(identityPromoteSelfBtn, hasSelfDraft, {
@@ -4672,20 +5534,23 @@ async function refreshIdentity() {
       // a version query — for v1 show id in the version body area from list only.
       if (identitySelfVersionBody) {
         identitySelfVersionBody.hidden = false;
-        identitySelfVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+        setTextIfChanged(
+          identitySelfVersionBody,
+          `version ${vid} (body via model get_identity / review-identity)`
+        );
       }
     });
 
-    const users = (usersList && usersList.users) || [];
     renderUserChips(users, uid);
 
-    if (identityUser) {
-      identityUser.textContent = user.body || user.profile || "(empty profile)";
-    }
-    if (identityUserLabel) {
-      identityUserLabel.textContent =
-        user.goes_by || (user.meta && user.meta.goes_by) || uid;
-    }
+    setTextIfChanged(
+      identityUser,
+      user.body || user.profile || "(empty profile)"
+    );
+    setTextIfChanged(
+      identityUserLabel,
+      user.goes_by || (user.meta && user.meta.goes_by) || uid
+    );
     if (identityUserMeta && user.meta) {
       const m = user.meta;
       const bits = [
@@ -4695,7 +5560,7 @@ async function refreshIdentity() {
         `provisional ${Boolean(m.provisional)}`,
         `real_name_known ${Boolean(m.real_name_known)}`,
       ].filter(Boolean);
-      identityUserMeta.textContent = bits.join(" · ");
+      setTextIfChanged(identityUserMeta, bits.join(" · "));
     }
     const hasUserDraft = Boolean(user.has_draft);
     if (identityUserDraftBadge) identityUserDraftBadge.hidden = !hasUserDraft;
@@ -4703,7 +5568,7 @@ async function refreshIdentity() {
       identityUserDraftFold.hidden = !hasUserDraft;
       if (!hasUserDraft) identityUserDraftFold.open = false;
       if (identityUserDraft) {
-        identityUserDraft.textContent = user.draft_body || "(empty draft)";
+        setTextIfChanged(identityUserDraft, user.draft_body || "(empty draft)");
       }
     }
     setPromoteBtnState(identityPromoteUserBtn, hasUserDraft, {
@@ -4713,13 +5578,17 @@ async function refreshIdentity() {
     renderVersionList(identityUserVersions, user.versions || [], (vid) => {
       if (identityUserVersionBody) {
         identityUserVersionBody.hidden = false;
-        identityUserVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+        setTextIfChanged(
+          identityUserVersionBody,
+          `version ${vid} (body via model get_identity / review-identity)`
+        );
       }
     });
     if (user.goes_by) labelCache.users[uid] = user.goes_by;
   } catch (err) {
     // Hard failure: do not leave promote enabled against stale draft UI
     disablePromoteButtons();
+    lastIdentityFp = null;
     throw err;
   }
 }
@@ -4859,11 +5728,23 @@ function parseGrantsCsv(raw) {
     .filter(Boolean);
 }
 
-async function refreshSecrets() {
+async function refreshSecrets(opts = {}) {
   if (!secretsListEl) return;
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/secrets");
   const secrets = (data && data.secrets) || [];
-  if (secretsCountBadge) secretsCountBadge.textContent = String(secrets.length);
+  if (secretsCountBadge) {
+    setTextIfChanged(secretsCountBadge, String(secrets.length));
+  }
+  const fp = stableFingerprint(secrets);
+  if (
+    !force &&
+    fp === lastSecretsFp &&
+    secretsListEl.childElementCount > 0
+  ) {
+    return;
+  }
+  lastSecretsFp = fp;
   if (!secrets.length) {
     secretsListEl.textContent = "No named secrets yet.";
     return;
@@ -4924,7 +5805,7 @@ async function refreshSecrets() {
             body: JSON.stringify({ grants: parseGrantsCsv(inp.value) }),
           });
           showNotice(`Grants updated for ${s.name}.`);
-          await refreshSecrets();
+          await refreshSecrets({ force: true });
         } catch (err) {
           showNotice(`Grants failed: ${err && err.message ? err.message : err}`);
         } finally {
@@ -4948,7 +5829,7 @@ async function refreshSecrets() {
           method: "DELETE",
         });
         showNotice(`Deleted secret ${s.name}.`);
-        await refreshSecrets();
+        await refreshSecrets({ force: true });
       } catch (err) {
         showNotice(`Delete failed: ${err && err.message ? err.message : err}`);
       } finally {
@@ -4994,7 +5875,7 @@ async function saveSecret() {
     }
     if (secretsFormMeta) secretsFormMeta.textContent = `Saved ${name} (value not stored in UI).`;
     showNotice(`Secret ${name} saved.`);
-    await refreshSecrets();
+    await refreshSecrets({ force: true });
   } catch (err) {
     showNotice(`Save secret failed: ${err && err.message ? err.message : err}`);
   } finally {
@@ -5048,11 +5929,13 @@ function syncResetConfirmEnabled() {
 async function refreshAllPanels() {
   await Promise.all([
     refreshStatus(),
-    refreshMessages(),
-    refreshGoals().catch(() => {}),
-    refreshMoments().catch(() => {}),
-    refreshTools().catch(() => {}),
-    refreshIdentity().catch(() => {}),
+    refreshMessages({ force: true }),
+    refreshGoals({ force: true }).catch(() => {}),
+    refreshMoments({ force: true }).catch(() => {}),
+    refreshTools({ force: true }).catch(() => {}),
+    refreshIdentity({ force: true }).catch(() => {}),
+    refreshSecrets({ force: true }).catch(() => {}),
+    refreshMemory({ force: true }).catch(() => {}),
   ]);
 }
 
@@ -5765,7 +6648,7 @@ if (catalogInspectorClose) {
 
 if (catalogRefreshBtn) {
   catalogRefreshBtn.addEventListener("click", () => {
-    refreshTools()
+    refreshTools({ force: true })
       .then(() => showNotice("Tools & skills rescanned from disk."))
       .catch((e) => panelLoadError("Tools", e));
   });
@@ -5815,14 +6698,16 @@ function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);
 }
 
-function refreshActivePanel() {
+function refreshActivePanel(opts = {}) {
+  const force = Boolean(opts.force);
   const name = activePanel;
-  if (name === "goals") return refreshGoals();
-  if (name === "moments") return refreshMoments();
-  if (name === "memory") return refreshMemory();
-  if (name === "tools") return refreshTools();
-  if (name === "identity") return refreshIdentity();
-  if (name === "secrets") return refreshSecrets();
+  // Tick uses soft-refresh (force=false); nav click / buttons pass force=true.
+  // Moments is a Memory tab — polled via refreshMemory when activePanel === "memory".
+  if (name === "goals") return refreshGoals({ force });
+  if (name === "memory") return refreshMemory({ force });
+  if (name === "tools") return refreshTools({ force });
+  if (name === "identity") return refreshIdentity({ force });
+  if (name === "secrets") return refreshSecrets({ force });
   // chat / status: covered by refreshMessages / refreshStatus
   return Promise.resolve();
 }
@@ -5836,13 +6721,21 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     activePanel = name || "chat";
     const panel = document.getElementById(`panel-${name}`);
     if (panel) panel.classList.add("active");
-    // Refresh panel data when opened; surface failures (parity with chat).
-    if (name === "goals") refreshGoals().catch((e) => panelLoadError("Goals", e));
-    if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
-    if (name === "memory") refreshMemory().catch((e) => panelLoadError("Memory", e));
-    if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
-    if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
-    if (name === "secrets") refreshSecrets().catch((e) => panelLoadError("Secrets", e));
+    // Force refresh on nav so opening a panel always shows current disk state.
+    if (name === "goals")
+      refreshGoals({ force: true }).catch((e) => panelLoadError("Goals", e));
+    if (name === "memory")
+      refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
+    if (name === "tools")
+      refreshTools({ force: true }).catch((e) => panelLoadError("Tools", e));
+    if (name === "identity")
+      refreshIdentity({ force: true }).catch((e) =>
+        panelLoadError("Identity", e)
+      );
+    if (name === "secrets")
+      refreshSecrets({ force: true }).catch((e) =>
+        panelLoadError("Secrets", e)
+      );
   });
 });
 
@@ -5853,9 +6746,9 @@ async function tick() {
   try {
     const tasks = [refreshStatus(), refreshMessages()];
     // Also poll the active catalog panel so creates appear without nav re-click.
+    // Moments is under Memory (active tab) — no separate activePanel.
     if (
       activePanel === "goals" ||
-      activePanel === "moments" ||
       activePanel === "memory" ||
       activePanel === "tools" ||
       activePanel === "identity" ||
