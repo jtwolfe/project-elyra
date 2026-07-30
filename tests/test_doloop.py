@@ -3397,3 +3397,49 @@ def test_generic_exception_still_yields_error(ctx, registry, moments):
     assert result.stop_reason == "error"
     assert result.error is not None
     assert "RuntimeError" in result.error
+
+
+def test_provider_timeout_is_operational_error_report(ctx, registry, moments):
+    """HTTP TimeoutError → STOP_ERROR with error_class=provider_timeout (not bug framing)."""
+
+    mid = moments.open_moment(why_now="provider timeout", moment_id="m-prov-to")
+    ctx.moment_id = mid
+
+    class _TimeoutClient:
+        def chat_completion(self, *args: Any, **kwargs: Any) -> ChatCompletionResult:
+            raise TimeoutError("The read operation timed out")
+
+    result = _run(_TimeoutClient(), ctx, registry, moments=moments)  # type: ignore[arg-type]
+    assert result.stop_reason == "error"
+    assert result.error is not None
+    assert result.error.startswith("provider_timeout:")
+    stop_beats = [b for b in moments.list_beats(mid) if b.get("type") == "stop"]
+    assert len(stop_beats) == 1
+    assert stop_beats[0].get("stop_reason") == "error"
+    assert stop_beats[0].get("error_class") == "provider_timeout"
+    assert "provider_timeout" in (stop_beats[0].get("error") or "")
+
+
+def test_client_wrapped_timeout_runtimeerror_is_provider_timeout(
+    ctx, registry, moments
+):
+    """HttpChatClient-style RuntimeError wrap also maps to provider_timeout."""
+
+    mid = moments.open_moment(why_now="wrapped timeout", moment_id="m-wrap-to")
+    ctx.moment_id = mid
+
+    class _WrappedTimeoutClient:
+        def chat_completion(self, *args: Any, **kwargs: Any) -> ChatCompletionResult:
+            raise RuntimeError(
+                "chat request timed out after 120s "
+                "(provider stall, queue, or slow completion; "
+                "not a product logic fault)"
+            )
+
+    result = _run(_WrappedTimeoutClient(), ctx, registry, moments=moments)  # type: ignore[arg-type]
+    assert result.stop_reason == "error"
+    assert result.error is not None
+    assert result.error.startswith("provider_timeout:")
+    assert "chat request timed out" in result.error
+    stop_beats = [b for b in moments.list_beats(mid) if b.get("type") == "stop"]
+    assert stop_beats[0].get("error_class") == "provider_timeout"

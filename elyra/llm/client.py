@@ -584,6 +584,15 @@ class HttpChatClient:
             try:
                 with urllib.request.urlopen(request, timeout=request_timeout) as response:
                     raw = response.read().decode("utf-8")
+            except TimeoutError as exc:
+                # Socket/read wall exceeded — often provider queue/stall/slow
+                # completion under load, not a clean HTTP 4xx/5xx. Surface a
+                # stable message for do-loop handling (not a product logic bug).
+                raise RuntimeError(
+                    f"chat request timed out after {request_timeout}s "
+                    f"(provider stall, queue, or slow completion; "
+                    f"not a product logic fault)"
+                ) from exc
             except urllib.error.HTTPError as exc:
                 # Read body once (HTTPError fp is single-shot).
                 try:

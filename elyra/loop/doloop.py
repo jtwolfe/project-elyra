@@ -834,6 +834,89 @@ def run_do_loop(
             last_stop_hop_was_flood=state.last_stop_hop_was_flood,
             error=err_detail,
         )
+    except (TimeoutError, RuntimeError) as exc:
+        # Provider HTTP timeout: bare TimeoutError or client-wrapped RuntimeError.
+        # Operational report — not a product logic bug; future: rate-limit/backoff.
+        msg = str(exc)
+        is_timeout = isinstance(exc, TimeoutError) or (
+            isinstance(exc, RuntimeError)
+            and (
+                msg.startswith("chat request timed out")
+                or "timed out after" in msg
+            )
+        )
+        if not is_timeout:
+            # Other RuntimeErrors → same surface as uncaught Exception below.
+            _LOG.exception("do-loop uncaught error")
+            _record_beat(
+                moments,
+                moment_id,
+                {"type": "stop", "stop_reason": STOP_ERROR, "error": str(exc)},
+                memory_store=memory_store,
+                memory_settings=mem_settings,
+                promote_state=promote_state,
+            )
+            return DoLoopResult(
+                stop_reason=STOP_ERROR,
+                hop_count=state.hop,
+                arm_wait=state.arm_wait,
+                spoke=state.spoke,
+                moment_id=moment_id,
+                reouter_count=state.reouter_count,
+                continue_injects=state.continue_injects,
+                work_continue_injects=state.work_continue_injects,
+                skill_commit_injects=state.skill_commit_injects,
+                thrash_host_injects=state.thrash_host_sent,
+                thrash_skips=state.thrash_skip_count,
+                tools_ran=state.tools_ran,
+                ledger_mutated=state.ledger_mutated,
+                model_beats=state.model_beats,
+                channel_flood_beats=state.channel_flood_beats,
+                last_stop_hop_was_flood=state.last_stop_hop_was_flood,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        err_detail = f"provider_timeout:{msg}"
+        _LOG.error(
+            "do-loop provider timeout (HTTP request_timeout exceeded). "
+            "Operational report — often queue/stall/slow completion under load; "
+            "not a product logic bug. Future: rate-limit / backoff awareness. "
+            "detail=%s hop=%s moment=%s",
+            err_detail,
+            state.hop,
+            moment_id,
+        )
+        _record_beat(
+            moments,
+            moment_id,
+            {
+                "type": "stop",
+                "stop_reason": STOP_ERROR,
+                "error": err_detail,
+                "error_class": "provider_timeout",
+            },
+            memory_store=memory_store,
+            memory_settings=mem_settings,
+            promote_state=promote_state,
+        )
+        return DoLoopResult(
+            stop_reason=STOP_ERROR,
+            hop_count=state.hop,
+            arm_wait=state.arm_wait,
+            spoke=state.spoke,
+            moment_id=moment_id,
+            reouter_count=state.reouter_count,
+            continue_injects=state.continue_injects,
+            work_continue_injects=state.work_continue_injects,
+            skill_commit_injects=state.skill_commit_injects,
+            thrash_host_injects=state.thrash_host_sent,
+            thrash_skips=state.thrash_skip_count,
+            tools_ran=state.tools_ran,
+            ledger_mutated=state.ledger_mutated,
+            model_beats=state.model_beats,
+            channel_flood_beats=state.channel_flood_beats,
+            last_stop_hop_was_flood=state.last_stop_hop_was_flood,
+            error=err_detail,
+        )
     except Exception as exc:  # noqa: BLE001 — surface as stop error
         _LOG.exception("do-loop uncaught error")
         _record_beat(
