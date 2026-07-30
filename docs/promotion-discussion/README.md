@@ -262,7 +262,11 @@ Normative draft for **instance continuity** (glass-tail + sticky directed keep +
 
 → [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](../stretch-2/design-instance-continuity-glass-tail-directed-keep.md)
 
-Issue: [#93](https://github.com/jtwolfe/project-elyra/issues/93). Next: meal-formation / continuation review report, then refine draft → implement.
+Review methodology (execute next):
+
+→ [`docs/stretch-2/design-meal-formation-continuity-review-plan.md`](../stretch-2/design-meal-formation-continuity-review-plan.md)
+
+Issue: [#93](https://github.com/jtwolfe/project-elyra/issues/93). Next: run the review plan → write continuity review report → refine draft → implement.
 
 ---
 

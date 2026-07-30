@@ -1,0 +1,24 @@
+{
+  "run_id": "sa9b-e6d460f2",
+  "moment_id": "e6d460f2-4087-42cd-870f-d34a89b6feaf",
+  "glass_user_id": "04f85fc6-195a-4b3c-b0bf-8b307c7baa2f",
+  "glass_assistant_fail_id": "37ec1721-930d-4045-9d0c-819c3c1c1baf",
+  "prior_glass_assistant_id": "436f4ca1-3860-4e3a-bd14-ec2bcb12373d",
+  "wait_id": "c13ae60a-40ed-45c6-a75a-035c1a78f05c",
+  "wait_prompt": "Anything else?",
+  "wait_prompt_surface": "data/wakes/waits.json + prior moment de87355d-\u2026 wait_user tool result; NOT a glass assistant row",
+  "why_now": "wait reply (wait_id=c13ae60a-40ed-45c6-a75a-035c1a78f05c)",
+  "budget_tokens": 50000,
+  "budget_split": {
+    "fixed": 1920,
+    "semantic": 0,
+    "directed_keep": 0,
+    "episodic": 9616,
+    "temporal": 38464
+  },
+  "dogfood_jsonl_atom_count": 87,
+  "dogfood_jsonl_atoms_for_moment": 0,
+  "note_lance": "lance open segfaulted in this environment; used jsonl dogfood + hermetic pressure fixture",
+  "live_api": "skipped \u2014 http://127.0.0.1:8787 returned non-ready / down",
+  "open_moment_atoms_source": "hermetic_wake_obs_hop0"
+}

@@ -9,9 +9,9 @@
 | **Status** | **Draft** |
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` |
 | **Bug id** | `BUG-meal-03` |
-| **Branch** | `design/BUG-meal-03-93-instance-continuity` |
+| **Branch** | Content origin: `design/BUG-meal-03-93-instance-continuity`; landed on main via docs PR |
 | **Work product (when executed)** | Written **fault report** under `docs/stretch-2/meal-continuity-review/` that refines the product draft |
-| **Product draft refined by report** | [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md) |
+| **Product draft refined by report** | [`design-instance-continuity-glass-tail-directed-keep.md`](design-instance-continuity-glass-tail-directed-keep.md) |
 | **Repo path for this plan (PR-R1)** | `docs/stretch-2/design-meal-formation-continuity-review-plan.md` |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
 | **Related** | #68 wake-02; #92 meal-02 summaries; promotion-discussion §4–5; lance-debug1 inspection pattern |
@@ -62,8 +62,8 @@ Key entry points:
 
 | Surface | Evidence (local dogfood data) |
 |---------|-------------------------------|
-| **Glass user** | `data/messages.jsonl` id `04f85fc6-…`: *“what is the coolest thing you remember about rockets?”* (2026-07-30T08:47:45Z) |
-| **Glass assistant** | id `37ec1721-…`: *“Not much else hanging — last open threads were the philosophy pack and fabric report, both closed…”* |
+| **Glass user** | `data/messages.jsonl` id `04f85fc6-195a-4b3c-b0bf-8b307c7baa2f`: *“what is the coolest thing you remember about rockets?”* (2026-07-30T08:47:45Z) |
+| **Glass assistant** | id `37ec1721-930d-4045-9d0c-819c3c1c1baf`: *“Not much else hanging — last open threads were the philosophy pack and fabric report, both closed…”* |
 | **Moment** | `e6d460f2-4087-42cd-870f-d34a89b6feaf` |
 | **why_now** | `wait reply (wait_id=c13ae60a-40ed-45c6-a75a-035c1a78f05c)` — **no rockets text** |
 | **Model reasoning (tape)** | *“The user is replying to my wait after I told them the time. The wait prompt was ‘Anything else?’…”* |
