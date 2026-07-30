@@ -36,7 +36,9 @@ from elyra.memory.weights import (
 )
 
 # Truncation for glass list rows (not store limits).
-_SNIPPET_CHARS = 240
+# Glass Context inspect preview (BUG-mem-ui-01: honesty labels when truncated).
+# Not the stored summary cap — only what operators see in /api/memory/context.
+_SNIPPET_CHARS = 480
 _ATOM_LIST_HARD_CAP = 200
 _ATOM_TEXT_CAP = 4000
 _NEIGHBOR_K_DEFAULT = 12

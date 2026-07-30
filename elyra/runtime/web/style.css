@@ -2917,6 +2917,25 @@ body {
   min-height: 0;
 }
 
+.memory-channel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.memory-channel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.15rem;
+  font-size: 0.85rem;
+  color: var(--cream);
+  text-transform: lowercase;
+  letter-spacing: 0.03em;
+}
+
 .memory-channel-card {
   margin-bottom: 0.15rem;
 }
@@ -2958,6 +2977,42 @@ body {
   color: var(--text);
   max-height: 12rem;
   overflow: auto;
+}
+
+.memory-snippet-prose {
+  font-family: var(--font);
+  max-height: 16rem;
+}
+
+.memory-snippet-prose p {
+  margin: 0 0 0.4rem;
+}
+
+.memory-snippet-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.memory-trunc-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.78rem;
+}
+
+.memory-channel-actions {
+  margin-top: 0.35rem;
+}
+
+.memory-channel-card.memory-ch-temporal {
+  border-left: 3px solid color-mix(in srgb, var(--gold-primary) 55%, var(--border));
+}
+.memory-channel-card.memory-ch-episodic {
+  border-left: 3px solid color-mix(in srgb, #6ea8fe 50%, var(--border));
+}
+.memory-channel-card.memory-ch-semantic {
+  border-left: 3px solid color-mix(in srgb, var(--good) 50%, var(--border));
+}
+.memory-channel-card.memory-ch-system,
+.memory-channel-card.memory-ch-orient {
+  border-left: 3px solid color-mix(in srgb, var(--muted) 60%, var(--border));
 }
 
 .memory-atoms-toolbar {

@@ -2904,8 +2904,41 @@ function renderMemoryContext(data) {
     memoryContextBody.appendChild(p);
     return;
   }
+
+  // Group variable meal items by channel for scan hierarchy (BUG-mem-ui-01).
+  const byChannel = new Map();
   for (const item of items) {
-    memoryContextBody.appendChild(renderMemoryChannelCard(item));
+    const ch = item.channel || item.label || "other";
+    if (!byChannel.has(ch)) byChannel.set(ch, []);
+    byChannel.get(ch).push(item);
+  }
+  const channelOrder = [
+    "temporal",
+    "episodic",
+    "semantic",
+    "directed_keep",
+    "summary",
+  ];
+  const orderedKeys = [
+    ...channelOrder.filter((k) => byChannel.has(k)),
+    ...[...byChannel.keys()].filter((k) => !channelOrder.includes(k)),
+  ];
+  for (const ch of orderedKeys) {
+    const group = byChannel.get(ch) || [];
+    if (!group.length) continue;
+    const section = document.createElement("div");
+    section.className = "memory-channel-section";
+    section.dataset.channel = ch;
+    const h = document.createElement("div");
+    h.className = "memory-channel-section-head";
+    h.innerHTML = `<strong>${escapeHtml(ch)}</strong><span class="badge">${
+      group.length
+    }</span>`;
+    section.appendChild(h);
+    for (const item of group) {
+      section.appendChild(renderMemoryChannelCard(item));
+    }
+    memoryContextBody.appendChild(section);
   }
 }
 
@@ -3046,34 +3079,97 @@ function formatDirectedKeepLine(meal) {
 
 function renderMemoryChannelCard(item) {
   const card = document.createElement("div");
-  card.className = "card memory-channel-card";
+  const ch = item.channel || "other";
+  card.className = `card memory-channel-card memory-ch-${String(ch).replace(
+    /[^a-z0-9_-]/gi,
+    "_"
+  )}`;
   const head = document.createElement("div");
   head.className = "card-head";
   const title = document.createElement("strong");
-  title.textContent = item.label || item.channel || "channel";
+  title.textContent = item.label || ch || "channel";
   const badge = document.createElement("span");
   badge.className = "badge";
   const tok =
     item.token_estimate != null ? `≈${item.token_estimate} tok` : "—";
-  badge.textContent = `${item.channel || "—"} · ${tok}`;
+  badge.textContent = `${ch || "—"} · ${tok}`;
   head.appendChild(title);
   head.appendChild(badge);
   card.appendChild(head);
+
+  const snippet = item.snippet != null ? String(item.snippet) : "";
+  const snipLen = snippet.length;
+  const fullChars =
+    item.content_chars != null && !Number.isNaN(Number(item.content_chars))
+      ? Number(item.content_chars)
+      : null;
+  const truncated = fullChars != null && fullChars > snipLen;
+
   const meta = document.createElement("div");
   meta.className = "meta";
   const mbits = [];
   if (item.atom_id) mbits.push(item.atom_id);
-  if (item.t_start) mbits.push(item.t_start);
-  if (item.content_chars != null) mbits.push(`${item.content_chars} chars`);
+  if (item.t_start) mbits.push(formatBeatTs(item.t_start) || item.t_start);
+  if (item.meta && item.meta.scale) mbits.push(`scale=${item.meta.scale}`);
   if (item.meta && item.meta.atom_count != null) {
     mbits.push(`${item.meta.atom_count} atoms`);
   }
+  if (fullChars != null) {
+    mbits.push(
+      truncated
+        ? `snippet ${snipLen}/${fullChars} chars (inspect truncates; not empty memory)`
+        : `${fullChars} chars`
+    );
+  } else if (snipLen) {
+    mbits.push(`${snipLen} chars shown`);
+  }
   meta.textContent = mbits.join(" · ") || "—";
   card.appendChild(meta);
-  const pre = document.createElement("pre");
-  pre.className = "memory-snippet";
-  pre.textContent = item.snippet || "(empty)";
-  card.appendChild(pre);
+
+  // Prose-friendly body for summaries / speak-like channels.
+  const proseCh = new Set([
+    "temporal",
+    "episodic",
+    "semantic",
+    "summary",
+    "system",
+    "orient",
+    "directed_keep",
+  ]);
+  const body = document.createElement(proseCh.has(ch) ? "div" : "pre");
+  body.className = proseCh.has(ch)
+    ? "memory-snippet memory-snippet-prose"
+    : "memory-snippet";
+  if (proseCh.has(ch) && snippet) {
+    body.innerHTML = renderMarkdown(snippet);
+  } else {
+    body.textContent = snippet || "(empty)";
+  }
+  card.appendChild(body);
+
+  if (truncated) {
+    const note = document.createElement("p");
+    note.className = "muted memory-trunc-note";
+    note.textContent =
+      "Showing Glass inspect snippet only — full atom body may be longer (open atom for detail).";
+    card.appendChild(note);
+  }
+
+  if (item.atom_id) {
+    const actions = document.createElement("div");
+    actions.className = "memory-channel-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link-btn";
+    btn.textContent = "open atom";
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      setMemoryTab("atoms");
+      void loadAtomDetail(item.atom_id);
+    });
+    actions.appendChild(btn);
+    card.appendChild(actions);
+  }
   return card;
 }
 

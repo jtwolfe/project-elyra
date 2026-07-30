@@ -26,7 +26,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
 | `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (open) | Fixed on fix branch (pending main) |
 | `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
-| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Open (defer) |
+| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Partial fix on branch (UI; gen residual) |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open (defer) |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
@@ -327,7 +327,7 @@ Moments is a top-level nav peer of Memory. After Stretch 2 Phase 1, operators th
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | Partial fix on `fix/BUG-mem-ui-01-72` (UI beautify + snippet honesty; generation remains template-first) |
 | **Issue** | [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
 | **Severity now** | Med (hard to understand what the model is “eating”) |
 | **Severity later** | High if Context is the primary trust surface for meal/ladder correctness |
@@ -346,9 +346,9 @@ Context cards are hard to read: snipped text, channel labels without hierarchy, 
 
 ### Fix directions
 
-1. **Beautify:** channel sections, scale/window badges, token budget bars, expandable full content (use `content_chars` / detail endpoint).
-2. **Generation review:** when ladder runs (idle `refresh_due` vs on-compose), skip-unchanged behavior, child-preference vs raw, highlight ranking, whether template-only is enough for dogfood.
-3. Document operator-visible “this is a snippet of N chars” so truncation is not mistaken for empty memory.
+1. **Beautify:** channel sections, scale/window badges, token budget bars, expandable full content (use `content_chars` / detail endpoint). **Done on branch:** channel groups, truncation honesty (`snippet k/N chars`), prose body, open-atom link; inspect snippet 480 chars.
+2. **Generation review:** when ladder runs (idle `refresh_due` vs on-compose), skip-unchanged behavior, child-preference vs raw, highlight ranking, whether template-only is enough for dogfood. **Residual:** still template-first / no LLM summaries — intentional until dogfood asks for richer narrative.
+3. Document operator-visible “this is a snippet of N chars” so truncation is not mistaken for empty memory. **Done on branch.**
 4. Optional later: richer narrative summaries (LLM) only after template path is trustworthy and budgeted.
 
 ---
