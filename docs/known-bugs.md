@@ -30,8 +30,10 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (closed) | **Fixed** on main (Atoms soft-skip under glass-03) |
 | `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | **Partial** on main — knip soft-skip shipped; residual poll architecture later |
-| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | KaTeX on fix/known-bugs; dogfood then close |
-| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Soft newlines on fix/known-bugs; dogfood then close |
+| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | **Dogfood OK** on fix/known-bugs (equations); merge then close |
+| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | **Dogfood OK** on fix/known-bugs (newlines); merge then close |
+| `BUG-chat-03` | [#88](https://github.com/jtwolfe/project-elyra/issues/88) (open) | Open — Sources / reference links must open correctly |
+| `BUG-wait-01` | [#89](https://github.com/jtwolfe/project-elyra/issues/89) (open) | Open — multi-choice wait after speak; strong instruction nudge |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
 | `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** on main |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** on main |
@@ -483,7 +485,7 @@ Nav click, Memory tab/Apply, catalog Rescan, secret save/delete/grants, identity
 
 | Field | Value |
 |-------|--------|
-| **Status** | Landed on `fix/known-bugs` — dogfood then close |
+| **Status** | **Dogfood OK** on `fix/known-bugs` (2026-07-30) — merge then close |
 | **Issue** | [#75](https://github.com/jtwolfe/project-elyra/issues/75) |
 | **Severity now** | Low residual (edge TeX / currency `$` false positives) |
 | **Severity later** | Med if models change delimiter style |
@@ -512,7 +514,7 @@ Math in chat showed as raw `\[…\]` / `$…$` instead of rendered equations.
 
 | Field | Value |
 |-------|--------|
-| **Status** | Landed on `fix/known-bugs` — dogfood then close |
+| **Status** | **Dogfood OK** on `fix/known-bugs` (2026-07-30) — merge then close |
 | **Issue** | [#84](https://github.com/jtwolfe/project-elyra/issues/84) |
 | **Severity now** | — |
 | **Severity later** | — |
@@ -530,6 +532,90 @@ Multi-line chat input showed as a single run-on paragraph in Glass history; atom
 ### Related
 
 - **BUG-chat-01** — same `renderMarkdown` pipeline (math placeholders).
+- **BUG-chat-03** — source links in the same bubble pipeline.
+
+---
+
+## BUG-chat-03 — Source / reference links in Glass chat must open correctly
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open |
+| **Issue** | [#88](https://github.com/jtwolfe/project-elyra/issues/88) |
+| **Severity now** | Med (research speaks dump Sources operators cannot reliably open) |
+| **Severity later** | Med as citation-heavy dogfood grows |
+| **Area** | Glass `renderMarkdown` link path; speak/chat **Sources** sections |
+| **Dogfood** | 2026-07-30 — moment `cb41e603-1a7a-497c-932c-91983f4e1893` Schrödinger speak; Sources with Wikipedia/Grokipedia markdown links (non-ASCII path chars e.g. `Schrödinger`) |
+
+### Symptom
+
+Long research **`speak`** payloads end with a **Sources** list. Operators need every link to be clickable and land on the intended page (new tab). Risk classes: Unicode wiki paths, bare URLs (no markdown), trailing punctuation, broken `href` encoding.
+
+### Likely cause
+
+- Only `[label](url)` becomes anchors; bare `https://` may not autolink.
+- Non-ASCII path segments may need percent-encoding in `href` for some browsers.
+- Edge cases: parentheses, mixed encoding, `target`/`rel` hygiene.
+
+### Fix directions
+
+1. Safely encode `http(s)` hrefs (IRI → valid URL) without double-encoding.
+2. Optionally autolink bare `https://` lines in Sources-like blocks.
+3. Regression: Schrödinger Sources (Wikipedia + Grokipedia) all open; reject `javascript:`.
+4. Display-only — do not change atom/message store text.
+
+### Related
+
+- **BUG-chat-01** / **BUG-chat-02** — same `renderMarkdown` surface.
+- Parent epic [#59](https://github.com/jtwolfe/project-elyra/issues/59).
+
+---
+
+## BUG-wait-01 — Multi-choice wait after substantive speak (strong instruction nudge)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open |
+| **Issue** | [#89](https://github.com/jtwolfe/project-elyra/issues/89) |
+| **Severity now** | Med (fork questions die without wait bar; human free-types into a new moment) |
+| **Severity later** | High for collaborative multi-step dogfood |
+| **Area** | `wait_user` + `talk` / social skills + loop `ends_moment` ordering; Glass `#wait-choices` |
+| **Dogfood** | 2026-07-30 — same Schrödinger moment: after long answer **speak**, model listed forks (1)–(4) and asked “Which fork?” **without** arming `wait_user` multi-choice — no Glass choice buttons |
+
+### Symptom
+
+After a substantive **speak** that offers multiple follow-up forks, the model often:
+
+1. Writes options only in prose (“(1)… (2)… Which fork?”), and  
+2. **Does not** call **`wait_user`** with `choices=[…]` (and adequate timeout),
+
+so Glass never shows the wait bar / multi-choice buttons. Operator must re-open the conversation free-text instead of tapping a choice.
+
+Product intent already exists (`talk` skill: speak then wait; multi-choice for collab forks) but the **nudge is too soft** — model treats the fork list as a rhetorical close.
+
+### Likely cause
+
+- Soft skill language (“if you need a decision”) rather than a hard close-path rule.
+- `ends_moment` batch abort after `wait_user` — model must order **speak → wait_user** in one turn; may skip wait to “finish cleanly”.
+- Glass wait UI is correct when armed (`renderWaitBar`); defect is **failure to arm**.
+
+### Fix directions
+
+1. **Strong skill + TOOL.md nudge:** when speak offers numbered / lettered forks, **must** follow with `wait_user` using those strings as `choices` (or long free-text wait if offering “I’ll type”).
+2. Concrete dogfood example in `talk` + `wait_user` (research close + 4 forks).
+3. Optional host one-shot reminder if speak looks multi-choice and batch has no wait (avoid thrash).
+4. Verify: armed multi-choice → buttons; free-text → composer hint; reply routes `wait_reply`.
+
+### Explicit non-goals
+
+- Do not invent choices the model did not offer.
+- Do not retune default timeouts without separate dogfood.
+- Separate from **BUG-wake-*** storm class.
+
+### Related
+
+- `tools/bundled/wait_user/TOOL.md`, `skills/bundled/talk/SKILL.md`, `elyra/tools/builtin/social.py`
+- Parent epic [#59](https://github.com/jtwolfe/project-elyra/issues/59).
 
 ---
 
