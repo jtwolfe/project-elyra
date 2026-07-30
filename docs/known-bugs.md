@@ -31,6 +31,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open (defer) |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
+| `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
 | `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Open (defer) |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (open) | Open (defer) |
 | `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Open (defer) |
@@ -473,6 +474,58 @@ Confirms storage path is OK; defect is **display** of user (and possibly assista
 
 - **BUG-chat-01** — math rendering (same chat bubble pipeline).
 - **BUG-mem-ui-*** — atoms already show newlines; good contrast for dogfood.
+
+---
+
+## BUG-tts-01 — TTS needs sanitation before text is sent to the service
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open |
+| **Issue** | [#85](https://github.com/jtwolfe/project-elyra/issues/85) |
+| **Severity now** | Med (broken / chaotic audio for common Glass speak payloads) |
+| **Severity later** | High if TTS is a default listen path for long agent turns with tables, links, UI chrome |
+| **Area** | `elyra/media/tts.py` (`validate_text_for_tts` / `synthesize` / `get_or_synthesize`); Glass play-on-message path that feeds **saved** message text to xAI TTS |
+| **Dogfood** | 2026-07-30 operator: non-language / non-speech characters create **generation chaos**. Example class: Grok UI / glass elements like *“you can see the table in our conversation history”* (and similar chrome, tables, markup) when included in text sent to TTS |
+
+### Symptom
+
+Text is handed to the TTS service with little or no **speech-oriented sanitation**. Current guard in product is mainly **empty / length** (`validate_text_for_tts`), not content hygiene. Result:
+
+- Tables, markdown, URLs, code fences, emoji-heavy chrome, and **UI meta-phrases** (e.g. affordance copy about “conversation history” / “see the table”) get spoken or scramble prosody.
+- Audio sounds broken, robotic-garble, or reads control/UI prose that was never meant for ears.
+- Operator loses trust in play-on-message for real multi-part agent replies.
+
+Storage of the original message can stay intact; this is a **TTS ingress** problem (what we send on the wire), not necessarily a glass-display bug.
+
+### Likely cause (unverified)
+
+`validate_text_for_tts` returns full stored content after empty/length checks; `synthesize` posts that string as `text` to `POST /v1/tts`. No strip of:
+
+- markdown / table syntax
+- bare URLs and attachment tokens
+- code fences
+- glass/system chrome strings and non-linguistic punctuation runs
+- optional: role labels, citation chips, “see table in history” style meta
+
+### Fix directions
+
+1. **Sanitize pipeline** before `synthesize` / cache key material that should reflect *spoken* form: strip or rewrite non-speech structures to short spoken equivalents (or drop).
+2. Prefer **fail soft**: if after sanitation text is empty, refuse with a clear reason rather than calling the service.
+3. Inventory dogfood offenders: tables, lists, code, URLs, emoji, UI meta lines (including Grok-style *“you can see the table in our conversation history”* elements).
+4. Keep original message on disk; cache key may need to include a **sanitized hash** or version suffix so old chaotic caches do not stick after the fix.
+5. Optional operator toggle later (“read raw”); default must be sanitized.
+
+### Explicit non-goals
+
+- Do not change STT.
+- Do not require perfect SSML for v1 — plain cleaned prose is enough.
+- Do not delete original chat/atom text.
+
+### Related
+
+- Glass play-on-message / media TTS cache (`tts_cache` kind).
+- **BUG-chat-01** / **BUG-chat-02** — chat *display* issues; TTS is the *listen* path (related multi-modal surface, separate fix).
 
 ---
 
