@@ -1672,6 +1672,15 @@ body {
   max-width: none;
 }
 
+/* Status body scrolls; panel-head stays pinned (BUG-status-01 / #76). */
+#panel-status .status-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.5rem;
+}
+
 .status-cards {
   padding: 0.75rem 1.5rem 0;
   display: flex;

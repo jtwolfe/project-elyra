@@ -32,7 +32,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
-| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Open (defer) |
+| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Fixed on fix branch (pending main) |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (open) | Open (defer) |
 | `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Open (defer) |
 | `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
@@ -533,7 +533,7 @@ Storage of the original message can stay intact; this is a **TTS ingress** probl
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | Fixed on `fix/BUG-status-01-76` (pending merge to main) |
 | **Issue** | [#76](https://github.com/jtwolfe/project-elyra/issues/76) |
 | **Severity now** | Med (lower half of Status unreachable on typical viewports) |
 | **Severity later** | Med |
