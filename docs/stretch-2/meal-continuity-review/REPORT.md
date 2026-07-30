@@ -30,16 +30,27 @@ Model reasoning on hop 1 framed a **wait ceremony** (*replying to my wait after 
 
 ### Primary fault chain (not B1 alone)
 
+Two rankings are used deliberately — do not merge them:
+
+| Label | Order | Meaning |
+|-------|-------|---------|
+| **Empirical recompose ranking** (SA-9b hop-0 carriers) | **B12 → B11 → B3 → B7 → B1** | What the offline meal frame + tape suggest outranked the tip *in the failure instance* (mass/framing first; structural missing band last as “absence”) |
+| **Normative fix / structural priority** (implement S-order) | **B12 + B1 co-primary → B3 → B7 → B11** (under tip floor) | What to ship first: framing dual-write + glass-tail channel; then role fidelity; hybrid stays scoped; epi mass handled by tip floor once a tip channel exists |
+
+#### Normative fix priority (for S1–S3)
+
 | Rank | Bucket | Mechanism | Role in rockets failure |
 |------|--------|-----------|-------------------------|
 | 1 | **B12** framing_bias | `_why_now("wait_reply")` = wait_id only + `format_skill_bias` → `BIAS_TALK` | Matches tape reasoning; wait ceremony attractor |
-| 2 | **B1** missing_glass_tail | Memory meal has **no** sliding glass / glass-tail band | Prior assistant social turns never enter outer |
+| 1 (co) | **B1** missing_glass_tail | Memory meal has **no** sliding glass / glass-tail band | Prior assistant social turns never enter outer — primary **missing channel** fix |
 | 3 | **B3** role_collapse | Meal items default `role: user` host blocks; `format_atom_line` kind tags | Rockets text, if present, is not Q→A dialogue |
 | 4 | **B7** hybrid_wake_only | Hybrid injects **one** glass row only when id missing; skipped when temporal already has `wake_message_id` | No assistant prior; often no extra glass row at all |
-| 5 | **B11** epi_outranks_tip | Channel order + token mass; no tip floor / precedence | Closed-work speak can dominate thin tip |
-| 6 | **B4** why_now_without_content | Content-carrier gap for orient | Amplifies B12 |
+| 5 | **B11** epi_outranks_tip | Channel order + token mass; no tip floor / precedence | Closed-work speak can dominate thin tip once tip band exists, protect with floor |
+| — | **B4** why_now_without_content | Content-carrier gap for orient | Amplifies B12 |
 | — | **B2** path_asymmetry | wait_reply → new moment outer rebuild vs interject → chain | Explains why interject “never” fails this way |
 | — | **B5 + B5b** | Moment-end wipe + `get_last_confirmed_keep(open_id)` moment filter | Sticky keep cannot survive moment boundary even if wipe removed alone |
+
+Empirical order matches `evidence/sa9b-e6d460f2/recompose_meal.json` `carrier_ranking`, `notes.md`, and EDGE-MATRIX P2 (B12→B11→B3→B7→B1). Elevating **B1** in the normative table is fix-priority (missing channel / S1), **not** a re-statement of the empirical recompose rank.
 
 **B12 framing (tail-only vs tail+orient):** Offline recompose + tape show that **glass-tail alone is the correct primary fix (S1)** for must-have tip (user Q + prior assistant glass), but **why_now / orient snippet remains a recommended dual-write (S2 option)** because the model’s reasoning tracked wait ceremony language that is strongest in orient. Do **not** ship prompt-only soft recall (A5) as S1.
 
@@ -310,8 +321,8 @@ Live E-P* matrix: **skipped**.
 | **Path(s)** | P2 rockets; any social with rich epi |
 | **Location** | `compose_meal` order KD-A8 `meal.py:1643–1648`; `split_memory_budget_v3` epi share; **no** glass-tail floor in cut order |
 | **Nature** | Supports listed before temporal; under pressure supports cut before temporal floor — but tip channel does not exist to protect. Closed-work narrative fills bulb. |
-| **Evidence** | Hermetic pressure fixture: epi ~981 tok vs temporal tip 27 tok; fail speak references philosophy/fabric. Dogfood jsonl store thin (atom_count 87; lance open segfaulted in review env — possible richer lance data at runtime). |
-| **Confidence** | **confirmed** mechanism; mass magnitude **likely** higher on full lance dogfood |
+| **Evidence** | **Mass ranking driven by hermetic compose B (+ thin jsonl compose A), not full lance dogfood.** Hermetic pressure fixture B: epi ~981 tok vs temporal tip 27 tok; compose A dogfood jsonl was thin (atom_count 87; **0 atoms for moment e6d460f2**; lance open segfaulted in review env — possible richer lance data at runtime was not measured). Fail speak still references philosophy/fabric (behavioral), consistent with B11 under a filled bulb. |
+| **Confidence** | **confirmed** mechanism (order + no tip floor); mass magnitude on full production lance **not measured** here (likely higher) |
 | **Impact** | Model prefers “closed threads” narrative. |
 | **Related draft §** | §4.1 precedence; §5.4 cut order |
 
@@ -446,9 +457,11 @@ Extend Part B target table:
 
 ### 6.8 New: rockets fix-evaluation summary for draft
 
-Add a short note under problem statement or §5:
+Add a short note under problem statement or §5 (keep empirical vs normative labels distinct):
 
-> Offline recompose ranks carriers: **B12 orient framing ≥ B1 missing tail > B3 role collapse > B7 hybrid > B11 epi mass**. Implementation must evaluate **tail-only vs tail+orient snippet**, not B1 alone.
+> **Empirical SA-9b recompose ranking** (hop-0 carriers in outer + tape): **B12 → B11 → B3 → B7 → B1**.  
+> **Normative fix / structural priority** (implement order): **B12 + B1 co-primary → B3 → B7 → B11** (epi mass under tip floor once a glass-tail channel exists).  
+> Elevating B1 for S1 is fix-priority (missing channel), not a re-rank of the empirical list. Implementation must evaluate **tail-only vs tail+orient snippet**, not B1 alone.
 
 ---
 
@@ -528,12 +541,21 @@ docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/
 
 PII: user_id `jim` retained as dogfood operator id; no secrets included.
 
-### 9.5 Static carrier ranking (normative for implement)
+### 9.5 Carrier rankings (empirical vs normative)
+
+**Empirical recompose ranking** (SA-9b; matches `recompose_meal.json` / EDGE-MATRIX P2):
 
 1. **B12** orient why_now + BIAS_TALK  
-2. **B1** missing glass-tail (prior assistant + true user role)  
+2. **B11** episodic closed-work mass  
 3. **B3** role-collapsed temporal observation  
 4. **B7** hybrid skip / single row  
-5. **B11** episodic closed-work mass  
+5. **B1** missing glass-tail band (structural absence)
+
+**Normative fix / structural priority** (implement S-order; not a re-quote of SA-9b):
+
+1. **B12 + B1** co-primary (framing dual-write + glass-tail channel)  
+2. **B3** role fidelity via glass-tail  
+3. **B7** keep hybrid scoped; dedupe with tail  
+4. **B11** epi mass under tip floor once tip exists  
 
 **Primary package:** glass-tail (S1) + path/framing dual-write (S2) + sticky keep B5+B5b (S3).
