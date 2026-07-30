@@ -1561,6 +1561,19 @@ body {
   max-height: 240px;
 }
 
+/* Tool result body: same pretty structure as raw fields (compact wire → indent). */
+.beat-json-body {
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-soft) 80%, transparent);
+  max-height: min(28rem, 55vh);
+  overflow: auto;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
 .link-btn {
   appearance: none;
   border: none;

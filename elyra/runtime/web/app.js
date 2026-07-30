@@ -2518,6 +2518,54 @@ function appendBeatRawFold(row, label, text) {
   row.appendChild(details);
 }
 
+/**
+ * Best-effort pretty-print for tool (and other) beat bodies.
+ * Host stores tool content as compact json.dumps (no indent); Moments should
+ * show the same delimited structure as "raw fields" (BUG-glass-01 residual).
+ * @returns {string|null} pretty JSON, or null if not parseable object/array JSON
+ */
+function tryPrettyJsonContent(raw) {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  // Compact dumps always start with { or [; skip playbooks / prose.
+  if (s[0] !== "{" && s[0] !== "[") return null;
+  try {
+    const parsed = JSON.parse(s);
+    if (parsed === null || typeof parsed !== "object") return null;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    // Truncated tool_result_max_chars may break JSON — fall back to plain pre.
+    return null;
+  }
+}
+
+function appendBeatContentBody(row, content, { preferJson } = {}) {
+  const text = String(content);
+  const pretty = preferJson || text.trimStart().startsWith("{") || text.trimStart().startsWith("[")
+    ? tryPrettyJsonContent(text)
+    : null;
+  if (pretty != null) {
+    const pre = document.createElement("pre");
+    pre.className = "beat-body beat-json-body";
+    pre.textContent = pretty;
+    row.appendChild(pre);
+    return;
+  }
+  if (preferJson) {
+    // Tool/playbook path: never markdown-collapse; preserve newlines.
+    const pre = document.createElement("pre");
+    pre.className = "beat-body";
+    pre.textContent = text;
+    row.appendChild(pre);
+    return;
+  }
+  const prose = document.createElement("div");
+  prose.className = "beat-prose";
+  prose.innerHTML = renderMarkdown(text);
+  row.appendChild(prose);
+}
+
 function renderBeats(beats) {
   const wrap = document.createElement("div");
   wrap.className = "beats";
@@ -2530,24 +2578,24 @@ function renderBeats(beats) {
   for (const b of ordered) {
     const row = document.createElement("div");
     const type = b.type || "beat";
+    const isTool =
+      type === "tool" || type === "tool_call" || type === "tool_result";
     row.className = `beat ${beatKindClass(type)}`;
     const head = document.createElement("div");
     head.className = "beat-head";
+    const okBadge =
+      isTool && typeof b.ok === "boolean"
+        ? `<span class="badge ${b.ok ? "badge-open" : "badge-bad"}">${
+            b.ok ? "ok" : "fail"
+          }</span>`
+        : "";
     head.innerHTML = `<span class="badge beat-kind-chip">${escapeHtml(
       type
-    )}</span>
+    )}</span>${okBadge}
       <span class="meta beat-ts">${escapeHtml(formatBeatTs(b.ts))}</span>`;
     row.appendChild(head);
 
-    // Prose-first speak / content (not mono dump).
-    if (b.content) {
-      const prose = document.createElement("div");
-      prose.className = "beat-prose";
-      prose.innerHTML = renderMarkdown(String(b.content));
-      row.appendChild(prose);
-    }
-
-    // Tool name line as structured meta, not JSON blob.
+    // Tool name + host ok before body so the JSON isn't the only chrome.
     const toolName = b.name || b.tool;
     if (toolName) {
       const toolLine = document.createElement("div");
@@ -2566,6 +2614,14 @@ function renderBeats(beats) {
       stop.className = "meta";
       stop.textContent = `stop · ${b.stop_reason}`;
       row.appendChild(stop);
+    }
+
+    // Tool content: compact JSON from do-loop → pretty-print like raw fields.
+    // Speak/model: markdown. Obs with JSON: pretty if parseable.
+    if (b.content) {
+      appendBeatContentBody(row, b.content, {
+        preferJson: isTool || type === "obs",
+      });
     }
 
     // Reasoning collapsed.
@@ -2595,6 +2651,7 @@ function renderBeats(beats) {
       "error_reason",
       "stop_reason",
       "payload",
+      "ok", // already shown as badge for tools
     ]);
     const rest = {};
     for (const [k, v] of Object.entries(b)) {
