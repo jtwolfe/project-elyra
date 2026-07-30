@@ -288,7 +288,7 @@ VALID_SOURCES = frozenset({SOURCE_XAI_OAUTH, SOURCE_API_KEY, SOURCE_GROK_BUILD})
 | `token` | Always **access** token only (never refresh) |
 | `detail` | New status-safe codes (below) |
 | `expires_at` | From OAuth bundle |
-| `email` | From id_token claims at login (store email; drop raw id_token preferred) |
+| `email` | From **id_token claims only** at login (KD24); omit if missing; no userinfo; drop raw id_token after claims |
 | `api_key_configured` | Unchanged |
 
 Expose `oauth_configured` via `ProviderRuntime.status_provider_fields()` (boolean only), parallel to `api_key_configured`.
@@ -524,7 +524,7 @@ Notes:
 | `access_token` | Yes | Bearer for api.x.ai |
 | `refresh_token` | Yes | Never status, never inject |
 | `expires_in` | → `expires_at` ISO UTC | `now + expires_in` |
-| `id_token` | Parse claims only | Prefer store `email`/`subject`; drop raw id_token |
+| `id_token` | Parse claims only (KD24) | Store `email`/`subject` if present; omit email if claim missing; drop raw id_token; **no userinfo call** |
 | `token_type` | Meta | Expect Bearer |
 | `scope` | Meta | As returned |
 | `reauth_required` | Yes (bool, default false) | Set on invalid_grant; clear on successful login/refresh |
@@ -1063,12 +1063,10 @@ def credits_poller_after_resolve(fresh_or_resolution, runtime: ProviderRuntime) 
 
 ## Open Questions
 
-Resolved product defaults are now **Key Decisions** (KD13–KD17). Remaining true unknowns:
+Resolved by operator (see KD23–KD24). Remaining non-blocking unknowns:
 
-1. **Glass bind off-loopback:** Any near-term plan to bind `0.0.0.0` that would force API authn before shipping login? (Residual CSRF value increases.)
-2. **Email source:** id_token claims only vs userinfo endpoint if email missing?
-3. **Credits live confirmation:** Does SuperGrok billing accept Elyra-obtained OAuth access identically? (One operator smoke after first login.)
-4. **PKCE demand:** Defer until dogfood asks (default: PR7 optional only).
+1. **Credits live confirmation:** Does SuperGrok billing accept Elyra-obtained OAuth access identically? (One operator smoke after first login.)
+2. **PKCE demand:** Defer until dogfood asks (default: PR7 optional only).
 
 ---
 
@@ -1098,6 +1096,8 @@ Resolved product defaults are now **Key Decisions** (KD13–KD17). Remaining tru
 | **KD20** | Future inject: **`resolve_access_token_for_tool`** allowlist; **no** `inject_class` meta in v1 | Real hook vs vapor schema |
 | **KD21** | **`resolve_bearer` / `ensure_fresh` are pure** (return `rotated`); rebind only in ProviderRuntime / credits / 401 cb | Avoid double rebind on rebuild; no auth↔runtime import cycles |
 | **KD22** | Credits poller **must** call `on_access_refreshed` when rotation detected (PR2 required); keep-alive is belt-and-suspenders | One rule; no must/optional contradiction |
+| **KD23** | Glass/API bind remains **loopback-only for now**; no extra API authn for login endpoints in v1 | Operator decision; accepted residual CSRF if bind later opens off-loopback (revisit authn then) |
+| **KD24** | Email from **`id_token` claims only in v1**; omit email if claim missing; **no userinfo** HTTP call | Operator decision; simpler login path; status email optional |
 
 ---
 
@@ -1248,3 +1248,5 @@ PR1 → PR2 → PR3 → PR4 → PR5b
 **Pass 1:** live chat rebind + 401 as v1 (not PR6); PR plan reorder; reserved bare names; redaction; `complete_oauth_login`; multi-instance; device session lifecycle; inject hook; KD13–KD20; CSRF residual; browser device_code rejected; implementation touchpoints.
 
 **Pass 2 (residual 6):** credits rebind **required** when rotated (KD22); durable-only `reauth_required` atomic write on `invalid_grant` (KD15); `persist_oauth_login` vs `complete_oauth_login` (KD13/KD16); pure `resolve_bearer` / no rebind hook in auth (KD21); 401 on `HTTPError` before `RuntimeError` wrap; normative `complete_oauth_login` lock/I/O order.
+
+**Pass 3 (operator OQ resolve):** KD23 loopback-only bind (no login API authn yet); KD24 id_token email only, no userinfo; remaining OQs = SuperGrok credits smoke + PKCE demand.
