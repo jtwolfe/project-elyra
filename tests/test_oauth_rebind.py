@@ -370,6 +370,178 @@ def test_resolve_bearer_pure_no_rebind_side_effect(data_dir: Path):
 
 
 # ---------------------------------------------------------------------------
+# Keep-alive recovery + 401 fail-closed status (review Issue 1 / 2)
+# ---------------------------------------------------------------------------
+
+
+def test_keepalive_retries_after_transient_fail_and_recovers(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    """After oauth_refresh_failed, keep-alive must keep calling ensure_fresh and
+    restore credential_ok via on_access_refreshed when access becomes ok again.
+    """
+    from elyra.llm.xai_oauth import DETAIL_OAUTH_REFRESH_FAILED, FreshAccessResult
+
+    client = HttpChatClient.for_xai(model="grok-4.5", bearer_token="tok-old")
+    pr = _minimal_pr(
+        data_dir,
+        http_client=client,
+        chat_client=client,
+        credential_ok=True,
+        credential_source=SOURCE_XAI_OAUTH,
+    )
+    # Short interval so test drives multiple ticks quickly.
+    monkeypatch.setattr(
+        "elyra.runtime.provider_runtime._OAUTH_KEEPALIVE_INTERVAL_S",
+        0.05,
+    )
+
+    calls = {"n": 0}
+
+    def fake_ensure(data_dir_arg, **_k):  # noqa: ARG001
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return FreshAccessResult(
+                ok=False,
+                access_token=None,
+                expires_at=_near(10),
+                email="op@example.com",
+                detail=DETAIL_OAUTH_REFRESH_FAILED,
+                rotated=False,
+            )
+        # Subsequent ticks: access ok again (e.g. network recovered; still fresh
+        # so rotated=False) — prior_ok is False so rebind must still fire.
+        return FreshAccessResult(
+            ok=True,
+            access_token="tok-recovered",
+            expires_at=_future(),
+            email="op@example.com",
+            detail=None,
+            rotated=False,
+        )
+
+    monkeypatch.setattr(
+        "elyra.runtime.provider_runtime.ensure_fresh_access",
+        fake_ensure,
+    )
+    pr._start_oauth_keepalive()
+    import time
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if calls["n"] >= 2 and pr.credential_ok is True:
+            break
+        time.sleep(0.05)
+    pr.stop_background_tasks()
+
+    assert calls["n"] >= 2, "keep-alive must keep calling ensure_fresh after fail"
+    assert pr.credential_ok is True
+    assert pr.credential_detail is None
+    # Bearer rebound to recovered token
+    auths: list[str | None] = []
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        auths.append(req.get_header("Authorization") or req.get_header("authorization"))
+        return _FakeHTTPResponse(_ok_chat_body())
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        client.chat_completion([{"role": "user", "content": "x"}])
+    assert auths == ["Bearer tok-recovered"]
+
+
+def test_keepalive_keeps_trying_on_reauth_required_but_stays_fail_closed(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """invalid_grant / reauth_required: still fail-closed each tick, but loop continues."""
+    from elyra.llm.xai_oauth import DETAIL_OAUTH_REAUTH_REQUIRED, FreshAccessResult
+
+    client = HttpChatClient.for_xai(model="grok-4.5", bearer_token="tok")
+    pr = _minimal_pr(
+        data_dir,
+        http_client=client,
+        chat_client=client,
+        credential_ok=True,
+        credential_source=SOURCE_XAI_OAUTH,
+    )
+    monkeypatch.setattr(
+        "elyra.runtime.provider_runtime._OAUTH_KEEPALIVE_INTERVAL_S",
+        0.05,
+    )
+    calls = {"n": 0}
+
+    def fake_ensure(*_a, **_k):
+        calls["n"] += 1
+        return FreshAccessResult(
+            ok=False,
+            access_token=None,
+            expires_at=_future(),
+            email="op@example.com",
+            detail=DETAIL_OAUTH_REAUTH_REQUIRED,
+            rotated=False,
+        )
+
+    monkeypatch.setattr(
+        "elyra.runtime.provider_runtime.ensure_fresh_access",
+        fake_ensure,
+    )
+    pr._start_oauth_keepalive()
+    import time
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and calls["n"] < 3:
+        time.sleep(0.05)
+    pr.stop_background_tasks()
+    assert calls["n"] >= 3
+    assert pr.credential_ok is False
+    assert pr.credential_detail == DETAIL_OAUTH_REAUTH_REQUIRED
+
+
+def test_401_refresh_cb_fail_sets_credential_ok_false(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    """Force-refresh failure must fail-closed status for Glass CTA (Issue 2)."""
+    from elyra.llm.xai_oauth import DETAIL_OAUTH_REAUTH_REQUIRED, FreshAccessResult
+
+    client = HttpChatClient.for_xai(model="grok-4.5", bearer_token="tok-stale")
+    pr = _minimal_pr(
+        data_dir,
+        http_client=client,
+        chat_client=client,
+        credential_ok=True,
+        credential_source=SOURCE_XAI_OAUTH,
+        credential_detail=None,
+    )
+    client.set_refresh_cb(pr._make_chat_refresh_cb())
+
+    def fake_ensure(*_a, **_k):
+        return FreshAccessResult(
+            ok=False,
+            access_token=None,
+            expires_at=_near(5),
+            email="op@example.com",
+            detail=DETAIL_OAUTH_REAUTH_REQUIRED,
+            rotated=False,
+        )
+
+    monkeypatch.setattr(
+        "elyra.runtime.provider_runtime.ensure_fresh_access",
+        fake_ensure,
+    )
+
+    def fake_urlopen(req: urllib.request.Request, timeout: float = 0):  # noqa: ARG001
+        raise urllib.error.HTTPError(
+            url=req.full_url,
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(b'{"error":"expired"}'),
+        )
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with pytest.raises(RuntimeError) as ei:
+            client.chat_completion([{"role": "user", "content": "x"}])
+    assert "401" in str(ei.value)
+    assert pr.credential_ok is False
+    assert pr.credential_detail == DETAIL_OAUTH_REAUTH_REQUIRED
+
+
+# ---------------------------------------------------------------------------
 # Credits poller rotated → on_access_refreshed
 # ---------------------------------------------------------------------------
 

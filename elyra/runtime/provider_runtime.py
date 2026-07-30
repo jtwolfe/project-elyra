@@ -476,16 +476,45 @@ class ProviderRuntime:
         except Exception:  # noqa: BLE001 — best-effort
             _LOG.debug("refresh_models after rebuild failed", exc_info=True)
 
+    def _mark_oauth_credential_failed(
+        self,
+        *,
+        detail: str | None,
+        expires_at: str | None = None,
+        email: str | None = None,
+    ) -> None:
+        """Fail-closed oauth status for Glass CTA (short lock; no network)."""
+        with self._lock:
+            self.credential_ok = False
+            self.credential_detail = detail or "oauth_refresh_failed"
+            if expires_at is not None:
+                self.credential_expires_at = expires_at
+            if email is not None:
+                self.credential_email = email
+            self._sync_state_unlocked()
+        if self.state is not None:
+            self.state.set_chat_posture(ready=False, error=None)
+
     def _make_chat_refresh_cb(self):
-        """Build 401 refresh_cb: force ensure_fresh → on_access_refreshed → token."""
+        """Build 401 refresh_cb: force ensure_fresh → on_access_refreshed → token.
+
+        On failed force refresh: set credential_ok=false + detail so Glass shows
+        re-auth CTA (design live-refresh fail path).
+        """
 
         def _cb() -> str | None:
             try:
                 fresh = ensure_fresh_access(self.data_dir, force=True)
             except Exception:  # noqa: BLE001
                 _LOG.warning("chat 401 refresh_cb: ensure_fresh failed", exc_info=True)
+                self._mark_oauth_credential_failed(detail="oauth_refresh_failed")
                 return None
             if not fresh.ok or not fresh.access_token:
+                self._mark_oauth_credential_failed(
+                    detail=fresh.detail or "oauth_refresh_failed",
+                    expires_at=fresh.expires_at,
+                    email=fresh.email,
+                )
                 return None
             self.on_access_refreshed(
                 fresh.access_token,
@@ -505,6 +534,8 @@ class ProviderRuntime:
         """Rebind live HttpChatClient bearer after OAuth rotation (KD17 path B).
 
         Hold lock only for field/bearer swap — never network I/O.
+        Clears prior fail-closed (credential_ok=True) so keep-alive recovery
+        and 401 success both restore Glass posture.
         """
         if not access or not isinstance(access, str) or not access.strip():
             return
@@ -516,12 +547,14 @@ class ProviderRuntime:
             self.credential_expires_at = expires_at
             if email is not None:
                 self.credential_email = email
-            # Keep credential_ok true when we successfully rebind.
-            if http is not None:
-                self.credential_ok = True
-                self.credential_detail = None
+            # Recover credential_ok after rebind (even if http missing, status
+            # reflects fresh access so status/Glass clear re-auth CTA).
+            self.credential_ok = True
+            self.credential_detail = None
             self._refresh_auth_redaction_snapshot_unlocked()
             self._sync_state_unlocked()
+        if self.state is not None and http is not None:
+            self.state.set_chat_posture(ready=True, error=None)
         _LOG.debug("oauth access rebound on live chat client")
 
     def complete_oauth_login(
@@ -592,15 +625,22 @@ class ProviderRuntime:
         self._stop_oauth_keepalive()
 
     def _oauth_keepalive_loop(self) -> None:
-        """Proactive ensure_fresh + rebind when rotated (KD17 path B)."""
+        """Proactive ensure_fresh + rebind (KD17 path B).
+
+        Always calls ensure_fresh while source is xai_oauth (does **not** gate
+        on credential_ok). Transient ``oauth_refresh_failed`` stays retryable;
+        durable ``oauth_reauth_required`` / missing tokens still fail-closed
+        each tick (disk-only cheap). Success after failure rebinds via
+        ``on_access_refreshed`` so credential_ok recovers without restart.
+        """
         stop = self._oauth_keepalive_stop
         while not stop.is_set():
             with self._lock:
                 source = self.credential_source
-                ok = self.credential_ok
+                prior_ok = self.credential_ok
                 provider = self.provider_name
-            if provider != "xai" or source != SOURCE_XAI_OAUTH or not ok:
-                # Sleep full interval; may be restarted after rebuild.
+            if provider != "xai" or source != SOURCE_XAI_OAUTH:
+                # Wrong source/provider — idle until rebuild switches us.
                 if stop.wait(timeout=_OAUTH_KEEPALIVE_INTERVAL_S):
                     return
                 continue
@@ -609,23 +649,24 @@ class ProviderRuntime:
                 fresh = ensure_fresh_access(self.data_dir, skew_s=DEFAULT_SKEW_S)
             except Exception:  # noqa: BLE001
                 _LOG.debug("oauth keep-alive ensure_fresh failed", exc_info=True)
+                # Treat as transient — leave status; retry next tick.
                 fresh = None
-            if fresh is not None and fresh.ok and fresh.rotated:
-                self.on_access_refreshed(
-                    fresh.access_token,
-                    fresh.expires_at,
-                    fresh.email,
-                )
+            if fresh is not None and fresh.ok and fresh.access_token:
+                # Rebind when rotated, or recover after prior fail-closed.
+                if fresh.rotated or not prior_ok:
+                    self.on_access_refreshed(
+                        fresh.access_token,
+                        fresh.expires_at,
+                        fresh.email,
+                    )
             elif fresh is not None and not fresh.ok:
-                # Fail closed: mark credential bad so Glass shows re-auth CTA.
-                with self._lock:
-                    self.credential_ok = False
-                    self.credential_detail = fresh.detail
-                    self.credential_expires_at = fresh.expires_at
-                    self.credential_email = fresh.email
-                    self._sync_state_unlocked()
-                if self.state is not None:
-                    self.state.set_chat_posture(ready=False, error=None)
+                # Fail closed (invalid_grant durable or transient expired).
+                # Keep looping so retryable oauth_refresh_failed can recover.
+                self._mark_oauth_credential_failed(
+                    detail=fresh.detail,
+                    expires_at=fresh.expires_at,
+                    email=fresh.email,
+                )
             # Wake every ~60s (or sooner if stop set).
             if stop.wait(timeout=_OAUTH_KEEPALIVE_INTERVAL_S):
                 return
