@@ -23,6 +23,7 @@ from elyra.memory.store import open_memory_store
 from elyra.memory.tokens import (
     split_memory_budget_v2,
     split_memory_budget_v3,
+    split_memory_budget_v4,
 )
 from elyra.memory.types import Atom, new_atom_id
 
@@ -233,6 +234,75 @@ def test_split_v3_impossible_floor_all_to_temporal():
     assert dk == 0
     assert epi == 0
     assert temp == 500
+
+
+# ---------------------------------------------------------------------------
+# split_memory_budget_v4 golden cases (S1 glass-tail)
+# ---------------------------------------------------------------------------
+
+
+def test_split_v4_inactive_bit_identical_v3():
+    """glass_tail_active=False → bit-identical to existing v3 goldens."""
+    cases = [
+        dict(
+            budget_tokens=10_000,
+            system_text="sys",
+            orient_text="orient",
+            semantic_enabled=False,
+            directed_keep_active=False,
+            episodic_fraction=0.20,
+        ),
+        dict(
+            budget_tokens=10_000,
+            system_text="sys",
+            orient_text="orient",
+            semantic_enabled=True,
+            directed_keep_active=True,
+            semantic_fraction=0.12,
+            directed_keep_fraction=0.08,
+            episodic_fraction_with_semantic=0.18,
+            temporal_min_fraction=0.55,
+        ),
+        dict(
+            budget_tokens=1000,
+            semantic_enabled=True,
+            directed_keep_active=True,
+            semantic_fraction=0.25,
+            directed_keep_fraction=0.20,
+            episodic_fraction_with_semantic=0.20,
+            temporal_min_fraction=0.55,
+        ),
+        dict(budget_tokens=0, semantic_enabled=True, directed_keep_active=True),
+    ]
+    for kwargs in cases:
+        f3, s3, d3, e3, t3 = split_memory_budget_v3(**kwargs)
+        f4, s4, d4, e4, g4, t4 = split_memory_budget_v4(
+            glass_tail_active=False, **kwargs
+        )
+        assert (f4, s4, d4, e4, g4, t4) == (f3, s3, d3, e3, 0, t3)
+
+
+def test_split_v4_active_identity_all_supports_on():
+    """All supports on: five residual caps sum to R; glass soft ≈ 0.08R."""
+    R = 10_000
+    # Keep soft sum under (1 - temporal_min) so no floor cut muddies identity.
+    fixed, sem, dk, epi, gt, temp = split_memory_budget_v4(
+        R,
+        system_text="",
+        orient_text="",
+        semantic_enabled=True,
+        directed_keep_active=True,
+        glass_tail_active=True,
+        glass_tail_fraction=0.08,
+        semantic_fraction=0.10,
+        directed_keep_fraction=0.08,
+        episodic_fraction_with_semantic=0.15,
+        temporal_min_fraction=0.55,
+    )
+    assert fixed == 0
+    assert sem + dk + epi + gt + temp == R
+    assert gt == int(R * 0.08)
+    assert temp >= int(R * 0.55)
 
 
 # ---------------------------------------------------------------------------

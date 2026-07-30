@@ -522,7 +522,7 @@ def test_compose_meal_message_order(store):
     )
     assert msgs[0]["role"] == "system"
     assert msgs[-1]["content"] == "ORIENT"
-    # Episodic sections before temporal in package/messages.
+    # Episodic sections before temporal in package/messages (no glass_rows).
     roles_content = [m["content"] for m in msgs[1:-1]]
     epi_idx = next(
         (i for i, c in enumerate(roles_content) if "episodic/" in c),
@@ -534,6 +534,31 @@ def test_compose_meal_message_order(store):
     )
     if epi_idx is not None and temp_idx is not None:
         assert epi_idx < temp_idx
+
+    # With glass_rows: glass_tail after supports and before temporal.
+    glass = [
+        {"id": "g-u", "role": "user", "content": "tip user"},
+        {"id": "g-a", "role": "assistant", "content": "tip asst"},
+    ]
+    msgs_gt = compose_outer_messages(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        system_text="SYSTEM",
+        orient_text="ORIENT",
+        now=now,
+        glass_rows=glass,
+        social_wake=True,
+    )
+    mid = [m["content"] for m in msgs_gt[1:-1]]
+    gt_idx = next((i for i, c in enumerate(mid) if "glass-tail" in c), None)
+    temp_idx2 = next((i for i, c in enumerate(mid) if "temporal/" in c), None)
+    assert gt_idx is not None
+    if temp_idx2 is not None:
+        assert gt_idx < temp_idx2
+    epi_idx2 = next((i for i, c in enumerate(mid) if "episodic/" in c), None)
+    if epi_idx2 is not None:
+        assert epi_idx2 < gt_idx
 
 
 def test_compose_meal_no_forbidden_words_in_module():

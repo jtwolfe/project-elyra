@@ -201,6 +201,13 @@ class MemorySettings:
     directed_keep_enabled: bool = False
     directed_keep_fraction: float = 0.08  # meal residual share when channel active
 
+    # --- Glass-tail band (S1 / #93 instance continuity) ---
+    # Soft residual share + absolute message floor for social wakes (KD-SOC).
+    glass_tail_fraction: float = 0.08  # soft % of residual R (5–12% band)
+    glass_tail_floor_messages: int = 4  # social wakes only; ≥2 full turns
+    glass_tail_max_messages: int = 16  # hard cap — prevent unbounded dump
+    glass_tail_list_limit: int = 80  # align with rebuild_outer list_messages
+
     # Per-step expand compute (NOT multi-hop session wall-clock — KD-A18).
     traverse_expand_max_ms: int = 80  # soft wall for neighbors / seed_from_text
     # Start seed_from_text budget; 0 = same as traverse_expand_max_ms.

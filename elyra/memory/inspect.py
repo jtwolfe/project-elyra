@@ -170,6 +170,7 @@ def meal_package_to_inspect(
             package, "directed_keep_omitted_reason", None
         ),
         "directed_keep_meta": getattr(package, "directed_keep_meta", None),
+        "glass_tail_meta": getattr(package, "glass_tail_meta", None),
         "fixed": fixed_block,
         "items": items,
         "channels": by_channel,

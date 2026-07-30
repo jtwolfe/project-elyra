@@ -1988,7 +1988,10 @@ class PresenceWorker:
             # (no full sliding glass) + expand_memory_meal_for_provider.
             # Meal token budget is moment-scoped (meal_tokens) — not re-read
             # from runtime mid-moment (avoids outer/in-turn desync).
-            glass = list_messages(limit=80, paths=self.paths)
+            glass_list_limit = int(
+                getattr(self.settings.memory, "glass_tail_list_limit", 80) or 80
+            )
+            glass = list_messages(limit=glass_list_limit, paths=self.paths)
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
                 wake,
@@ -2034,6 +2037,7 @@ class PresenceWorker:
                 try:
                     from elyra.loop.context import fill_orient, format_now
                     from elyra.memory.meal import (
+                        SOCIAL_WAKE_KINDS,
                         compose_meal,
                         compose_outer_messages,
                         expand_memory_meal_for_provider,
@@ -2074,6 +2078,7 @@ class PresenceWorker:
                     dk_ids, dk_summary = self._last_confirmed_keep_for_meal(
                         moment_id
                     )
+                    social = wake.kind in SOCIAL_WAKE_KINDS
                     package = compose_meal(
                         self._memory,
                         open_moment_id=moment_id,
@@ -2085,6 +2090,8 @@ class PresenceWorker:
                         embedder=meal_embedder,
                         directed_keep_ids=dk_ids or None,
                         directed_keep_summary=dk_summary,
+                        glass_rows=glass,
+                        social_wake=social,
                     )
                     self._record_last_meal_snapshot(
                         package,
@@ -2105,6 +2112,8 @@ class PresenceWorker:
                         embedder=meal_embedder,
                         directed_keep_ids=dk_ids or None,
                         directed_keep_summary=dk_summary,
+                        glass_rows=glass,
+                        social_wake=social,
                     )
                     expanded = expand_memory_meal_for_provider(
                         meal,
