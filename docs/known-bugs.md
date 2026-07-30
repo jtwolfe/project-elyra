@@ -30,6 +30,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open (defer) |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
+| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
 | `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Open (defer) |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (open) | Open (defer) |
 | `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Open (defer) |
@@ -428,6 +429,50 @@ Math in chat shows as raw `$...$` / `$$...$$` / `\(...\)` (or similar) instead o
 
 - Do not treat this as memory/atom formatting (separate from **BUG-mem-ui-***).
 - Do not pull a heavy full Markdown+math stack without need.
+
+---
+
+## BUG-chat-02 — Soft newlines from chat input missing in Glass history (present in atoms)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open |
+| **Issue** | [#84](https://github.com/jtwolfe/project-elyra/issues/84) |
+| **Severity now** | Low–Med (multi-line chat composition looks flattened in history) |
+| **Severity later** | Med for any structured prompts / poetry / lists typed with Enter in the composer |
+| **Area** | Glass chat history render (`elyra/runtime/web/app.js` `renderMarkdown` / message bubbles); user social text path is fine into store |
+| **Dogfood** | 2026-07-30 operator: newlines typed in chat input **do not appear** in Glass chat history, but **do appear** in Memory atoms |
+
+### Symptom
+
+Operator composes a multi-line message in the Glass chat input (soft line breaks via Enter). After send:
+
+- **Glass Chat** history shows the text as a **single run-on paragraph** (line breaks collapsed / invisible).
+- **Memory atoms** (and likely raw store / meal) still contain the **real newlines** — so fidelity is not lost on the backend, only on Glass chat presentation.
+
+Confirms storage path is OK; defect is **display** of user (and possibly assistant) bubbles after markdown-ish rendering.
+
+### Likely cause (unverified — dig on fix)
+
+`renderMarkdown` flushes paragraph lines with `para.join(" ")` — single newlines become spaces, Markdown-style. Chat soft-breaks are not converted to `<br>` and message CSS may not use `white-space: pre-wrap` for user bubbles. Atoms UI shows raw-ish text, so newlines survive there.
+
+### Fix directions
+
+1. For **chat history bubbles**, preserve soft line breaks: either treat single `\n` as `<br>` (GFM-style / chat-composer style) or render user messages with `white-space: pre-wrap` and skip aggressive join-space collapse.
+2. Prefer fixing **user** role first (composer source of truth); then decide if assistant speak should match.
+3. Regression: multi-line user message still looks multi-line after refresh / re-open Glass; atom body unchanged.
+4. Do not strip newlines from the wire format or atom promote path.
+
+### Explicit non-goals
+
+- Do not change atom schema or meal composition for this bug.
+- Do not require full CommonMark hard-break rules unless we adopt them product-wide.
+- Separate from **BUG-chat-01** (math); fix can land without KaTeX.
+
+### Related
+
+- **BUG-chat-01** — math rendering (same chat bubble pipeline).
+- **BUG-mem-ui-*** — atoms already show newlines; good contrast for dogfood.
 
 ---
 
