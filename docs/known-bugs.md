@@ -24,17 +24,17 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-wake-01` | [#67](https://github.com/jtwolfe/project-elyra/issues/67) (open) | Open (defer) |
 | `BUG-wake-02` | [#68](https://github.com/jtwolfe/project-elyra/issues/68) (open) | Open (defer) |
 | `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
-| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (open) | Fixed on fix branch (pending main) |
+| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (open) | Partial — speak better; tool JSON still raw |
 | `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
-| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Partial fix on branch (UI; gen residual) |
+| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Partial — better; more improvement needed |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open (defer) |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
-| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Fixed on fix branch (pending main) |
-| `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (open) | Fixed on fix branch (pending main) |
-| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Fixed on fix branch (pending main) |
+| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** (dogfood; pending main) |
+| `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** (dogfood; pending main) |
+| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (closed) | **Fixed** (dogfood; pending main) |
 | `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
 | `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
@@ -533,7 +533,7 @@ Storage of the original message can stay intact; this is a **TTS ingress** probl
 
 | Field | Value |
 |-------|--------|
-| **Status** | Fixed on `fix/BUG-status-01-76` (pending merge to main) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs`; pending main) |
 | **Issue** | [#76](https://github.com/jtwolfe/project-elyra/issues/76) |
 | **Severity now** | Med (lower half of Status unreachable on typical viewports) |
 | **Severity later** | Med |
@@ -556,7 +556,7 @@ Status panel content that exceeds the viewport cannot be scrolled; cards below t
 
 | Field | Value |
 |-------|--------|
-| **Status** | Fixed on `fix/BUG-status-02-77` (pending merge to main) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs`; pending main) |
 | **Issue** | [#77](https://github.com/jtwolfe/project-elyra/issues/77) |
 | **Severity now** | Low–Med (confusing control; one affordance appears dead) |
 | **Severity later** | Low |
@@ -583,7 +583,7 @@ Hard-stop override / continuous use `input.continuous-toggle` + `.toggle-track` 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Fixed on `fix/BUG-status-03-78` (pending merge to main) |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs`; pending main) |
 | **Issue** | [#78](https://github.com/jtwolfe/project-elyra/issues/78) |
 | **Severity now** | Med (budget safety + operator trust; override ON is dangerous if sticky) |
 | **Severity later** | High if ON sticks unintentionally across restarts |
