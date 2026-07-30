@@ -48,7 +48,7 @@ def test_default_settings_match_design():
     assert s.provider.model_label == "Grok 4.5"
     assert s.provider.model_label == DEFAULT_XAI_MODEL_LABEL
     assert s.provider.base_url == "https://api.x.ai/v1"
-    assert s.provider.credential_source == "grok_build"
+    assert s.provider.credential_source == "xai_oauth"
     assert s.provider.grok_auth_path is None
     assert s.provider.request_timeout_s == 120.0
     assert s.usage.enabled is True

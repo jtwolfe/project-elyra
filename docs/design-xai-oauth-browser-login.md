@@ -32,7 +32,7 @@ Phase 0 shipped a solid xAI path with:
 
 | Credential source | Mechanism | Pain |
 |-------------------|-----------|------|
-| `grok_build` (default) | Parse `~/.grok/auth.json` | Requires Grok Build / `grok login` on the **host**; shared home file across tools; no refresh inside Elyra; multi-instance / multi-user nodes collide |
+| `grok_build` (legacy optional; was Phase 0 default) | Parse `~/.grok/auth.json` | Requires Grok Build / `grok login` on the **host**; shared home file across tools; no refresh inside Elyra; multi-instance / multi-user nodes collide |
 | `api_key` | `data/secrets/xai_api_key` or `XAI_API_KEY` | Fine for CI / API-key accounts; not SuperGrok **subscription** session semantics |
 
 Operators dogfooding Elyra as a communal teammate need:
@@ -97,8 +97,8 @@ openclaw onboard --auth-choice xai-oauth
 | Live repair | `ProviderRuntime.rebuild_chat_stack()` rebinds `worker.client` | `elyra/runtime/provider_runtime.py` |
 | Glass | Status provider card: credential select, API key paste; no login ceremony | `elyra/runtime/web/{index.html,app.js}` |
 | API | `PATCH /api/provider`, `PUT|DELETE /api/provider/api-key`, `/api/secrets*`; ThreadingHTTPServer | `elyra/runtime/api.py` |
-| CLI | `--credential-source grok_build\|api_key` | `elyra/cli.py` |
-| Settings default | `ProviderSettings.credential_source = "grok_build"` | `elyra/settings.py` |
+| CLI | `--credential-source xai_oauth\|api_key\|grok_build` | `elyra/cli.py` |
+| Settings default | `ProviderSettings.credential_source = "xai_oauth"` (PR5b; empty prefs / new installs) | `elyra/settings.py` |
 | Credits poller | Uses `resolve_bearer` for SuperGrok billing GET | `elyra/runtime/credits_poller.py` |
 
 **Status-safety invariant (non-negotiable, already law):** `CredentialResolution.token` and all secret values never appear in `/api/status`, Glass, moments, or logs. Status uses only `credential_ok`, `credential_detail` (codes), `credential_expires_at`, `credential_email`, `api_key_configured`, and new non-secret OAuth meta.
@@ -275,7 +275,7 @@ VALID_SOURCES = frozenset({SOURCE_XAI_OAUTH, SOURCE_API_KEY, SOURCE_GROK_BUILD})
 | Phase | Default `credential_source` | Notes |
 |-------|----------------------------|-------|
 | **PR1–PR4** | Settings ship default may remain `grok_build` **or** leave as-is for existing prefs | UI ships in PR4; do not strand empty homes without a login button |
-| **PR5b (after Glass PR4)** | New installs / empty prefs → **`xai_oauth`** | Existing `provider.json` preserved |
+| **PR5b (after Glass PR4)** | New installs / empty prefs → **`xai_oauth`** | **Landed** — existing `provider.json` preserved; `api_key` / `grok_build` still selectable |
 | **Legacy** | `grok_build` remains selectable | CLI still accepts it |
 
 **No silent fallback:** selecting `xai_oauth` without a stored bundle → `credential_ok=false`, detail `missing_oauth_tokens`. Selecting `api_key` without key → `missing_api_key`. Selecting `grok_build` without auth.json → `missing_auth_json`.
@@ -908,7 +908,7 @@ elyra start --credential-source xai_oauth|api_key|grok_build
 | 1. PR1–PR3 | Code available; prefs still typically `grok_build` |
 | 2. PR4 Glass | Banner if `grok_build`: “You can log in with xAI inside Elyra (recommended).” |
 | 3. Login success | `complete_oauth_login(activate=true)` by default |
-| 4. PR5b | Empty prefs / new install default → `xai_oauth` |
+| 4. PR5b | Empty prefs / new install default → `xai_oauth` (**landed**) |
 | 5. Startup | Missing tokens → Glass / `elyra auth login` messaging (from PR2) |
 | 6. Legacy | `grok_build` remains |
 
@@ -1169,9 +1169,9 @@ Each PR independently reviewable. **PR2 is not complete without live rebind** (K
 | Field | Content |
 |-------|---------|
 | **Title** | `settings: default credential_source xai_oauth for new installs` |
-| **Files** | `elyra/settings.py`, docs, startup posture if any remain |
+| **Files** | `elyra/settings.py`, `elyra/runtime/config.py`, `elyra/runtime/state.py`, docs, tests |
 | **Dependencies** | **PR4** (login UI must exist); PR2 detail messages already done |
-| **Description** | Flip ship default / empty-prefs default only. Existing `provider.json` preserved. |
+| **Description** | Flip ship default / empty-prefs default only. Existing `provider.json` preserved. **Landed.** |
 
 ### PR6 — Future `grok_build` inject hook only
 

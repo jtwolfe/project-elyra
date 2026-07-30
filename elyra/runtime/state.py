@@ -26,7 +26,7 @@ class RuntimeState:
     model: str = DEFAULT_XAI_MODEL
     model_label: str = DEFAULT_XAI_MODEL_LABEL
     base_url: str = "https://api.x.ai/v1"
-    credential_source: str = "grok_build"
+    credential_source: str = "xai_oauth"
     credential_ok: bool = False
     credential_detail: str | None = None
     credential_expires_at: str | None = None
