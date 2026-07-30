@@ -9,10 +9,12 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
   STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
   named secrets store GET/PUT/DELETE + grants (PR5 / IK10),
+  xAI OAuth device login/logout GET/POST /api/auth/xai/* (PR3 — server-polled
+  device-code; never returns tokens or device_code; optional loopback Origin),
   memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only;
   Phase 2 PR7 — vectors health/status/neighbors;
   Phase 2a PR-A5 — graph overview/session/neighbors + optional debug POST).
-Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
+Out of scope: Glass draft editors, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
 """
 
@@ -43,6 +45,7 @@ from elyra.identity import (
 )
 from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
 from elyra.llm.auth import VALID_SOURCES, resolve_bearer
+from elyra.llm.oauth_store import public_meta as oauth_public_meta
 from elyra.llm.queue import ChatRequestGate
 from elyra.media.tts import (
     TTS_DEFAULT_LANGUAGE,
@@ -98,6 +101,9 @@ _DEFAULT_SESSION_USER = "operator"
 
 # In-process concurrent upload cap (KD15); shared across handler instances.
 _UPLOAD_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
+
+# Loopback hosts for optional Origin/Referer CSRF check on auth mutators (PR3).
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
 def _route_payload(result: dict[str, Any], *, message: Any | None = None) -> dict[str, Any]:
@@ -354,6 +360,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._get_secrets()
             return
 
+        # xAI OAuth device login (PR3) — public meta / status; never tokens.
+        if path == "/api/auth/xai" or path == "/api/auth/xai/":
+            self._get_auth_xai()
+            return
+        if path == "/api/auth/xai/device/status":
+            self._get_auth_xai_device_status()
+            return
+
         if path.startswith("/api/users/"):
             rest = unquote(path[len("/api/users/") :])
             # Promote is POST only; GET is single-segment user id.
@@ -480,6 +494,17 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/wait/reply":
             self._post_wait_reply(body)
+            return
+
+        # xAI OAuth device login mutators (PR3) — never return tokens/device_code.
+        if path == "/api/auth/xai/device/start":
+            self._post_auth_xai_device_start(body)
+            return
+        if path == "/api/auth/xai/device/cancel":
+            self._post_auth_xai_device_cancel(body)
+            return
+        if path == "/api/auth/xai/logout":
+            self._post_auth_xai_logout(body)
             return
 
         if path == "/api/goals":
@@ -620,6 +645,57 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def _provider_unavailable(self) -> bool:
         """True when provider runtime is not bound (legacy / incomplete start)."""
         return self.provider is None
+
+    def _origin_is_loopback_ok(self) -> bool:
+        """Optional cheap CSRF: if Origin/Referer present, host must be loopback.
+
+        Missing Origin and Referer → allow (curl / CLI). Non-loopback host → deny.
+        KD23 residual: accepted for loopback-only bind; full CSRF token later if
+        bind opens off-loopback.
+        """
+        origin = self.headers.get("Origin") or self.headers.get("Referer")
+        if not origin or not isinstance(origin, str) or not origin.strip():
+            return True
+        try:
+            parsed = urlparse(origin.strip())
+        except Exception:  # noqa: BLE001
+            return False
+        host = (parsed.hostname or "").lower()
+        if not host:
+            # Opaque / non-http origin — reject when present but unparseable.
+            return False
+        if host in _LOOPBACK_HOSTS:
+            return True
+        # Also accept literal IPv6 without brackets from some parsers.
+        if host in {"0:0:0:0:0:0:0:1"}:
+            return True
+        return False
+
+    def _reject_if_auth_origin_bad(self) -> bool:
+        """Send 403 when Origin/Referer is present and not loopback."""
+        if self._origin_is_loopback_ok():
+            return False
+        self._json(
+            403,
+            {
+                "ok": False,
+                "error": "origin_not_allowed",
+                "detail": "auth mutators require loopback Origin/Referer when set",
+            },
+        )
+        return True
+
+    @staticmethod
+    def _strip_auth_secrets(payload: dict[str, Any]) -> dict[str, Any]:
+        """Defensive: never return tokens or device_code from auth endpoints."""
+        banned = {
+            "access_token",
+            "refresh_token",
+            "device_code",
+            "id_token",
+            "token",
+        }
+        return {k: v for k, v in payload.items() if k not in banned}
 
     def _reject_if_resetting(self) -> bool:
         """Send 503 resetting when full reset is in progress; return True if rejected."""
@@ -2432,6 +2508,134 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             "provider": fields.get("provider"),
             "models_available": fields.get("models_available"),
         }
+
+    # ── xAI OAuth device login (PR3) ─────────────────────────────────────
+
+    def _get_auth_xai(self) -> None:
+        """GET /api/auth/xai — public OAuth meta only (never tokens)."""
+        meta = oauth_public_meta(self.paths.data_dir)
+        payload: dict[str, Any] = {
+            "ok": True,
+            "configured": meta.configured,
+            "email": meta.email,
+            "expires_at": meta.expires_at,
+            "updated_at": meta.updated_at,
+            "auth_method": meta.auth_method,
+            "reauth_required": meta.reauth_required,
+        }
+        if not self._provider_unavailable():
+            fields = self.provider.status_provider_fields()
+            payload["credential_source"] = fields.get("credential_source")
+            payload["credential_ok"] = fields.get("credential_ok")
+            payload["oauth_configured"] = fields.get("oauth_configured")
+        else:
+            payload["oauth_configured"] = meta.configured
+        self._json(200, self._strip_auth_secrets(payload))
+
+    def _get_auth_xai_device_status(self) -> None:
+        """GET /api/auth/xai/device/status — session state; never tokens/device_code."""
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+        try:
+            status = self.provider.xai_device_status()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai device status failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"device_status_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(status, dict):
+            status = {"ok": True, "state": "idle"}
+        self._json(200, self._strip_auth_secrets(dict(status)))
+
+    def _post_auth_xai_device_start(self, body: dict[str, Any]) -> None:
+        """POST /api/auth/xai/device/start — mint user_code; server holds device_code."""
+        if self._reject_if_auth_origin_bad():
+            return
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+
+        activate = True
+        if "activate" in body:
+            raw = body.get("activate")
+            if not isinstance(raw, bool):
+                self._json(400, {"ok": False, "error": "invalid body", "detail": "activate must be bool"})
+                return
+            activate = raw
+
+        try:
+            result = self.provider.start_xai_device_login(activate=activate)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai device start failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"device_start_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": False, "error": "device_start_failed"}
+        # 200 even on protocol-level start failure (ok=False + state=error).
+        self._json(200, self._strip_auth_secrets(dict(result)))
+
+    def _post_auth_xai_device_cancel(self, body: dict[str, Any]) -> None:  # noqa: ARG002
+        """POST /api/auth/xai/device/cancel — stop poller; state cancelled."""
+        if self._reject_if_auth_origin_bad():
+            return
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+        try:
+            result = self.provider.cancel_xai_device_login()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai device cancel failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"device_cancel_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": True, "state": "cancelled"}
+        self._json(200, self._strip_auth_secrets(dict(result)))
+
+    def _post_auth_xai_logout(self, body: dict[str, Any]) -> None:  # noqa: ARG002
+        """POST /api/auth/xai/logout — delete bundle; rebuild if source oauth."""
+        if self._reject_if_auth_origin_bad():
+            return
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+        try:
+            fields = self.provider.logout_xai_oauth()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai logout failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"logout_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(fields, dict):
+            fields = {}
+        payload = {
+            "ok": True,
+            "oauth_configured": bool(fields.get("oauth_configured", False)),
+            "credential_source": fields.get("credential_source"),
+            "credential_ok": fields.get("credential_ok"),
+            "credential_detail": fields.get("credential_detail"),
+            "credential_email": fields.get("credential_email"),
+            "credential_expires_at": fields.get("credential_expires_at"),
+        }
+        self._json(200, self._strip_auth_secrets(payload))
 
     def _patch_provider(self, body: dict[str, Any]) -> None:
         """PATCH /api/provider — ``{ model?, credential_source?, reasoning_effort? }``.

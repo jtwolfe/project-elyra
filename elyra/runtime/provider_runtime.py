@@ -51,6 +51,7 @@ from elyra.llm.provider_prefs import (
 from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import UsageMeter, UsageSnapshot
 from elyra.llm.xai_oauth import DEFAULT_SKEW_S, ensure_fresh_access
+from elyra.runtime.oauth_session import OAuthDeviceSession
 from elyra.settings import UsageSettings
 
 if TYPE_CHECKING:
@@ -174,6 +175,10 @@ class ProviderRuntime:
         default_factory=threading.Event, repr=False
     )
     _oauth_keepalive_thread: threading.Thread | None = field(
+        default=None, repr=False
+    )
+    # In-memory device-code session (PR3); never serialized to status.
+    _oauth_device_session: OAuthDeviceSession | None = field(
         default=None, repr=False
     )
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -587,6 +592,11 @@ class ProviderRuntime:
 
     def logout_xai_oauth(self) -> dict[str, Any]:
         """Delete OAuth bundle + tmp; clear redaction; rebuild if source oauth."""
+        # Cancel any in-flight device login first.
+        try:
+            self.cancel_xai_device_login()
+        except Exception:  # noqa: BLE001
+            _LOG.debug("cancel device session on logout failed", exc_info=True)
         delete_oauth_bundle(self.data_dir)
         with self._lock:
             self._auth_redaction_values = []
@@ -597,6 +607,50 @@ class ProviderRuntime:
             # Leave other source stack intact; still refresh status oauth flag.
             pass
         return self.status_provider_fields()
+
+    def _get_oauth_device_session(self) -> OAuthDeviceSession:
+        """Lazy-create the process-local device session bound to this runtime."""
+        with self._lock:
+            sess = self._oauth_device_session
+            if sess is not None:
+                return sess
+            sess = OAuthDeviceSession(
+                self.data_dir,
+                on_success=self._device_login_success,
+            )
+            self._oauth_device_session = sess
+            return sess
+
+    def _device_login_success(self, tokens: Any, *, activate: bool = True) -> Any:
+        """Success callback from OAuthDeviceSession → complete_oauth_login."""
+        return self.complete_oauth_login(tokens, activate=activate)
+
+    def start_xai_device_login(self, *, activate: bool = True) -> dict[str, Any]:
+        """Start (or replace) device-code login; public fields only."""
+        return self._get_oauth_device_session().start(activate=activate)
+
+    def cancel_xai_device_login(self) -> dict[str, Any]:
+        """Cancel pending device-code login if any."""
+        with self._lock:
+            sess = self._oauth_device_session
+        if sess is None:
+            return {"ok": True, "state": "cancelled"}
+        return sess.cancel()
+
+    def xai_device_status(self) -> dict[str, Any]:
+        """Public device-session status + credential fields (no secrets)."""
+        with self._lock:
+            sess = self._oauth_device_session
+        provider_fields = self.status_provider_fields()
+        if sess is None:
+            return {
+                "ok": True,
+                "state": "idle",
+                "credential_source": provider_fields.get("credential_source"),
+                "credential_ok": provider_fields.get("credential_ok"),
+                "oauth_configured": provider_fields.get("oauth_configured"),
+            }
+        return sess.status(provider_fields=provider_fields)
 
     def _start_oauth_keepalive(self) -> None:
         """Start OAuth keep-alive daemon if not already running."""
@@ -621,7 +675,11 @@ class ProviderRuntime:
         self._oauth_keepalive_thread = None
 
     def stop_background_tasks(self) -> None:
-        """Stop oauth keep-alive (supervisor shutdown hook)."""
+        """Stop oauth keep-alive + cancel device session (supervisor shutdown)."""
+        try:
+            self.cancel_xai_device_login()
+        except Exception:  # noqa: BLE001
+            _LOG.debug("cancel device session on stop failed", exc_info=True)
         self._stop_oauth_keepalive()
 
     def _oauth_keepalive_loop(self) -> None:
