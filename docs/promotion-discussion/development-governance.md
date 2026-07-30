@@ -72,7 +72,7 @@ Treat the Grok Web structure as **loose architectural guidance** to grow into, n
 ### Stage 1 — Kickoff (do soon — low cost)
 
 1. **One GitHub Project** — **done** ([Autopoiesis Commons #2](https://github.com/users/jtwolfe/projects/2)).  
-2. **Light protection on `main`** — **blocked on free private repo** (see §3.1); soft policy until Pro or public.  
+2. **Light protection on `main`** — **done** (public repo + branch protection; see §3.1).  
 3. **Branch hygiene** documented: short-lived only; delete after merge; `feature/…` `fix/…` `improve/…` `self/…`.  
 4. **Write the map** (this file + [README.md](README.md)): `main` integration; releases = tags; later operating pin; worktrees for real changes.  
 5. **Running instance stays fully manual** for now.  
