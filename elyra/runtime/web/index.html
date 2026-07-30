@@ -897,16 +897,23 @@
                   id="meal-budget-fraction"
                   class="status-range"
                   min="0.10"
-                  max="0.60"
+                  max="0.75"
                   step="0.01"
                   value="0.50"
                   aria-label="Meal budget fraction of model window"
                 />
                 <span id="meal-budget-readout" class="muted meal-budget-readout">50% → 250k of 500k</span>
               </div>
+              <p id="meal-budget-max-note" class="muted status-helper meal-budget-max-note">
+                Slider max defaults to <strong>75%</strong> of the model window.
+                Raise the ceiling with
+                <code>elyra start --max-meal-override 100</code>
+                (percent 1–100; e.g. 100 = full context). High values leave less room for generation.
+              </p>
               <p id="context-detail" class="muted status-helper">
-                Product meal size is a fraction of the model window (default 50% → 250k of 500k; clamp 10–60%).
-                Bars and gold mark are read-only; use the range control to set the budget. Heuristic tokens (len/4).
+                Product meal size is a fraction of the model window (default 50% → 250k of 500k;
+                slider max 75% unless overridden). Bars and gold mark are read-only; use the range
+                control to set the budget. Heuristic tokens (len/4).
               </p>
             </div>
             <div class="card status-card" id="usage-card">

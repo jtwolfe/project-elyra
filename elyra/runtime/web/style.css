@@ -1884,6 +1884,15 @@ body {
   font-size: 0.82rem;
 }
 
+.meal-budget-max-note {
+  margin: 0.35rem 0 0;
+  max-width: 40rem;
+}
+
+.meal-budget-max-note code {
+  font-size: 0.8em;
+}
+
 .status-select:focus-visible,
 .status-input:focus-visible {
   outline: none;

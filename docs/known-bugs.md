@@ -984,8 +984,9 @@ Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), meas
 
 ### Fix (product)
 
-- Primary knob: `meal_budget_fraction` of `model_context_window_tokens` (default **0.5** → **250k** @ 500k; clamp **0.10–0.60**).
+- Primary knob: `meal_budget_fraction` of `model_context_window_tokens` (default **0.5** → **250k** @ 500k; product slider max **0.75**, hard max **1.0**).
 - Persisted `data/runtime/meal_budget.json` + `PATCH /api/meal-budget`; does not mutate frozen Settings.
+- Raise slider ceiling: **`elyra start --max-meal-override PCT`** (percent 1–100; e.g. `100` → full model window).
 - **Policy A:** effective tokens apply to **both** sliding and in-turn caps on product paths (worker meal compose, do-loop, inspect, status context).
 - Glass Status Context card: range + readout; bars/gold mark read-only monitoring.
 

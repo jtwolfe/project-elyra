@@ -885,11 +885,12 @@ def test_patch_meal_budget_and_status(paths):
         reloaded = load_meal_budget_runtime(paths.data_dir)
         assert reloaded.fraction == 0.4
 
-        # Clamp out-of-band rather than 400.
+        # Clamp out-of-band rather than 400 (product max 0.75 unless override).
         code, body = h.patch("/api/meal-budget", {"fraction": 0.99})
         assert code == 200, body
-        assert body["meal_budget"]["fraction"] == 0.6
-        assert body["meal_budget"]["meal_budget_tokens"] == 300_000
+        assert body["meal_budget"]["fraction"] == 0.75
+        assert body["meal_budget"]["meal_budget_tokens"] == 375_000
+        assert body["meal_budget"]["max_fraction"] == 0.75
     finally:
         h.close()
 
@@ -1050,6 +1051,8 @@ def test_static_index_served(paths):
         assert 'id="context-card"' in html
         assert 'id="meal-budget-fraction"' in html
         assert 'id="meal-budget-readout"' in html
+        assert 'id="meal-budget-max-note"' in html
+        assert "max-meal-override" in html
         assert 'type="range"' in html
         assert "meal-budget-fraction" in html
         assert "50% → 250k of 500k" in html

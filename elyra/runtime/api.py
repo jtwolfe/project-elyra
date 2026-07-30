@@ -3195,8 +3195,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         """PATCH /api/meal-budget — ``{ "fraction": 0.5 }``.
 
         Meal size as a fraction of model_context_window_tokens. Default 0.5
-        (250k of 500k). Clamped to 0.10–0.60. Persists data/runtime/meal_budget.json.
-        Does not mutate frozen Settings.
+        (250k of 500k). Clamped to [min_fraction, max_fraction] where product
+        default max is 0.75 (raise via ``elyra start --max-meal-override``).
+        Persists data/runtime/meal_budget.json. Does not mutate frozen Settings.
         """
         if "fraction" not in body:
             self._json(400, {"ok": False, "error": "fraction required"})

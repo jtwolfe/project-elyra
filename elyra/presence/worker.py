@@ -684,7 +684,8 @@ class PresenceWorker:
                     "meal_budget": prev_block,
                 }
             try:
-                new_frac = clamp_fraction(fraction)
+                ceiling = float(self._meal_budget.max_fraction)
+                new_frac = clamp_fraction(fraction, max_fraction=ceiling)
             except (TypeError, ValueError) as exc:
                 return {
                     "ok": False,
@@ -702,6 +703,7 @@ class PresenceWorker:
                 save_meal_budget_runtime(
                     self.paths.data_dir,
                     fraction=new_frac,
+                    max_fraction=ceiling,
                 )
             except OSError as exc:
                 _LOG.warning("persist meal_budget.json failed: %s", exc)

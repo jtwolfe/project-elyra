@@ -27,7 +27,7 @@ ln -sfn ../aurimago/project-elyra2/model model
 |------|---------|---------|
 | llama-server **`-c`** | **86000** (`CONTEXT_WINDOW_TOKENS`) | Server **KV ceiling** (allocated window) |
 | Client / meal **`sliding_input_tokens`** | **250000** (`DEFAULT_SLIDING_INPUT_TOKENS`) | Settings/unit-test fallback meal size (was 50k / 24k) |
-| Runtime **`meal_budget_fraction`** | **0.5** (clamp 0.10–0.60) | Product SSOT: fraction of model window → effective meal tokens (default **250k** of **500k**). `data/runtime/meal_budget.json` + `PATCH /api/meal-budget` |
+| Runtime **`meal_budget_fraction`** | **0.5** (slider max **0.75** default) | Product SSOT: fraction of model window → effective meal tokens (default **250k** of **500k**). `data/runtime/meal_budget.json` + `PATCH /api/meal-budget`. Raise slider ceiling with **`elyra start --max-meal-override PCT`** (1–100; e.g. `100` = full window). |
 | Generation headroom | **~8192** (`generation_max_tokens`) | Tool-loop max_tokens; do not starve multi-hop |
 | Model window (glass) | **500000** (`MODEL_CONTEXT_WINDOW_TOKENS`) | Grok-class context; product meal = fraction × this window |
 

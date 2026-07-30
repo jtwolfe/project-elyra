@@ -91,6 +91,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start.add_argument("--api-host", default="127.0.0.1")
     start.add_argument("--api-port", type=int, default=8787)
+    start.add_argument(
+        "--max-meal-override",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help=(
+            "Raise meal-budget slider max as percent of model window (1–100). "
+            "Product default max is 75%%. Example: --max-meal-override 100 "
+            "allows up to full model context (less generation headroom). "
+            "Persists max_fraction in data/runtime/meal_budget.json."
+        ),
+    )
 
     auth = sub.add_parser(
         "auth",
@@ -175,6 +187,22 @@ def _print_startup_posture(sup: ElyraSupervisor) -> None:
             print(f"Credential:  {msg}")
     continuous = "on" if config.continuous_enabled else "off"
     print(f"Continuous:  {continuous}")
+    try:
+        from elyra.runtime.meal_budget import (
+            load_meal_budget_runtime,
+            meal_budget_status_block,
+        )
+
+        mb = meal_budget_status_block(load_meal_budget_runtime(paths.data_dir))
+        ov = " · override" if mb.get("max_override_active") else ""
+        print(
+            f"Meal budget: {mb['fraction'] * 100:.0f}% → "
+            f"{mb['meal_budget_tokens'] // 1000}k of "
+            f"{mb['model_window_tokens'] // 1000}k "
+            f"(slider max {mb['max_fraction'] * 100:.0f}%{ov})"
+        )
+    except Exception:  # noqa: BLE001 — posture is best-effort
+        pass
     meter = pr.meter if pr is not None else None
     usage_line = format_usage_posture(meter, enabled=config.usage.enabled)
     print(f"Usage:       {usage_line}")
@@ -199,6 +227,22 @@ def _cmd_start(args: argparse.Namespace) -> int:
     paths = resolve_paths()
     # Ensure data/runtime exists so provider.json load is well-defined.
     paths.ensure_data_dirs()
+
+    # Meal budget slider ceiling override (percent of model window).
+    if args.max_meal_override is not None:
+        from elyra.runtime.meal_budget import apply_max_meal_override_percent
+
+        try:
+            state = apply_max_meal_override_percent(
+                paths.data_dir, args.max_meal_override
+            )
+        except (TypeError, ValueError) as exc:
+            print(f"error: invalid --max-meal-override: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"Meal budget max: {state.max_fraction * 100:.0f}% of model window "
+            f"(override; persisted data/runtime/meal_budget.json)"
+        )
 
     settings = load_merged_settings(
         paths.home,

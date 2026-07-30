@@ -43,7 +43,7 @@ elyra start (supervisor)
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
 
-Inference: product path is **xAI Grok** (usage meter + SuperGrok pacing + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals default to **~250k** input tokens (~50% of model window; runtime `meal_budget_fraction`); glass **Context** rail shows last meal vs **~500k** model window (`MODEL_CONTEXT_WINDOW_TOKENS`; `CONTEXT_WINDOW_TOKENS = 86000` remains legacy meal-math ceiling). See [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
+Inference: product path is **xAI Grok** (usage meter + SuperGrok pacing + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals default to **~250k** input tokens (~50% of model window; runtime `meal_budget_fraction`; Glass Status range, max **75%** unless `elyra start --max-meal-override PCT`); glass **Context** rail shows last meal vs **~500k** model window (`MODEL_CONTEXT_WINDOW_TOKENS`; `CONTEXT_WINDOW_TOKENS = 86000` remains legacy meal-math ceiling). See [docs/inference.md](docs/inference.md) and [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
 Usage / SuperGrok operator notes + dogfood checklist: [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md).  
 [docs/inference.md](docs/inference.md) is a **historical freeze — do not follow for setup** (older local-server path removed).
 
@@ -163,7 +163,7 @@ Open **http://127.0.0.1:8787/**
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
 | `elyra auth login\|logout\|status` | Headless xAI OAuth (device-code); never prints tokens |
 
-Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 250000` as settings fallback; product meal size is runtime `meal_budget_fraction`, default 0.5 → 250k of 500k). CLI overrides win over toml.
+Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 250000` as settings fallback; product meal size is runtime `meal_budget_fraction`, default 0.5 → 250k of 500k; slider max **75%** of model window unless raised). CLI: `elyra start --max-meal-override 100` raises the meal slider ceiling to 100% of the model window (persists `max_fraction` in `data/runtime/meal_budget.json`). Other CLI overrides win over toml.
 
 ## Testing
 

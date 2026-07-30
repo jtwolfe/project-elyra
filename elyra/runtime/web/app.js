@@ -193,6 +193,7 @@ const semanticWaitBadge = $("#semantic-wait-badge");
 const semanticWaitMaxMs = $("#semantic-wait-max-ms");
 const mealBudgetFraction = $("#meal-budget-fraction");
 const mealBudgetReadout = $("#meal-budget-readout");
+const mealBudgetMaxNote = $("#meal-budget-max-note");
 
 /** Active glass session user (who is typing) — not orient USER on pure work. */
 let sessionUserId =
@@ -1185,8 +1186,12 @@ function mealBudgetReadoutText(fraction, tokens, modelWindow) {
   return `${pct}% → ${formatTokenCount(tokens)} of ${formatTokenCount(modelWindow)}`;
 }
 
-function updateMealBudgetReadout(fraction, modelWindow) {
-  const frac = Math.max(0.1, Math.min(0.6, Number(fraction) || 0.5));
+function updateMealBudgetReadout(fraction, modelWindow, maxFraction) {
+  const maxF =
+    typeof maxFraction === "number" && !Number.isNaN(maxFraction)
+      ? maxFraction
+      : 0.75;
+  const frac = Math.max(0.1, Math.min(maxF, Number(fraction) || 0.5));
   const window = Math.max(1, Number(modelWindow) || 500000);
   const tokens = Math.max(1, Math.round(frac * window));
   if (mealBudgetReadout) {
@@ -1212,6 +1217,10 @@ function renderMealBudget(s) {
     typeof mb.meal_budget_tokens === "number" && !Number.isNaN(mb.meal_budget_tokens)
       ? mb.meal_budget_tokens
       : Math.max(1, Math.round(fraction * modelWindow));
+  const minF =
+    typeof mb.min_fraction === "number" ? mb.min_fraction : 0.1;
+  const maxF =
+    typeof mb.max_fraction === "number" ? mb.max_fraction : 0.75;
   lastMealBudgetFraction = fraction;
   lastMealBudgetModelWindow = modelWindow;
 
@@ -1221,10 +1230,6 @@ function renderMealBudget(s) {
       document.activeElement !== mealBudgetFraction
     ) {
       mealBudgetFraction.value = String(fraction);
-      const minF =
-        typeof mb.min_fraction === "number" ? mb.min_fraction : 0.1;
-      const maxF =
-        typeof mb.max_fraction === "number" ? mb.max_fraction : 0.6;
       mealBudgetFraction.min = String(minF);
       mealBudgetFraction.max = String(maxF);
     }
@@ -1235,6 +1240,17 @@ function renderMealBudget(s) {
       tokens,
       modelWindow
     );
+  }
+  if (mealBudgetMaxNote) {
+    const maxPct = Math.round(maxF * 100);
+    const override = mb.max_override_active === true;
+    mealBudgetMaxNote.innerHTML = override
+      ? `Slider max is <strong>${maxPct}%</strong> of the model window ` +
+        `(raised via <code>elyra start --max-meal-override</code>). ` +
+        `High values leave less room for generation.`
+      : `Slider max defaults to <strong>75%</strong> of the model window. ` +
+        `Raise the ceiling with <code>elyra start --max-meal-override 100</code> ` +
+        `(percent 1–100; e.g. 100 = full context). High values leave less room for generation.`;
   }
 }
 
@@ -1253,7 +1269,11 @@ async function patchMealBudget(body) {
     if (mealBudgetFraction) {
       mealBudgetFraction.value = String(lastMealBudgetFraction);
     }
-    updateMealBudgetReadout(lastMealBudgetFraction, lastMealBudgetModelWindow);
+    updateMealBudgetReadout(
+      lastMealBudgetFraction,
+      lastMealBudgetModelWindow,
+      mealBudgetFraction ? Number(mealBudgetFraction.max) : 0.75
+    );
     showNotice(String(err.message || err));
   } finally {
     mealBudgetInFlight = false;
@@ -5821,7 +5841,8 @@ if (mealBudgetFraction) {
   mealBudgetFraction.addEventListener("input", () => {
     const n = Number(mealBudgetFraction.value);
     if (!Number.isFinite(n)) return;
-    updateMealBudgetReadout(n, lastMealBudgetModelWindow);
+    const maxF = Number(mealBudgetFraction.max) || 0.75;
+    updateMealBudgetReadout(n, lastMealBudgetModelWindow, maxF);
   });
   const scheduleMealBudgetPatch = () => {
     const n = Number(mealBudgetFraction.value);
