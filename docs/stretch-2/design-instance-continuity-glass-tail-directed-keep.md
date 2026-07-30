@@ -334,9 +334,9 @@ Do **not** ship S3 without S1 if dogfood is still failing wait-reply social — 
 ## 12. Next process step (explicit)
 
 1. ~~Draft this design~~ (this document).  
-2. Update GitHub #93 + project board to point here and expand scope.  
-3. **Plan and run a meal-formation / continuation review** → written **report** isolating edge conditions.  
-4. Refine this draft from the report → PR plan → implement on a fix branch.
+2. ~~Update GitHub #93 + project board~~.  
+3. **Review plan (normative method):** [`design-meal-formation-continuity-review-plan.md`](design-meal-formation-continuity-review-plan.md) — execute → fault report under `docs/stretch-2/meal-continuity-review/`.  
+4. Refine **this** draft from the report → implement plan on a fix branch.
 
 Until step 3–4 complete, treat ratios, cut order, and OQ defaults as **provisional**.
 
