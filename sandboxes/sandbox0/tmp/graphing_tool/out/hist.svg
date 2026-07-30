@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="528" viewBox="0 0 864 528">
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<text x="432.0" y="28" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="16" fill="#1F2A37">Normal draws</text>
+<rect x="64" y="48" width="776" height="424" fill="none" stroke="#E5EAF0"/>
+<line x1="64" y1="467.34" x2="840" y2="467.34" stroke="#E5EAF0" stroke-width="1"/>
+<text x="56" y="471.34" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">0</text>
+<line x1="64" y1="368.29" x2="840" y2="368.29" stroke="#E5EAF0" stroke-width="1"/>
+<text x="56" y="372.29" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">25</text>
+<line x1="64" y1="269.24" x2="840" y2="269.24" stroke="#E5EAF0" stroke-width="1"/>
+<text x="56" y="273.24" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">50</text>
+<line x1="64" y1="170.19" x2="840" y2="170.19" stroke="#E5EAF0" stroke-width="1"/>
+<text x="56" y="174.19" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">75</text>
+<line x1="64" y1="71.14" x2="840" y2="71.14" stroke="#E5EAF0" stroke-width="1"/>
+<text x="56" y="75.14" text-anchor="end" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">100</text>
+<line x1="163.10" y1="48" x2="163.10" y2="472" stroke="#E5EAF0" stroke-width="1"/>
+<text x="163.10" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">-2</text>
+<line x1="410.88" y1="48" x2="410.88" y2="472" stroke="#E5EAF0" stroke-width="1"/>
+<text x="410.88" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">0</text>
+<line x1="658.67" y1="48" x2="658.67" y2="472" stroke="#E5EAF0" stroke-width="1"/>
+<text x="658.67" y="490" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#4B5563">2</text>
+<text x="452.0" y="512" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#1F2A37">v</text>
+<text x="16" y="260.0" text-anchor="middle" transform="rotate(-90 16 260.0)" font-family="DejaVu Sans, sans-serif" font-size="12" fill="#1F2A37">v</text>
+<rect x="54.95" y="463.38" width="18.11" height="3.96" fill="#0072B2"/>
+<rect x="81.71" y="463.38" width="18.11" height="3.96" fill="#0072B2"/>
+<rect x="108.46" y="451.49" width="18.11" height="15.85" fill="#0072B2"/>
+<rect x="135.22" y="427.72" width="18.11" height="39.62" fill="#0072B2"/>
+<rect x="161.98" y="427.72" width="18.11" height="39.62" fill="#0072B2"/>
+<rect x="188.74" y="435.64" width="18.11" height="31.70" fill="#0072B2"/>
+<rect x="215.50" y="324.71" width="18.11" height="142.63" fill="#0072B2"/>
+<rect x="242.26" y="328.67" width="18.11" height="138.67" fill="#0072B2"/>
+<rect x="269.02" y="277.16" width="18.11" height="190.18" fill="#0072B2"/>
+<rect x="295.77" y="190.00" width="18.11" height="277.34" fill="#0072B2"/>
+<rect x="322.53" y="182.07" width="18.11" height="285.27" fill="#0072B2"/>
+<rect x="349.29" y="146.42" width="18.11" height="320.92" fill="#0072B2"/>
+<rect x="376.05" y="79.06" width="18.11" height="388.28" fill="#0072B2"/>
+<rect x="402.81" y="134.53" width="18.11" height="332.81" fill="#0072B2"/>
+<rect x="429.57" y="90.95" width="18.11" height="376.39" fill="#0072B2"/>
+<rect x="456.33" y="166.23" width="18.11" height="301.11" fill="#0072B2"/>
+<rect x="483.08" y="273.20" width="18.11" height="194.14" fill="#0072B2"/>
+<rect x="509.84" y="241.51" width="18.11" height="225.84" fill="#0072B2"/>
+<rect x="536.60" y="277.16" width="18.11" height="190.18" fill="#0072B2"/>
+<rect x="563.36" y="356.40" width="18.11" height="110.94" fill="#0072B2"/>
+<rect x="590.12" y="364.33" width="18.11" height="103.01" fill="#0072B2"/>
+<rect x="616.88" y="364.33" width="18.11" height="103.01" fill="#0072B2"/>
+<rect x="643.64" y="435.64" width="18.11" height="31.70" fill="#0072B2"/>
+<rect x="670.39" y="423.76" width="18.11" height="43.58" fill="#0072B2"/>
+<rect x="697.15" y="423.76" width="18.11" height="43.58" fill="#0072B2"/>
+<rect x="723.91" y="451.49" width="18.11" height="15.85" fill="#0072B2"/>
+<rect x="750.67" y="459.42" width="18.11" height="7.92" fill="#0072B2"/>
+<rect x="777.43" y="467.34" width="18.11" height="1.00" fill="#0072B2"/>
+<rect x="804.19" y="467.34" width="18.11" height="1.00" fill="#0072B2"/>
+<rect x="830.95" y="463.38" width="18.11" height="3.96" fill="#0072B2"/>
+</svg>

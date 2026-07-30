@@ -26,11 +26,17 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
 | 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
 | 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
-| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs (e.g. stale timer/`task_ready` wake storms → moment bloat) |
+| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog (wake storms, usage pacing, glass polish, chat math, soften system prompt post-memory) |
+| 16a | **[promotion-discussion/README.md](promotion-discussion/README.md)** | **v0.1 promotion / gym** — pillars, meal/context, Phase 3 defer; **[governance](promotion-discussion/development-governance.md)** multi-party + operating pin ladder |
+| 16b | **[design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md)** | **In-browser xAI OIDC login** (device-code; secrets; live rebind; future grok_build access) |
+| 17 | **[stretch-2/README.md](stretch-2/README.md)** | **Stretch 2 memory** — **Phase 1 done** (caveats in known-bugs); Phase 2/2a code done (dogfood pending); Phase 3 experimental |
+| 17a | [stretch-2/inspiration-activity-model-and-storage.md](stretch-2/inspiration-activity-model-and-storage.md) | Activity model, data prototype, storage requirements |
+| 17b | [stretch-2/design-context-meal-composition.md](stretch-2/design-context-meal-composition.md) | Provisional labeled meal + slide-off |
+| 17c | [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (not goals) |
 
 **Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `grok-improvement`** over stale phase README status lines.  
 **Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes — freeze bodies stay until a docs modernization pass rewrites them.  
-**Archive:** longer research notes under [archive/](archive/) (not freeze). Phase 3 essay: [memory-atoms.pdf](memory-atoms.pdf).
+**Archive:** longer research notes under [archive/](archive/) (not freeze). Memory essay: [memory-atoms.pdf](memory-atoms.pdf).
 
 ## Stance (short)
 
@@ -41,16 +47,18 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 - **Voice = `speak` tool** (with transport feedback)  
 - **No language debt** — no “organs” cast; skills/tools/host jobs only  
 - **Dogfood** — created tools/skills use the same formats as builtins  
-- **Memory graph later** — Stretch 1 only emits moments + linear tapes  
+- **Memory graph later** — Stretch 1 only emits moments + linear tapes; Stretch 2 planning on `grok-improvement-memory`  
 
 ## Stretch 1 vs Stretch 2
 
-| Stretch 1 (shipped) | Stretch 2 (later) |
-|---------------------|-------------------|
-| Presence, wake queue, do-loops | Hypergraph, auto-ontology |
-| Skills + tools + create-tool (fail-closed, PR13) | Opaque sleep / sparse linking |
-| Sliding context (~24k under `-c` ceiling) | LanceDB / graph migration |
-| Gemma via llama.cpp Vulkan | Same model stack, richer memory |
+| Stretch 1 (shipped) | Stretch 2 (planning on `grok-improvement-memory`) |
+|---------------------|--------------------------------------------------|
+| Presence, wake queue, do-loops | Atomized memory; moments as groups of atoms |
+| Skills + tools + create-tool (fail-closed, PR13) | Rolling summary ladder; labeled context meal |
+| Sliding context meal | Temporal + episodic + later semantic/procedural channels |
+| Grok product path on gi | LanceDB direction; Nemotron embed runtime (Phase 2) |
+
+Start at [stretch-2/README.md](stretch-2/README.md).
 
 ## Run
 
@@ -71,6 +79,10 @@ elyra start --stub-llm   # stub LLM + UI (hermetic)
 # http://127.0.0.1:8787/
 ```
 
+**New terminal (everyday):** `cd` to repo → `source .venv/bin/activate` → `elyra start` → UI `http://127.0.0.1:8787/`.
+
+**Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): see **[radeon-vii-dev/README.md](radeon-vii-dev/README.md)** § *New terminal session — start Elyra*.
+
 Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
 Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
 
@@ -89,5 +101,4 @@ Live protocol: [live-eval.md](live-eval.md). Ship knobs: [inference.md](inferenc
 
 ## Status
 
-**Stretch 1 complete** on the foundation path. Integration branch **`grok-improvement`** also carries Grok-by-default (Phase 0), sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, and gold glass — see [project-status-pass.md](project-status-pass.md). `main` may lag. Phase 3 memory not started (essay only).
-
+**Stretch 1 complete** on the foundation path. Integration branch **`grok-improvement`** also carries Grok-by-default (Phase 0), sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, and gold glass — see [project-status-pass.md](project-status-pass.md). `main` may lag. **Stretch 2 memory** is in planning on **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).

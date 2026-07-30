@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "atom_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Atom ids to inspect (capped by traverse_inspect_max_ids; required)."
+    }
+  },
+  "required": ["atom_ids"],
+  "additionalProperties": false
+}

@@ -26,6 +26,7 @@
           <button type="button" class="nav-btn active" data-panel="chat">Chat</button>
           <button type="button" class="nav-btn" data-panel="goals">Goals</button>
           <button type="button" class="nav-btn" data-panel="moments">Moments</button>
+          <button type="button" class="nav-btn" data-panel="memory">Memory</button>
           <button type="button" class="nav-btn" data-panel="tools">Tools</button>
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
           <button type="button" class="nav-btn" data-panel="secrets">Secrets</button>
@@ -218,6 +219,263 @@
           </header>
           <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
           <div id="moment-detail" class="list-panel detail-panel" hidden></div>
+        </section>
+
+        <section id="panel-memory" class="panel">
+          <header class="panel-head panel-head-row">
+            <div>
+              <h1>Memory</h1>
+              <p class="muted">
+                What the model is fed (context meal) and store atoms. Read-only.
+              </p>
+            </div>
+            <button type="button" id="memory-refresh-btn" class="btn-secondary btn-sm">
+              Refresh
+            </button>
+          </header>
+          <div class="memory-tabs" role="tablist" aria-label="Memory views">
+            <button
+              type="button"
+              class="memory-tab active"
+              role="tab"
+              data-memory-tab="context"
+              aria-selected="true"
+            >
+              Context
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="atoms"
+              aria-selected="false"
+            >
+              Atoms
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="vectors"
+              aria-selected="false"
+            >
+              Vectors
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="graph"
+              aria-selected="false"
+            >
+              Graph
+            </button>
+          </div>
+          <div id="memory-tab-context" class="memory-tab-panel active" role="tabpanel">
+            <div id="memory-context-flags" class="memory-flags status-fields">loading…</div>
+            <div id="memory-context-body" class="list-panel memory-context-body">loading…</div>
+          </div>
+          <div id="memory-tab-atoms" class="memory-tab-panel" role="tabpanel" hidden>
+            <div class="memory-atoms-toolbar">
+              <label class="status-label" for="memory-atom-kind">Kind</label>
+              <select id="memory-atom-kind" class="status-select memory-filter" aria-label="Filter by kind">
+                <option value="">all</option>
+                <option value="observation">observation</option>
+                <option value="speak">speak</option>
+                <option value="tool">tool</option>
+                <option value="model">model</option>
+                <option value="ledger">ledger</option>
+                <option value="summary">summary</option>
+                <option value="parcel">parcel</option>
+                <option value="moment_meta">moment_meta</option>
+              </select>
+              <label class="status-label" for="memory-atom-moment">Moment</label>
+              <input
+                id="memory-atom-moment"
+                type="text"
+                class="status-input memory-filter"
+                placeholder="moment id (optional)"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <button type="button" id="memory-atoms-apply" class="btn-secondary btn-sm">
+                Apply
+              </button>
+            </div>
+            <div id="memory-atoms-list" class="list-panel list-panel-auto">loading…</div>
+            <div id="memory-atom-detail" class="list-panel detail-panel" hidden></div>
+          </div>
+          <div id="memory-tab-vectors" class="memory-tab-panel" role="tabpanel" hidden>
+            <div id="memory-vectors-health" class="memory-flags status-fields">loading…</div>
+            <div class="memory-vectors-toolbar">
+              <label class="status-label" for="memory-vector-status">Status</label>
+              <select
+                id="memory-vector-status"
+                class="status-select memory-filter"
+                aria-label="Filter by embedding status"
+              >
+                <option value="">all</option>
+                <option value="pending">pending</option>
+                <option value="ready">ready</option>
+                <option value="failed">failed</option>
+                <option value="skipped">skipped</option>
+                <option value="none">none</option>
+              </select>
+              <button type="button" id="memory-vectors-apply" class="btn-secondary btn-sm">
+                Apply
+              </button>
+              <button
+                type="button"
+                id="memory-vectors-rebuild"
+                class="btn-secondary btn-sm"
+                title="Rebuild approximate nearest-neighbor search index over stored vectors (does not re-run Nemotron)"
+              >
+                Rebuild ANN index
+              </button>
+            </div>
+            <p class="muted status-helper memory-vectors-hint">
+              ANN = approximate nearest-neighbor <strong>search index</strong> (cosine over embeddings),
+              not the neural net. Rebuild speeds large corpora.
+              <strong>IVF not built on a small corpus is normal</strong> — full scan is still used and
+              is not “search broken.” Repair-pending joint means auto prefers text until joint is full.
+            </p>
+            <div id="memory-vectors-list" class="list-panel list-panel-auto">loading…</div>
+            <div class="memory-neighbors-panel card">
+              <div class="card-head">
+                <strong>Neighbor inspect</strong>
+                <span class="badge" title="Scores are cosine similarity (higher = closer)">cosine</span>
+              </div>
+              <div class="memory-neighbors-toolbar">
+                <label class="status-label" for="memory-neighbor-atom">Atom id</label>
+                <input
+                  id="memory-neighbor-atom"
+                  type="text"
+                  class="status-input memory-filter"
+                  placeholder="a_…"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-neighbor-q">or query</label>
+                <input
+                  id="memory-neighbor-q"
+                  type="text"
+                  class="status-input memory-filter memory-neighbor-q"
+                  placeholder="free-text seed"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-neighbor-channel">Channel</label>
+                <select
+                  id="memory-neighbor-channel"
+                  class="status-select memory-filter"
+                  aria-label="Embedding channel for neighbor search"
+                  title="auto resolves joint when multi-modal/joint is ready; falls back to text while joint repair is pending"
+                >
+                  <option value="auto" selected>auto</option>
+                  <option value="joint">joint</option>
+                  <option value="text">text</option>
+                  <option value="image">image</option>
+                  <option value="audio">audio</option>
+                  <option value="video">video</option>
+                </select>
+                <label class="status-label" for="memory-neighbor-k">k</label>
+                <input
+                  id="memory-neighbor-k"
+                  type="number"
+                  class="status-input memory-filter memory-neighbor-k"
+                  value="8"
+                  min="1"
+                  max="50"
+                />
+                <button type="button" id="memory-neighbors-run" class="btn-secondary btn-sm">
+                  Search
+                </button>
+              </div>
+              <div id="memory-neighbors-meta" class="muted status-helper memory-neighbors-meta" hidden></div>
+              <div id="memory-neighbors-list" class="list-panel list-panel-auto memory-neighbors-list">
+                <p class="muted empty memory-empty">Pick an atom id or free-text query.</p>
+              </div>
+            </div>
+          </div>
+          <div id="memory-tab-graph" class="memory-tab-panel" role="tabpanel" hidden>
+            <div id="memory-graph-overview" class="memory-flags status-fields">loading…</div>
+            <p id="memory-graph-honesty" class="muted status-helper memory-graph-honesty" hidden></p>
+            <div id="memory-graph-session" class="memory-graph-session card">
+              <div class="card-head">
+                <strong>Walk session</strong>
+                <span id="memory-graph-session-badge" class="badge">—</span>
+              </div>
+              <div id="memory-graph-session-body" class="memory-graph-session-body">
+                <p class="muted empty memory-empty">No walk yet.</p>
+              </div>
+            </div>
+            <div class="memory-graph-split">
+              <div class="memory-graph-list-panel card">
+                <div class="card-head">
+                  <strong>Considered</strong>
+                  <span class="badge memory-graph-considered-badge" title="Visited during the walk">walk</span>
+                </div>
+                <div id="memory-graph-considered" class="list-panel list-panel-auto memory-graph-list">
+                  <p class="muted empty memory-empty">—</p>
+                </div>
+              </div>
+              <div class="memory-graph-list-panel card">
+                <div class="card-head">
+                  <strong>Kept</strong>
+                  <span class="badge memory-graph-kept-badge" title="Confirmed keep-set">keep</span>
+                </div>
+                <div id="memory-graph-kept" class="list-panel list-panel-auto memory-graph-list">
+                  <p class="muted empty memory-empty">—</p>
+                </div>
+              </div>
+            </div>
+            <div class="memory-graph-list-panel card memory-graph-frontier-panel">
+              <div class="card-head">
+                <strong>Frontier</strong>
+                <span class="badge" title="Expand candidates (active walks only)">active only</span>
+              </div>
+              <div id="memory-graph-frontier" class="list-panel list-panel-auto memory-graph-list">
+                <p class="muted empty memory-empty">—</p>
+              </div>
+            </div>
+            <div class="memory-neighbors-panel card memory-graph-neighbors-panel">
+              <div class="card-head">
+                <strong>Neighbor probe</strong>
+                <span class="badge" title="1-hop multi-kind expand (structural + optional semantic)">1-hop</span>
+              </div>
+              <div class="memory-neighbors-toolbar memory-graph-neighbors-toolbar">
+                <label class="status-label" for="memory-graph-neighbor-atom">Atom id</label>
+                <input
+                  id="memory-graph-neighbor-atom"
+                  type="text"
+                  class="status-input memory-filter"
+                  placeholder="a_…"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-graph-neighbor-k">k</label>
+                <input
+                  id="memory-graph-neighbor-k"
+                  type="number"
+                  class="status-input memory-filter memory-neighbor-k"
+                  value="12"
+                  min="1"
+                  max="50"
+                />
+                <label class="status-label memory-graph-sem-label" for="memory-graph-neighbor-sem">
+                  <input id="memory-graph-neighbor-sem" type="checkbox" checked />
+                  semantic
+                </label>
+                <button type="button" id="memory-graph-neighbors-run" class="btn-secondary btn-sm">
+                  Expand
+                </button>
+              </div>
+              <div id="memory-graph-neighbors-meta" class="muted status-helper memory-neighbors-meta" hidden></div>
+              <div id="memory-graph-neighbors-list" class="list-panel list-panel-auto memory-neighbors-list">
+                <p class="muted empty memory-empty">Pick an atom id to expand 1-hop.</p>
+              </div>
+            </div>
+          </div>
         </section>
 
         <section id="panel-tools" class="panel">
@@ -466,13 +724,113 @@
                 <div class="status-row">
                   <span class="status-label">Credential</span>
                   <select id="provider-credential-select" class="status-select" aria-label="Credential source">
-                    <option value="grok_build">Grok Build (auth.json)</option>
+                    <option value="xai_oauth">xAI login (Elyra)</option>
                     <option value="api_key">API key</option>
+                    <option value="grok_build">Grok Build auth.json (legacy)</option>
                   </select>
                 </div>
                 <div class="status-row">
                   <span class="status-label">Credential ok</span>
                   <span id="provider-credential-ok" class="status-value">—</span>
+                </div>
+                <div class="status-row status-row-stack" id="oauth-login-row">
+                  <span class="status-label">xAI login</span>
+                  <div class="oauth-login-stack" id="oauth-login-stack">
+                    <div
+                      id="oauth-legacy-banner"
+                      class="oauth-banner oauth-banner-legacy"
+                      hidden
+                      role="status"
+                    >
+                      You can log in with xAI inside Elyra (recommended). Grok Build
+                      <code>auth.json</code> remains available as a legacy source.
+                    </div>
+                    <div
+                      id="oauth-cta-banner"
+                      class="oauth-banner oauth-banner-cta"
+                      hidden
+                      role="status"
+                    ></div>
+                    <span id="oauth-meta" class="muted status-helper">not configured</span>
+                    <div class="oauth-actions-row">
+                      <button
+                        type="button"
+                        id="oauth-login-btn"
+                        class="btn-primary btn-sm"
+                      >
+                        Log in with xAI
+                      </button>
+                      <button
+                        type="button"
+                        id="oauth-logout-btn"
+                        class="btn-secondary btn-sm"
+                        hidden
+                      >
+                        Log out xAI
+                      </button>
+                      <button
+                        type="button"
+                        id="oauth-cancel-btn"
+                        class="btn-secondary btn-sm"
+                        hidden
+                      >
+                        Cancel login
+                      </button>
+                    </div>
+                    <label class="oauth-activate-label" for="oauth-activate-checkbox">
+                      <input
+                        type="checkbox"
+                        id="oauth-activate-checkbox"
+                        checked
+                      />
+                      Switch credential source to Elyra login
+                    </label>
+                    <div id="oauth-pending-panel" class="oauth-pending-panel" hidden>
+                      <div class="oauth-pending-status">
+                        <span class="oauth-spinner" aria-hidden="true"></span>
+                        <span id="oauth-pending-label">Waiting for authorization…</span>
+                      </div>
+                      <div class="oauth-code-row">
+                        <span class="oauth-field-label">User code</span>
+                        <code
+                          id="oauth-user-code"
+                          class="oauth-user-code"
+                          aria-live="polite"
+                          aria-label="Device user code"
+                        ></code>
+                        <button
+                          type="button"
+                          id="oauth-copy-code-btn"
+                          class="btn-secondary btn-sm"
+                          aria-label="Copy user code"
+                        >
+                          Copy code
+                        </button>
+                      </div>
+                      <div class="oauth-uri-row">
+                        <a
+                          id="oauth-verify-link"
+                          class="oauth-verify-link"
+                          href="#"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >Open verification page</a>
+                        <button
+                          type="button"
+                          id="oauth-copy-uri-btn"
+                          class="btn-secondary btn-sm"
+                          aria-label="Copy verification link"
+                        >
+                          Copy link
+                        </button>
+                      </div>
+                      <p class="muted status-helper oauth-remote-help">
+                        Open the link on any device; you do not need a browser on the
+                        Elyra host. Consent screen may say Grok Build — shared xAI app
+                        name. Tokens stay in this instance’s data/secrets (never shown here).
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <div class="status-row status-row-stack">
                   <span class="status-label">API key</span>
@@ -496,7 +854,7 @@
               </div>
               <p class="muted status-helper">
                 Model applies to next call. Effort applies to next Completions request (no credential rebuild).
-                API key save does not switch source until you select it.
+                API key save does not switch source until you select it. xAI device login never displays tokens.
               </p>
             </div>
             <div class="card status-card" id="context-card">
@@ -627,6 +985,36 @@
                 />
               </div>
             </div>
+            <div class="card continuous-card status-card" id="semantic-wait-card">
+              <div class="card-head">
+                <strong>Wait for semantic</strong>
+                <span id="semantic-wait-badge" class="badge">on</span>
+              </div>
+              <p class="muted status-helper">
+                Keep slow meal semantic encodes (CPU Nemotron). Default ON (15s ceiling, clamp 1–120s).
+              </p>
+              <div class="continuous-control">
+                <label class="toggle-label" for="semantic-wait-toggle">
+                  <input type="checkbox" id="semantic-wait-toggle" />
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span class="toggle-text">Wait for semantic select</span>
+                </label>
+                <div id="semantic-wait-meta" class="continuous-meta muted">up to 15s for encode+search</div>
+              </div>
+              <div class="status-row" style="margin-top: 0.75rem">
+                <span class="status-label">Max (ms)</span>
+                <input
+                  type="number"
+                  id="semantic-wait-max-ms"
+                  class="status-input"
+                  min="1000"
+                  max="120000"
+                  step="1000"
+                  value="15000"
+                  aria-label="Semantic wait max milliseconds"
+                />
+              </div>
+            </div>
           </div>
           <div class="reset-actions">
             <button type="button" id="reset-open-btn" class="btn-danger">
@@ -634,7 +1022,7 @@
             </button>
             <p class="muted reset-hint">
               Clears moments, chat, goals, wakes/timers, sandbox, and tool drafts.
-              Preserves identity, users, continuous/dev-speed toggles, provider/usage prefs,
+              Preserves identity, users, continuous/dev-speed/semantic-wait toggles, provider/usage prefs,
               secrets (API key), skills/local, and tools/local.
             </p>
           </div>
@@ -667,6 +1055,7 @@
           <li class="will-keep">identity/self, users</li>
           <li class="will-keep">continuous.json enabled flag</li>
           <li class="will-keep">dev_speed.json (pace hops toggle + delay)</li>
+          <li class="will-keep">semantic_wait.json (wait-for-select toggle + max_ms)</li>
           <li class="will-keep">data/secrets/ (API key)</li>
           <li class="will-keep">data/runtime/provider.json (model / credential source prefs)</li>
           <li class="will-keep">data/runtime/usage.json (usage meter + hard-stop override flag)</li>

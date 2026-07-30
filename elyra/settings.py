@@ -1,7 +1,7 @@
 """Settings from defaults, optional elyra.toml, and CLI overrides.
 
-Scope: load/merge loop, wait, tools, goals, continuous, provider, usage
-(and common CLI) knobs.
+Scope: load/merge loop, wait, tools, goals, continuous, provider, usage,
+memory (and common CLI) knobs.
 In scope: tomllib, frozen defaults, precedence defaults < toml < CLI, type checks.
 Out of scope: runtime wiring, argv parsing, ELYRA_HOME (see config).
 """
@@ -18,10 +18,45 @@ import tomllib
 
 from elyra.llm.constants import MODEL_CONTEXT_WINDOW_TOKENS
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
+from elyra.memory.config import (
+    MEMORY_ANN_SEARCH_BACKENDS,
+    MEMORY_BACKENDS,
+    MEMORY_EMBED_BACKENDS,
+    MEMORY_EMBED_DEVICES,
+    MEMORY_SEARCH_CHANNELS,
+    TRAVERSE_EXPAND_MAX_MS_MAX,
+    TRAVERSE_FRONTIER_MAX_MAX,
+    TRAVERSE_INSPECT_CHARS_PER_ID_MAX,
+    TRAVERSE_INSPECT_MAX_IDS_MAX,
+    TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX,
+    TRAVERSE_KEEP_MAX_MAX,
+    TRAVERSE_LABEL_CHARS_MAX,
+    TRAVERSE_MAX_DEPTH_MAX,
+    TRAVERSE_MAX_EXPAND_PER_STEP_MAX,
+    TRAVERSE_MAX_NODES_MAX,
+    TRAVERSE_MAX_SEEDS_MAX,
+    TRAVERSE_MAX_STEPS_MAX,
+    TRAVERSE_PARCEL_CHILD_CAP_MAX,
+    TRAVERSE_PREVIEW_CHARS_MAX,
+    TRAVERSE_SAME_MOMENT_K_MAX,
+    TRAVERSE_SCRATCHPAD_CHARS_MAX,
+    TRAVERSE_SEMANTIC_K_MAX,
+    TRAVERSE_SESSION_TTL_S_MAX,
+    MemorySettings,
+)
+from elyra.memory.embed.types import CHANNEL_SET
+
+from elyra.llm.auth import VALID_SOURCES as _CREDENTIAL_SOURCES
 
 _CLOSE_GATES = frozenset({"soft", "hard"})
 _PROVIDER_NAMES = frozenset({"xai", "local"})
-_CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
+# SSOT: VALID_SOURCES from elyra.llm.auth (KD14). Ship default is xai_oauth (PR5b).
+_MEMORY_BACKENDS = MEMORY_BACKENDS
+_MEMORY_EMBED_BACKENDS = MEMORY_EMBED_BACKENDS
+_MEMORY_EMBED_DEVICES = MEMORY_EMBED_DEVICES
+_MEMORY_SEARCH_CHANNELS = MEMORY_SEARCH_CHANNELS
+_MEMORY_ANN_CHANNELS = CHANNEL_SET
+_MEMORY_ANN_SEARCH_BACKENDS = MEMORY_ANN_SEARCH_BACKENDS
 
 
 @dataclass(frozen=True)
@@ -109,7 +144,9 @@ class ProviderSettings:
     model: str = DEFAULT_XAI_MODEL
     model_label: str = DEFAULT_XAI_MODEL_LABEL
     base_url: str = "https://api.x.ai/v1"
-    credential_source: str = "grok_build"  # grok_build | api_key
+    # PR5b: new installs / empty prefs → xai_oauth. Existing provider.json preserved
+    # via merge (prefs > settings). api_key and grok_build remain fully selectable.
+    credential_source: str = "xai_oauth"  # xai_oauth | api_key | grok_build
     grok_auth_path: str | None = None  # None → ~/.grok/auth.json
     request_timeout_s: float = 120.0
 
@@ -167,6 +204,8 @@ class Settings:
     continuous: ContinuousSettings = field(default_factory=ContinuousSettings)
     provider: ProviderSettings = field(default_factory=ProviderSettings)
     usage: UsageSettings = field(default_factory=UsageSettings)
+    # Stretch 2 Phase 1 memory (write_atoms + meal enabled on by default).
+    memory: MemorySettings = field(default_factory=MemorySettings)
     # Common CLI knobs (not required in elyra.toml)
     api_host: str = "127.0.0.1"
     api_port: int = 8787
@@ -230,6 +269,10 @@ def _apply_mapping(settings: Settings, data: Mapping[str, Any]) -> Settings:
         )
     if "usage" in data and isinstance(data["usage"], Mapping):
         kwargs["usage"] = _replace_section(settings.usage, data["usage"], "usage")
+    if "memory" in data and isinstance(data["memory"], Mapping):
+        kwargs["memory"] = _replace_section(
+            settings.memory, data["memory"], "memory"
+        )
 
     # get_type_hints resolves postponed annotations (str -> real types).
     top_types = get_type_hints(Settings)
@@ -308,6 +351,185 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(
                 f"{path}: expected None or non-empty str, got {coerced!r}"
             )
+        # Memory (Phase 1 + Phase 2): allowlists + fraction/horizon/budget floors.
+        if path == "memory.backend" and coerced not in _MEMORY_BACKENDS:
+            raise ValueError(
+                f"{path}: expected one of {sorted(_MEMORY_BACKENDS)}, "
+                f"got {coerced!r}"
+            )
+        if path == "memory.episodic_fraction":
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path == "memory.episodic_horizon_hours" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        if path == "memory.ladder_max_ms_per_tick" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.max_tool_atoms_per_moment" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.atom_max_chars" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.model_promote_min_chars" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.protect_tail_atoms" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.tool_ok_preview_chars" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.regather_every_n_hops" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.compact_max_tokens" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        # Phase 2 embed / semantic (KD9 defaults off; validation always active).
+        # Lowercase/strip string allowlist fields to match open_encoder/select_device.
+        if path == "memory.embed_backend":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_EMBED_BACKENDS:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(_MEMORY_EMBED_BACKENDS)}, "
+                    f"got {coerced!r}"
+                )
+        if path == "memory.embed_device":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_EMBED_DEVICES:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(_MEMORY_EMBED_DEVICES)}, "
+                    f"got {coerced!r}"
+                )
+        if path == "memory.semantic_search_channel":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_SEARCH_CHANNELS:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(_MEMORY_SEARCH_CHANNELS)}, "
+                    f"got {coerced!r}"
+                )
+        if path == "memory.ann_search_backend":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in _MEMORY_ANN_SEARCH_BACKENDS:
+                raise ValueError(
+                    f"{path}: expected one of "
+                    f"{sorted(_MEMORY_ANN_SEARCH_BACKENDS)}, got {coerced!r}"
+                )
+        if path in (
+            "memory.semantic_fraction",
+            "memory.episodic_fraction_with_semantic",
+            "memory.temporal_min_fraction",
+            "memory.semantic_min_score",
+        ):
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path in (
+            "memory.semantic_horizon_hours",
+            "memory.embed_media_max_seconds",
+            "memory.embed_catchup_horizon_hours",
+        ) and coerced <= 0:
+            raise ValueError(f"{path}: expected float/int > 0, got {coerced!r}")
+        if path == "memory.encode_queue_max" and coerced < 1:
+            raise ValueError(f"{path}: expected int >= 1, got {coerced!r}")
+        if path in (
+            "memory.encode_max_ms_per_tick",
+            "memory.encode_max_items_per_tick",
+            "memory.encode_max_attempts",
+            "memory.encode_query_max_ms",
+            "memory.semantic_select_max_ms",
+            "memory.semantic_top_k",
+            "memory.ann_recent_buffer_max",
+            "memory.ann_full_search_below",
+            "memory.ann_optimize_every_n_encodes",
+            "memory.ann_optimize_interval_s",
+            "memory.ann_optimize_max_ms",
+            "memory.ann_ivf_min_vectors",
+            "memory.parcel_threshold_chars",
+            "memory.embed_media_max_bytes",
+            "memory.embed_catchup_max",
+            "memory.embed_catchup_per_tick",
+            "memory.joint_repair_max_per_open",
+            "memory.joint_repair_max_per_tick",
+        ) and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        # Wait ceiling: same product band as runtime clamp (no silent rewrite).
+        if path == "memory.semantic_wait_max_ms":
+            from elyra.memory.config import (  # noqa: PLC0415
+                SEMANTIC_WAIT_MAX_MS_MAX,
+                SEMANTIC_WAIT_MAX_MS_MIN,
+            )
+
+            if not (
+                SEMANTIC_WAIT_MAX_MS_MIN <= coerced <= SEMANTIC_WAIT_MAX_MS_MAX
+            ):
+                raise ValueError(
+                    f"{path}: expected int in "
+                    f"[{SEMANTIC_WAIT_MAX_MS_MIN}, {SEMANTIC_WAIT_MAX_MS_MAX}], "
+                    f"got {coerced!r}"
+                )
+        if path == "memory.ann_index_channels":
+            # Normalize emb_* prefixes; require non-empty ⊂ CHANNEL_SET.
+            if not isinstance(coerced, tuple) or not coerced:
+                raise ValueError(
+                    f"{path}: expected non-empty list/tuple of channel names "
+                    f"from {sorted(_MEMORY_ANN_CHANNELS)}, got {coerced!r}"
+                )
+            normalized: list[str] = []
+            for i, item in enumerate(coerced):
+                ch = str(item).strip().lower()
+                if ch.startswith("emb_"):
+                    ch = ch[len("emb_") :]
+                if ch not in _MEMORY_ANN_CHANNELS:
+                    raise ValueError(
+                        f"{path}[{i}]: expected one of "
+                        f"{sorted(_MEMORY_ANN_CHANNELS)}, got {item!r}"
+                    )
+                if ch not in normalized:
+                    normalized.append(ch)
+            coerced = tuple(normalized)
+        # Phase 2a directed traversal budgets (hard maxes — design table).
+        if path == "memory.directed_keep_fraction":
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path == "memory.traverse_min_expand_weight":
+            if not (0.0 <= coerced <= 1.0):
+                raise ValueError(
+                    f"{path}: expected float in [0.0, 1.0], got {coerced!r}"
+                )
+        if path == "memory.traverse_temporal_half_life_hours" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        _traverse_int_caps = {
+            "memory.traverse_expand_max_ms": TRAVERSE_EXPAND_MAX_MS_MAX,
+            "memory.traverse_start_expand_max_ms": TRAVERSE_EXPAND_MAX_MS_MAX,
+            "memory.traverse_max_depth": TRAVERSE_MAX_DEPTH_MAX,
+            "memory.traverse_max_nodes": TRAVERSE_MAX_NODES_MAX,
+            "memory.traverse_max_steps": TRAVERSE_MAX_STEPS_MAX,
+            "memory.traverse_max_seeds": TRAVERSE_MAX_SEEDS_MAX,
+            "memory.traverse_frontier_max": TRAVERSE_FRONTIER_MAX_MAX,
+            "memory.traverse_max_expand_per_step": TRAVERSE_MAX_EXPAND_PER_STEP_MAX,
+            "memory.traverse_keep_max": TRAVERSE_KEEP_MAX_MAX,
+            "memory.traverse_session_ttl_s": TRAVERSE_SESSION_TTL_S_MAX,
+            "memory.traverse_label_chars": TRAVERSE_LABEL_CHARS_MAX,
+            "memory.traverse_preview_chars": TRAVERSE_PREVIEW_CHARS_MAX,
+            "memory.traverse_inspect_chars_per_id": TRAVERSE_INSPECT_CHARS_PER_ID_MAX,
+            "memory.traverse_inspect_max_ids": TRAVERSE_INSPECT_MAX_IDS_MAX,
+            "memory.traverse_inspect_max_total_chars": (
+                TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX
+            ),
+            "memory.traverse_scratchpad_chars": TRAVERSE_SCRATCHPAD_CHARS_MAX,
+            "memory.traverse_semantic_k": TRAVERSE_SEMANTIC_K_MAX,
+            "memory.traverse_parcel_child_cap": TRAVERSE_PARCEL_CHILD_CAP_MAX,
+            "memory.traverse_same_moment_k": TRAVERSE_SAME_MOMENT_K_MAX,
+        }
+        if path in _traverse_int_caps:
+            hi = _traverse_int_caps[path]
+            if coerced < 0 or coerced > hi:
+                raise ValueError(
+                    f"{path}: expected int in [0, {hi}], got {coerced!r}"
+                )
         filtered[k] = coerced
 
     # Cross-field usage constraints use the post-merge effective values.

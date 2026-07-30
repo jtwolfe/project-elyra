@@ -19,6 +19,19 @@ search = ["ddgs>=9.0"]
 # Optional Playwright browser primitives (host builtins). Also run:
 #   playwright install chromium
 browser = ["playwright>=1.49"]
+# Optional LanceDB MemoryStore backend (Phase 1 fields; no ANN required).
+# CI stays on jsonl; enable with memory.backend = "lance".
+memory-lance = ["lancedb>=0.20,<0.21", "pyarrow>=14"]
+# Optional Omni-Embed-Nemotron encode path (Phase 2 PR8). Hermetic CI never
+# requires these; mock encoder always available. Full multimodal may need a
+# transformers build with Qwen2.5-Omni support — see spike note.
+memory-embed = [
+    "torch>=2.2",
+    "torchvision>=0.17",  # Qwen2VL video processor path (Nemotron Omni)
+    "transformers>=4.51",
+    "accelerate>=0.33",
+    "Pillow>=10.0",
+]
 
 [project.scripts]
 elyra = "elyra.cli:main"
@@ -36,4 +49,6 @@ testpaths = ["tests"]
 markers = [
     "llm: optional live LLM (OpenAI-compat local/remote); skipped when unavailable",
     "microsandbox: optional live microsandbox smoke (needs KVM + elyra[sandbox])",
+    "gpu: optional GPU / real Nemotron encode; skipped when torch/CUDA/model unavailable",
+    "memory_embed: optional elyra[memory-embed] path (torch+transformers); may skip",
 ]

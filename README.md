@@ -122,7 +122,7 @@ Product default when `ELYRA_SANDBOX` is **unset**: isolation **on** (needs `elyr
 |------|---------|--------|
 | `git` | `git_*` tools | On `PATH` |
 | `gh` | `gh_*` tools | On `PATH`; auth via `gh auth login` when needed |
-| Grok / xAI | Product LLM | `grok login`, or `XAI_API_KEY`, or paste key in glass **Status** |
+| Grok / xAI | Product LLM | `elyra auth login` (preferred), glass **Status** login, `XAI_API_KEY`, or legacy `grok login` |
 
 ### 5. Sanity checks
 
@@ -143,21 +143,25 @@ Catalog, dogfood checklist, secrets/git notes: [docs/tools-and-skills.md](docs/t
 source .venv/bin/activate
 
 # Product path (xAI Grok) — auth first if needed:
-#   grok login
-#   # or: export XAI_API_KEY=...
+#   elyra auth login          # device-code → data/secrets/xai_oauth.json
+#   elyra auth status
+#   # or: export XAI_API_KEY=...  /  glass Status paste / legacy grok login
 elyra start
 
 # UI + API only, stub LLM (no remote calls / hermetic glass)
 elyra start --stub-llm
 ```
 
+`elyra auth login` is **paths-only** (no supervisor): it writes tokens via `persist_oauth_login`. Cold `elyra start` picks them up. If an instance is **already running**, restart it or complete login in Glass for live chat rebind. See `elyra auth login --help`.
+
 Open **http://127.0.0.1:8787/**
 
-| Flag | Effect |
+| Flag / command | Effect |
 |------|--------|
 | `--stub-llm` | StubChatClient only (hermetic UI; no remote LLM) |
 | `--provider xai\|local` | Product default `xai`; `local` fails closed (not implemented) |
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
+| `elyra auth login\|logout\|status` | Headless xAI OAuth (device-code); never prints tokens |
 
 Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 50000`). CLI overrides win over toml.
 

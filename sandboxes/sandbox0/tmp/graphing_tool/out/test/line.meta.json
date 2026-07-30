@@ -1,0 +1,34 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:06.764732+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "line",
+  "path": "/workspace/tmp/graphing_tool/out/test/line.svg",
+  "request": {
+    "backend": "svg",
+    "color": null,
+    "data_columns": [
+      "x",
+      "y"
+    ],
+    "data_rows": 4,
+    "kind": "line",
+    "out": "/workspace/tmp/graphing_tool/out/test/line.svg",
+    "title": "squares",
+    "x": "x",
+    "y": "y"
+  },
+  "request_sha256": "19e00d0be8635c5edc3e5e620c3f9eab915ed997cc105dbc31fd4ef727c15e5c",
+  "theme": "elyra_light",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

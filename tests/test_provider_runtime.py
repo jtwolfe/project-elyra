@@ -113,6 +113,40 @@ credential_source = "api_key"
     assert s3.provider.credential_source == "grok_build"
 
 
+def test_empty_prefs_new_install_defaults_to_xai_oauth(tmp_path: Path):
+    """PR5b: ship default / empty prefs → xai_oauth (no provider.json)."""
+    home = tmp_path / "home"
+    home.mkdir()
+    data = home / "data"
+    data.mkdir()
+    s = load_merged_settings(home, data)
+    assert s.provider.credential_source == "xai_oauth"
+    cfg = runtime_config_from_settings(s, data_dir=data)
+    assert cfg.credential_source == "xai_oauth"
+    # default_settings() is the same ship default
+    assert default_settings().provider.credential_source == "xai_oauth"
+
+
+def test_existing_prefs_preserve_api_key_and_grok_build(tmp_path: Path):
+    """PR5b: existing provider.json is never rewritten by the ship default flip."""
+    home = tmp_path / "home"
+    home.mkdir()
+    data = home / "data"
+    data.mkdir()
+
+    save_provider_prefs(data, ProviderPrefs(credential_source="api_key"))
+    assert load_merged_settings(home, data).provider.credential_source == "api_key"
+
+    save_provider_prefs(data, ProviderPrefs(credential_source="grok_build"))
+    assert load_merged_settings(home, data).provider.credential_source == "grok_build"
+
+    # CLI still selects any source without being forced to xai_oauth
+    s_cli = load_merged_settings(
+        home, data, credential_source="api_key"
+    )
+    assert s_cli.provider.credential_source == "api_key"
+
+
 def test_merge_no_usage_meter_flag(tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
@@ -498,6 +532,7 @@ def test_rebuild_chat_stack_repairs_failing_to_gated(tmp_path: Path):
         api_host="127.0.0.1",
         api_port=port,
         provider_name="xai",
+        credential_source="grok_build",
         grok_auth_path=str(home / "missing.json"),  # cold start fail
     )
     sup = ElyraSupervisor(paths=paths, config=cfg)
@@ -860,6 +895,7 @@ def test_provider_runtime_worker_rebind_is_thread_safe_enough(tmp_path: Path):
         api_host="127.0.0.1",
         api_port=port,
         provider_name="xai",
+        credential_source="grok_build",
         grok_auth_path=str(home / "nope.json"),
     )
     sup = ElyraSupervisor(paths=paths, config=cfg)

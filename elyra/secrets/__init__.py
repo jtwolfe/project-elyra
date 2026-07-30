@@ -6,9 +6,11 @@ guest / host-stub paths must never merge secret_env.
 """
 
 from elyra.secrets.inject import (
+    GROK_BUILD_TOOL_NAMES,
     redact_payload,
     redact_tool_call_arguments,
     redact_tool_result_payload,
+    resolve_access_token_for_tool,
     resolve_for_tool,
 )
 from elyra.secrets.policy import (
@@ -22,6 +24,7 @@ from elyra.secrets.policy import (
 from elyra.secrets.store import SecretsStore
 
 __all__ = [
+    "GROK_BUILD_TOOL_NAMES",
     "REDACT_PLACEHOLDER",
     "RESERVED_SECRET_NAMES",
     "SECRET_WRITE_ARG_KEYS",
@@ -31,6 +34,7 @@ __all__ = [
     "redact_payload",
     "redact_tool_call_arguments",
     "redact_tool_result_payload",
+    "resolve_access_token_for_tool",
     "resolve_for_tool",
     "validate_secret_name",
 ]

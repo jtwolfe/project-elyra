@@ -1,0 +1,52 @@
+# pre-rocm-host-stack.txt
+# host: LuxPrimata
+# recorded: 2026-07-29T12:01:10Z
+# torch before switch:
+torch 2.13.0+cu130
+cuda 13.0
+hip None
+is_available False
+
+## pacman -Q | rg -i rocm|hip|hsa
+comgr 2:7.2.4-1
+hip-runtime-amd 7.2.4-1
+hsa-rocr 7.2.4-1
+rocm-cmake 7.2.4-1
+rocm-core 7.2.4-1
+rocm-device-libs 2:7.2.4-1
+rocm-hip-runtime 7.2.4-1
+rocm-language-runtime 7.2.4-1
+rocm-llvm 2:7.2.4-1
+rocm-smi-lib 7.2.0-2
+rocminfo 7.2.4-1
+starship 1.26.0-1
+
+## rocminfo Marketing Name / gfx (excerpt)
+  Marketing Name:          AMD Ryzen 5 1600X Six-Core Processor
+  Vendor Name:             CPU                                
+  Feature:                 None specified                     
+--
+  Name:                    gfx906                             
+  Uuid:                    GPU-2284206172df8893               
+  Marketing Name:          AMD Radeon VII                     
+  Vendor Name:             AMD                                
+  Feature:                 KERNEL_DISPATCH                    
+--
+      Name:                    amdgcn-amd-amdhsa--gfx906:sramecc+:xnack-
+      Machine Models:          HSA_MACHINE_MODEL_LARGE            
+      Profiles:                HSA_PROFILE_BASE                   
+--
+      Name:                    amdgcn-amd-amdhsa--gfx9-generic:xnack-
+      Machine Models:          HSA_MACHINE_MODEL_LARGE            
+      Profiles:                HSA_PROFILE_BASE                   
+
+## hipconfig -v (first lines)
+7.2.53211-9999
+## ROCM_PATH /opt/rocm
+ROCM_PATH=/opt/rocm
+drwxr-xr-x 1 root root 80 Jul 29 21:13 /opt/rocm
+
+## elyra.toml pin (local uncommitted; not part of freezes commit of toml itself)
+16:embed_enabled = true
+17:embed_backend = "nemotron"
+19:embed_device = "cpu"

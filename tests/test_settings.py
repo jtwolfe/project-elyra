@@ -48,7 +48,7 @@ def test_default_settings_match_design():
     assert s.provider.model_label == "Grok 4.5"
     assert s.provider.model_label == DEFAULT_XAI_MODEL_LABEL
     assert s.provider.base_url == "https://api.x.ai/v1"
-    assert s.provider.credential_source == "grok_build"
+    assert s.provider.credential_source == "xai_oauth"
     assert s.provider.grok_auth_path is None
     assert s.provider.request_timeout_s == 120.0
     assert s.usage.enabled is True
@@ -70,6 +70,77 @@ def test_default_settings_match_design():
     assert s.usage.credits_stale_after_s == 3600.0
     assert s.usage.auto_throttle_model is False
     assert s.usage.throttle_model is None
+    # Memory defaults (Phase 1 on; Phase 2 semantic/embed OFF — KD9).
+    assert s.memory.enabled is True
+    assert s.memory.write_atoms is True
+    assert s.memory.backend == "jsonl"
+    assert s.memory.episodic_fraction == 0.20
+    assert s.memory.episodic_horizon_hours == 24.0
+    assert s.memory.ladder_enabled is True
+    assert s.memory.ladder_max_ms_per_tick == 50
+    assert s.memory.link_across_moments is True
+    assert s.memory.max_tool_atoms_per_moment == 48
+    # Phase 2 semantic/embed knobs default off (no behaviour change).
+    assert s.memory.semantic_enabled is False
+    assert s.memory.embed_enabled is False
+    assert s.memory.parcels_enabled is False
+    assert s.memory.embed_backend == "mock"
+    assert s.memory.embed_device == "auto"
+    assert s.memory.embed_model_id == "nvidia/omni-embed-nemotron-3b"
+    assert s.memory.embed_preload is False
+    assert s.memory.semantic_fraction == 0.12
+    assert s.memory.episodic_fraction_with_semantic == 0.18
+    assert s.memory.temporal_min_fraction == 0.55
+    assert s.memory.semantic_horizon_hours == 168.0
+    assert s.memory.semantic_top_k == 12
+    assert s.memory.semantic_min_score == 0.0
+    assert s.memory.semantic_select_max_ms == 50
+    assert s.memory.encode_query_max_ms == 30
+    assert s.memory.semantic_wait_for_select is True
+    assert s.memory.semantic_wait_max_ms == 15_000
+    assert s.memory.encode_queue_max == 1024
+    assert s.memory.semantic_search_channel == "auto"
+    assert s.memory.embed_joint_for_single_modality is True
+    assert s.memory.joint_repair_max_per_open == 500
+    assert s.memory.joint_repair_max_per_tick == 64
+    assert s.memory.encode_max_ms_per_tick == 100
+    assert s.memory.encode_max_items_per_tick == 4
+    assert s.memory.encode_max_attempts == 3
+    assert s.memory.ann_recent_buffer_max == 256
+    assert s.memory.ann_full_search_below == 2000
+    assert s.memory.ann_optimize_every_n_encodes == 64
+    assert s.memory.ann_optimize_interval_s == 300
+    assert s.memory.ann_optimize_max_ms == 200
+    assert s.memory.ann_ivf_min_vectors == 256
+    assert s.memory.ann_index_channels == ("joint",)
+    assert s.memory.parcel_threshold_chars == 8000
+    assert s.memory.embed_media_max_bytes == 8_000_000
+    assert s.memory.embed_media_max_seconds == 30
+    # Phase 2a directed traversal defaults OFF (KD-A10).
+    assert s.memory.directed_traversal_enabled is False
+    assert s.memory.directed_keep_enabled is False
+    assert s.memory.directed_keep_fraction == 0.08
+    assert s.memory.traverse_expand_max_ms == 80
+    assert s.memory.traverse_start_expand_max_ms == 0
+    assert s.memory.traverse_max_depth == 3
+    assert s.memory.traverse_max_nodes == 48
+    assert s.memory.traverse_max_steps == 8
+    assert s.memory.traverse_max_seeds == 8
+    assert s.memory.traverse_frontier_max == 16
+    assert s.memory.traverse_max_expand_per_step == 3
+    assert s.memory.traverse_keep_max == 16
+    assert s.memory.traverse_keep_adjacent is True
+    assert s.memory.traverse_session_ttl_s == 900
+    assert s.memory.traverse_label_chars == 80
+    assert s.memory.traverse_preview_chars == 400
+    assert s.memory.traverse_inspect_chars_per_id == 800
+    assert s.memory.traverse_inspect_max_ids == 4
+    assert s.memory.traverse_inspect_max_total_chars == 2400
+    assert s.memory.traverse_scratchpad_chars == 200
+    assert s.memory.traverse_parcel_child_cap == 32
+    assert s.memory.traverse_same_moment_k == 4
+    assert s.memory.traverse_semantic_k == 8
+    assert s.memory.traverse_allow_semantic_hops is True
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert not hasattr(s, "context_tokens")
@@ -172,6 +243,426 @@ def test_settings_as_dict_round_structure():
     assert d["usage"]["account_hard_stop_percent"] == 95.0
     assert d["usage"]["credits_base_url"] == "https://cli-chat-proxy.grok.com"
     assert d["continuous"]["enabled"] is False
+    assert d["memory"]["enabled"] is True
+    assert d["memory"]["write_atoms"] is True
+    assert d["memory"]["backend"] == "jsonl"
+
+
+def test_load_settings_memory_toml(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+write_atoms = true
+enabled = false
+backend = "jsonl"
+episodic_fraction = 0.15
+episodic_horizon_hours = 12
+ladder_max_ms_per_tick = 25
+max_tool_atoms_per_moment = 10
+link_across_moments = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.write_atoms is True
+    assert s.memory.enabled is False  # explicit toml override
+    assert s.memory.backend == "jsonl"
+    assert s.memory.episodic_fraction == 0.15
+    assert s.memory.episodic_horizon_hours == 12.0
+    assert s.memory.ladder_max_ms_per_tick == 25
+    assert s.memory.max_tool_atoms_per_moment == 10
+    assert s.memory.link_across_moments is False
+    # Untouched memory defaults preserved
+    assert s.memory.ladder_enabled is True
+    assert s.memory.atom_max_chars == 8000
+
+
+def test_cli_overrides_memory_win_over_toml(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nwrite_atoms = true\nepisodic_fraction = 0.3\n",
+        encoding="utf-8",
+    )
+    base = load_settings(tmp_path)
+    merged = merge_cli_overrides(
+        base,
+        {"memory": {"write_atoms": False, "enabled": True}},
+    )
+    assert merged.memory.write_atoms is False
+    assert merged.memory.enabled is True
+    assert merged.memory.episodic_fraction == 0.3  # from toml
+
+
+def test_invalid_memory_backend_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nbackend = "sqlite"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.backend"):
+        load_settings(tmp_path)
+
+
+def test_invalid_memory_episodic_fraction_raises(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nepisodic_fraction = 1.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.episodic_fraction"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nepisodic_fraction = -0.1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.episodic_fraction"):
+        load_settings(tmp_path)
+
+
+def test_invalid_memory_horizon_and_ladder_ms_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nepisodic_horizon_hours = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.episodic_horizon_hours"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nladder_max_ms_per_tick = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ladder_max_ms_per_tick"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nmax_tool_atoms_per_moment = -5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.max_tool_atoms_per_moment"):
+        load_settings(tmp_path)
+
+
+def test_memory_phase2_semantic_toml_and_defaults(tmp_path):
+    """Phase 2 knobs load from toml; defaults stay off when omitted."""
+    s = load_settings(tmp_path)
+    assert s.memory.semantic_enabled is False
+    assert s.memory.embed_enabled is False
+    assert s.memory.parcels_enabled is False
+
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+semantic_enabled = true
+embed_enabled = true
+embed_backend = "mock"
+embed_device = "cpu"
+semantic_fraction = 0.10
+episodic_fraction_with_semantic = 0.15
+temporal_min_fraction = 0.60
+semantic_horizon_hours = 72.0
+semantic_top_k = 8
+semantic_min_score = 0.25
+semantic_select_max_ms = 40
+encode_queue_max = 64
+encode_max_ms_per_tick = 80
+parcels_enabled = true
+parcel_threshold_chars = 4000
+ann_recent_buffer_max = 128
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s2 = load_settings(tmp_path)
+    assert s2.memory.semantic_enabled is True
+    assert s2.memory.embed_enabled is True
+    assert s2.memory.embed_backend == "mock"
+    assert s2.memory.embed_device == "cpu"
+    assert s2.memory.semantic_fraction == 0.10
+    assert s2.memory.episodic_fraction_with_semantic == 0.15
+    assert s2.memory.temporal_min_fraction == 0.60
+    assert s2.memory.semantic_horizon_hours == 72.0
+    assert s2.memory.semantic_top_k == 8
+    assert s2.memory.semantic_min_score == 0.25
+    assert s2.memory.semantic_select_max_ms == 40
+    assert s2.memory.encode_queue_max == 64
+    assert s2.memory.encode_max_ms_per_tick == 80
+    assert s2.memory.parcels_enabled is True
+    assert s2.memory.parcel_threshold_chars == 4000
+    assert s2.memory.ann_recent_buffer_max == 128
+
+
+def test_invalid_memory_embed_backend_and_device_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nembed_backend = "openai"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.embed_backend"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nembed_device = "tpu"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.embed_device"):
+        load_settings(tmp_path)
+
+
+def test_memory_semantic_search_channel_and_repair_knobs(tmp_path):
+    """KD-R2 / KD-R11 settings defaults + allowlist / range validation."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+semantic_search_channel = "Auto"
+embed_joint_for_single_modality = true
+joint_repair_max_per_open = 100
+joint_repair_max_per_tick = 8
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.semantic_search_channel == "auto"
+    assert s.memory.embed_joint_for_single_modality is True
+    assert s.memory.joint_repair_max_per_open == 100
+    assert s.memory.joint_repair_max_per_tick == 8
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nsemantic_search_channel = "rrf"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.semantic_search_channel"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\njoint_repair_max_per_open = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.joint_repair_max_per_open"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\njoint_repair_max_per_tick = -3\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.joint_repair_max_per_tick"):
+        load_settings(tmp_path)
+
+    # Zero is a valid disable (must not be rewritten to defaults by load).
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+joint_repair_max_per_open = 0
+joint_repair_max_per_tick = 0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s0 = load_settings(tmp_path)
+    assert s0.memory.joint_repair_max_per_open == 0
+    assert s0.memory.joint_repair_max_per_tick == 0
+
+
+def test_memory_embed_backend_device_case_normalized(tmp_path):
+    """toml values are lowercased like open_encoder/select_device."""
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nembed_backend = "Mock"\nembed_device = "CPU"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.embed_backend == "mock"
+    assert s.memory.embed_device == "cpu"
+
+
+def test_invalid_memory_semantic_fractions_raise(tmp_path):
+    for field, bad in (
+        ("semantic_fraction", 1.5),
+        ("semantic_fraction", -0.1),
+        ("episodic_fraction_with_semantic", 2.0),
+        ("temporal_min_fraction", -0.01),
+        ("semantic_min_score", 1.1),
+    ):
+        (tmp_path / "elyra.toml").write_text(
+            f"[memory]\n{field} = {bad}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=f"memory\\.{field}"):
+            load_settings(tmp_path)
+
+
+def test_invalid_memory_semantic_budgets_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsemantic_horizon_hours = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.semantic_horizon_hours"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nembed_media_max_seconds = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.embed_media_max_seconds"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nencode_queue_max = 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.encode_queue_max"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsemantic_select_max_ms = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.semantic_select_max_ms"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_optimize_max_ms = -5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_optimize_max_ms"):
+        load_settings(tmp_path)
+
+
+def test_memory_phase2_zero_budgets_allowed_where_safe(tmp_path):
+    """0 is valid for ms budgets / top_k / optimize counters (off/unlimited)."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+encode_max_ms_per_tick = 0
+encode_max_items_per_tick = 0
+encode_query_max_ms = 0
+semantic_select_max_ms = 0
+semantic_top_k = 0
+ann_optimize_every_n_encodes = 0
+ann_optimize_interval_s = 0
+ann_optimize_max_ms = 0
+parcel_threshold_chars = 0
+embed_media_max_bytes = 0
+semantic_min_score = 0.0
+semantic_fraction = 0.0
+temporal_min_fraction = 1.0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.encode_max_ms_per_tick == 0
+    assert s.memory.semantic_top_k == 0
+    assert s.memory.semantic_min_score == 0.0
+    assert s.memory.semantic_fraction == 0.0
+    assert s.memory.temporal_min_fraction == 1.0
+
+
+def test_memory_semantic_wait_settings(tmp_path):
+    """semantic_wait_for_select / max_ms load + product-band validation."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+semantic_wait_for_select = false
+semantic_wait_max_ms = 8000
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.semantic_wait_for_select is False
+    assert s.memory.semantic_wait_max_ms == 8000
+
+    # Outside product band [1000, 120000] — reject (no silent clamp at load).
+    for bad in (-1, 0, 500, 999, 120_001, 999_999):
+        (tmp_path / "elyra.toml").write_text(
+            f"[memory]\nsemantic_wait_max_ms = {bad}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="memory.semantic_wait_max_ms"):
+            load_settings(tmp_path)
+
+    # Explicit false must not be rewritten via x-or-default.
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsemantic_wait_for_select = false\n",
+        encoding="utf-8",
+    )
+    s_off = load_settings(tmp_path)
+    assert s_off.memory.semantic_wait_for_select is False
+
+
+def test_memory_traverse_settings_toml_and_validation(tmp_path):
+    """Phase 2a directed traversal knobs load + hard-max validation."""
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+directed_traversal_enabled = true
+directed_keep_enabled = true
+directed_keep_fraction = 0.10
+traverse_expand_max_ms = 120
+traverse_start_expand_max_ms = 100
+traverse_max_depth = 4
+traverse_max_nodes = 64
+traverse_max_steps = 10
+traverse_max_seeds = 12
+traverse_frontier_max = 20
+traverse_max_expand_per_step = 5
+traverse_keep_max = 20
+traverse_keep_adjacent = false
+traverse_session_ttl_s = 600
+traverse_label_chars = 100
+traverse_preview_chars = 500
+traverse_inspect_chars_per_id = 1000
+traverse_inspect_max_ids = 6
+traverse_inspect_max_total_chars = 3000
+traverse_scratchpad_chars = 300
+traverse_semantic_k = 10
+traverse_parcel_child_cap = 16
+traverse_same_moment_k = 2
+traverse_allow_semantic_hops = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.directed_traversal_enabled is True
+    assert s.memory.directed_keep_enabled is True
+    assert s.memory.directed_keep_fraction == 0.10
+    assert s.memory.traverse_expand_max_ms == 120
+    assert s.memory.traverse_start_expand_max_ms == 100
+    assert s.memory.traverse_max_depth == 4
+    assert s.memory.traverse_max_nodes == 64
+    assert s.memory.traverse_max_steps == 10
+    assert s.memory.traverse_keep_adjacent is False
+    assert s.memory.traverse_session_ttl_s == 600
+    assert s.memory.traverse_allow_semantic_hops is False
+
+    # Explicit false must not flip via or-default (past issue).
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+directed_traversal_enabled = false
+directed_keep_enabled = false
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s_off = load_settings(tmp_path)
+    assert s_off.memory.directed_traversal_enabled is False
+    assert s_off.memory.directed_keep_enabled is False
+
+    # Hard max rejects (design budgets table).
+    for key, bad in (
+        ("traverse_expand_max_ms", 501),
+        ("traverse_max_depth", 7),
+        ("traverse_max_nodes", 129),
+        ("traverse_max_steps", 17),
+        ("traverse_session_ttl_s", 3601),
+        ("traverse_label_chars", 161),
+        ("traverse_preview_chars", 801),
+        ("directed_keep_fraction", 1.5),
+    ):
+        (tmp_path / "elyra.toml").write_text(
+            f"[memory]\n{key} = {bad}\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match=f"memory\\.{key}"):
+            load_settings(tmp_path)
+
+    # Negative rejected.
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\ntraverse_max_steps = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.traverse_max_steps"):
+        load_settings(tmp_path)
 
 
 def test_load_settings_provider_and_usage_toml(tmp_path):
@@ -691,3 +1182,115 @@ def test_allowed_repo_roots_rejects_non_str_elements():
             default_settings(),
             {"tools": {"allowed_repo_roots": ["/ok", 1]}},
         )
+
+
+def test_memory_ann_ivf_min_and_index_channels_defaults():
+    from elyra.settings import default_settings
+
+    s = default_settings()
+    assert s.memory.ann_ivf_min_vectors == 256
+    assert s.memory.ann_index_channels == ("joint",)
+    # KD-R4: lance_native is default primary search path.
+    assert s.memory.ann_search_backend == "lance_native"
+
+
+def test_memory_ann_search_backend_toml_and_allowlist(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_search_backend = "Python"\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_search_backend == "python"
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_search_backend = "lance_native"\n',
+        encoding="utf-8",
+    )
+    s2 = load_settings(tmp_path)
+    assert s2.memory.ann_search_backend == "lance_native"
+
+
+def test_memory_ann_search_backend_invalid_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_search_backend = "faiss"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_search_backend"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_ivf_min_and_channels_toml(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        """
+[memory]
+ann_ivf_min_vectors = 128
+ann_index_channels = ["joint", "text"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_ivf_min_vectors == 128
+    assert s.memory.ann_index_channels == ("joint", "text")
+
+
+def test_memory_ann_ivf_min_zero_allowed(tmp_path):
+    """0 is valid (always attempt IVF); must not be rewritten to default 256."""
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_ivf_min_vectors = 0\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_ivf_min_vectors == 0
+
+
+def test_memory_ann_ivf_min_negative_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_ivf_min_vectors = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_ivf_min_vectors"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_index_channels_invalid_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_index_channels = ["joint", "not_a_channel"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_index_channels"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_index_channels_empty_raises(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nann_index_channels = []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ann_index_channels"):
+        load_settings(tmp_path)
+
+
+def test_memory_ann_index_channels_normalizes_emb_prefix(tmp_path):
+    from elyra.settings import load_settings
+
+    (tmp_path / "elyra.toml").write_text(
+        '[memory]\nann_index_channels = ["emb_joint", "text"]\n',
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.ann_index_channels == ("joint", "text")

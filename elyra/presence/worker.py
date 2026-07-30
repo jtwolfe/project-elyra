@@ -7,7 +7,7 @@ Out of scope: HTTP/web, tool internals, glass UI panels.
 
 Public API: enqueue_wake, enqueue_user_message, interject, resolve_user_input,
 busy, active_moment_id, pending_wait, status_snapshot, reset_runtime_state,
-set_continuous_enabled, set_dev_speed.
+set_continuous_enabled, set_dev_speed, set_semantic_wait.
 Must not import runtime.web.
 """
 
@@ -17,8 +17,9 @@ import logging
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
@@ -49,6 +50,12 @@ from elyra.runtime.dev_speed import (
     effective_hop_delay_seconds,
     load_dev_speed_runtime,
     save_dev_speed_runtime,
+)
+from elyra.runtime.semantic_wait import (
+    SemanticWaitState,
+    load_semantic_wait_runtime,
+    save_semantic_wait_runtime,
+    semantic_wait_status_block,
 )
 from elyra.presence.interject import (
     REASON_BUFFER_FULL,
@@ -101,6 +108,63 @@ RunDoLoopFn = Callable[..., DoLoopResult]
 # Goal / task statuses that count as open work for outer moment_continue (K18).
 _OPEN_GOAL_STATUSES = frozenset({"open", "review"})
 _OPEN_TASK_STATUSES = frozenset({"ready", "in_progress", "blocked"})
+
+
+def _media_ids_from_wake(
+    wake: WakeItem,
+    *,
+    paths: ElyraPaths | None = None,
+) -> tuple[str, ...]:
+    """Resolve Stretch-1 media content ids for a social wake (best-effort).
+
+    Prefers payload ``media_ids`` / attachment ids; falls back to glass row
+    attachments for ``message_id`` when present.
+    """
+    payload = wake.payload or {}
+    raw = payload.get("media_ids")
+    if raw is None:
+        raw = payload.get("attachment_ids")
+    ids: list[str] = []
+    if isinstance(raw, str) and raw.strip():
+        ids.append(raw.strip())
+    elif isinstance(raw, (list, tuple)):
+        for x in raw:
+            if x:
+                ids.append(str(x))
+    # Attachment dicts may be embedded on the wake payload.
+    atts = payload.get("attachments")
+    if isinstance(atts, (list, tuple)):
+        for att in atts:
+            if isinstance(att, Mapping):
+                aid = att.get("id") or att.get("media_id")
+                if aid:
+                    ids.append(str(aid))
+            elif isinstance(att, str) and att.strip():
+                ids.append(att.strip())
+    # Glass row lookup when only message_id is known.
+    if not ids and payload.get("message_id") and paths is not None:
+        try:
+            from elyra.messages import get_message
+
+            row = get_message(str(payload["message_id"]), paths=paths)
+            if isinstance(row, dict):
+                glass_atts = row.get("attachments") or []
+                if isinstance(glass_atts, (list, tuple)):
+                    for att in glass_atts:
+                        if isinstance(att, dict):
+                            aid = att.get("id")
+                            if aid:
+                                ids.append(str(aid))
+        except Exception:  # noqa: BLE001
+            _LOG.exception("wake media_ids glass lookup failed")
+    # De-dupe preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for mid in ids:
+        if mid not in seen:
+            seen.add(mid)
+            out.append(mid)
+    return tuple(out)
 
 
 def _why_now(wake: WakeItem) -> str:
@@ -393,6 +457,33 @@ class PresenceWorker:
         )
         # Dev-speed pacing (default ON): inter-hop pause for followable glass.
         self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
+        # Semantic wait-for-select (default ON): keep slow encodes for meal pack.
+        # Missing runtime JSON seeds from settings.memory (elyra.toml).
+        self._semantic_wait: SemanticWaitState = load_semantic_wait_runtime(
+            paths.data_dir,
+            defaults=self.settings.memory,
+        )
+
+        # Stretch 2 memory store (lazy). Defaults write_atoms=true / enabled=true
+        # → never opened; meal still legacy until PR6.
+        self._memory: Any | None = None
+        self._memory_open_attempted = False
+        self._memory_open_failed = False
+        # Phase 2 encode queue + embedder + EmbeddingIndex (lazy; store open).
+        self._encode_queue: Any | None = None
+        self._embedder: Any | None = None
+        self._embedder_open_failed = False
+        self._embedding_index: Any | None = None
+        self._embed_catchup_marked: int = 0  # process-life OQ4 none→pending count
+        # Last labeled meal package inspect payload (glass Memory Context tab).
+        self._last_meal_snapshot: dict[str, Any] | None = None
+        # Phase 2a directed traversal (PR-A2): process-local session registry.
+        # Flags default off — registry is inert until directed_traversal_enabled.
+        from elyra.memory.traverse import TraversalRegistry
+
+        self._traversal: TraversalRegistry = TraversalRegistry(
+            settings=self.settings.memory
+        )
 
         self._phase: str = PHASE_IDLE
         self._busy = False
@@ -493,6 +584,57 @@ class PresenceWorker:
                     or abs(prev_delay - float(self._dev_speed.delay_seconds)) > 1e-9
                 ),
                 "dev_speed": block,
+            }
+
+    def set_semantic_wait(
+        self,
+        *,
+        enabled: bool | None = None,
+        max_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Toggle / set meal semantic wait ceiling; persist runtime JSON.
+
+        When wait is on, ``compose_meal`` → ``select_semantic`` uses a long
+        ceiling and keeps finished slow encodes (CPU dogfood). Does not invent
+        wakes. When both args are None, returns current state.
+        """
+        with self._lock:
+            snappy = int(self.settings.memory.semantic_select_max_ms)
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "semantic_wait": semantic_wait_status_block(
+                        self._semantic_wait, snappy_max_ms=snappy
+                    ),
+                }
+            prev_en = bool(self._semantic_wait.enabled)
+            prev_max = int(self._semantic_wait.max_ms)
+            if enabled is not None:
+                self._semantic_wait.enabled = bool(enabled)
+            if max_ms is not None:
+                from elyra.memory.config import clamp_semantic_wait_max_ms
+
+                self._semantic_wait.max_ms = clamp_semantic_wait_max_ms(max_ms)
+            try:
+                save_semantic_wait_runtime(
+                    self.paths.data_dir,
+                    enabled=bool(self._semantic_wait.enabled),
+                    max_ms=int(self._semantic_wait.max_ms),
+                    defaults=self.settings.memory,
+                )
+            except OSError as exc:
+                _LOG.warning("persist semantic_wait.json failed: %s", exc)
+            block = semantic_wait_status_block(
+                self._semantic_wait, snappy_max_ms=snappy
+            )
+            return {
+                "ok": True,
+                "changed": (
+                    prev_en != bool(self._semantic_wait.enabled)
+                    or prev_max != int(self._semantic_wait.max_ms)
+                ),
+                "semantic_wait": block,
             }
 
     def reset_runtime_state(
@@ -919,7 +1061,14 @@ class PresenceWorker:
                     pending_moment_continues=pending_continues,
                 ),
                 "dev_speed": dev_speed_status_block(self._dev_speed),
+                "semantic_wait": semantic_wait_status_block(
+                    self._semantic_wait,
+                    snappy_max_ms=int(
+                        self.settings.memory.semantic_select_max_ms
+                    ),
+                ),
                 "context": context_block,
+                "memory": self._memory_status_block(),
             }
 
     # ------------------------------------------------------------------
@@ -931,6 +1080,7 @@ class PresenceWorker:
         _LOG.info("presence worker started")
         try:
             self._startup_recover()
+            self._ensure_memory_store()
             self._started = True
             while not self._stop.is_set():
                 wake: WakeItem | None = None
@@ -941,6 +1091,16 @@ class PresenceWorker:
                         # Still fire due timers/waits while idle.
                         with self._lock:
                             self._fire_due_unlocked()
+                        # Ladder refresh OUTSIDE lock (PR5 normative placement).
+                        self._idle_memory_ladder()
+                        # Corpus encode drain OUTSIDE lock (KD2 / KD16).
+                        self._idle_memory_encode()
+                        # KD-R11: joint-copy repair continue (open/idle only).
+                        self._idle_memory_joint_repair()
+                        # ANN optimize OUTSIDE lock — never mid-hop (KD4).
+                        self._idle_memory_optimize()
+                        # Phase 2a: abandon idle active TraversalSession (TTL).
+                        self._idle_traversal_ttl()
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
@@ -996,6 +1156,622 @@ class PresenceWorker:
             self._timers.check_timeouts()
         except Exception:  # noqa: BLE001
             _LOG.exception("timer/wait poll failed")
+
+    def _ensure_memory_store(self) -> Any | None:
+        """Open MemoryStore once when write_atoms or enabled; never raise.
+
+        Defaults both false → returns None without opening (legacy path).
+        On open failure: log once, leave ``self._memory`` None for the life of
+        the worker (promote/ladder become no-ops).
+        """
+        mem_cfg = self.settings.memory
+        if not (mem_cfg.write_atoms or mem_cfg.enabled):
+            return None
+        if self._memory is not None:
+            return self._memory
+        if self._memory_open_failed:
+            return None
+        if self._memory_open_attempted and self._memory is None:
+            return None
+        self._memory_open_attempted = True
+        try:
+            from elyra.memory.store import open_memory_store
+
+            self._memory = open_memory_store(self.paths, mem_cfg)
+            self._install_encode_hooks(self._memory, mem_cfg)
+            self._ensure_embedding_index()
+            return self._memory
+        except Exception:  # noqa: BLE001 — store down must not kill presence
+            self._memory_open_failed = True
+            self._memory = None
+            _LOG.exception("memory store open failed; atoms disabled this run")
+            return None
+
+    def _install_encode_hooks(self, store: Any, mem_cfg: Any) -> None:
+        """Install store write hook + EncodeQueue (KD16). Best-effort."""
+        try:
+            from elyra.memory.embed.queue import EncodeQueue
+
+            maxsize = int(getattr(mem_cfg, "encode_queue_max", 1024) or 1024)
+            queue = EncodeQueue(maxsize=maxsize)
+            self._encode_queue = queue
+
+            def _on_written(atom: Any) -> None:
+                # Hook must never raise to put_atom (store already guards).
+                try:
+                    cfg = self.settings.memory
+                    if not cfg.semantic_enabled:
+                        return
+                    # Only enqueue when drain can run; otherwise backlog
+                    # overflows mark atoms skipped (semantic+embed-off must
+                    # leave pending until embed is enabled — KD intent).
+                    # Idle pending scan fills the queue once embed turns on.
+                    if not cfg.embed_enabled:
+                        return
+                    if getattr(atom, "embedding_status", None) != "pending":
+                        return
+                    # KD16 re-put: already encode-ok with same content → no-op.
+                    meta = getattr(atom, "meta", None) or {}
+                    if meta.get("embed_encode_ok"):
+                        try:
+                            from elyra.memory.embed.encode import (
+                                content_fingerprint,
+                            )
+
+                            if meta.get("embed_content_fp") == content_fingerprint(
+                                atom
+                            ):
+                                return
+                        except Exception:  # noqa: BLE001
+                            pass
+                    queue.enqueue(atom.atom_id, store=store)
+                except Exception:  # noqa: BLE001
+                    _LOG.exception(
+                        "encode write hook failed atom_id=%s",
+                        getattr(atom, "atom_id", "?"),
+                    )
+
+            set_hook = getattr(store, "set_write_hook", None)
+            if callable(set_hook):
+                set_hook(_on_written)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("install encode hooks failed")
+
+    def _ensure_embedder(self) -> Any | None:
+        """Open embedder once when embed_enabled; never raise."""
+        mem_cfg = self.settings.memory
+        if not mem_cfg.embed_enabled:
+            return None
+        if self._embedder is not None:
+            return self._embedder
+        if self._embedder_open_failed:
+            return None
+        try:
+            from elyra.memory.embed.runtime import open_encoder
+
+            self._embedder = open_encoder(mem_cfg)
+            return self._embedder
+        except Exception:  # noqa: BLE001
+            self._embedder_open_failed = True
+            self._embedder = None
+            _LOG.exception("embedder open failed; encode drain disabled this run")
+            return None
+
+    def _ensure_embedding_index(self) -> Any | None:
+        """Open EmbeddingIndex once for the memory store (KD4 freshness).
+
+        Best-effort; Null index for JSONL. Lance path seeds buffer / full mode
+        on open. Never raises into the presence loop.
+        """
+        if self._embedding_index is not None:
+            return self._embedding_index
+        store = self._memory
+        if store is None:
+            return None
+        try:
+            from elyra.memory.index import open_embedding_index
+
+            self._embedding_index = open_embedding_index(
+                store, settings=self.settings.memory
+            )
+            return self._embedding_index
+        except Exception:  # noqa: BLE001
+            _LOG.exception("embedding index open failed")
+            self._embedding_index = None
+            return None
+
+    def _memory_ladder_active(self) -> bool:
+        """True when ladder should run on idle / finalize (PR5 placement)."""
+        mem_cfg = self.settings.memory
+        if not mem_cfg.ladder_enabled:
+            return False
+        if not (mem_cfg.write_atoms or mem_cfg.enabled):
+            return False
+        return self._ensure_memory_store() is not None
+
+    def _memory_meal_active(self) -> bool:
+        """True when rebuild_outer should use labeled memory meal (PR6).
+
+        Requires ``memory.enabled`` and a healthy open store. Flag off or
+        store down → legacy assemble_outer_meal + expand.
+        """
+        if not self.settings.memory.enabled:
+            return False
+        store = self._ensure_memory_store()
+        if store is None:
+            return False
+        try:
+            health = store.health()
+        except Exception:  # noqa: BLE001
+            return False
+        if not isinstance(health, Mapping):
+            return False
+        return bool(health.get("ok"))
+
+    def _memory_status_block(self) -> dict[str, Any]:
+        """Lightweight memory health for ``/api/status`` (optional PR6)."""
+        mem_cfg = self.settings.memory
+        block: dict[str, Any] = {
+            "enabled": bool(mem_cfg.enabled),
+            "write_atoms": bool(mem_cfg.write_atoms),
+            "backend": str(mem_cfg.backend),
+            "store_open": self._memory is not None,
+            "ok": False,
+            "has_last_meal": self._last_meal_snapshot is not None,
+        }
+        if self._memory is None:
+            if self._memory_open_failed:
+                block["error"] = "open_failed"
+            elif not (mem_cfg.write_atoms or mem_cfg.enabled):
+                block["error"] = "disabled"
+            return block
+        try:
+            health = self._memory.health()
+            if isinstance(health, Mapping):
+                block["ok"] = bool(health.get("ok"))
+                for key in ("atom_count", "line_count", "backend", "error"):
+                    if key in health:
+                        block[key] = health[key]
+            else:
+                block["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            block["ok"] = False
+            block["error"] = str(exc) or type(exc).__name__
+        return block
+
+    def last_meal_snapshot(self) -> dict[str, Any] | None:
+        """Return a copy of the last composed meal inspect payload, if any."""
+        with self._lock:
+            snap = self._last_meal_snapshot
+            return dict(snap) if isinstance(snap, dict) else None
+
+    # ------------------------------------------------------------------
+    # Phase 2a GraphView + TraversalSession (PR-A2)
+    # ------------------------------------------------------------------
+
+    @property
+    def traversal(self) -> Any:
+        """Process-local TraversalRegistry (tools inject via extras later)."""
+        return self._traversal
+
+    def graph_view(self) -> Any | None:
+        """Build a GraphView from the open store + warm embedder if available.
+
+        Never cold-loads torch. Returns None when the memory store is down.
+        Structural walks work without index/embedder; semantic hops require
+        a non-null index and already-warm embedder (GraphView policy).
+        """
+        store = self._ensure_memory_store()
+        if store is None:
+            return None
+        try:
+            from elyra.memory.graph import GraphView
+
+            mem_cfg = self.settings.memory
+            self._traversal.bind_settings(mem_cfg)
+            index = self._ensure_embedding_index()
+            # Warm only: never call open_encoder solely for graph hops.
+            embedder = self._embedder
+            if embedder is None and mem_cfg.embed_enabled:
+                # Only reuse if already opened elsewhere; do not force load.
+                pass
+            return GraphView(
+                store,
+                index=index,
+                embedder=embedder,
+                settings=mem_cfg,
+            )
+        except Exception:  # noqa: BLE001 — fail closed for tools/glass
+            _LOG.exception("graph_view factory failed")
+            return None
+
+    def _idle_traversal_ttl(self) -> None:
+        """Abandon active traversal session when idle past traverse_session_ttl_s."""
+        try:
+            self._traversal.bind_settings(self.settings.memory)
+            dropped = self._traversal.sweep_idle()
+            if dropped is not None:
+                _LOG.info(
+                    "traversal idle TTL: timed_out session_id=%s",
+                    dropped.session_id,
+                )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("traversal idle TTL sweep failed")
+
+    def _close_traversal_for_moment(self, moment_id: str | None) -> None:
+        """Moment end hygiene: abandon active; clear sticky keep + last_session."""
+        try:
+            self._traversal.on_moment_close(moment_id)
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "traversal moment-close cleanup failed moment_id=%s", moment_id
+            )
+
+    def _last_confirmed_keep_for_meal(
+        self, moment_id: str | None = None
+    ) -> tuple[list[str], str | None]:
+        """Thin keep-set for next compose_meal (KD-A16 — no soft re-outer).
+
+        Returns ``(keep_ids, walk_summary_nl)`` from sticky
+        ``last_confirmed_keep`` only (not active provisional keeps).
+        """
+        try:
+            snap = self._traversal.get_last_confirmed_keep(moment_id)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("read last_confirmed_keep for meal failed")
+            return [], None
+        if snap is None:
+            return [], None
+        ids = [str(i) for i in (snap.keep_ids or ()) if i]
+        summary = (snap.walk_summary_nl or "").strip() or None
+        return ids, summary
+
+    def _record_last_meal_snapshot(
+        self,
+        package: Any,
+        *,
+        system_text: str = "",
+        orient_text: str = "",
+        budget_tokens: int | None = None,
+        source: str = "rebuild_outer",
+    ) -> None:
+        """Best-effort: stash inspect payload for glass Memory Context tab."""
+        try:
+            from elyra.memory.inspect import meal_package_to_inspect
+            from elyra.memory.types import utc_now_iso
+
+            payload = meal_package_to_inspect(
+                package,
+                system_text=system_text,
+                orient_text=orient_text,
+                budget_tokens=budget_tokens,
+                source=source,
+                recorded_at=utc_now_iso(),
+            )
+            with self._lock:
+                self._last_meal_snapshot = payload
+        except Exception:  # noqa: BLE001 — never break rebuild for glass
+            _LOG.exception("record last meal snapshot failed")
+
+    def _idle_memory_ladder(self) -> None:
+        """Budgeted period-summary refresh outside the state lock (idle only)."""
+        if not self._memory_ladder_active():
+            return
+        store = self._memory
+        if store is None:
+            return
+        try:
+            from elyra.memory.ladder import refresh_due
+
+            max_ms = int(self.settings.memory.ladder_max_ms_per_tick)
+            refresh_due(store, max_ms=max_ms)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("memory ladder refresh_due failed")
+        self._maybe_compact_memory_store()
+
+    def _idle_memory_encode(self) -> None:
+        """Idle-only corpus encode: pending scan + queue drain (KD2 / KD16).
+
+        Outside the state lock; never runs in-moment / hop path. Drain only
+        when ``embed_enabled``; hooks still enqueue when ``semantic_enabled``.
+        PR2 never marks ``ready`` without an index (leave pending).
+        """
+        mem_cfg = self.settings.memory
+        if not mem_cfg.semantic_enabled:
+            return
+        if not mem_cfg.embed_enabled:
+            return
+        store = self._memory
+        if store is None:
+            store = self._ensure_memory_store()
+        if store is None:
+            return
+        queue = self._encode_queue
+        if queue is None:
+            # Store opened before hooks existed or install failed — re-install.
+            self._install_encode_hooks(store, mem_cfg)
+            queue = self._encode_queue
+        if queue is None:
+            return
+        try:
+            from elyra.memory.embed.queue import (
+                catchup_none_atoms_for_encode,
+                scan_pending_into_queue,
+            )
+
+            max_items = max(1, int(mem_cfg.encode_max_items_per_tick or 4))
+            # OQ4: historical atoms written before semantic_on stay ``none``;
+            # flip a budgeted batch to pending so drain can fill vectors.
+            # Process-lifetime budget: stop once catchup_max marked this run.
+            catchup_budget = int(getattr(mem_cfg, "embed_catchup_max", 500) or 0)
+            already = int(getattr(self, "_embed_catchup_marked", 0) or 0)
+            if catchup_budget > 0 and already < catchup_budget:
+                per_tick = int(
+                    getattr(mem_cfg, "embed_catchup_per_tick", 32) or 32
+                )
+                room = min(per_tick, catchup_budget - already)
+                n = catchup_none_atoms_for_encode(
+                    store,
+                    limit=room,
+                    horizon_hours=float(
+                        getattr(mem_cfg, "embed_catchup_horizon_hours", 168.0)
+                        or 168.0
+                    ),
+                )
+                self._embed_catchup_marked = already + int(n or 0)
+            scan_pending_into_queue(
+                store,
+                queue,
+                limit=max_items * 4,
+            )
+            embedder = self._ensure_embedder()
+            if embedder is None:
+                return
+            media_store = None
+            try:
+                from elyra.media.store import MediaStore
+
+                media_store = MediaStore(self.paths)
+            except Exception:  # noqa: BLE001 — media optional for encode
+                _LOG.debug("MediaStore open for encode failed", exc_info=True)
+            index = self._ensure_embedding_index()
+            queue.drain(
+                store,
+                embedder,
+                index=index,
+                max_ms=int(mem_cfg.encode_max_ms_per_tick or 100),
+                max_items=max_items,
+                max_attempts=int(mem_cfg.encode_max_attempts or 3),
+                media_store=media_store,
+                settings=mem_cfg,  # threads embed_media_max_bytes/seconds
+            )
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("memory idle encode drain failed")
+
+    def rebuild_vector_index(self, *, max_ms: int | None = None) -> dict[str, Any]:
+        """Operator-triggered ANN index rebuild (glass Vectors button).
+
+        ANN here means **approximate nearest-neighbor** vector index (Lance),
+        not re-loading Nemotron. Rebuilds the search index over **already
+        stored** vectors; does not re-encode atoms. Best-effort; never raises.
+        """
+        mem_cfg = self.settings.memory
+        store = self._memory
+        if store is None and (mem_cfg.write_atoms or mem_cfg.enabled or mem_cfg.semantic_enabled):
+            store = self._ensure_memory_store()
+        if store is None:
+            err = "store_unavailable"
+            return {
+                "ok": False,
+                "error": err,
+                "optimized": False,
+                "notes": [err],
+                "note": err,
+            }
+        index = self._ensure_embedding_index()
+        if index is None:
+            err = "index_unavailable"
+            return {
+                "ok": False,
+                "error": err,
+                "optimized": False,
+                "notes": [err],
+                "note": err,
+            }
+        try:
+            seed_fn = getattr(index, "seed_buffer", None)
+            if callable(seed_fn):
+                try:
+                    seed_fn(max_ms=int(mem_cfg.ann_optimize_max_ms or 200))
+                except Exception:  # noqa: BLE001
+                    _LOG.debug("index seed_buffer on rebuild failed", exc_info=True)
+            # Operator button: allow longer than idle soft budget (default 5s).
+            budget = max_ms
+            if budget is None:
+                idle = int(getattr(mem_cfg, "ann_optimize_max_ms", 200) or 200)
+                budget = max(idle, 5000)
+            result = index.optimize(max_ms=int(budget))
+            if not isinstance(result, dict):
+                result = {"ok": True, "optimized": bool(result), "result": result}
+            health = index.health() if hasattr(index, "health") else {}
+            out = dict(result)
+            out["health"] = health if isinstance(health, dict) else {}
+            out.setdefault("ok", True)
+            # KD-R3 rebuild honesty: always expose notes[] (and legacy note join).
+            notes = out.get("notes")
+            if not isinstance(notes, list):
+                legacy = out.get("note")
+                notes = [str(legacy)] if legacy else []
+                out["notes"] = notes
+            if "note" not in out or not out.get("note"):
+                out["note"] = "; ".join(str(n) for n in notes) if notes else ""
+            _LOG.info("memory vector index rebuild: %s", out)
+            return out
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("memory vector index rebuild failed")
+            return {
+                "ok": False,
+                "error": str(exc) or type(exc).__name__,
+                "optimized": False,
+                "notes": [str(exc) or type(exc).__name__],
+                "note": str(exc) or type(exc).__name__,
+            }
+
+    def _idle_memory_joint_repair(self) -> None:
+        """Idle-only joint-copy repair continue (KD-R11). Never mid-hop / meal.
+
+        Fills emb_joint = copy(sole modality) for ready rows missing joint.
+        Caps via ``joint_repair_max_per_tick``. No encoder.
+        """
+        mem_cfg = self.settings.memory
+        if not (mem_cfg.semantic_enabled or self._embedding_index is not None):
+            return
+        store = self._memory
+        if store is None and (
+            mem_cfg.write_atoms or mem_cfg.enabled or mem_cfg.semantic_enabled
+        ):
+            store = self._ensure_memory_store()
+        if store is None:
+            return
+        index = self._ensure_embedding_index()
+        if index is None:
+            return
+        try:
+            health = index.health() if hasattr(index, "health") else {}
+            remaining = 0
+            if isinstance(health, dict):
+                remaining = int(health.get("joint_repair_remaining") or 0)
+            if remaining <= 0:
+                # Also check store directly when index health lacks the field.
+                store_fn = getattr(store, "joint_repair_remaining", None)
+                if callable(store_fn):
+                    remaining = int(store_fn() or 0)
+            if remaining <= 0:
+                return
+            # 0 is a valid disable; only None/missing falls back to default 64.
+            raw_tick = getattr(mem_cfg, "joint_repair_max_per_tick", None)
+            limit = 64 if raw_tick is None else max(0, int(raw_tick))
+            if limit <= 0:
+                return
+            repair_fn = getattr(index, "repair_joint_copies", None)
+            if not callable(repair_fn):
+                repair_fn = getattr(store, "repair_joint_copies", None)
+            if callable(repair_fn):
+                result = repair_fn(limit=limit)
+                _LOG.debug("memory joint repair: %s", result)
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("memory idle joint repair failed")
+
+    def _idle_memory_optimize(self) -> None:
+        """Idle-only ANN optimize / buffer seed (KD4). Never mid-hop.
+
+        Runs outside the state lock after encode drain. Soft ``ann_optimize_max_ms``
+        only; meal hard budget is PR6.
+        """
+        mem_cfg = self.settings.memory
+        # Index may exist for Lance even when semantic is off (vectors on disk);
+        # only schedule work when semantic path is active or index already open.
+        if not (mem_cfg.semantic_enabled or self._embedding_index is not None):
+            return
+        store = self._memory
+        if store is None and (mem_cfg.write_atoms or mem_cfg.enabled):
+            store = self._ensure_memory_store()
+        if store is None:
+            return
+        index = self._ensure_embedding_index()
+        if index is None:
+            return
+        try:
+            # Continue budgeted seed if open left it incomplete.
+            seed_fn = getattr(index, "seed_buffer", None)
+            if callable(seed_fn):
+                try:
+                    h0 = index.health() if hasattr(index, "health") else {}
+                    if isinstance(h0, dict) and h0.get("seed_incomplete"):
+                        seed_fn(max_ms=int(mem_cfg.ann_optimize_max_ms or 200))
+                except Exception:  # noqa: BLE001
+                    _LOG.debug("index seed_buffer failed", exc_info=True)
+
+            health = index.health() if hasattr(index, "health") else {}
+            if not isinstance(health, dict):
+                return
+            if not health.get("index_stale"):
+                return
+            max_ms = int(getattr(mem_cfg, "ann_optimize_max_ms", 200) or 200)
+            result = index.optimize(max_ms=max_ms)
+            _LOG.debug("memory index optimize: %s", result)
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("memory idle index optimize failed")
+
+    def _finalize_memory_ladder_15m(self) -> None:
+        """Refresh the 15m window containing now after moment close (budgeted)."""
+        if not self._memory_ladder_active():
+            return
+        store = self._memory
+        if store is None:
+            return
+        try:
+            from elyra.memory.ladder import refresh_window
+
+            refresh_window(store, "15m", datetime.now(UTC))
+        except Exception:  # noqa: BLE001
+            _LOG.exception("memory ladder 15m finalize refresh failed")
+        self._maybe_compact_memory_store()
+
+    def _maybe_compact_memory_store(self) -> None:
+        """Idle-only JSONL rewrite when dirty lines / size exceed thresholds."""
+        store = self._memory
+        if store is None:
+            return
+        maybe = getattr(store, "maybe_compact", None)
+        if not callable(maybe):
+            return
+        try:
+            if maybe():
+                _LOG.info("memory store compacted (jsonl latest-wins rewrite)")
+        except Exception:  # noqa: BLE001
+            _LOG.exception("memory store maybe_compact failed")
+
+    def _promote_social_wake_unlocked(
+        self,
+        wake: WakeItem,
+        moment_id: str,
+        why: str,
+    ) -> None:
+        """Promote social wake observation after open_moment (caller holds lock).
+
+        Best-effort: never raises; no-op when write_atoms false or store down.
+        Non-social wakes must not call this (R6 / BUG-wake-01 density).
+        """
+        mem_cfg = self.settings.memory
+        if not mem_cfg.write_atoms:
+            return
+        store = self._ensure_memory_store()
+        if store is None:
+            return
+        payload = wake.payload or {}
+        content = payload.get("content")
+        content_s = str(content) if content is not None else None
+        message_id = payload.get("message_id")
+        message_id_s = str(message_id) if message_id is not None else None
+        media_ids = _media_ids_from_wake(wake, paths=self.paths)
+        try:
+            from elyra.memory.promote import promote_wake_observation
+
+            promote_wake_observation(
+                store,
+                moment_id,
+                content=content_s,
+                message_id=message_id_s,
+                media_ids=media_ids,
+                why_now=why,
+                settings=mem_cfg,
+            )
+        except Exception:  # noqa: BLE001 — never abort claim/open
+            _LOG.exception(
+                "memory promote_wake_observation failed moment_id=%s",
+                moment_id,
+            )
 
     def _claim_and_open(self) -> tuple[WakeItem, str] | None:
         """Under lock: fire due work, claim one wake, open moment, set phase.
@@ -1058,6 +1834,9 @@ class PresenceWorker:
             # User-band claim resets continuous streak (design C runtime state).
             if wake.kind in SOCIAL_WAKE_KINDS:
                 self._continuous.streak = 0
+                # Promote social wake observation while still under lock is fine
+                # (best-effort; failures never abort open). Call after open_moment.
+                self._promote_social_wake_unlocked(wake, moment_id, why)
 
             self._phase = PHASE_IN_MOMENT
             self._busy = True
@@ -1104,9 +1883,11 @@ class PresenceWorker:
             # USER inject: work-origin policy (K13/K19) — social speaker, else
             # linked goal/task created_in_context (PR4), else empty — never
             # blind "operator" fallback.
-            # Multimodal (KD20/KD25): every rebuild re-runs assemble(retain_ids)
-            # → expand_meal_for_provider → strip_meal_wire_fields. Never stash
-            # expanded parts across hops; never expand after ids are stripped.
+            # Multimodal (KD20/KD25): every rebuild re-runs assemble/compose
+            # → expand → strip_meal_wire_fields. Never stash expanded parts
+            # across hops; never expand after ids are stripped.
+            # Memory path (PR6): when enabled + store healthy use labeled meal
+            # (no full sliding glass) + expand_memory_meal_for_provider.
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
@@ -1123,28 +1904,18 @@ class PresenceWorker:
                 protect_goal_ids.add(str(payload["goal_id"]))
             if payload.get("task_id"):
                 protect_task_ids.add(str(payload["task_id"]))
-            meal = assemble_outer_meal(
-                glass_history=glass,
-                settings=self.settings,
-                paths=self.paths,
-                self_digest=self_digest,
-                user_digest=user_digest,
-                why_now=why,
-                goals=format_goals_slice(
-                    goals_list,
-                    max_tokens=loop.orient_goals_max_tokens,
-                    protect_goal_ids=protect_goal_ids or None,
-                    protect_task_ids=protect_task_ids or None,
-                ),
-                skill_catalog=format_skill_catalog(
-                    catalog,
-                    max_tokens=loop.orient_skill_catalog_max_tokens,
-                ),
-                skill_bias=format_skill_bias(wake.kind, payload, goals_list),
-                wake_content=wake_content_s,
-                wake_message_id=wake_message_id_s,
-                retain_ids=True,
+            goals_slice = format_goals_slice(
+                goals_list,
+                max_tokens=loop.orient_goals_max_tokens,
+                protect_goal_ids=protect_goal_ids or None,
+                protect_task_ids=protect_task_ids or None,
             )
+            skill_catalog_s = format_skill_catalog(
+                catalog,
+                max_tokens=loop.orient_skill_catalog_max_tokens,
+            )
+            skill_bias_s = format_skill_bias(wake.kind, payload, goals_list)
+
             from elyra.media import MediaStore
             from elyra.media.prompt import (
                 expand_meal_for_provider,
@@ -1152,18 +1923,128 @@ class PresenceWorker:
                 strip_meal_wire_fields,
             )
 
+            media_store = MediaStore(self.paths)
+            glass_by_id = index_glass(glass)
+            provider_name = self.settings.provider.name
+
+            use_memory_meal = self._memory_meal_active()
+            if use_memory_meal:
+                try:
+                    from elyra.loop.context import fill_orient, format_now
+                    from elyra.memory.meal import (
+                        compose_meal,
+                        compose_outer_messages,
+                        expand_memory_meal_for_provider,
+                    )
+                    from elyra.prompts.loader import load_prompt
+
+                    system_text = load_prompt("system", paths=self.paths)
+                    orient_template = load_prompt("orient", paths=self.paths)
+                    orient_body = fill_orient(
+                        orient_template,
+                        now=format_now(),
+                        self_digest=self_digest,
+                        user_digest=user_digest,
+                        why_now=why,
+                        goals=goals_slice,
+                        skill_catalog=skill_catalog_s,
+                        skill_bias=skill_bias_s,
+                    )
+                    budget = int(loop.sliding_input_tokens)
+                    mem_cfg = self.settings.memory
+                    # Overlay runtime wait toggle so first outer + re-outer both
+                    # honor glass/API wait-for-select (CPU dogfood).
+                    with self._lock:
+                        sw = self._semantic_wait
+                        mem_cfg = replace(
+                            mem_cfg,
+                            semantic_wait_for_select=bool(sw.enabled),
+                            semantic_wait_max_ms=int(sw.max_ms),
+                        )
+                    # Semantic select: pass index (cheap open) + warm embedder
+                    # only (KD12 — no cold model load inside rebuild_outer).
+                    meal_index = None
+                    meal_embedder = None
+                    if mem_cfg.semantic_enabled:
+                        meal_index = self._ensure_embedding_index()
+                        meal_embedder = self._embedder
+                    # PR-A3 / KD-A16: directed_keep from last_confirmed_keep on
+                    # next natural compose only (no soft re-outer on finish).
+                    dk_ids, dk_summary = self._last_confirmed_keep_for_meal(
+                        moment_id
+                    )
+                    package = compose_meal(
+                        self._memory,
+                        open_moment_id=moment_id,
+                        budget_tokens=budget,
+                        system_text=system_text,
+                        orient_text=orient_body,
+                        settings=mem_cfg,
+                        index=meal_index,
+                        embedder=meal_embedder,
+                        directed_keep_ids=dk_ids or None,
+                        directed_keep_summary=dk_summary,
+                    )
+                    self._record_last_meal_snapshot(
+                        package,
+                        system_text=system_text,
+                        orient_text=orient_body,
+                        budget_tokens=budget,
+                        source="rebuild_outer",
+                    )
+                    meal = compose_outer_messages(
+                        self._memory,
+                        open_moment_id=moment_id,
+                        budget_tokens=budget,
+                        system_text=system_text,
+                        orient_text=orient_body,
+                        settings=mem_cfg,
+                        package=package,
+                        index=meal_index,
+                        embedder=meal_embedder,
+                        directed_keep_ids=dk_ids or None,
+                        directed_keep_summary=dk_summary,
+                    )
+                    expanded = expand_memory_meal_for_provider(
+                        meal,
+                        glass_by_id=glass_by_id,
+                        wake_message_id=wake_message_id_s,
+                        media_store=media_store,
+                        provider=provider_name,
+                    )
+                    return strip_meal_wire_fields(expanded)
+                except Exception:  # noqa: BLE001 — fall back to legacy meal
+                    _LOG.exception(
+                        "memory meal rebuild failed; falling back to glass meal"
+                    )
+
+            meal = assemble_outer_meal(
+                glass_history=glass,
+                settings=self.settings,
+                paths=self.paths,
+                self_digest=self_digest,
+                user_digest=user_digest,
+                why_now=why,
+                goals=goals_slice,
+                skill_catalog=skill_catalog_s,
+                skill_bias=skill_bias_s,
+                wake_content=wake_content_s,
+                wake_message_id=wake_message_id_s,
+                retain_ids=True,
+            )
             expanded = expand_meal_for_provider(
                 meal,
-                glass_by_id=index_glass(glass),
+                glass_by_id=glass_by_id,
                 wake_message_id=wake_message_id_s,
-                media_store=MediaStore(self.paths),
-                provider=self.settings.provider.name,
+                media_store=media_store,
+                provider=provider_name,
             )
             return strip_meal_wire_fields(expanded)
 
         registry = self._ensure_registry()
         with self._lock:
             hop_delay = effective_hop_delay_seconds(self._dev_speed)
+        mem = self._ensure_memory_store()
         result = self._run_do_loop(
             client=self.client,
             registry=registry,
@@ -1177,6 +2058,8 @@ class PresenceWorker:
             continuous_enabled=cont_on,
             hop_delay_seconds=hop_delay,
             drain_interjections=self._drain_interjections,
+            memory_store=mem,
+            memory_settings=self.settings.memory,
         )
         return result, list(ctx.skills_used)
 
@@ -1250,6 +2133,13 @@ class PresenceWorker:
             self._active_moment_id = None
             if result and result.error:
                 self._worker_error = result.error
+
+            # Phase 2a: moment end clears active + sticky last_session/keep.
+            self._close_traversal_for_moment(moment_id)
+
+        # After close (outside long critical sections): refresh 15m window for
+        # the just-ended moment when atom writes or meal are active.
+        self._finalize_memory_ladder_15m()
 
     def _maybe_enqueue_moment_continue_unlocked(
         self,
@@ -1417,6 +2307,7 @@ class PresenceWorker:
             self._phase = self._phase_from_pending_waits_unlocked()
             self._busy = False
             self._active_moment_id = None
+            self._close_traversal_for_moment(moment_id)
 
     @staticmethod
     def _close_browser_sessions_for_moment(moment_id: str) -> None:
@@ -1612,6 +2503,10 @@ class PresenceWorker:
                 "users": self._users,
                 # install_skill / growth tools reload the held catalog
                 "skills": self._ensure_skills(),
+                # Phase 2a directed traversal: thin tools resolve these ports.
+                # graph_view is a factory (fresh view per call; warm embedder only).
+                "graph_view": self.graph_view,
+                "traversal": self._traversal,
             },
         )
 
@@ -1757,6 +2652,11 @@ class PresenceWorker:
             self._hop_count = 0
             self._last_tool = None
             self._continue_injects = 0
+            self._last_meal_snapshot = None
+            try:
+                self._traversal.reset()
+            except Exception:  # noqa: BLE001
+                _LOG.exception("traversal reset failed")
             self._phase = PHASE_IDLE
 
             pending = self._queue.pending()

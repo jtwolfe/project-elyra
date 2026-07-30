@@ -1,0 +1,33 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:06.791730+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "pie",
+  "path": "/workspace/tmp/graphing_tool/out/test/pie.svg",
+  "request": {
+    "backend": "auto",
+    "color": null,
+    "data_columns": [
+      "label",
+      "share"
+    ],
+    "data_rows": 3,
+    "kind": "pie",
+    "out": "/workspace/tmp/graphing_tool/out/test/pie.svg",
+    "x": "label",
+    "y": "share"
+  },
+  "request_sha256": "6e26d40585433a58dbb7520fc8e75d22c77efaa52bc407ddeb8f4c555f84d30f",
+  "theme": "elyra_light",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

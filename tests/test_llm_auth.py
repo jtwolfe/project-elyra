@@ -514,3 +514,155 @@ def test_ensure_data_dirs_creates_secrets(tmp_path: Path):
     assert secrets.is_dir()
     if os.name == "posix":
         assert stat.S_IMODE(secrets.stat().st_mode) == 0o700
+
+
+# --- xai_oauth resolve + redaction (PR2) ---
+
+
+def test_valid_sources_includes_xai_oauth():
+    from elyra.llm.auth import SOURCE_XAI_OAUTH, VALID_SOURCES
+
+    assert SOURCE_XAI_OAUTH in VALID_SOURCES
+    assert "api_key" in VALID_SOURCES
+    assert "grok_build" in VALID_SOURCES
+
+
+def test_provider_prefs_roundtrip_xai_oauth(tmp_path: Path):
+    path = save_provider_prefs(
+        tmp_path,
+        ProviderPrefs(model="grok-4.5", credential_source="xai_oauth"),
+    )
+    assert path.is_file()
+    prefs = load_provider_prefs(tmp_path)
+    assert prefs.credential_source == "xai_oauth"
+    update_provider_prefs(tmp_path, reasoning_effort="low")
+    prefs2 = load_provider_prefs(tmp_path)
+    assert prefs2.credential_source == "xai_oauth"
+    assert prefs2.reasoning_effort == "low"
+
+
+def test_resolve_xai_oauth_missing(tmp_path: Path):
+    from elyra.llm.auth import DETAIL_MISSING_OAUTH_TOKENS, SOURCE_XAI_OAUTH
+
+    data = tmp_path / "data"
+    data.mkdir()
+    r = resolve_bearer(source=SOURCE_XAI_OAUTH, data_dir=data, env={})
+    assert r.ok is False
+    assert r.token is None
+    assert r.detail == DETAIL_MISSING_OAUTH_TOKENS
+    assert r.rotated is False
+
+
+def test_resolve_xai_oauth_fresh(tmp_path: Path):
+    from elyra.llm.auth import SOURCE_XAI_OAUTH
+    from elyra.llm.oauth_store import OAuthBundle, save_oauth_bundle
+    from elyra.llm.xai_oauth import XAI_OAUTH_CLIENT_ID, XAI_OAUTH_SCOPE
+
+    data = tmp_path / "data"
+    data.mkdir()
+    save_oauth_bundle(
+        data,
+        OAuthBundle(
+            version=1,
+            client_id=XAI_OAUTH_CLIENT_ID,
+            access_token="oauth-access-fresh",
+            refresh_token="oauth-refresh",
+            token_type="Bearer",
+            scope=XAI_OAUTH_SCOPE,
+            expires_at=_future_expires(),
+            email="o@x.ai",
+            subject="sub",
+            obtained_at=_future_expires(),
+            updated_at=_future_expires(),
+            auth_method="device_code",
+            reauth_required=False,
+        ),
+    )
+    r = resolve_bearer(source=SOURCE_XAI_OAUTH, data_dir=data, env={})
+    assert r.ok is True
+    assert r.token == "oauth-access-fresh"
+    assert r.email == "o@x.ai"
+    assert r.rotated is False
+    assert r.detail is None
+
+
+def test_resolve_xai_oauth_reauth_required_cold_start(tmp_path: Path):
+    """Durable reauth_required on disk → token=None even if access unexpired (KD15)."""
+    from elyra.llm.auth import DETAIL_OAUTH_REAUTH_REQUIRED, SOURCE_XAI_OAUTH
+    from elyra.llm.oauth_store import OAuthBundle, save_oauth_bundle
+    from elyra.llm.xai_oauth import XAI_OAUTH_CLIENT_ID, XAI_OAUTH_SCOPE
+
+    data = tmp_path / "data"
+    data.mkdir()
+    save_oauth_bundle(
+        data,
+        OAuthBundle(
+            version=1,
+            client_id=XAI_OAUTH_CLIENT_ID,
+            access_token="still-unexpired-jwt",
+            refresh_token="dead-refresh",
+            token_type="Bearer",
+            scope=XAI_OAUTH_SCOPE,
+            expires_at=_future_expires(),
+            email="o@x.ai",
+            subject="sub",
+            obtained_at=_future_expires(),
+            updated_at=_future_expires(),
+            auth_method="device_code",
+            reauth_required=True,
+        ),
+    )
+    r = resolve_bearer(source=SOURCE_XAI_OAUTH, data_dir=data, env={})
+    assert r.ok is False
+    assert r.token is None
+    assert r.detail == DETAIL_OAUTH_REAUTH_REQUIRED
+    assert r.rotated is False
+    # Second resolve (simulates process restart reading same disk) still fails.
+    r2 = resolve_bearer(source=SOURCE_XAI_OAUTH, data_dir=data, env={})
+    assert r2.ok is False
+    assert r2.token is None
+    assert r2.detail == DETAIL_OAUTH_REAUTH_REQUIRED
+
+
+def test_auth_secret_values_for_redaction_unions_oauth_and_api_key(tmp_path: Path):
+    from elyra.llm.auth import auth_secret_values_for_redaction
+    from elyra.llm.oauth_store import OAuthBundle, save_oauth_bundle
+    from elyra.llm.xai_oauth import XAI_OAUTH_CLIENT_ID, XAI_OAUTH_SCOPE
+
+    data = tmp_path / "data"
+    data.mkdir()
+    write_stored_api_key(data, "sk-redact-me")
+    save_oauth_bundle(
+        data,
+        OAuthBundle(
+            version=1,
+            client_id=XAI_OAUTH_CLIENT_ID,
+            access_token="access-redact-me",
+            refresh_token="refresh-redact-me",
+            token_type="Bearer",
+            scope=XAI_OAUTH_SCOPE,
+            expires_at=_future_expires(),
+            email=None,
+            subject=None,
+            obtained_at=None,
+            updated_at=None,
+            auth_method="device_code",
+            reauth_required=False,
+        ),
+    )
+    vals = auth_secret_values_for_redaction(data)
+    assert "sk-redact-me" in vals
+    assert "access-redact-me" in vals
+    assert "refresh-redact-me" in vals
+
+
+def test_no_silent_fallback_oauth_to_api_key(tmp_path: Path):
+    """Active source xai_oauth must not fall back to api_key."""
+    from elyra.llm.auth import DETAIL_MISSING_OAUTH_TOKENS, SOURCE_XAI_OAUTH
+
+    data = tmp_path / "data"
+    write_stored_api_key(data, "sk-should-not-use")
+    r = resolve_bearer(source=SOURCE_XAI_OAUTH, data_dir=data, env={})
+    assert r.ok is False
+    assert r.token is None
+    assert r.detail == DETAIL_MISSING_OAUTH_TOKENS

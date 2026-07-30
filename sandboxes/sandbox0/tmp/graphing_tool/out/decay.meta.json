@@ -1,0 +1,37 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:18.428499+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "line",
+  "path": "/workspace/tmp/graphing_tool/out/decay.svg",
+  "request": {
+    "backend": "auto",
+    "color": null,
+    "data_columns": [
+      "x",
+      "y"
+    ],
+    "data_rows": 500,
+    "kind": "line",
+    "out": "/workspace/tmp/graphing_tool/out/decay.svg",
+    "theme": "elyra_dark",
+    "title": "Damped sine",
+    "x": "x",
+    "xlabel": "x",
+    "y": "y",
+    "ylabel": "y"
+  },
+  "request_sha256": "9a83cc327b92b6e6a5f4d1d82699d3c3162bfdabddbf8ae1e597bf481d5b7a9b",
+  "theme": "elyra_dark",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

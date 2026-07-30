@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="864" height="528" viewBox="0 0 864 528">
+<rect width="100%" height="100%" fill="#FFFFFF"/>
+<text x="432.0" y="28" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="16" fill="#1F2A37">Shares</text>
+<path d="M 452.00 260.00 L 452.00 98.88 A 161.12 161.12 0 0 1 501.79 413.23 Z" fill="#0072B2"/>
+<text x="635.01" y="231.01" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#1F2A37">alpha</text>
+<path d="M 452.00 260.00 L 501.79 413.23 A 161.12 161.12 0 0 1 290.88 260.00 Z" fill="#E69F00"/>
+<text x="343.09" y="409.90" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#1F2A37">beta</text>
+<path d="M 452.00 260.00 L 290.88 260.00 A 161.12 161.12 0 0 1 452.00 98.88 Z" fill="#009E73"/>
+<text x="320.98" y="128.98" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="11" fill="#1F2A37">gamma</text>
+</svg>

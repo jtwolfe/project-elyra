@@ -14,4 +14,5 @@
 - git_tools.py — frozen git_* / worktree builtins (path-jailed host)
 - gh_tools.py — frozen gh_* PR/issue/project builtins (GH_TOKEN soft-fail)
 - sandbox_packages.py — sandbox_pip_update (allowlist-add guest curated env)
+- memory_traverse.py — memory_traverse_start/step/inspect/finish/abandon (Phase 2a)
 """

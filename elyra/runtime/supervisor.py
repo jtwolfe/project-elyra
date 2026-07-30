@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from elyra.config import ElyraPaths, resolve_paths
-from elyra.llm.auth import resolve_bearer
+from elyra.llm.auth import SOURCE_XAI_OAUTH, resolve_bearer
 from elyra.llm.client import (
     ChatClient,
     FailingChatClient,
@@ -338,6 +338,19 @@ class ElyraSupervisor:
         )
         pr.worker = self._worker
 
+        # Cold-start oauth: wire 401 refresh_cb + keep-alive (rebuild path also
+        # does this; supervisor builds the first client without those hooks).
+        if (
+            credential_ok
+            and provider_name == "xai"
+            and not self._use_stub
+            and pr.credential_source == SOURCE_XAI_OAUTH
+            and pr.http_client is not None
+        ):
+            pr.http_client.set_refresh_cb(pr._make_chat_refresh_cb())
+            pr._start_oauth_keepalive()
+            pr._refresh_auth_redaction_snapshot_unlocked()
+
         # SuperGrok credits poller (daemon): after meter + provider runtime.
         # No-op when usage.enabled=false or credits_poll_enabled=false.
         self._start_credits_poller(meter=meter, pr=pr)
@@ -385,6 +398,13 @@ class ElyraSupervisor:
         def _get_settings():
             return pr.usage_settings
 
+        def _on_access_refreshed(
+            access: str | None,
+            expires_at: str | None = None,
+            email: str | None = None,
+        ) -> None:
+            pr.on_access_refreshed(access, expires_at, email)
+
         poller = CreditsPoller(
             meter=meter,
             usage_settings=cfg.usage,
@@ -393,6 +413,7 @@ class ElyraSupervisor:
             grok_auth_path=pr.grok_auth_path,
             get_credential_source=_get_source,
             get_usage_settings=_get_settings,
+            on_access_refreshed=_on_access_refreshed,
             enabled=True,
         )
         self._credits_poller = poller
@@ -444,6 +465,12 @@ class ElyraSupervisor:
             self._credits_poller = None
             if self.provider_runtime is not None:
                 self.provider_runtime.credits_poller = None
+        # 0b. OAuth keep-alive stop.
+        if self.provider_runtime is not None:
+            try:
+                self.provider_runtime.stop_background_tasks()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("provider background stop failed: %s", exc)
         # 1. Presence worker join before sandbox stop.
         # When browser sessions exist, allow nav timeout (+margin) so the
         # worker thread can finish and close Playwright on the owner thread.

@@ -1,0 +1,35 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:18.749274+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "area",
+  "path": "/workspace/tmp/graphing_tool/out/area.svg",
+  "request": {
+    "backend": "auto",
+    "color": null,
+    "data_columns": [
+      "x",
+      "y"
+    ],
+    "data_rows": 30,
+    "kind": "area",
+    "out": "/workspace/tmp/graphing_tool/out/area.svg",
+    "theme": "elyra_dark",
+    "title": "Area",
+    "x": "x",
+    "y": "y"
+  },
+  "request_sha256": "9ea4699518e21c068e639ee537966f37653ffa0f4152c971efeba94429924b63",
+  "theme": "elyra_dark",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

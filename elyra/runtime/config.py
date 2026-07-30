@@ -40,7 +40,7 @@ class RuntimeConfig:
     model: str = DEFAULT_XAI_MODEL
     model_label: str = DEFAULT_XAI_MODEL_LABEL
     base_url: str = "https://api.x.ai/v1"
-    credential_source: str = "grok_build"
+    credential_source: str = "xai_oauth"
     grok_auth_path: str | None = None
     request_timeout_s: float = 120.0
     usage: UsageSettings = field(default_factory=UsageSettings)

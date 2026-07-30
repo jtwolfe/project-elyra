@@ -31,6 +31,46 @@ const waitChoices = $("#wait-choices");
 const goalsList = $("#goals-list");
 const momentsList = $("#moments-list");
 const momentDetail = $("#moment-detail");
+const memoryRefreshBtn = $("#memory-refresh-btn");
+const memoryContextFlags = $("#memory-context-flags");
+const memoryContextBody = $("#memory-context-body");
+const memoryAtomsList = $("#memory-atoms-list");
+const memoryAtomDetail = $("#memory-atom-detail");
+const memoryAtomKind = $("#memory-atom-kind");
+const memoryAtomMoment = $("#memory-atom-moment");
+const memoryAtomsApply = $("#memory-atoms-apply");
+const memoryVectorsHealth = $("#memory-vectors-health");
+const memoryVectorsList = $("#memory-vectors-list");
+const memoryVectorStatus = $("#memory-vector-status");
+const memoryVectorsApply = $("#memory-vectors-apply");
+const memoryVectorsRebuild = $("#memory-vectors-rebuild");
+const memoryNeighborAtom = $("#memory-neighbor-atom");
+const memoryNeighborQ = $("#memory-neighbor-q");
+const memoryNeighborChannel = $("#memory-neighbor-channel");
+const memoryNeighborK = $("#memory-neighbor-k");
+const memoryNeighborsRun = $("#memory-neighbors-run");
+const memoryNeighborsList = $("#memory-neighbors-list");
+const memoryNeighborsMeta = $("#memory-neighbors-meta");
+const memoryGraphOverview = $("#memory-graph-overview");
+const memoryGraphHonesty = $("#memory-graph-honesty");
+const memoryGraphSessionBadge = $("#memory-graph-session-badge");
+const memoryGraphSessionBody = $("#memory-graph-session-body");
+const memoryGraphConsidered = $("#memory-graph-considered");
+const memoryGraphKept = $("#memory-graph-kept");
+const memoryGraphFrontier = $("#memory-graph-frontier");
+const memoryGraphNeighborAtom = $("#memory-graph-neighbor-atom");
+const memoryGraphNeighborK = $("#memory-graph-neighbor-k");
+const memoryGraphNeighborSem = $("#memory-graph-neighbor-sem");
+const memoryGraphNeighborsRun = $("#memory-graph-neighbors-run");
+const memoryGraphNeighborsList = $("#memory-graph-neighbors-list");
+const memoryGraphNeighborsMeta = $("#memory-graph-neighbors-meta");
+/** @type {boolean} */
+let memoryVectorsRebuildInFlight = false;
+/** @type {"context" | "atoms" | "vectors" | "graph"} */
+let memoryActiveTab = "context";
+/** @type {string | null} */
+let selectedAtomId = null;
+let memoryAtomDetailLoadGen = 0;
 const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const catalogInspector = $("#catalog-inspector");
@@ -93,6 +133,20 @@ const providerApiKeyInput = $("#provider-api-key-input");
 const providerApiKeySave = $("#provider-api-key-save");
 const providerApiKeyClear = $("#provider-api-key-clear");
 const providerApiKeyMeta = $("#provider-api-key-meta");
+const oauthLoginStack = $("#oauth-login-stack");
+const oauthLegacyBanner = $("#oauth-legacy-banner");
+const oauthCtaBanner = $("#oauth-cta-banner");
+const oauthMeta = $("#oauth-meta");
+const oauthLoginBtn = $("#oauth-login-btn");
+const oauthLogoutBtn = $("#oauth-logout-btn");
+const oauthCancelBtn = $("#oauth-cancel-btn");
+const oauthActivateCheckbox = $("#oauth-activate-checkbox");
+const oauthPendingPanel = $("#oauth-pending-panel");
+const oauthPendingLabel = $("#oauth-pending-label");
+const oauthUserCode = $("#oauth-user-code");
+const oauthCopyCodeBtn = $("#oauth-copy-code-btn");
+const oauthVerifyLink = $("#oauth-verify-link");
+const oauthCopyUriBtn = $("#oauth-copy-uri-btn");
 const usageBadge = $("#usage-badge");
 const usageWeekPct = $("#usage-week-pct");
 const usageDayPct = $("#usage-day-pct");
@@ -127,6 +181,10 @@ const devSpeedToggle = $("#dev-speed-toggle");
 const devSpeedMeta = $("#dev-speed-meta");
 const devSpeedBadge = $("#dev-speed-badge");
 const devSpeedDelay = $("#dev-speed-delay");
+const semanticWaitToggle = $("#semantic-wait-toggle");
+const semanticWaitMeta = $("#semantic-wait-meta");
+const semanticWaitBadge = $("#semantic-wait-badge");
+const semanticWaitMaxMs = $("#semantic-wait-max-ms");
 
 /** Active glass session user (who is typing) — not orient USER on pure work. */
 let sessionUserId =
@@ -185,12 +243,28 @@ let devSpeedInFlight = false;
 let lastDevSpeedEnabled = true;
 /** Last known dev_speed.delay_seconds from status. */
 let lastDevSpeedDelay = 8;
+/** True while PATCH /api/semantic-wait is in flight. */
+let semanticWaitInFlight = false;
+/** Last known semantic_wait.enabled from status. */
+let lastSemanticWaitEnabled = true;
+/** Last known semantic_wait.max_ms from status. */
+let lastSemanticWaitMaxMs = 15000;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
 /** True while PATCH /api/provider is in flight. */
 let providerPatchInFlight = false;
 /** True while PUT/DELETE api-key is in flight. */
 let apiKeyInFlight = false;
+/** True while xAI device start/cancel/logout is in flight. */
+let oauthActionInFlight = false;
+/** True while a device-code login is pending (server-side poll). */
+let oauthDevicePending = false;
+/** Public fields from last device start/status (never tokens / device_code). */
+let oauthPendingPublic = null;
+/** Interval handle for GET /api/auth/xai/device/status while pending. */
+let oauthPollTimer = null;
+/** Last known oauth_configured from status. */
+let lastOauthConfigured = false;
 /** True while PATCH /api/usage (hard-stop override) is in flight. */
 let usageOverrideInFlight = false;
 /** Last known hard_stop_override / override_active from status. */
@@ -1127,6 +1201,50 @@ function renderProviderPill(s) {
   setPill(pillProvider, `${provider} ready`, "pill-on");
 }
 
+/**
+ * Status-safe credential_detail → operator CTA (mirrors design CTA table;
+ * never includes tokens). Used by hard-stop banner + OAuth panel.
+ */
+const OAUTH_REAUTH_DETAILS = new Set([
+  "missing_oauth_tokens",
+  "invalid_oauth_tokens",
+  "oauth_token_expired",
+  "oauth_refresh_failed",
+  "oauth_reauth_required",
+  "oauth_denied",
+  "oauth_device_expired",
+  "oauth_ineligible",
+  "oauth_pending",
+]);
+
+function credentialDetailCta(detail) {
+  if (!detail) return null;
+  const map = {
+    missing_oauth_tokens: "Log in with xAI in Status (or elyra auth login).",
+    invalid_oauth_tokens: "Log in again; if it persists, log out then log in.",
+    oauth_token_expired: "Re-login with xAI if refresh also failed.",
+    oauth_refresh_failed: "Wait / retry; check network; re-login if persistent.",
+    oauth_reauth_required: "Log in with xAI again.",
+    oauth_denied: "Retry login and approve on the consent screen.",
+    oauth_device_expired: "Start login again — the device code timed out.",
+    oauth_ineligible:
+      "Account not eligible for this client/scopes — try API key or contact xAI.",
+    oauth_pending: "Complete the verification URL + user code in your browser.",
+    missing_auth_json:
+      "Missing Grok Build auth.json — use Elyra xAI login (recommended) or grok login.",
+    invalid_auth_json: "Invalid auth.json — re-run grok login or switch to Elyra xAI login.",
+    missing_token: "auth.json has no access token — re-run grok login or use Elyra xAI login.",
+    token_expired:
+      "Grok Build token expired — use Elyra xAI login (recommended) or grok login.",
+    missing_api_key: "Missing API key — paste key in Status or set XAI_API_KEY.",
+    empty_api_key: "Empty API key rejected.",
+    unknown_source: "Unknown credential source.",
+    client_build_failed: "Failed to build chat client.",
+    credential_unavailable: "Credentials unavailable.",
+  };
+  return map[detail] || detail;
+}
+
 function renderHardStopBanner(s) {
   if (!hardStopBanner) return;
   const usage = (s && s.usage) || {};
@@ -1138,7 +1256,10 @@ function renderHardStopBanner(s) {
     hardStopBanner.hidden = false;
     hardStopBanner.className = "hard-stop-banner hard-stop-auth";
     const detail = (s && s.credential_detail) || "credential missing";
-    hardStopBanner.textContent = `Auth paused — ${detail}. Model moments will not open until credentials resolve.`;
+    const cta = credentialDetailCta(detail);
+    hardStopBanner.textContent = cta
+      ? `Auth paused — ${detail}. ${cta}`
+      : `Auth paused — ${detail}. Model moments will not open until credentials resolve.`;
     return;
   }
 
@@ -1249,6 +1370,18 @@ function renderProviderCard(s) {
     fillModelSelect(s && s.models_available, s && s.model);
     lastProviderModel = (s && s.model) || null;
     if (providerCredentialSelect && s && s.credential_source) {
+      // Ensure option exists if server returns a known source we ship.
+      if (
+        s.credential_source &&
+        !Array.from(providerCredentialSelect.options).some(
+          (o) => o.value === s.credential_source
+        )
+      ) {
+        const opt = document.createElement("option");
+        opt.value = s.credential_source;
+        opt.textContent = s.credential_source;
+        providerCredentialSelect.appendChild(opt);
+      }
       providerCredentialSelect.value = s.credential_source;
       lastCredentialSource = s.credential_source;
     }
@@ -1275,6 +1408,382 @@ function renderProviderCard(s) {
     providerApiKeyMeta.textContent = configured
       ? "API key configured (secret not shown)"
       : "not configured";
+  }
+  renderOauthLoginPanel(s);
+}
+
+/**
+ * Paint xAI OAuth login panel from status (+ local pending public fields).
+ * Never displays access_token / refresh_token / device_code.
+ */
+function renderOauthLoginPanel(s) {
+  const source = (s && s.credential_source) || lastCredentialSource || "";
+  const detail = (s && s.credential_detail) || "";
+  const oauthConfigured = Boolean(s && s.oauth_configured);
+  lastOauthConfigured = oauthConfigured;
+
+  const reauthCta =
+    OAUTH_REAUTH_DETAILS.has(detail) ||
+    (source === "xai_oauth" && s && s.credential_ok === false);
+  const prominent = source === "xai_oauth" || reauthCta || oauthDevicePending;
+
+  if (oauthLoginStack) {
+    oauthLoginStack.classList.toggle("oauth-login-prominent", Boolean(prominent));
+  }
+
+  if (oauthLegacyBanner) {
+    oauthLegacyBanner.hidden = source !== "grok_build";
+  }
+
+  if (oauthCtaBanner) {
+    if (reauthCta && !oauthDevicePending) {
+      const cta = credentialDetailCta(detail) || "Log in with xAI.";
+      oauthCtaBanner.hidden = false;
+      oauthCtaBanner.textContent = detail ? `${detail} — ${cta}` : cta;
+    } else {
+      oauthCtaBanner.hidden = true;
+      oauthCtaBanner.textContent = "";
+    }
+  }
+
+  if (oauthMeta) {
+    if (oauthDevicePending) {
+      oauthMeta.textContent = "Login in progress — complete the code below.";
+    } else if (oauthConfigured) {
+      const parts = ["xAI login configured"];
+      const email = (s && s.credential_email) || "";
+      // Only show email when active source is oauth (avoids stale email on other sources).
+      if (email && source === "xai_oauth") parts.push(email);
+      if (s && s.credential_expires_at && source === "xai_oauth") {
+        parts.push(`exp ${s.credential_expires_at}`);
+      }
+      parts.push("(tokens never shown)");
+      oauthMeta.textContent = parts.join(" · ");
+    } else {
+      oauthMeta.textContent = "not configured — Log in with xAI to store tokens in this instance";
+    }
+  }
+
+  if (oauthLogoutBtn) {
+    oauthLogoutBtn.hidden = !oauthConfigured || oauthDevicePending;
+    oauthLogoutBtn.disabled = oauthActionInFlight;
+  }
+
+  if (oauthCancelBtn) {
+    oauthCancelBtn.hidden = !oauthDevicePending;
+    oauthCancelBtn.disabled = oauthActionInFlight;
+  }
+
+  if (oauthLoginBtn) {
+    // Debounce / disable while pending or action in flight.
+    oauthLoginBtn.disabled = oauthActionInFlight || oauthDevicePending;
+    oauthLoginBtn.textContent = oauthDevicePending
+      ? "Login pending…"
+      : oauthConfigured
+        ? "Re-login with xAI"
+        : "Log in with xAI";
+  }
+
+  if (oauthActivateCheckbox) {
+    oauthActivateCheckbox.disabled = oauthActionInFlight || oauthDevicePending;
+  }
+
+  paintOauthPendingPanel(oauthPendingPublic);
+}
+
+function paintOauthPendingPanel(publicFields) {
+  if (!oauthPendingPanel) return;
+  if (!oauthDevicePending || !publicFields) {
+    oauthPendingPanel.hidden = true;
+    return;
+  }
+  oauthPendingPanel.hidden = false;
+
+  const userCode = publicFields.user_code || "";
+  const uri =
+    publicFields.verification_uri_complete ||
+    publicFields.verification_uri ||
+    "";
+  const plainUri = publicFields.verification_uri || uri;
+
+  if (oauthUserCode) {
+    oauthUserCode.textContent = userCode || "—";
+  }
+  if (oauthVerifyLink) {
+    if (uri) {
+      oauthVerifyLink.href = uri;
+      oauthVerifyLink.textContent = publicFields.verification_uri_complete
+        ? "Open verification page (pre-filled code)"
+        : plainUri || "Open verification page";
+      oauthVerifyLink.hidden = false;
+    } else {
+      oauthVerifyLink.removeAttribute("href");
+      oauthVerifyLink.textContent = "Verification URL unavailable — start login again";
+    }
+  }
+  if (oauthPendingLabel) {
+    oauthPendingLabel.textContent = userCode
+      ? "Waiting for authorization on auth.x.ai…"
+      : "Waiting for authorization…";
+  }
+  if (oauthCopyCodeBtn) oauthCopyCodeBtn.disabled = !userCode;
+  if (oauthCopyUriBtn) oauthCopyUriBtn.disabled = !uri;
+}
+
+function stopOauthDevicePoll() {
+  if (oauthPollTimer != null) {
+    clearInterval(oauthPollTimer);
+    oauthPollTimer = null;
+  }
+}
+
+function startOauthDevicePoll() {
+  stopOauthDevicePoll();
+  oauthPollTimer = setInterval(() => {
+    pollOauthDeviceStatus().catch(() => {
+      /* transient; next tick retries */
+    });
+  }, 1500);
+  // Immediate first poll after a short beat so start response paints first.
+  setTimeout(() => {
+    pollOauthDeviceStatus().catch(() => {});
+  }, 400);
+}
+
+/**
+ * Strip any accidental secret keys from client-held OAuth public state.
+ * Defense-in-depth: API already never returns these.
+ */
+function publicOauthFieldsOnly(data) {
+  if (!data || typeof data !== "object") return null;
+  const out = {};
+  for (const key of [
+    "user_code",
+    "verification_uri",
+    "verification_uri_complete",
+    "expires_in",
+    "interval",
+    "state",
+    "detail",
+    "email",
+    "expires_at",
+    "pending",
+    "ok",
+  ]) {
+    if (data[key] !== undefined && data[key] !== null) out[key] = data[key];
+  }
+  // Explicitly never retain these even if server misbehaves.
+  delete out.access_token;
+  delete out.refresh_token;
+  delete out.device_code;
+  delete out.id_token;
+  return out;
+}
+
+async function startXaiDeviceLogin() {
+  if (oauthActionInFlight || oauthDevicePending) return;
+  oauthActionInFlight = true;
+  if (oauthLoginBtn) oauthLoginBtn.disabled = true;
+  try {
+    const activate = oauthActivateCheckbox
+      ? Boolean(oauthActivateCheckbox.checked)
+      : true;
+    const data = await fetchJson("/api/auth/xai/device/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activate }),
+    });
+    const pub = publicOauthFieldsOnly(data);
+    if (!data || data.ok === false) {
+      const detail = (data && data.detail) || (data && data.error) || "device_start_failed";
+      oauthDevicePending = false;
+      oauthPendingPublic = null;
+      stopOauthDevicePoll();
+      showNotice(`xAI login failed to start — ${detail}`);
+      return;
+    }
+    oauthDevicePending = true;
+    oauthPendingPublic = pub;
+    paintOauthPendingPanel(pub);
+    startOauthDevicePoll();
+    showNotice("xAI login started — open the link and enter the code.");
+  } catch (err) {
+    oauthDevicePending = false;
+    oauthPendingPublic = null;
+    stopOauthDevicePoll();
+    showNotice(String(err.message || err));
+  } finally {
+    oauthActionInFlight = false;
+    // Re-paint so disabled state reflects pending vs idle.
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+    });
+  }
+}
+
+async function pollOauthDeviceStatus() {
+  if (!oauthDevicePending) return;
+  let data;
+  try {
+    data = await fetchJson("/api/auth/xai/device/status");
+  } catch (err) {
+    // 503 provider unavailable mid-flow: surface once, keep panel.
+    if (err && err.status === 503) {
+      if (oauthPendingLabel) {
+        oauthPendingLabel.textContent =
+          "Provider unavailable — retry shortly or start login again.";
+      }
+    }
+    return;
+  }
+  const state = (data && data.state) || "idle";
+  const pub = publicOauthFieldsOnly(data);
+
+  if (state === "pending") {
+    // Merge public fields so user_code survives status payloads that omit them
+    // only when we already have them; status should include them while pending.
+    oauthPendingPublic = {
+      ...(oauthPendingPublic || {}),
+      ...(pub || {}),
+    };
+    paintOauthPendingPanel(oauthPendingPublic);
+    return;
+  }
+
+  // Terminal or idle (process restart mid-flow).
+  stopOauthDevicePoll();
+  oauthDevicePending = false;
+
+  if (state === "success") {
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    const email = (data && data.email) || "";
+    showNotice(
+      email
+        ? `xAI login complete (${email}). Tokens stored in this instance.`
+        : "xAI login complete. Tokens stored in this instance."
+    );
+    await refreshStatus();
+    return;
+  }
+
+  if (state === "cancelled") {
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    showNotice("xAI login cancelled.");
+    await refreshStatus();
+    return;
+  }
+
+  if (state === "error") {
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    const detail = (data && data.detail) || "oauth_device_error";
+    const cta = credentialDetailCta(detail);
+    showNotice(cta ? `xAI login failed — ${detail}. ${cta}` : `xAI login failed — ${detail}`);
+    await refreshStatus();
+    return;
+  }
+
+  // idle: process likely restarted mid-flow (in-memory session gone).
+  oauthPendingPublic = null;
+  paintOauthPendingPanel(null);
+  showNotice("Login session lost (server restarted?) — start login again.");
+  await refreshStatus();
+}
+
+async function cancelXaiDeviceLogin() {
+  if (oauthActionInFlight) return;
+  oauthActionInFlight = true;
+  if (oauthCancelBtn) oauthCancelBtn.disabled = true;
+  try {
+    await fetchJson("/api/auth/xai/device/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    stopOauthDevicePoll();
+    oauthDevicePending = false;
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    showNotice("xAI login cancelled.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    oauthActionInFlight = false;
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+    });
+  }
+}
+
+async function logoutXaiOauth() {
+  if (oauthActionInFlight || oauthDevicePending) return;
+  oauthActionInFlight = true;
+  if (oauthLogoutBtn) oauthLogoutBtn.disabled = true;
+  try {
+    // Canonical logout path (PR3): POST /api/auth/xai/logout
+    await fetchJson("/api/auth/xai/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    showNotice("xAI login cleared for this instance.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    oauthActionInFlight = false;
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+    });
+  }
+}
+
+async function copyOauthText(text, btn, label) {
+  if (!text) {
+    showNotice(`Nothing to copy (${label}).`);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => {
+        btn.textContent = prev || label;
+      }, 1200);
+    }
+  } catch {
+    showNotice(`Copy failed — select the ${label} manually.`);
+  }
+}
+
+/**
+ * If the browser reloaded mid device-flow, the server still has the pending
+ * session — resume polling and re-show user_code / verification URI.
+ */
+async function maybeResumeOauthDeviceSession() {
+  if (oauthDevicePending || oauthActionInFlight) return;
+  try {
+    const data = await fetchJson("/api/auth/xai/device/status");
+    if (!data || data.state !== "pending") return;
+    oauthDevicePending = true;
+    oauthPendingPublic = publicOauthFieldsOnly(data);
+    paintOauthPendingPanel(oauthPendingPublic);
+    startOauthDevicePoll();
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+      credential_detail: (data && data.detail) || "oauth_pending",
+      credential_ok: false,
+    });
+  } catch {
+    /* provider offline / 503 — ignore on boot */
   }
 }
 
@@ -1685,6 +2194,67 @@ async function patchDevSpeed(body) {
   }
 }
 
+function renderSemanticWait(s) {
+  const d = (s && s.semantic_wait) || {};
+  const enabled = d.enabled !== undefined ? Boolean(d.enabled) : true;
+  const maxMs =
+    typeof d.max_ms === "number" && !Number.isNaN(d.max_ms)
+      ? d.max_ms
+      : 15000;
+  // Prefer live effective/snappy from status (settings.semantic_select_max_ms).
+  const effective =
+    typeof d.effective_select_max_ms === "number" &&
+    !Number.isNaN(d.effective_select_max_ms)
+      ? d.effective_select_max_ms
+      : enabled
+        ? maxMs
+        : typeof d.snappy_select_max_ms === "number" &&
+            !Number.isNaN(d.snappy_select_max_ms)
+          ? d.snappy_select_max_ms
+          : 50;
+  lastSemanticWaitEnabled = enabled;
+  lastSemanticWaitMaxMs = maxMs;
+
+  if (!semanticWaitInFlight) {
+    if (semanticWaitToggle) semanticWaitToggle.checked = enabled;
+    if (semanticWaitMaxMs && document.activeElement !== semanticWaitMaxMs) {
+      semanticWaitMaxMs.value = String(Math.round(maxMs));
+    }
+  }
+  if (semanticWaitBadge) {
+    semanticWaitBadge.textContent = enabled ? "on" : "off";
+    semanticWaitBadge.classList.toggle("badge-open", enabled);
+  }
+  if (semanticWaitMeta) {
+    semanticWaitMeta.textContent = enabled
+      ? `up to ${Math.round(maxMs / 1000)}s for encode+search`
+      : `off — snappy omit (${Math.round(effective)}ms)`;
+  }
+}
+
+async function patchSemanticWait(body) {
+  if (semanticWaitInFlight) return;
+  semanticWaitInFlight = true;
+  if (semanticWaitToggle) semanticWaitToggle.disabled = true;
+  if (semanticWaitMaxMs) semanticWaitMaxMs.disabled = true;
+  try {
+    await fetchJson("/api/semantic-wait", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshStatus();
+  } catch (err) {
+    if (semanticWaitToggle) semanticWaitToggle.checked = lastSemanticWaitEnabled;
+    if (semanticWaitMaxMs) semanticWaitMaxMs.value = String(lastSemanticWaitMaxMs);
+    showNotice(String(err.message || err));
+  } finally {
+    semanticWaitInFlight = false;
+    if (semanticWaitToggle) semanticWaitToggle.disabled = false;
+    if (semanticWaitMaxMs) semanticWaitMaxMs.disabled = false;
+  }
+}
+
 /**
  * Sandbox pill (KD27): ready / warming / unusable next to provider pill.
  * No secrets, no host paths — only coarse states from status.sandbox.
@@ -1751,6 +2321,7 @@ async function refreshStatus() {
   updateChatActivity(s);
   renderContinuous(s);
   renderDevSpeed(s);
+  renderSemanticWait(s);
   renderWaitBar(s.pending_wait || null);
   return s;
 }
@@ -2097,6 +2668,1462 @@ async function refreshMoments() {
   // Do not pre-commit snapshot before load succeeds.
   if (momentSnapshotChanged(selectedMomentSnapshot, next)) {
     await loadMomentDetail(selectedMomentId, { soft: true });
+  }
+}
+
+// ── Memory panel (PR9) ────────────────────────────────────────────────
+
+function setMemoryTab(name) {
+  memoryActiveTab = name || "context";
+  document.querySelectorAll(".memory-tab").forEach((btn) => {
+    const on = btn.dataset.memoryTab === memoryActiveTab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll(".memory-tab-panel").forEach((panel) => {
+    const id = panel.id || "";
+    const key = id.replace(/^memory-tab-/, "");
+    const on = key === memoryActiveTab;
+    panel.classList.toggle("active", on);
+    if (on) panel.removeAttribute("hidden");
+    else panel.setAttribute("hidden", "");
+  });
+}
+
+function renderMemoryFlags(mem) {
+  if (!memoryContextFlags) return;
+  memoryContextFlags.innerHTML = "";
+  const m = mem || {};
+  const rows = [
+    ["enabled", m.enabled === true ? "true" : "false", m.enabled === true],
+    ["write_atoms", m.write_atoms === true ? "true" : "false", m.write_atoms === true],
+    ["backend", m.backend || "—", null],
+    ["store", m.ok ? "ok" : m.error || "down", m.ok === true],
+    ["atoms", m.atom_count != null ? String(m.atom_count) : "—", null],
+    ["open moment", m.active_moment_id || "—", null],
+  ];
+  for (const [label, value, good] of rows) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = label;
+    const val = document.createElement("span");
+    val.className = "status-value";
+    if (good === true) val.classList.add("status-ok");
+    if (good === false) val.classList.add("status-bad");
+    val.textContent = value;
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryContextFlags.appendChild(row);
+  }
+}
+
+function renderMemoryContext(data) {
+  if (!memoryContextBody) return;
+  memoryContextBody.innerHTML = "";
+  const mem = data.memory || {};
+  renderMemoryFlags(mem);
+
+  if (!data.ok && !data.meal) {
+    const p = document.createElement("p");
+    p.className = "muted memory-empty";
+    p.textContent = data.error
+      ? `Context meal unavailable: ${data.error}`
+      : "No meal snapshot yet. Chat once with memory.enabled, or wait for a compose.";
+    memoryContextBody.appendChild(p);
+    return;
+  }
+
+  const meal = data.meal || {};
+  const head = document.createElement("div");
+  head.className = "card memory-channel-card";
+  const headTitle = document.createElement("div");
+  headTitle.className = "card-head";
+  headTitle.innerHTML = `<strong>Meal package</strong><span class="badge">${escapeHtml(
+    String(data.source || meal.source || "—")
+  )}</span>`;
+  head.appendChild(headTitle);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const bits = [
+    meal.open_moment_id ? `moment=${meal.open_moment_id}` : "moment=—",
+    meal.total_tokens != null ? `memory≈${meal.total_tokens} tok` : null,
+    meal.fixed_tokens != null ? `fixed≈${meal.fixed_tokens} tok` : null,
+    meal.budget_tokens != null ? `budget=${meal.budget_tokens}` : null,
+    meal.slid_off_count != null ? `slid_off=${meal.slid_off_count}` : null,
+    meal.recorded_at ? `at ${meal.recorded_at}` : null,
+  ].filter(Boolean);
+  meta.textContent = bits.join(" · ");
+  head.appendChild(meta);
+  memoryContextBody.appendChild(head);
+
+  // Semantic channel note (omit / packed) — always visible when select ran.
+  const semNote = renderSemanticChannelNote(meal);
+  if (semNote) memoryContextBody.appendChild(semNote);
+
+  // PR-A3: one muted line for directed_keep omit / pack meta.
+  const dkLine = formatDirectedKeepLine(meal);
+  if (dkLine) {
+    const p = document.createElement("p");
+    p.className = "muted memory-directed-keep-meta";
+    p.textContent = dkLine;
+    memoryContextBody.appendChild(p);
+  }
+
+  // Fixed system/orient if present.
+  const fixed = meal.fixed || {};
+  for (const key of ["system", "orient"]) {
+    const block = fixed[key];
+    if (!block) continue;
+    memoryContextBody.appendChild(
+      renderMemoryChannelCard({
+        label: block.label || key,
+        channel: key,
+        token_estimate: block.token_estimate,
+        snippet: block.snippet,
+        content_chars: block.content_chars,
+      })
+    );
+  }
+
+  const items = Array.isArray(meal.items) ? meal.items : [];
+  if (!items.length && !Object.keys(fixed).length) {
+    const p = document.createElement("p");
+    p.className = "muted memory-empty";
+    p.textContent =
+      "Meal has no labeled channels yet (empty store or meal not composed).";
+    memoryContextBody.appendChild(p);
+    return;
+  }
+  for (const item of items) {
+    memoryContextBody.appendChild(renderMemoryChannelCard(item));
+  }
+}
+
+/**
+ * Human-readable semantic select status for Memory → Context.
+ * PR-R2 / KD-R6: include dedupe counts so operators see retrieval ran
+ * even when no semantic items were packed.
+ */
+function formatSemanticSelectLine(meal) {
+  if (!meal) return "";
+  const reason = meal.semantic_omitted_reason || null;
+  const sm = meal.semantic_select_meta || null;
+  if (!reason && !sm) return "";
+  const parts = [];
+  if (reason) {
+    parts.push(`omitted (${reason})`);
+  } else if (sm && sm.packed != null) {
+    parts.push(`packed=${sm.packed}`);
+  }
+  if (sm && sm.channel) {
+    const chBit = sm.channel_reason
+      ? `channel=${sm.channel} (${sm.channel_reason})`
+      : `channel=${sm.channel}`;
+    parts.push(chBit);
+  }
+  // Dedupe: primary path may show raw_hits=0 (excludes in search) while probe
+  // counted matches already in temporal/episodic — surface the count.
+  if (reason === "deduped") {
+    const n =
+      sm && sm.deduped != null
+        ? Number(sm.deduped)
+        : sm && sm.raw_hits != null
+          ? Number(sm.raw_hits)
+          : null;
+    if (n != null && !Number.isNaN(n) && n > 0) {
+      parts.push(
+        `${n} match${n === 1 ? "" : "es"} already in temporal/episodic (not re-listed as semantic)`
+      );
+    } else {
+      parts.push(
+        "matches already in temporal/episodic (not re-listed as semantic)"
+      );
+    }
+  } else if (reason === "no_hits" && sm && sm.channel) {
+    parts.push(`no candidates on ${sm.channel}`);
+  } else if (reason === "timeout") {
+    parts.push("encode/search exceeded meal wall-clock");
+  } else if (reason === "empty_seed") {
+    parts.push("no observation/speak/model text on open moment");
+  } else if (reason === "encoder") {
+    parts.push("embedder not warm or encode failed");
+  } else if (reason === "no_index") {
+    parts.push("no vector index");
+  }
+  if (sm && sm.deduped != null && reason !== "deduped" && Number(sm.deduped) > 0) {
+    parts.push(`also_deduped=${sm.deduped}`);
+  }
+  if (sm && sm.elapsed_ms != null) {
+    const ms = Number(sm.elapsed_ms);
+    if (!Number.isNaN(ms)) {
+      parts.push(ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`);
+    }
+  }
+  if (sm && sm.wait === true) parts.push("wait=on");
+  if (sm && sm.wait === false) parts.push("wait=off");
+  if (!parts.length) return "";
+  return parts.join(" · ");
+}
+
+/** Small Context panel card so semantic omit (esp. dedupe) is easy to see. */
+function renderSemanticChannelNote(meal) {
+  const line = formatSemanticSelectLine(meal);
+  if (!line) return null;
+  const reason = meal.semantic_omitted_reason || null;
+  const sm = meal.semantic_select_meta || null;
+  const card = document.createElement("div");
+  card.className = "card memory-channel-card memory-semantic-note";
+  if (reason === "deduped") {
+    card.classList.add("memory-semantic-note-deduped");
+  } else if (reason) {
+    card.classList.add("memory-semantic-note-omit");
+  } else {
+    card.classList.add("memory-semantic-note-ok");
+  }
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = "Semantic";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  if (reason === "deduped") {
+    const n = sm && sm.deduped != null ? Number(sm.deduped) : null;
+    badge.textContent =
+      n != null && !Number.isNaN(n) ? `deduped · ${n}` : "deduped";
+  } else if (reason) {
+    badge.textContent = `omitted · ${reason}`;
+  } else if (sm && sm.packed != null) {
+    badge.textContent = `packed · ${sm.packed}`;
+  } else {
+    badge.textContent = "select";
+  }
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+  const body = document.createElement("p");
+  body.className = "memory-semantic-meta";
+  body.textContent = line;
+  card.appendChild(body);
+  return card;
+}
+
+/** One muted Context line: directed_keep omit / pack (PR-A3). */
+function formatDirectedKeepLine(meal) {
+  if (!meal) return "";
+  const reason = meal.directed_keep_omitted_reason || null;
+  const dm = meal.directed_keep_meta || null;
+  if (!reason && !dm) return "";
+  const parts = ["directed_keep"];
+  if (reason) {
+    parts.push(`omitted (${reason})`);
+  } else if (dm && dm.packed != null) {
+    parts.push(`packed=${dm.packed}`);
+  }
+  if (dm && dm.keep_ids_in != null) {
+    parts.push(`keeps_in=${dm.keep_ids_in}`);
+  }
+  if (reason === "deduped") {
+    parts.push("already in temporal/episodic/semantic");
+  } else if (reason === "disabled") {
+    parts.push("flag off");
+  } else if (reason === "empty") {
+    parts.push("no confirmed keep-set");
+  } else if (reason === "budget") {
+    parts.push("cap too small");
+  }
+  return parts.join(" · ");
+}
+
+function renderMemoryChannelCard(item) {
+  const card = document.createElement("div");
+  card.className = "card memory-channel-card";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = item.label || item.channel || "channel";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  const tok =
+    item.token_estimate != null ? `≈${item.token_estimate} tok` : "—";
+  badge.textContent = `${item.channel || "—"} · ${tok}`;
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const mbits = [];
+  if (item.atom_id) mbits.push(item.atom_id);
+  if (item.t_start) mbits.push(item.t_start);
+  if (item.content_chars != null) mbits.push(`${item.content_chars} chars`);
+  if (item.meta && item.meta.atom_count != null) {
+    mbits.push(`${item.meta.atom_count} atoms`);
+  }
+  meta.textContent = mbits.join(" · ") || "—";
+  card.appendChild(meta);
+  const pre = document.createElement("pre");
+  pre.className = "memory-snippet";
+  pre.textContent = item.snippet || "(empty)";
+  card.appendChild(pre);
+  return card;
+}
+
+async function refreshMemoryContext() {
+  const data = await fetchJson("/api/memory/context");
+  renderMemoryContext(data);
+}
+
+function setAtomDetailOpen(on) {
+  const panel = document.getElementById("panel-memory");
+  if (panel) panel.classList.toggle("atom-detail-open", !!on);
+}
+
+function closeAtomDetail() {
+  memoryAtomDetailLoadGen += 1;
+  selectedAtomId = null;
+  if (memoryAtomDetail) {
+    memoryAtomDetail.hidden = true;
+    memoryAtomDetail.innerHTML = "";
+  }
+  setAtomDetailOpen(false);
+  if (memoryAtomsList) {
+    memoryAtomsList
+      .querySelectorAll(".card-selected")
+      .forEach((el) => el.classList.remove("card-selected"));
+  }
+}
+
+function renderAtomsList(atoms) {
+  if (!memoryAtomsList) return;
+  memoryAtomsList.innerHTML = "";
+  if (!atoms.length) {
+    memoryAtomsList.innerHTML = `<p class="muted empty memory-empty">No atoms match.</p>`;
+    return;
+  }
+  for (const a of atoms) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn";
+    card.dataset.atomId = a.atom_id || "";
+    if (selectedAtomId && a.atom_id === selectedAtomId) {
+      card.classList.add("card-selected");
+    }
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const strong = document.createElement("strong");
+    strong.textContent = a.kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = a.t_start || "—";
+    head.appendChild(strong);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      a.atom_id || "—",
+      a.moment_id ? `moment=${a.moment_id}` : null,
+      a.scale ? `scale=${a.scale}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const snip = document.createElement("div");
+    snip.className = "muted";
+    snip.style.fontSize = "0.85rem";
+    snip.style.marginTop = "0.35rem";
+    snip.textContent = a.text || "(empty)";
+    card.appendChild(snip);
+    card.addEventListener("click", () => {
+      loadAtomDetail(a.atom_id);
+    });
+    memoryAtomsList.appendChild(card);
+  }
+}
+
+async function loadAtomDetail(id) {
+  if (!id || !memoryAtomDetail) return;
+  const gen = ++memoryAtomDetailLoadGen;
+  selectedAtomId = id;
+  memoryAtomDetail.hidden = false;
+  setAtomDetailOpen(true);
+  memoryAtomDetail.innerHTML = `<div class="card-head"><strong>${escapeHtml(
+    id
+  )}</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">loading…</p>`;
+  const closeBtn = $("#close-atom-detail");
+  if (closeBtn) closeBtn.addEventListener("click", closeAtomDetail);
+  try {
+    const data = await fetchJson(`/api/memory/atoms/${encodeURIComponent(id)}`);
+    if (selectedAtomId !== id || gen !== memoryAtomDetailLoadGen) return;
+    if (!data.ok || !data.atom) {
+      memoryAtomDetail.innerHTML = `<div class="card-head"><strong>Atom</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">${escapeHtml(
+        data.error || "not found"
+      )}</p>`;
+      const c = $("#close-atom-detail");
+      if (c) c.addEventListener("click", closeAtomDetail);
+      return;
+    }
+    const a = data.atom;
+    const body = document.createDocumentFragment();
+    const head = document.createElement("div");
+    head.className = "card-head";
+    head.innerHTML = `<strong>${escapeHtml(a.kind || "atom")}</strong>
+      <button type="button" class="link-btn" id="close-atom-detail">close</button>`;
+    body.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      a.atom_id,
+      a.moment_id ? `moment=${a.moment_id}` : null,
+      a.t_start || null,
+      a.scale ? `scale=${a.scale}` : null,
+      a.prev_atom_id ? `prev=${a.prev_atom_id}` : null,
+      a.next_atom_id ? `next=${a.next_atom_id}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    body.appendChild(meta);
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet";
+    pre.textContent = a.content_text || "(empty)";
+    body.appendChild(pre);
+    memoryAtomDetail.innerHTML = "";
+    memoryAtomDetail.appendChild(body);
+    const c2 = $("#close-atom-detail");
+    if (c2) c2.addEventListener("click", closeAtomDetail);
+    if (memoryAtomsList) {
+      memoryAtomsList.querySelectorAll(".card-btn").forEach((el) => {
+        el.classList.toggle("card-selected", el.dataset.atomId === id);
+      });
+    }
+  } catch (err) {
+    if (selectedAtomId !== id || gen !== memoryAtomDetailLoadGen) return;
+    if (err && err.status === 404) {
+      closeAtomDetail();
+      return;
+    }
+    memoryAtomDetail.innerHTML = `<div class="card-head"><strong>Atom</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">${escapeHtml(
+      String(err.message || err)
+    )}</p>`;
+    const c3 = $("#close-atom-detail");
+    if (c3) c3.addEventListener("click", closeAtomDetail);
+  }
+}
+
+async function refreshMemoryAtoms() {
+  const params = new URLSearchParams();
+  params.set("limit", "60");
+  const kind = memoryAtomKind ? memoryAtomKind.value.trim() : "";
+  const moment = memoryAtomMoment ? memoryAtomMoment.value.trim() : "";
+  if (kind) params.set("kind", kind);
+  if (moment) params.set("moment_id", moment);
+  const data = await fetchJson(`/api/memory/atoms?${params.toString()}`);
+  if (!data.ok && !(data.atoms || []).length) {
+    if (memoryAtomsList) {
+      memoryAtomsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        data.error || "store unavailable"
+      )}</p>`;
+    }
+    return;
+  }
+  renderAtomsList(data.atoms || []);
+  if (selectedAtomId) {
+    await loadAtomDetail(selectedAtomId);
+  }
+}
+
+/**
+ * Format vectors_by_channel map for glass health (omit zero channels except joint/text).
+ * @param {Record<string, number> | null | undefined} counts
+ */
+function formatVectorsByChannel(counts) {
+  if (!counts || typeof counts !== "object") return "—";
+  const order = ["joint", "text", "image", "audio", "video"];
+  const parts = [];
+  for (const ch of order) {
+    const n = counts[ch];
+    if (n == null) continue;
+    const num = Number(n) || 0;
+    if (num > 0 || ch === "joint" || ch === "text") {
+      parts.push(`${ch}=${num}`);
+    }
+  }
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+/**
+ * Honest ANN / search-mode copy: small corpus without IVF is not "search broken".
+ * @param {Record<string, any>} idx
+ */
+function formatAnnHonesty(idx) {
+  const ready = Number(idx.vectors_ready) || 0;
+  const built = idx.ann_index_built === true;
+  const mode = idx.search_mode ? String(idx.search_mode) : null;
+  const repair = Number(idx.joint_repair_remaining) || 0;
+  const bits = [];
+  if (built) {
+    bits.push("ann=built");
+  } else if (ready === 0) {
+    bits.push("ann=off (no vectors yet)");
+  } else {
+    // Small-N / not yet optimized: full scan still works.
+    bits.push("ann=off — corpus small or IVF not built; full scan still used");
+  }
+  if (mode) bits.push(`mode=${mode}`);
+  if (repair > 0) bits.push(`joint_repair_remaining=${repair}`);
+  return bits.join(" · ");
+}
+
+function renderVectorsHealth(data) {
+  if (!memoryVectorsHealth) return;
+  memoryVectorsHealth.innerHTML = "";
+  const enc = data.encoder || {};
+  const idx = data.index || {};
+  const mem = data.memory || {};
+  const notes = Array.isArray(idx.last_optimize_notes)
+    ? idx.last_optimize_notes
+    : [];
+  const deviceBits = [
+    enc.device ? `eff=${enc.device}` : null,
+    enc.device_pref ? `req=${enc.device_pref}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const rows = [
+    [
+      "encoder",
+      enc.ok
+        ? `${enc.backend || "—"} · ${deviceBits || enc.device || enc.device_pref || "—"}`
+        : enc.error || "down",
+      enc.ok === true,
+    ],
+    ["model", enc.model_id || "—", null],
+    [
+      "queue",
+      `${enc.queue_depth != null ? enc.queue_depth : 0}/${
+        enc.queue_max != null ? enc.queue_max : "—"
+      }${enc.queue_dropped ? ` · dropped=${enc.queue_dropped}` : ""}`,
+      null,
+    ],
+    [
+      "embed flags",
+      `embed=${enc.embed_enabled ? "on" : "off"} · semantic=${
+        enc.semantic_enabled ? "on" : "off"
+      }`,
+      null,
+    ],
+    [
+      "index",
+      idx.ok
+        ? `${idx.backend || "—"} · ready=${
+            idx.vectors_ready != null ? idx.vectors_ready : 0
+          }`
+        : idx.error || "down",
+      idx.ok === true,
+    ],
+    [
+      "channels",
+      formatVectorsByChannel(idx.vectors_by_channel),
+      null,
+    ],
+    [
+      "repair",
+      (() => {
+        const rem = Number(idx.joint_repair_remaining) || 0;
+        const batch = Number(idx.joint_repair_last_batch) || 0;
+        if (rem > 0) {
+          return `pending=${rem}${batch ? ` · last_batch=${batch}` : ""} (auto prefers text)`;
+        }
+        return rem === 0 && batch > 0
+          ? `complete (last_batch=${batch})`
+          : "none pending";
+      })(),
+      // Repair pending is not search-broken — warn tone only.
+      Number(idx.joint_repair_remaining) > 0 ? false : null,
+    ],
+    [
+      "freshness",
+      [
+        idx.index_stale ? "stale" : "fresh",
+        formatAnnHonesty(idx),
+        idx.recent_buffer != null ? `buf=${idx.recent_buffer}` : null,
+        idx.last_optimize ? `opt=${idx.last_optimize}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "—",
+      // Stale is a warning; ann=off on small corpus must NOT look like status-bad.
+      idx.index_stale === true ? false : null,
+    ],
+    [
+      "optimize notes",
+      notes.length
+        ? notes.map((n) => String(n)).join("; ")
+        : idx.last_optimize
+          ? "(no notes)"
+          : "—",
+      null,
+    ],
+    ["store", mem.ok ? mem.backend || "ok" : mem.error || "down", mem.ok === true],
+  ];
+  for (const [label, value, good] of rows) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = label;
+    const val = document.createElement("span");
+    val.className = "status-value";
+    if (good === true) val.classList.add("status-ok");
+    if (good === false) {
+      // repair / freshness warn — not hard error (search still works).
+      val.classList.add(
+        label === "freshness" || label === "repair"
+          ? "memory-vector-stale"
+          : "status-bad"
+      );
+    }
+    val.textContent = value;
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryVectorsHealth.appendChild(row);
+  }
+}
+
+function renderVectorsAtomsList(atoms) {
+  if (!memoryVectorsList) return;
+  memoryVectorsList.innerHTML = "";
+  if (!atoms.length) {
+    memoryVectorsList.innerHTML = `<p class="muted empty memory-empty">No atoms match this embedding status.</p>`;
+    return;
+  }
+  for (const a of atoms) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn";
+    card.dataset.atomId = a.atom_id || "";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const strong = document.createElement("strong");
+    strong.textContent = a.embedding_status || a.kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = a.kind || "—";
+    head.appendChild(strong);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      a.atom_id || "—",
+      a.t_start || null,
+      a.embed_error ? `err=${a.embed_error}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    // embed_channels chips — joint vs text visible (PR-R5 honesty).
+    if (Array.isArray(a.channels) && a.channels.length) {
+      const chips = document.createElement("div");
+      chips.className = "memory-channel-chips";
+      for (const ch of a.channels) {
+        const chip = document.createElement("span");
+        chip.className = "badge memory-channel-chip";
+        chip.textContent = String(ch);
+        chips.appendChild(chip);
+      }
+      card.appendChild(chips);
+    }
+    const snip = document.createElement("div");
+    snip.className = "muted";
+    snip.style.fontSize = "0.85rem";
+    snip.style.marginTop = "0.35rem";
+    snip.textContent = a.text || "(empty)";
+    card.appendChild(snip);
+    card.addEventListener("click", () => {
+      if (memoryNeighborAtom && a.atom_id) {
+        memoryNeighborAtom.value = a.atom_id;
+      }
+      if (memoryNeighborQ) memoryNeighborQ.value = "";
+      runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
+    });
+    memoryVectorsList.appendChild(card);
+  }
+}
+
+/**
+ * Neighbor empty-state / meta line: never blank without explanation when query ran.
+ * @param {Record<string, any>} data
+ */
+function renderNeighborsMeta(data) {
+  if (!memoryNeighborsMeta) return;
+  const q = data.query || {};
+  const req = q.channel || "auto";
+  const resolved = q.resolved_channel || req;
+  const reason = q.channel_reason || null;
+  const parts = [
+    `channel ${req}${resolved && resolved !== req ? ` → ${resolved}` : resolved ? ` (${resolved})` : ""}`,
+    reason ? `reason=${reason}` : null,
+  ].filter(Boolean);
+  const idx = data.index || {};
+  if (idx.search_mode) parts.push(`mode=${idx.search_mode}`);
+  if (idx.ann_index_built === false) {
+    parts.push("IVF not built — full scan still used");
+  }
+  if (Number(idx.joint_repair_remaining) > 0) {
+    parts.push(`repair_pending=${idx.joint_repair_remaining}`);
+  }
+  memoryNeighborsMeta.hidden = false;
+  memoryNeighborsMeta.textContent = parts.join(" · ");
+}
+
+function renderNeighborsList(data) {
+  if (!memoryNeighborsList) return;
+  memoryNeighborsList.innerHTML = "";
+  renderNeighborsMeta(data);
+  const neighbors = data.neighbors || [];
+  if (!neighbors.length) {
+    const omit = data.omitted_reason || data.error || "no_hits";
+    const q = data.query || {};
+    const resolved = q.resolved_channel || q.channel || "—";
+    const reason = q.channel_reason || "—";
+    const lines = [
+      `No neighbors (${omit}).`,
+      `Searched channel ${resolved} (${reason}).`,
+    ];
+    // Distinguish “search broken” vs empty channel / small corpus.
+    if (omit === "no_hits" || omit === "no_vector") {
+      lines.push(
+        "Empty result is not necessarily broken search — try another channel or wait for encode/repair."
+      );
+    } else if (omit === "no_index" || omit === "encoder" || omit === "search_failed") {
+      lines.push("Search path unavailable (index/encoder) — not an IVF small-corpus skip.");
+    }
+    memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+      lines.join(" ")
+    )}</p>`;
+    return;
+  }
+  for (const n of neighbors) {
+    const card = document.createElement("div");
+    card.className = "card memory-channel-card";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const title = document.createElement("strong");
+    title.textContent = n.kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    const score =
+      n.score != null && Number.isFinite(Number(n.score))
+        ? Number(n.score).toFixed(4)
+        : "—";
+    // Cosine similarity badge (higher = closer).
+    const kind = n.score_kind === "cosine" || !n.score_kind ? "cosine" : n.score_kind;
+    badge.textContent = `${kind}=${score}`;
+    badge.title = "Cosine similarity (1 = identical direction)";
+    head.appendChild(title);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      n.atom_id || "—",
+      n.moment_id ? `moment=${n.moment_id}` : null,
+      n.channel ? `ch=${n.channel}` : null,
+      n.embedding_status || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet";
+    pre.textContent = n.snippet || "(empty)";
+    card.appendChild(pre);
+    memoryNeighborsList.appendChild(card);
+  }
+}
+
+async function refreshMemoryVectors() {
+  const health = await fetchJson("/api/memory/vectors");
+  renderVectorsHealth(health);
+
+  const params = new URLSearchParams();
+  params.set("limit", "50");
+  const status = memoryVectorStatus ? memoryVectorStatus.value.trim() : "";
+  if (status) params.set("status", status);
+  const data = await fetchJson(
+    `/api/memory/vectors/atoms?${params.toString()}`
+  );
+  if (!data.ok && !(data.atoms || []).length) {
+    if (memoryVectorsList) {
+      memoryVectorsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        data.error || "store unavailable"
+      )}</p>`;
+    }
+    return;
+  }
+  renderVectorsAtomsList(data.atoms || []);
+}
+
+async function runNeighborSearch() {
+  const params = new URLSearchParams();
+  const atomId = memoryNeighborAtom ? memoryNeighborAtom.value.trim() : "";
+  const q = memoryNeighborQ ? memoryNeighborQ.value.trim() : "";
+  let k = 8;
+  if (memoryNeighborK) {
+    const raw = parseInt(memoryNeighborK.value, 10);
+    if (Number.isFinite(raw)) k = raw;
+  }
+  params.set("k", String(k));
+  // Default auto when select missing; always send explicit channel from UI.
+  const channel =
+    memoryNeighborChannel && memoryNeighborChannel.value
+      ? memoryNeighborChannel.value.trim() || "auto"
+      : "auto";
+  params.set("channel", channel);
+  if (atomId) params.set("atom_id", atomId);
+  else if (q) params.set("q", q);
+  else {
+    if (memoryNeighborsMeta) {
+      memoryNeighborsMeta.hidden = true;
+      memoryNeighborsMeta.textContent = "";
+    }
+    if (memoryNeighborsList) {
+      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id or free-text query.</p>`;
+    }
+    return;
+  }
+  if (memoryNeighborsList) {
+    memoryNeighborsList.innerHTML = `<p class="muted">searching…</p>`;
+  }
+  try {
+    const data = await fetchJson(
+      `/api/memory/vectors/neighbors?${params.toString()}`
+    );
+    renderNeighborsList(data);
+  } catch (err) {
+    if (memoryNeighborsMeta) {
+      memoryNeighborsMeta.hidden = true;
+    }
+    if (memoryNeighborsList) {
+      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+  }
+}
+
+/**
+ * Format idle age for Graph session card (seconds → short human).
+ * @param {number | null | undefined} ageS
+ */
+function formatIdleAge(ageS) {
+  if (ageS == null || !Number.isFinite(Number(ageS))) return "—";
+  const s = Math.max(0, Math.floor(Number(ageS)));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+/**
+ * Graph overview flags + honesty note.
+ * @param {Record<string, any>} data
+ */
+function renderGraphOverview(data) {
+  if (!memoryGraphOverview) return;
+  memoryGraphOverview.innerHTML = "";
+  const trav = data.traversal || {};
+  const mem = data.memory || {};
+  const flagOn = trav.directed_traversal_enabled === true;
+  const keepOn = trav.directed_keep_enabled === true;
+  const rows = [
+    [
+      "traversal",
+      flagOn ? "on" : "off (default)",
+      flagOn === true,
+    ],
+    [
+      "directed keep",
+      keepOn ? "on" : "off",
+      keepOn === true ? true : null,
+    ],
+    [
+      "sessions",
+      [
+        data.has_active ? "active walk" : null,
+        data.has_last_session ? "last finished" : null,
+        !data.has_active && !data.has_last_session ? "none" : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      data.has_active === true ? true : null,
+    ],
+    [
+      "meal keep",
+      data.meal_keep_count != null ? String(data.meal_keep_count) : "0",
+      null,
+    ],
+    [
+      "budgets",
+      [
+        trav.traverse_max_steps != null ? `steps≤${trav.traverse_max_steps}` : null,
+        trav.traverse_max_nodes != null ? `nodes≤${trav.traverse_max_nodes}` : null,
+        trav.traverse_max_depth != null ? `depth≤${trav.traverse_max_depth}` : null,
+        trav.traverse_expand_max_ms != null
+          ? `expand_ms≤${trav.traverse_expand_max_ms}`
+          : null,
+        trav.traverse_session_ttl_s != null
+          ? `idle_ttl=${trav.traverse_session_ttl_s}s`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || "—",
+      null,
+    ],
+    [
+      "store",
+      mem.ok ? mem.backend || "ok" : mem.error || "down",
+      mem.ok === true,
+    ],
+  ];
+  for (const [label, value, good] of rows) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = label;
+    const val = document.createElement("span");
+    val.className = "status-value";
+    if (good === true) val.classList.add("status-ok");
+    if (good === false) val.classList.add("status-bad");
+    // Flag off is expected default — muted, not status-bad.
+    if (label === "traversal" && !flagOn) {
+      val.classList.remove("status-bad");
+      val.classList.add("memory-vector-stale");
+    }
+    val.textContent = value;
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryGraphOverview.appendChild(row);
+  }
+  // Edge-kind legend as a compact line.
+  const legend = Array.isArray(data.edge_kind_legend) ? data.edge_kind_legend : [];
+  if (legend.length) {
+    const row = document.createElement("div");
+    row.className = "status-row";
+    const lab = document.createElement("span");
+    lab.className = "status-label";
+    lab.textContent = "edge kinds";
+    const val = document.createElement("span");
+    val.className = "status-value";
+    val.textContent = legend
+      .map((e) => `${e.kind}=${e.base_weight != null ? e.base_weight : "?"}`)
+      .join(" · ");
+    row.appendChild(lab);
+    row.appendChild(val);
+    memoryGraphOverview.appendChild(row);
+  }
+
+  if (memoryGraphHonesty) {
+    const honesty = data.honesty || {};
+    const note = honesty.note || null;
+    if (note) {
+      memoryGraphHonesty.hidden = false;
+      memoryGraphHonesty.textContent = String(note);
+    } else {
+      memoryGraphHonesty.hidden = true;
+      memoryGraphHonesty.textContent = "";
+    }
+  }
+}
+
+/**
+ * Session card: status, goal, budgets (steps/nodes/depth/expand_ms/idle) — no wall-clock.
+ * @param {Record<string, any>} data session API payload
+ */
+function renderGraphSession(data) {
+  const sess = data.session || null;
+  const which = data.which || "none";
+  const dual =
+    data.has_active && data.has_last_session
+      ? which === "active"
+        ? "walking… · last finished retained"
+        : "last finished · active also present"
+      : null;
+
+  if (memoryGraphSessionBadge) {
+    if (!sess) {
+      memoryGraphSessionBadge.textContent = which === "meal" ? "meal-thin" : "none";
+    } else {
+      const st = sess.status || which;
+      memoryGraphSessionBadge.textContent = dual
+        ? `${st} · dual`
+        : String(st);
+    }
+  }
+
+  if (!memoryGraphSessionBody) return;
+  memoryGraphSessionBody.innerHTML = "";
+
+  if (!sess) {
+    const p = document.createElement("p");
+    p.className = "muted empty memory-empty";
+    if (data.honesty && data.honesty.note) {
+      p.textContent = String(data.honesty.note);
+    } else if (which === "meal") {
+      const n = data.meal_keep_count != null ? data.meal_keep_count : 0;
+      p.textContent = `Meal-thin keep only (${n} ids) — full walk is on active/last session.`;
+    } else {
+      p.textContent = "No walk yet. Start via traverse tools (flag on) or wait for a session.";
+    }
+    memoryGraphSessionBody.appendChild(p);
+    return;
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = [
+    sess.session_id || "—",
+    sess.status || null,
+    which ? `view=${which}` : null,
+    dual || null,
+    sess.moment_id ? `moment=${sess.moment_id}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  memoryGraphSessionBody.appendChild(meta);
+
+  const goal = document.createElement("div");
+  goal.style.marginTop = "0.35rem";
+  const goalLabel = document.createElement("span");
+  goalLabel.className = "muted";
+  goalLabel.textContent = "goal: ";
+  goal.appendChild(goalLabel);
+  goal.appendChild(document.createTextNode(sess.goal || "—"));
+  memoryGraphSessionBody.appendChild(goal);
+
+  const budgets = sess.budgets || {};
+  const budgetRow = document.createElement("div");
+  budgetRow.className = "memory-graph-budgets";
+  // KD-A18: steps/nodes/depth + expand_ms + idle age — NOT multi-hop wall-clock.
+  const idle =
+    sess.idle_age_s != null
+      ? sess.idle_age_s
+      : data.session && data.session.idle_age_s;
+  const bits = [
+    `steps ${budgets.steps_spent != null ? budgets.steps_spent : 0}/${
+      budgets.max_steps != null ? budgets.max_steps : "—"
+    } (rem ${budgets.steps_remaining != null ? budgets.steps_remaining : "—"})`,
+    `nodes ${budgets.nodes_spent != null ? budgets.nodes_spent : 0}/${
+      budgets.max_nodes != null ? budgets.max_nodes : "—"
+    }`,
+    `depth ${budgets.depth_spent != null ? budgets.depth_spent : 0}/${
+      budgets.max_depth != null ? budgets.max_depth : "—"
+    }`,
+    `expand_ms last=${
+      budgets.expand_ms_spent_last != null ? budgets.expand_ms_spent_last : 0
+    }/budget=${budgets.expand_ms_budget != null ? budgets.expand_ms_budget : "—"}`,
+    budgets.expand_truncated ? "expand_truncated" : null,
+    `idle ${formatIdleAge(idle)}`,
+  ].filter(Boolean);
+  budgetRow.textContent = bits.join(" · ");
+  memoryGraphSessionBody.appendChild(budgetRow);
+
+  const summary = document.createElement("pre");
+  summary.className = "memory-graph-summary";
+  summary.textContent =
+    sess.walk_summary_nl && String(sess.walk_summary_nl).trim()
+      ? String(sess.walk_summary_nl)
+      : "no walk summary yet";
+  memoryGraphSessionBody.appendChild(summary);
+
+  if (data.meal_keep_count != null && data.has_last_session) {
+    const meal = document.createElement("div");
+    meal.className = "muted";
+    meal.style.fontSize = "0.8rem";
+    meal.style.marginTop = "0.35rem";
+    meal.textContent = `meal keep ids: ${data.meal_keep_count} (thin; full considered is above)`;
+    memoryGraphSessionBody.appendChild(meal);
+  }
+}
+
+/**
+ * @param {HTMLElement | null} el
+ * @param {Array<Record<string, any>>} nodes
+ * @param {"considered" | "kept" | "frontier"} mode
+ */
+function renderGraphNodeList(el, nodes, mode) {
+  if (!el) return;
+  el.innerHTML = "";
+  if (!nodes.length) {
+    const empty = mode === "frontier"
+      ? "No frontier (active walks only; frozen on finished)."
+      : mode === "kept"
+        ? "No keeps yet."
+        : "No considered nodes.";
+    el.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(empty)}</p>`;
+    return;
+  }
+  for (const n of nodes) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "card card-btn memory-graph-node";
+    if (mode === "kept" || n.kept) {
+      card.classList.add("memory-graph-node-kept");
+    } else if (mode === "considered") {
+      card.classList.add("memory-graph-node-considered");
+    }
+    const aid = n.atom_id || "";
+    card.dataset.atomId = aid;
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const strong = document.createElement("strong");
+    strong.textContent = n.kind || n.edge_kind || mode;
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    if (mode === "kept" || n.kept) {
+      badge.classList.add("memory-graph-kept-badge");
+      badge.textContent = "kept";
+    } else if (n.via_edge_kind || n.edge_kind) {
+      badge.textContent = String(n.via_edge_kind || n.edge_kind);
+    } else {
+      badge.textContent = n.depth != null ? `d=${n.depth}` : mode;
+    }
+    head.appendChild(strong);
+    head.appendChild(badge);
+    card.appendChild(head);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const weight =
+      n.weight != null && Number.isFinite(Number(n.weight))
+        ? Number(n.weight).toFixed(3)
+        : null;
+    meta.textContent = [
+      aid || "—",
+      n.depth != null ? `depth=${n.depth}` : null,
+      weight != null ? `w=${weight}` : null,
+      n.via_edge_kind || n.edge_kind || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+
+    const snip = document.createElement("div");
+    snip.className = "muted";
+    snip.style.fontSize = "0.85rem";
+    snip.style.marginTop = "0.25rem";
+    snip.textContent = n.snippet || n.label || n.preview || n.reason || "(empty)";
+    card.appendChild(snip);
+
+    card.addEventListener("click", () => {
+      if (memoryGraphNeighborAtom && aid) {
+        memoryGraphNeighborAtom.value = aid;
+      }
+      runGraphNeighborSearch().catch((e) =>
+        panelLoadError("Memory graph neighbors", e)
+      );
+    });
+    el.appendChild(card);
+  }
+}
+
+/**
+ * @param {Record<string, any>} data session payload
+ */
+function renderGraphLists(data) {
+  const sess = data.session || null;
+  const considered = sess && Array.isArray(sess.considered) ? sess.considered : [];
+  const keepIds = new Set(
+    sess && Array.isArray(sess.keep_ids) ? sess.keep_ids.map(String) : []
+  );
+  // Kept list: prefer order of keep_ids, fall back to considered.kept flags.
+  const byId = new Map(considered.map((n) => [String(n.atom_id || ""), n]));
+  const kept = [];
+  if (sess && Array.isArray(sess.keep_ids)) {
+    for (const id of sess.keep_ids) {
+      const row = byId.get(String(id));
+      if (row) kept.push({ ...row, kept: true });
+      else kept.push({ atom_id: id, kept: true, label: id });
+    }
+  } else {
+    for (const n of considered) {
+      if (n.kept || keepIds.has(String(n.atom_id || ""))) {
+        kept.push({ ...n, kept: true });
+      }
+    }
+  }
+  const frontier =
+    sess && Array.isArray(sess.frontier) && data.which === "active"
+      ? sess.frontier
+      : [];
+  renderGraphNodeList(memoryGraphConsidered, considered, "considered");
+  renderGraphNodeList(memoryGraphKept, kept, "kept");
+  renderGraphNodeList(memoryGraphFrontier, frontier, "frontier");
+}
+
+/**
+ * Graph neighbor probe results (multi-kind edges).
+ * @param {Record<string, any>} data
+ */
+function renderGraphNeighbors(data) {
+  if (!memoryGraphNeighborsList) return;
+  memoryGraphNeighborsList.innerHTML = "";
+  if (memoryGraphNeighborsMeta) {
+    const q = data.query || {};
+    const em = data.expand_meta || {};
+    const parts = [
+      q.atom_id ? `atom=${q.atom_id}` : null,
+      q.k != null ? `k=${q.k}` : null,
+      q.allow_semantic === false ? "semantic=off" : "semantic=on",
+      em.elapsed_ms != null ? `elapsed_ms=${em.elapsed_ms}` : null,
+      em.expand_truncated ? "truncated" : null,
+      em.semantic_reason ? `sem=${em.semantic_reason}` : null,
+    ].filter(Boolean);
+    memoryGraphNeighborsMeta.hidden = parts.length === 0;
+    memoryGraphNeighborsMeta.textContent = parts.join(" · ");
+  }
+  const neighbors = data.neighbors || [];
+  if (!neighbors.length) {
+    const omit = data.omitted_reason || data.error || "no_hits";
+    const lines = [
+      `No neighbors (${omit}).`,
+      "Structural edges need prev/next/parent links; semantic hops need index + warm encoder.",
+    ];
+    memoryGraphNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+      lines.join(" ")
+    )}</p>`;
+    return;
+  }
+  for (const n of neighbors) {
+    const card = document.createElement("div");
+    card.className = "card memory-channel-card memory-graph-node";
+    const head = document.createElement("div");
+    head.className = "card-head";
+    const title = document.createElement("strong");
+    title.textContent = n.kind || n.edge_kind || "atom";
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    const w =
+      n.weight != null && Number.isFinite(Number(n.weight))
+        ? Number(n.weight).toFixed(3)
+        : "—";
+    badge.textContent = `${n.edge_kind || "edge"} w=${w}`;
+    badge.title = n.reason || "edge weight (v1 model)";
+    head.appendChild(title);
+    head.appendChild(badge);
+    card.appendChild(head);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = [
+      n.atom_id || "—",
+      n.moment_id ? `moment=${n.moment_id}` : null,
+      n.reason || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    card.appendChild(meta);
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet";
+    pre.textContent = n.snippet || n.label || "(empty)";
+    card.appendChild(pre);
+    card.style.cursor = "pointer";
+    card.addEventListener("click", () => {
+      if (memoryGraphNeighborAtom && n.atom_id) {
+        memoryGraphNeighborAtom.value = n.atom_id;
+      }
+    });
+    memoryGraphNeighborsList.appendChild(card);
+  }
+}
+
+async function runGraphNeighborSearch() {
+  const params = new URLSearchParams();
+  const atomId = memoryGraphNeighborAtom
+    ? memoryGraphNeighborAtom.value.trim()
+    : "";
+  let k = 12;
+  if (memoryGraphNeighborK) {
+    const raw = parseInt(memoryGraphNeighborK.value, 10);
+    if (Number.isFinite(raw)) k = raw;
+  }
+  params.set("k", String(k));
+  const allowSem =
+    !memoryGraphNeighborSem || memoryGraphNeighborSem.checked !== false;
+  params.set("allow_semantic", allowSem ? "1" : "0");
+  if (!atomId) {
+    if (memoryGraphNeighborsMeta) {
+      memoryGraphNeighborsMeta.hidden = true;
+      memoryGraphNeighborsMeta.textContent = "";
+    }
+    if (memoryGraphNeighborsList) {
+      memoryGraphNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id to expand 1-hop.</p>`;
+    }
+    return;
+  }
+  params.set("atom_id", atomId);
+  if (memoryGraphNeighborsList) {
+    memoryGraphNeighborsList.innerHTML = `<p class="muted">expanding…</p>`;
+  }
+  try {
+    const data = await fetchJson(
+      `/api/memory/graph/neighbors?${params.toString()}`
+    );
+    renderGraphNeighbors(data);
+  } catch (err) {
+    if (memoryGraphNeighborsMeta) memoryGraphNeighborsMeta.hidden = true;
+    if (memoryGraphNeighborsList) {
+      memoryGraphNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+  }
+}
+
+async function refreshMemoryGraph() {
+  const overview = await fetchJson("/api/memory/graph");
+  renderGraphOverview(overview);
+
+  const session = await fetchJson("/api/memory/graph/session");
+  // Merge honesty from overview when session has none.
+  if (!session.honesty && overview.honesty) {
+    session.honesty = overview.honesty;
+  }
+  // Prefer dual-badge presence from overview if session omitted.
+  if (session.has_active == null) session.has_active = overview.has_active;
+  if (session.has_last_session == null) {
+    session.has_last_session = overview.has_last_session;
+  }
+  renderGraphSession(session);
+  renderGraphLists(session);
+}
+
+async function refreshMemory() {
+  if (memoryActiveTab === "atoms") {
+    await refreshMemoryAtoms();
+    return;
+  }
+  if (memoryActiveTab === "vectors") {
+    await refreshMemoryVectors();
+    return;
+  }
+  if (memoryActiveTab === "graph") {
+    await refreshMemoryGraph();
+    return;
+  }
+  await refreshMemoryContext();
+}
+
+if (memoryRefreshBtn) {
+  memoryRefreshBtn.addEventListener("click", () => {
+    refreshMemory().catch((e) => panelLoadError("Memory", e));
+  });
+}
+document.querySelectorAll(".memory-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setMemoryTab(btn.dataset.memoryTab || "context");
+    refreshMemory().catch((e) => panelLoadError("Memory", e));
+  });
+});
+if (memoryAtomsApply) {
+  memoryAtomsApply.addEventListener("click", () => {
+    refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+  });
+}
+if (memoryAtomKind) {
+  memoryAtomKind.addEventListener("change", () => {
+    if (memoryActiveTab === "atoms") {
+      refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+    }
+  });
+}
+if (memoryVectorsApply) {
+  memoryVectorsApply.addEventListener("click", () => {
+    refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+  });
+}
+if (memoryVectorsRebuild) {
+  memoryVectorsRebuild.addEventListener("click", () => {
+    rebuildVectorIndex().catch((e) => panelLoadError("Memory vectors rebuild", e));
+  });
+}
+if (memoryVectorStatus) {
+  memoryVectorStatus.addEventListener("change", () => {
+    if (memoryActiveTab === "vectors") {
+      refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+    }
+  });
+}
+if (memoryNeighborsRun) {
+  memoryNeighborsRun.addEventListener("click", () => {
+    runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
+  });
+}
+if (memoryGraphNeighborsRun) {
+  memoryGraphNeighborsRun.addEventListener("click", () => {
+    runGraphNeighborSearch().catch((e) =>
+      panelLoadError("Memory graph neighbors", e)
+    );
+  });
+}
+
+/**
+ * Rebuild approximate nearest-neighbor index over stored embeddings.
+ * Does not re-run Nemotron / re-encode atoms.
+ * Honesty: notes[] explain skips (no vectors / below IVF min) vs failures.
+ */
+async function rebuildVectorIndex() {
+  if (memoryVectorsRebuildInFlight) return;
+  memoryVectorsRebuildInFlight = true;
+  if (memoryVectorsRebuild) {
+    memoryVectorsRebuild.disabled = true;
+    memoryVectorsRebuild.textContent = "Rebuilding…";
+  }
+  try {
+    const data = await fetchJson("/api/memory/vectors/rebuild", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const notes = Array.isArray(data && data.notes)
+      ? data.notes.map((n) => String(n))
+      : [];
+    const joined = notes.length
+      ? notes.join("; ")
+      : data && (data.note || data.error)
+        ? String(data.note || data.error)
+        : data && data.optimized === false
+          ? "optimize finished without a durable ANN (full scan still works)"
+          : "index rebuild requested";
+    // Map common skip notes into operator-facing honesty.
+    const lower = joined.toLowerCase();
+    let notice = joined;
+    if (
+      data &&
+      data.optimized === false &&
+      (lower.includes("below_ivf_min") ||
+        lower.includes("no_vectors") ||
+        lower.includes("null"))
+    ) {
+      notice = `${joined} — IVF not built is normal on small/empty corpora; full scan still used (not search broken).`;
+    }
+    if (typeof showNotice === "function") {
+      showNotice(
+        data && data.ok !== false
+          ? `Vector index: ${notice}`
+          : `Vector index rebuild: ${notice}`
+      );
+    }
+    await refreshMemoryVectors();
+  } finally {
+    memoryVectorsRebuildInFlight = false;
+    if (memoryVectorsRebuild) {
+      memoryVectorsRebuild.disabled = false;
+      memoryVectorsRebuild.textContent = "Rebuild ANN index";
+    }
   }
 }
 
@@ -2716,6 +4743,19 @@ if (devSpeedDelay) {
   });
 }
 
+if (semanticWaitToggle) {
+  semanticWaitToggle.addEventListener("change", () => {
+    patchSemanticWait({ enabled: Boolean(semanticWaitToggle.checked) });
+  });
+}
+if (semanticWaitMaxMs) {
+  semanticWaitMaxMs.addEventListener("change", () => {
+    const n = Number(semanticWaitMaxMs.value);
+    if (!Number.isFinite(n)) return;
+    patchSemanticWait({ max_ms: n });
+  });
+}
+
 if (providerModelSelect) {
   providerModelSelect.addEventListener("change", () => {
     const model = providerModelSelect.value;
@@ -2760,6 +4800,45 @@ if (providerApiKeyInput) {
       e.preventDefault();
       saveApiKey();
     }
+  });
+}
+
+// ── xAI OAuth device login (PR4) — never display tokens ─────────────────
+if (oauthLoginBtn) {
+  oauthLoginBtn.addEventListener("click", () => {
+    startXaiDeviceLogin();
+  });
+}
+if (oauthLogoutBtn) {
+  oauthLogoutBtn.addEventListener("click", () => {
+    logoutXaiOauth();
+  });
+}
+if (oauthCancelBtn) {
+  oauthCancelBtn.addEventListener("click", () => {
+    cancelXaiDeviceLogin();
+  });
+}
+if (oauthCopyCodeBtn) {
+  oauthCopyCodeBtn.addEventListener("click", () => {
+    const code =
+      (oauthPendingPublic && oauthPendingPublic.user_code) ||
+      (oauthUserCode && oauthUserCode.textContent) ||
+      "";
+    copyOauthText(code.trim() === "—" ? "" : code.trim(), oauthCopyCodeBtn, "Copy code");
+  });
+}
+if (oauthCopyUriBtn) {
+  oauthCopyUriBtn.addEventListener("click", () => {
+    const uri =
+      (oauthPendingPublic &&
+        (oauthPendingPublic.verification_uri_complete ||
+          oauthPendingPublic.verification_uri)) ||
+      (oauthVerifyLink && oauthVerifyLink.href) ||
+      "";
+    const safe =
+      uri && uri !== "#" && !uri.endsWith("#") ? uri : "";
+    copyOauthText(safe, oauthCopyUriBtn, "Copy link");
   });
 }
 
@@ -3740,6 +5819,7 @@ function refreshActivePanel() {
   const name = activePanel;
   if (name === "goals") return refreshGoals();
   if (name === "moments") return refreshMoments();
+  if (name === "memory") return refreshMemory();
   if (name === "tools") return refreshTools();
   if (name === "identity") return refreshIdentity();
   if (name === "secrets") return refreshSecrets();
@@ -3759,6 +5839,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     // Refresh panel data when opened; surface failures (parity with chat).
     if (name === "goals") refreshGoals().catch((e) => panelLoadError("Goals", e));
     if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
+    if (name === "memory") refreshMemory().catch((e) => panelLoadError("Memory", e));
     if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
     if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
     if (name === "secrets") refreshSecrets().catch((e) => panelLoadError("Secrets", e));
@@ -3775,6 +5856,7 @@ async function tick() {
     if (
       activePanel === "goals" ||
       activePanel === "moments" ||
+      activePanel === "memory" ||
       activePanel === "tools" ||
       activePanel === "identity" ||
       activePanel === "secrets"
@@ -3789,5 +5871,5 @@ async function tick() {
   }
 }
 
-tick();
+tick().then(() => maybeResumeOauthDeviceSession().catch(() => {}));
 setInterval(tick, 1500);

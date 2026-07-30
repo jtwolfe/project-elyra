@@ -1,12 +1,13 @@
 """Credential resolver + API key secret store (fail-closed).
 
 Scope: Grok Build ``~/.grok/auth.json`` parse (smoke-compatible), active-source
-resolution (``grok_build`` | ``api_key`` only — no silent fallback), atomic
-API key file under ``data/secrets/``, env ``XAI_API_KEY`` only for ``api_key``.
-Out of scope: HTTP clients, status API, token refresh, supervisor wiring.
+resolution (``xai_oauth`` | ``api_key`` | ``grok_build`` — no silent fallback),
+atomic API key file under ``data/secrets/``, env ``XAI_API_KEY`` only for
+``api_key``, pure OAuth resolve via ``ensure_fresh_access``.
+Out of scope: HTTP chat clients, Glass UI, ProviderRuntime rebind (callers).
 
 Never log or return secrets into status payloads. ``CredentialResolution.token``
-is for bearer injection only.
+is for bearer injection only. ``resolve_bearer`` is pure (no set_bearer_token).
 """
 
 from __future__ import annotations
@@ -21,9 +22,11 @@ from typing import Mapping
 
 logger = logging.getLogger(__name__)
 
+SOURCE_XAI_OAUTH = "xai_oauth"
 SOURCE_GROK_BUILD = "grok_build"
 SOURCE_API_KEY = "api_key"
-VALID_SOURCES = frozenset({SOURCE_GROK_BUILD, SOURCE_API_KEY})
+# SSOT — settings / provider_prefs / CLI must import this frozenset.
+VALID_SOURCES = frozenset({SOURCE_XAI_OAUTH, SOURCE_API_KEY, SOURCE_GROK_BUILD})
 
 ENV_XAI_API_KEY = "XAI_API_KEY"
 
@@ -39,6 +42,13 @@ DETAIL_TOKEN_EXPIRED = "token_expired"
 DETAIL_MISSING_API_KEY = "missing_api_key"
 DETAIL_UNKNOWN_SOURCE = "unknown_source"
 DETAIL_EMPTY_API_KEY = "empty_api_key"
+# OAuth detail codes (mirrored from xai_oauth for status messaging)
+DETAIL_MISSING_OAUTH_TOKENS = "missing_oauth_tokens"
+DETAIL_INVALID_OAUTH_TOKENS = "invalid_oauth_tokens"
+DETAIL_OAUTH_TOKEN_EXPIRED = "oauth_token_expired"
+DETAIL_OAUTH_REFRESH_FAILED = "oauth_refresh_failed"
+DETAIL_OAUTH_REAUTH_REQUIRED = "oauth_reauth_required"
+DETAIL_OAUTH_DENIED = "oauth_denied"
 
 
 @dataclass(frozen=True)
@@ -46,6 +56,8 @@ class CredentialResolution:
     """Result of resolving the active credential source.
 
     ``token`` must never be logged or placed in status/API responses.
+    ``rotated`` is True iff this call refreshed OAuth access on disk
+    (callers may rebind live clients; auth itself never rebinds).
     """
 
     ok: bool
@@ -55,6 +67,7 @@ class CredentialResolution:
     expires_at: str | None
     email: str | None
     api_key_configured: bool
+    rotated: bool = False
 
 
 class GrokAuthError(Exception):
@@ -281,6 +294,31 @@ def api_key_is_configured(
     return bool(isinstance(val, str) and val.strip())
 
 
+def auth_secret_values_for_redaction(data_dir: Path) -> list[str]:
+    """Return auth secret strings that must be scrubbed from tool results.
+
+    Unions stored API key with OAuth access + refresh when present on disk.
+    Never invents values/ entries solely for redaction. Best-effort: missing
+    or unreadable files yield an empty contribution.
+    """
+    out: list[str] = []
+    key = read_stored_api_key(data_dir)
+    if key:
+        out.append(key)
+    try:
+        from elyra.llm.oauth_store import load_oauth_bundle_optional
+
+        bundle = load_oauth_bundle_optional(data_dir)
+    except Exception:  # noqa: BLE001 — redaction best-effort
+        bundle = None
+    if bundle is not None:
+        if bundle.access_token:
+            out.append(bundle.access_token)
+        if bundle.refresh_token:
+            out.append(bundle.refresh_token)
+    return out
+
+
 def resolve_bearer(
     *,
     source: str,
@@ -290,8 +328,11 @@ def resolve_bearer(
 ) -> CredentialResolution:
     """Resolve bearer token for the **active** credential source only.
 
-    No silent fallback between ``grok_build`` and ``api_key``. Fail-closed:
-    missing / expired / invalid → ``ok=False`` with a status-safe ``detail``.
+    No silent fallback between sources. Fail-closed: missing / expired /
+    invalid → ``ok=False`` with a status-safe ``detail``.
+
+    PURE for OAuth: disk I/O + optional refresh HTTP via ``ensure_fresh_access``;
+    never calls ``set_bearer_token`` or touches ProviderRuntime.
 
     Env ``XAI_API_KEY`` is consulted only when ``source == api_key`` and no
     stored key file is present.
@@ -311,6 +352,12 @@ def resolve_bearer(
             api_key_configured=configured,
         )
 
+    if src == SOURCE_XAI_OAUTH:
+        return _resolve_xai_oauth(
+            data_dir=data_dir,
+            api_key_configured=configured,
+        )
+
     if src == SOURCE_GROK_BUILD:
         return _resolve_grok_build(
             data_dir=data_dir,
@@ -322,6 +369,62 @@ def resolve_bearer(
         data_dir=data_dir,
         env=env,
         api_key_configured=configured,
+    )
+
+
+def _resolve_xai_oauth(
+    *,
+    data_dir: Path,
+    api_key_configured: bool,
+) -> CredentialResolution:
+    """Pure OAuth resolve via ensure_fresh_access — no rebind side effects."""
+    # Local import: oauth_store/xai_oauth import auth helpers (cycle-safe).
+    from elyra.llm.xai_oauth import ensure_fresh_access
+
+    try:
+        fresh = ensure_fresh_access(data_dir)
+    except OSError as exc:
+        # Durable reauth_required write failed after invalid_grant (KD15).
+        logger.warning(
+            "credential resolve xai_oauth: ensure_fresh OSError %s",
+            type(exc).__name__,
+        )
+        return CredentialResolution(
+            ok=False,
+            source=SOURCE_XAI_OAUTH,
+            token=None,
+            detail=DETAIL_OAUTH_REFRESH_FAILED,
+            expires_at=None,
+            email=None,
+            api_key_configured=api_key_configured,
+            rotated=False,
+        )
+
+    if not fresh.ok:
+        logger.warning(
+            "credential resolve xai_oauth failed: detail=%s",
+            fresh.detail,
+        )
+        return CredentialResolution(
+            ok=False,
+            source=SOURCE_XAI_OAUTH,
+            token=None,
+            detail=fresh.detail or DETAIL_MISSING_OAUTH_TOKENS,
+            expires_at=fresh.expires_at,
+            email=fresh.email,
+            api_key_configured=api_key_configured,
+            rotated=False,
+        )
+
+    return CredentialResolution(
+        ok=True,
+        source=SOURCE_XAI_OAUTH,
+        token=fresh.access_token,
+        detail=None,
+        expires_at=fresh.expires_at,
+        email=fresh.email,
+        api_key_configured=api_key_configured,
+        rotated=bool(fresh.rotated),
     )
 
 

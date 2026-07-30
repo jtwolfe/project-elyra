@@ -8,8 +8,13 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   provider/model/credential mutators, live usage + hard-stop override,
   media upload/serve + message attachment_ids (PR3 / KD15, KD18, KD23),
   STT proxy POST /api/stt (PR6 / KD4, KD9, KD18),
-  named secrets store GET/PUT/DELETE + grants (PR5 / IK10).
-Out of scope: Glass draft editors, auth/IdP, multi-party chat protocol,
+  named secrets store GET/PUT/DELETE + grants (PR5 / IK10),
+  xAI OAuth device login/logout GET/POST /api/auth/xai/* (PR3 — server-polled
+  device-code; never returns tokens or device_code; optional loopback Origin),
+  memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only;
+  Phase 2 PR7 — vectors health/status/neighbors;
+  Phase 2a PR-A5 — graph overview/session/neighbors + optional debug POST).
+Out of scope: Glass draft editors, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
 """
 
@@ -40,6 +45,7 @@ from elyra.identity import (
 )
 from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
 from elyra.llm.auth import VALID_SOURCES, resolve_bearer
+from elyra.llm.oauth_store import public_meta as oauth_public_meta
 from elyra.llm.queue import ChatRequestGate
 from elyra.media.tts import (
     TTS_DEFAULT_LANGUAGE,
@@ -95,6 +101,9 @@ _DEFAULT_SESSION_USER = "operator"
 
 # In-process concurrent upload cap (KD15); shared across handler instances.
 _UPLOAD_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
+
+# Loopback hosts for optional Origin/Referer CSRF check on auth mutators (PR3).
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
 def _route_payload(result: dict[str, Any], *, message: Any | None = None) -> dict[str, Any]:
@@ -290,6 +299,46 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, {"moment": meta, "beats": beats})
             return
 
+        # Memory inspect (PR9 + Phase 2 PR7) — read-only; no secrets; fail closed.
+        if path == "/api/memory" or path == "/api/memory/":
+            self._get_memory_overview()
+            return
+        if path == "/api/memory/context":
+            self._get_memory_context(qs)
+            return
+        if path == "/api/memory/atoms":
+            self._get_memory_atoms(qs)
+            return
+        if path.startswith("/api/memory/atoms/"):
+            aid = _safe_segment(unquote(path[len("/api/memory/atoms/") :]))
+            if aid is None:
+                self._json(400, {"ok": False, "error": "invalid atom id"})
+                return
+            self._get_memory_atom(aid)
+            return
+        if path == "/api/memory/vectors" or path == "/api/memory/vectors/":
+            self._get_memory_vectors()
+            return
+        if path == "/api/memory/vectors/atoms":
+            self._get_memory_vectors_atoms(qs)
+            return
+        if path == "/api/memory/vectors/neighbors":
+            self._get_memory_vectors_neighbors(qs)
+            return
+        # Phase 2a Graph tab (PR-A5) — overview / session / neighbors.
+        if path == "/api/memory/graph" or path == "/api/memory/graph/":
+            self._get_memory_graph()
+            return
+        if path == "/api/memory/graph/session":
+            self._get_memory_graph_session(qs)
+            return
+        if path == "/api/memory/graph/neighbors":
+            self._get_memory_graph_neighbors(qs)
+            return
+        if path.startswith("/api/memory/"):
+            self._json(404, {"ok": False, "error": "not found"})
+            return
+
         if path == "/api/identity":
             include_draft = (qs.get("include_draft") or ["0"])[0] in (
                 "1",
@@ -309,6 +358,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/secrets":
             self._get_secrets()
+            return
+
+        # xAI OAuth device login (PR3) — public meta / status; never tokens.
+        if path == "/api/auth/xai" or path == "/api/auth/xai/":
+            self._get_auth_xai()
+            return
+        if path == "/api/auth/xai/device/status":
+            self._get_auth_xai_device_status()
             return
 
         if path.startswith("/api/users/"):
@@ -439,12 +496,31 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_wait_reply(body)
             return
 
+        # xAI OAuth device login mutators (PR3) — never return tokens/device_code.
+        if path == "/api/auth/xai/device/start":
+            self._post_auth_xai_device_start(body)
+            return
+        if path == "/api/auth/xai/device/cancel":
+            self._post_auth_xai_device_cancel(body)
+            return
+        if path == "/api/auth/xai/logout":
+            self._post_auth_xai_logout(body)
+            return
+
         if path == "/api/goals":
             self._post_goals(body)
             return
 
         if path == "/api/reset":
             self._post_reset(body)
+            return
+
+        if path == "/api/memory/vectors/rebuild":
+            self._post_memory_vectors_rebuild(body)
+            return
+
+        if path == "/api/memory/graph/traverse":
+            self._post_memory_graph_traverse(body)
             return
 
         if path == "/api/users":
@@ -483,6 +559,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/dev-speed":
             self._patch_dev_speed(body)
+            return
+
+        if path == "/api/semantic-wait":
+            self._patch_semantic_wait(body)
             return
 
         if path == "/api/provider":
@@ -566,6 +646,57 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         """True when provider runtime is not bound (legacy / incomplete start)."""
         return self.provider is None
 
+    def _origin_is_loopback_ok(self) -> bool:
+        """Optional cheap CSRF: if Origin/Referer present, host must be loopback.
+
+        Missing Origin and Referer → allow (curl / CLI). Non-loopback host → deny.
+        KD23 residual: accepted for loopback-only bind; full CSRF token later if
+        bind opens off-loopback.
+        """
+        origin = self.headers.get("Origin") or self.headers.get("Referer")
+        if not origin or not isinstance(origin, str) or not origin.strip():
+            return True
+        try:
+            parsed = urlparse(origin.strip())
+        except Exception:  # noqa: BLE001
+            return False
+        host = (parsed.hostname or "").lower()
+        if not host:
+            # Opaque / non-http origin — reject when present but unparseable.
+            return False
+        if host in _LOOPBACK_HOSTS:
+            return True
+        # Also accept literal IPv6 without brackets from some parsers.
+        if host in {"0:0:0:0:0:0:0:1"}:
+            return True
+        return False
+
+    def _reject_if_auth_origin_bad(self) -> bool:
+        """Send 403 when Origin/Referer is present and not loopback."""
+        if self._origin_is_loopback_ok():
+            return False
+        self._json(
+            403,
+            {
+                "ok": False,
+                "error": "origin_not_allowed",
+                "detail": "auth mutators require loopback Origin/Referer when set",
+            },
+        )
+        return True
+
+    @staticmethod
+    def _strip_auth_secrets(payload: dict[str, Any]) -> dict[str, Any]:
+        """Defensive: never return tokens or device_code from auth endpoints."""
+        banned = {
+            "access_token",
+            "refresh_token",
+            "device_code",
+            "id_token",
+            "token",
+        }
+        return {k: v for k, v in payload.items() if k not in banned}
+
     def _reject_if_resetting(self) -> bool:
         """Send 503 resetting when full reset is in progress; return True if rejected."""
         # PresenceWorker.is_resetting is a @property (bool), not a method.
@@ -573,6 +704,1344 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(503, {"ok": False, "error": "resetting"})
             return True
         return False
+
+    # ── Memory inspect (PR9) ─────────────────────────────────────────────
+
+    def _memory_flags_block(self) -> dict[str, Any]:
+        """Flags + store health from worker status (no secrets)."""
+        try:
+            snap = self.worker.status_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "enabled": False,
+                "write_atoms": False,
+                "backend": "unknown",
+                "store_open": False,
+                "ok": False,
+                "error": str(exc) or type(exc).__name__,
+            }
+        mem = snap.get("memory") if isinstance(snap, dict) else None
+        if not isinstance(mem, dict):
+            mem = {}
+        out = dict(mem)
+        out["active_moment_id"] = snap.get("active_moment_id") if isinstance(snap, dict) else None
+        out["phase"] = snap.get("phase") if isinstance(snap, dict) else None
+        return out
+
+    def _get_memory_overview(self) -> None:
+        """GET /api/memory — flags, store health, whether a last meal exists."""
+        block = self._memory_flags_block()
+        ok = bool(block.get("ok"))
+        payload: dict[str, Any] = {
+            "ok": ok,
+            "memory": block,
+            "has_last_meal": bool(block.get("has_last_meal")),
+            "tabs": {
+                "context": True,
+                "atoms": True,
+                "vectors": {"stub": False, "phase": "2"},
+                "graph": {"stub": False, "phase": "2a"},
+            },
+        }
+        if not ok and block.get("error"):
+            payload["error"] = block.get("error")
+        self._json(200, payload)
+
+    def _get_memory_context(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/context — last/current meal by channel labels.
+
+        Prefer last compose snapshot from the worker. Optional
+        ``?compose=1`` rebuilds on demand for the open/active moment when
+        the store is healthy (careful path; may be empty without atoms).
+        """
+        flags = self._memory_flags_block()
+        force_compose = (qs.get("compose") or ["0"])[0] in ("1", "true", "yes")
+        snap = None
+        if hasattr(self.worker, "last_meal_snapshot"):
+            try:
+                snap = self.worker.last_meal_snapshot()
+            except Exception:  # noqa: BLE001
+                snap = None
+
+        if snap and not force_compose:
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "meal": snap,
+                    "memory": flags,
+                    "source": snap.get("source") or "last_compose",
+                },
+            )
+            return
+
+        # Fail closed when store not usable and no snapshot to show.
+        store_ok = bool(flags.get("ok")) and bool(flags.get("store_open"))
+        if not store_ok and not snap:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "meal": None,
+                    "memory": flags,
+                },
+            )
+            return
+
+        if force_compose or not snap:
+            composed = self._compose_meal_for_inspect(flags)
+            if composed is not None:
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "meal": composed,
+                        "memory": flags,
+                        "source": composed.get("source") or "on_demand",
+                    },
+                )
+                return
+            if snap:
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "meal": snap,
+                        "memory": flags,
+                        "source": snap.get("source") or "last_compose",
+                        "compose_error": "on_demand_failed",
+                    },
+                )
+                return
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": "compose_failed",
+                    "meal": None,
+                    "memory": flags,
+                },
+            )
+            return
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "meal": snap,
+                "memory": flags,
+                "source": snap.get("source") or "last_compose",
+            },
+        )
+
+    def _compose_meal_for_inspect(self, flags: dict[str, Any]) -> dict[str, Any] | None:
+        """Best-effort on-demand compose for open/active moment (glass only)."""
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001 — inspect path
+        except Exception:  # noqa: BLE001
+            return None
+        if store is None:
+            return None
+        try:
+            health = store.health()
+            if isinstance(health, dict) and not health.get("ok", True):
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+
+        open_mid = flags.get("active_moment_id")
+        if not open_mid:
+            # Prefer most recent open moment from moment store.
+            try:
+                opens = self.moments.list_moments(limit=5, open_only=True)
+                if opens:
+                    open_mid = opens[0].get("id") or opens[0].get("moment_id")
+            except Exception:  # noqa: BLE001
+                open_mid = None
+
+        try:
+            from elyra.memory.inspect import meal_package_to_inspect
+            from elyra.memory.meal import compose_meal
+            from elyra.memory.types import utc_now_iso
+
+            mem_cfg = self.worker.settings.memory
+            loop = self.worker.settings.loop
+            budget = int(getattr(loop, "sliding_input_tokens", 50_000))
+            # Avoid loading full prompts on inspect poll — empty fixed cost.
+            # Include last_confirmed keep so Context can show directed_keep.
+            dk_ids: list[str] = []
+            dk_summary: str | None = None
+            try:
+                dk_ids, dk_summary = self.worker._last_confirmed_keep_for_meal(  # noqa: SLF001
+                    str(open_mid) if open_mid else None
+                )
+            except Exception:  # noqa: BLE001
+                dk_ids, dk_summary = [], None
+            package = compose_meal(
+                store,
+                open_moment_id=str(open_mid) if open_mid else None,
+                budget_tokens=budget,
+                system_text="",
+                orient_text="",
+                settings=mem_cfg,
+                directed_keep_ids=dk_ids or None,
+                directed_keep_summary=dk_summary,
+            )
+            return meal_package_to_inspect(
+                package,
+                system_text="",
+                orient_text="",
+                budget_tokens=budget,
+                source="on_demand",
+                recorded_at=utc_now_iso(),
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("on-demand memory meal compose failed")
+            return None
+
+    def _get_memory_atoms(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/atoms — filterable recent atom list (read-only)."""
+        flags = self._memory_flags_block()
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+        if store is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        kind = (qs.get("kind") or [None])[0]
+        moment_id = (qs.get("moment_id") or [None])[0]
+        limit_raw = (qs.get("limit") or ["50"])[0]
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        try:
+            from elyra.memory.inspect import atom_to_list_row, list_atoms_for_glass
+
+            atoms = list_atoms_for_glass(
+                store,
+                kind=kind if isinstance(kind, str) else None,
+                moment_id=moment_id if isinstance(moment_id, str) else None,
+                limit=limit,
+            )
+            rows = [atom_to_list_row(a) for a in atoms]
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "atoms": rows,
+                    "count": len(rows),
+                    "limit": limit,
+                    "filters": {
+                        "kind": kind if kind else None,
+                        "moment_id": moment_id if moment_id else None,
+                    },
+                    "memory": flags,
+                },
+            )
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc), "atoms": [], "memory": flags})
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("list memory atoms failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+
+    def _get_memory_atom(self, atom_id: str) -> None:
+        """GET /api/memory/atoms/{id} — single atom drill-down (read-only)."""
+        flags = self._memory_flags_block()
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "atom": None,
+                    "memory": flags,
+                },
+            )
+            return
+        if store is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "atom": None,
+                    "memory": flags,
+                },
+            )
+            return
+        try:
+            from elyra.memory.inspect import atom_to_detail
+
+            atom = store.get_atom(atom_id)
+            if atom is None:
+                self._json(
+                    404,
+                    {
+                        "ok": False,
+                        "error": "atom not found",
+                        "atom": None,
+                        "memory": flags,
+                    },
+                )
+                return
+            self._json(
+                200,
+                {"ok": True, "atom": atom_to_detail(atom), "memory": flags},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("get memory atom failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "atom": None,
+                    "memory": flags,
+                },
+            )
+
+    def _vectors_worker_handles(self) -> tuple[Any | None, Any | None, Any | None]:
+        """Best-effort (embedder, queue, index) from presence worker — never raises."""
+        embedder = getattr(self.worker, "_embedder", None)
+        queue = getattr(self.worker, "_encode_queue", None)
+        index = getattr(self.worker, "_embedding_index", None)
+        # Warm index if store is open (Null for JSONL); glass path only.
+        if index is None:
+            ensure_idx = getattr(self.worker, "_ensure_embedding_index", None)
+            if callable(ensure_idx):
+                try:
+                    index = ensure_idx()
+                except Exception:  # noqa: BLE001
+                    index = None
+        return embedder, queue, index
+
+    def _get_memory_vectors(self) -> None:
+        """GET /api/memory/vectors — encoder + index health (read-only)."""
+        from elyra.memory.inspect import encoder_health_block, index_health_block
+
+        flags = self._memory_flags_block()
+        mem_cfg = getattr(getattr(self.worker, "settings", None), "memory", None)
+        embedder, queue, index = self._vectors_worker_handles()
+        encoder = encoder_health_block(
+            settings=mem_cfg, embedder=embedder, queue=queue
+        )
+        index_h = index_health_block(index)
+        # Overview is always 200; ok when store flags ok (index may still be null).
+        ok = bool(flags.get("ok")) or bool(encoder.get("ok")) or bool(index_h.get("ok"))
+        self._json(
+            200,
+            {
+                "ok": ok,
+                "encoder": encoder,
+                "index": index_h,
+                "memory": flags,
+                "tabs": {
+                    "vectors": {"stub": False, "phase": "2"},
+                    "graph": {"stub": False, "phase": "2a"},
+                },
+            },
+        )
+
+    def _post_memory_vectors_rebuild(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/vectors/rebuild — rebuild ANN vector index.
+
+        ANN = approximate nearest-neighbor **search index** over stored
+        embeddings (not re-running Nemotron). Optional body: ``max_ms`` int.
+        """
+        from elyra.memory.inspect import index_health_block
+
+        flags = self._memory_flags_block()
+        max_ms = body.get("max_ms") if isinstance(body, dict) else None
+        budget: int | None = None
+        if max_ms is not None:
+            try:
+                budget = int(max_ms)
+            except (TypeError, ValueError):
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "max_ms must be an int",
+                        "memory": flags,
+                    },
+                )
+                return
+            if budget < 0:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "max_ms must be >= 0",
+                        "memory": flags,
+                    },
+                )
+                return
+
+        rebuild = getattr(self.worker, "rebuild_vector_index", None)
+        if not callable(rebuild):
+            err = "rebuild_vector_index not available"
+            self._json(
+                501,
+                {
+                    "ok": False,
+                    "error": err,
+                    "notes": [err],
+                    "note": err,
+                    "memory": flags,
+                },
+            )
+            return
+        try:
+            result = rebuild(max_ms=budget)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("POST /api/memory/vectors/rebuild failed")
+            err = str(exc) or type(exc).__name__
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": err,
+                    "notes": [err],
+                    "note": err,
+                    "memory": flags,
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        # KD-R3: rebuild honesty — notes[] (keep note as join for one release).
+        notes = result.get("notes")
+        if not isinstance(notes, list):
+            legacy = result.get("note")
+            notes = [str(legacy)] if legacy else []
+            result["notes"] = notes
+        if not result.get("note"):
+            result["note"] = "; ".join(str(n) for n in notes) if notes else ""
+        # Attach fresh index health for glass.
+        try:
+            _emb, _q, index = self._vectors_worker_handles()
+            result["index"] = index_health_block(index)
+        except Exception:  # noqa: BLE001
+            result.setdefault("index", {})
+        result["memory"] = flags
+        # 200 even on optimized:false so glass can show notes without throwing.
+        self._json(200, result)
+
+    def _get_memory_vectors_atoms(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/vectors/atoms — embedding status list (read-only)."""
+        flags = self._memory_flags_block()
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+        if store is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": flags.get("error") or "store_unavailable",
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        status = (qs.get("status") or [None])[0]
+        limit_raw = (qs.get("limit") or ["50"])[0]
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        try:
+            from elyra.memory.inspect import (
+                atom_to_vector_row,
+                list_atoms_by_embedding_status,
+            )
+
+            atoms = list_atoms_by_embedding_status(
+                store,
+                status=status if isinstance(status, str) else None,
+                limit=limit,
+            )
+            rows = [atom_to_vector_row(a) for a in atoms]
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "atoms": rows,
+                    "count": len(rows),
+                    "limit": limit,
+                    "filters": {
+                        "status": status if status else None,
+                    },
+                    "memory": flags,
+                },
+            )
+        except ValueError as exc:
+            self._json(
+                400,
+                {"ok": False, "error": str(exc), "atoms": [], "memory": flags},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("list memory vectors atoms failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "atoms": [],
+                    "memory": flags,
+                },
+            )
+
+    def _get_memory_vectors_neighbors(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/vectors/neighbors — top-k by atom_id or free-text q.
+
+        Read-only. No raw 2048-d vectors in the response. Fail soft with empty
+        neighbors when encoder/index unavailable (may no-op).
+
+        Channel policy (PR-R5 / KD-R16): default ``channel=auto``; resolve once
+        from index health, then query-vector + ``search(concrete)`` on that
+        same snapshot. Response echoes request, ``resolved_channel``, and
+        ``channel_reason``.
+        """
+        from elyra.memory.index import resolve_search_channel
+        from elyra.memory.inspect import (
+            index_health_block,
+            neighbor_hit_to_inspect,
+            query_vector_for_atom,
+            resolve_neighbor_k,
+        )
+
+        flags = self._memory_flags_block()
+        atom_id_raw = (qs.get("atom_id") or [None])[0]
+        q_raw = (qs.get("q") or [None])[0]
+        channel_req = (
+            (qs.get("channel") or ["auto"])[0] or "auto"
+        ).strip() or "auto"
+        k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
+
+        atom_id = (
+            atom_id_raw.strip()
+            if isinstance(atom_id_raw, str) and atom_id_raw.strip()
+            else None
+        )
+        query_text = (
+            q_raw.strip() if isinstance(q_raw, str) and q_raw.strip() else None
+        )
+        if not atom_id and not query_text:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "atom_id or q required",
+                    "neighbors": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        try:
+            store = self.worker._ensure_memory_store()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or "store_unavailable",
+                    "neighbors": [],
+                    "memory": flags,
+                },
+            )
+            return
+
+        embedder, _queue, index = self._vectors_worker_handles()
+        # One health snapshot for resolve + response honesty (KD-R16).
+        idx_health = index_health_block(index)
+        resolved_channel, channel_reason = resolve_search_channel(
+            channel_req,
+            vectors_by_channel=idx_health.get("vectors_by_channel") or {},
+            joint_repair_remaining=int(
+                idx_health.get("joint_repair_remaining") or 0
+            ),
+        )
+
+        def _query_block(
+            *,
+            source: str,
+            extra: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            block: dict[str, Any] = {
+                "atom_id": atom_id,
+                "q": query_text,
+                "channel": channel_req,
+                "resolved_channel": resolved_channel,
+                "channel_reason": channel_reason,
+                "k": k,
+                "source": source,
+            }
+            if extra:
+                block.update(extra)
+            return block
+
+        query_vec: list[float] | None = None
+        seed_atom_id: str | None = atom_id
+        source = "atom" if atom_id else "text"
+        omit_reason: str | None = None
+        searched = False
+
+        if atom_id:
+            # Query vector for concrete resolved channel only (no cross-channel
+            # soft-fallback, no encode_text invent — PR-R5 review Issue 1).
+            # Missing channel vector → omitted_reason=no_vector (empty neighbors).
+            # Free-text q= keeps encode_text; atom_id uses stored vectors only.
+            query_vec, omit_reason = query_vector_for_atom(
+                atom_id,
+                index=index,
+                store=store,
+                channel=resolved_channel,
+            )
+            if query_vec is None:
+                omit_reason = omit_reason or "no_vector"
+                # 404 only when the atom itself is missing (not merely unembedded).
+                if store is not None:
+                    try:
+                        atom = store.get_atom(atom_id)
+                    except Exception:  # noqa: BLE001
+                        atom = None
+                    if atom is None:
+                        self._json(
+                            404,
+                            {
+                                "ok": False,
+                                "error": "atom not found",
+                                "neighbors": [],
+                                "memory": flags,
+                                "query": _query_block(source=source),
+                            },
+                        )
+                        return
+        else:
+            # Free-text query — encode_text then search resolved channel.
+            if embedder is None:
+                ensure_emb = getattr(self.worker, "_ensure_embedder", None)
+                if callable(ensure_emb):
+                    try:
+                        embedder = ensure_emb()
+                    except Exception:  # noqa: BLE001
+                        embedder = None
+            if embedder is None:
+                omit_reason = "encoder"
+            else:
+                try:
+                    emb_health = (
+                        embedder.health() if hasattr(embedder, "health") else {}
+                    )
+                    if isinstance(emb_health, dict) and emb_health.get("ok") is False:
+                        omit_reason = "encoder"
+                    else:
+                        query_vec = list(embedder.encode_text(str(query_text)))
+                except Exception:  # noqa: BLE001
+                    omit_reason = "encode_failed"
+
+        neighbors: list[dict[str, Any]] = []
+        if query_vec is not None and index is not None:
+            exclude: set[str] = set()
+            if seed_atom_id:
+                exclude.add(seed_atom_id)
+            try:
+                # Fetch k+1 when excluding seed so we still fill the page.
+                fetch_k = k + (1 if exclude else 0)
+                hits = index.search(
+                    query_vec,
+                    k=fetch_k,
+                    channel=resolved_channel,
+                    exclude_atom_ids=exclude or None,
+                )
+                searched = True
+                for hit in hits:
+                    if seed_atom_id and getattr(hit, "atom_id", None) == seed_atom_id:
+                        continue
+                    neighbors.append(neighbor_hit_to_inspect(hit))
+                    if len(neighbors) >= k:
+                        break
+            except Exception as exc:  # noqa: BLE001
+                _LOG.exception("memory vectors neighbor search failed")
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error": str(exc) or type(exc).__name__,
+                        "neighbors": [],
+                        "omitted_reason": "search_failed",
+                        "memory": flags,
+                        "index": idx_health,
+                        "query": _query_block(source=source),
+                    },
+                )
+                return
+        elif query_vec is not None and index is None:
+            omit_reason = omit_reason or "no_index"
+        elif query_vec is None and omit_reason is None:
+            omit_reason = "no_vector"
+
+        if not neighbors:
+            if omit_reason is None and searched:
+                omit_reason = "no_hits"
+            elif omit_reason is None:
+                omit_reason = "no_vector"
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "neighbors": neighbors,
+                "count": len(neighbors),
+                "omitted_reason": omit_reason if not neighbors else None,
+                "query": _query_block(source=source),
+                "index": {
+                    "search_mode": idx_health.get("search_mode"),
+                    "ann_index_built": idx_health.get("ann_index_built"),
+                    "vectors_by_channel": idx_health.get("vectors_by_channel"),
+                    "joint_repair_remaining": idx_health.get(
+                        "joint_repair_remaining"
+                    ),
+                    "vectors_ready": idx_health.get("vectors_ready"),
+                },
+                "memory": flags,
+            },
+        )
+
+    # ── Phase 2a Graph tab (PR-A5) ────────────────────────────────────────
+
+    def _traversal_registry(self) -> Any | None:
+        """Best-effort TraversalRegistry from worker — never raises."""
+        trav = getattr(self.worker, "traversal", None)
+        if trav is not None:
+            return trav
+        return getattr(self.worker, "_traversal", None)
+
+    def _graph_view_for_api(self) -> Any | None:
+        """Worker GraphView factory (structural always; semantic if warm)."""
+        factory = getattr(self.worker, "graph_view", None)
+        if not callable(factory):
+            return None
+        try:
+            return factory()
+        except Exception:  # noqa: BLE001
+            _LOG.exception("graph_view factory failed for glass")
+            return None
+
+    def _memory_settings(self) -> Any | None:
+        return getattr(getattr(self.worker, "settings", None), "memory", None)
+
+    def _get_memory_graph(self) -> None:
+        """GET /api/memory/graph — overview: flags, session presence, legend."""
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            edge_kind_legend,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        reg = self._traversal_registry()
+        has_active = False
+        has_last = False
+        meal_keep_count = 0
+        if reg is not None:
+            try:
+                # Bind live settings so flag honesty matches registry.
+                bind = getattr(reg, "bind_settings", None)
+                if callable(bind) and mem_cfg is not None:
+                    bind(mem_cfg)
+                view = reg.get_graph_session_view()
+                has_active = bool(getattr(view, "has_active", False))
+                has_last = bool(getattr(view, "has_last_session", False))
+                meal_keep_count = int(getattr(view, "meal_keep_count", 0) or 0)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("graph overview session peek failed")
+
+        # Overview is always 200; ok tracks store health (flags may be off).
+        self._json(
+            200,
+            {
+                "ok": bool(flags.get("ok")),
+                "has_active": has_active,
+                "has_last_session": has_last,
+                "meal_keep_count": meal_keep_count,
+                "edge_kind_legend": edge_kind_legend(),
+                "traversal": trav_flags,
+                "memory": flags,
+                "tabs": {
+                    "vectors": {"stub": False, "phase": "2"},
+                    "graph": {"stub": False, "phase": "2a"},
+                },
+                # Honesty for empty/disabled (UI copy).
+                "honesty": {
+                    "flag_off": not bool(
+                        trav_flags.get("directed_traversal_enabled")
+                    ),
+                    "no_session": not has_active and not has_last,
+                    "note": (
+                        "directed_traversal_enabled is off — tools/POST fail closed; "
+                        "structural neighbor probe still available when store is open"
+                        if not trav_flags.get("directed_traversal_enabled")
+                        else (
+                            "no active or last walk yet — start via traverse tools "
+                            "or debug POST"
+                            if not has_active and not has_last
+                            else None
+                        )
+                    ),
+                },
+            },
+        )
+
+    def _get_memory_graph_session(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/graph/session — active else last_session (KD-A19).
+
+        Query ``?which=active|last|meal`` optional. Never meal-thin-only for
+        the default/session body — meal ids only as side fields.
+        """
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            graph_session_view_to_inspect,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        which_raw = (qs.get("which") or [None])[0]
+        which = (
+            which_raw.strip().lower()
+            if isinstance(which_raw, str) and which_raw.strip()
+            else None
+        )
+        if which is not None and which not in ("active", "last", "meal"):
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "which must be active|last|meal",
+                    "session": None,
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        reg = self._traversal_registry()
+        if reg is None:
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "which": "none",
+                    "session": None,
+                    "has_active": False,
+                    "has_last_session": False,
+                    "meal_keep_count": 0,
+                    "meal_keep_ids": [],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                    "honesty": {
+                        "flag_off": not trav_flags["directed_traversal_enabled"],
+                        "no_session": True,
+                        "note": "traversal registry unavailable",
+                    },
+                },
+            )
+            return
+
+        try:
+            bind = getattr(reg, "bind_settings", None)
+            if callable(bind) and mem_cfg is not None:
+                bind(mem_cfg)
+            view = reg.get_graph_session_view(which=which)
+            payload = graph_session_view_to_inspect(view)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("GET /api/memory/graph/session failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "which": "none",
+                    "session": None,
+                    "has_active": False,
+                    "has_last_session": False,
+                    "meal_keep_count": 0,
+                    "meal_keep_ids": [],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        sess = payload.get("session")
+        no_session = sess is None and which != "meal"
+        note = None
+        if not trav_flags["directed_traversal_enabled"]:
+            note = (
+                "directed_traversal_enabled is off — showing sticky last walk "
+                "if any; new walks disabled"
+            )
+        elif no_session:
+            note = "no walk session yet (active or last)"
+        elif which == "meal":
+            note = "meal-thin keep ids only (not full glass last walk)"
+
+        payload.update(
+            {
+                "ok": True,
+                "memory": flags,
+                "traversal": trav_flags,
+                "honesty": {
+                    "flag_off": not trav_flags["directed_traversal_enabled"],
+                    "no_session": no_session,
+                    "note": note,
+                },
+            }
+        )
+        self._json(200, payload)
+
+    def _get_memory_graph_neighbors(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/memory/graph/neighbors?atom_id= — 1-hop multi-kind expand.
+
+        Structural always (when store open). Semantic hops only if index + warm
+        encoder. Snippets only — no raw vectors. Soft-empty with reasons.
+        """
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            graph_edge_to_inspect,
+            resolve_neighbor_k,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        atom_id_raw = (qs.get("atom_id") or [None])[0]
+        atom_id = (
+            atom_id_raw.strip()
+            if isinstance(atom_id_raw, str) and atom_id_raw.strip()
+            else None
+        )
+        k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
+        allow_sem_raw = (qs.get("allow_semantic") or ["1"])[0]
+        allow_semantic = str(allow_sem_raw).strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
+        if not atom_id:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "atom_id required",
+                    "neighbors": [],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        graph = self._graph_view_for_api()
+        if graph is None:
+            # Fall back: try store health message.
+            err = flags.get("error") or "store_unavailable"
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": err,
+                    "neighbors": [],
+                    "count": 0,
+                    "omitted_reason": "store_unavailable",
+                    "query": {
+                        "atom_id": atom_id,
+                        "k": k,
+                        "allow_semantic": allow_semantic,
+                    },
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        store = getattr(graph, "_store", None)
+        # 404 only when atom itself is missing.
+        if store is not None:
+            try:
+                atom = store.get_atom(atom_id)
+            except Exception:  # noqa: BLE001
+                atom = None
+            if atom is None:
+                self._json(
+                    404,
+                    {
+                        "ok": False,
+                        "error": "atom not found",
+                        "neighbors": [],
+                        "query": {
+                            "atom_id": atom_id,
+                            "k": k,
+                            "allow_semantic": allow_semantic,
+                        },
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+
+        try:
+            edges = graph.neighbors(
+                atom_id,
+                k=k,
+                allow_semantic=allow_semantic,
+            )
+            expand_meta = dict(getattr(graph, "last_expand_meta", None) or {})
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("memory graph neighbor expand failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "neighbors": [],
+                    "count": 0,
+                    "omitted_reason": "expand_failed",
+                    "query": {
+                        "atom_id": atom_id,
+                        "k": k,
+                        "allow_semantic": allow_semantic,
+                    },
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        neighbors = [graph_edge_to_inspect(e, store) for e in edges]
+        omit: str | None = None
+        if not neighbors:
+            omit = (
+                expand_meta.get("error")
+                or expand_meta.get("semantic_reason")
+                or "no_hits"
+            )
+            # Prefer structural-empty honesty over semantic-only reason.
+            if expand_meta.get("error") == "atom_not_found":
+                omit = "atom_not_found"
+
+        self._json(
+            200,
+            {
+                "ok": True,
+                "neighbors": neighbors,
+                "count": len(neighbors),
+                "omitted_reason": omit if not neighbors else None,
+                "expand_meta": {
+                    "expand_truncated": bool(expand_meta.get("expand_truncated")),
+                    "elapsed_ms": expand_meta.get("elapsed_ms"),
+                    "semantic_reason": expand_meta.get("semantic_reason"),
+                    "parent_of_reason": expand_meta.get("parent_of_reason"),
+                },
+                "query": {
+                    "atom_id": atom_id,
+                    "k": k,
+                    "allow_semantic": allow_semantic,
+                },
+                "memory": flags,
+                "traversal": trav_flags,
+            },
+        )
+
+    def _post_memory_graph_traverse(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/graph/traverse — optional operator debug walk.
+
+        Same validation + budgets as tools. Flags-off fail-closed
+        (``ok: false``, ``error_reason: traverse_disabled``) — no budget bypass.
+        Body: ``action`` = start|step|finish|abandon|inspect (+ action fields).
+        """
+        from elyra.memory.inspect import (
+            directed_traversal_flags,
+            enrich_session_for_glass,
+        )
+        from elyra.memory.traverse import (
+            ERROR_TRAVERSE_DISABLED,
+            inspect_atoms,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        trav_flags = directed_traversal_flags(mem_cfg)
+        if not isinstance(body, dict):
+            body = {}
+
+        action = str(body.get("action") or body.get("op") or "").strip().lower()
+        if action not in ("start", "step", "finish", "abandon", "inspect"):
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "action must be start|step|finish|abandon|inspect",
+                    "error_reason": "bad_action",
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        reg = self._traversal_registry()
+        if reg is None:
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error_reason": "traverse_unavailable",
+                    "error": "traversal registry unavailable",
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        # Always bind live settings before enable check / mutate.
+        try:
+            bind = getattr(reg, "bind_settings", None)
+            if callable(bind) and mem_cfg is not None:
+                bind(mem_cfg)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Fail closed when directed traversal is off (parity with tools).
+        if not reg.enabled():
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error_reason": ERROR_TRAVERSE_DISABLED,
+                    "status": "disabled",
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        # Inspect is read-only against the store (still requires flag on so
+        # glass debug cannot bypass the same gate as tools).
+        if action == "inspect":
+            raw_ids = body.get("atom_ids") or body.get("ids") or []
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+            try:
+                store = self.worker._ensure_memory_store()  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error_reason": "store_unavailable",
+                        "error": str(exc) or "store_unavailable",
+                        "previews": [],
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+            if store is None:
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error_reason": "store_unavailable",
+                        "error": flags.get("error") or "store_unavailable",
+                        "previews": [],
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+            previews = inspect_atoms(store, raw_ids, settings=mem_cfg)
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "action": "inspect",
+                    "previews": [p.to_dict() for p in previews],
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        graph = self._graph_view_for_api()
+        if graph is None and action in ("start", "step", "finish"):
+            # finish may run without graph when keep_adjacent is off; still try.
+            if action != "finish":
+                self._json(
+                    200,
+                    {
+                        "ok": False,
+                        "error_reason": "store_unavailable",
+                        "error": flags.get("error") or "store_unavailable",
+                        "memory": flags,
+                        "traversal": trav_flags,
+                    },
+                )
+                return
+
+        session_id = body.get("session_id")
+        if session_id is not None:
+            session_id = str(session_id)
+
+        try:
+            if action == "start":
+                goal = str(body.get("goal") or "explore")
+                seed_query = body.get("seed_query")
+                if seed_query is not None:
+                    seed_query = str(seed_query)
+                seed_ids = body.get("seed_atom_ids") or body.get("seed_ids") or []
+                if not isinstance(seed_ids, list):
+                    seed_ids = []
+                moment_id = body.get("moment_id")
+                if moment_id is not None:
+                    moment_id = str(moment_id)
+                # Optional budget overrides (cannot exceed settings hard max —
+                # TraversalRegistry clamps via min()).
+                overrides: dict[str, int] = {}
+                for key in ("max_steps", "max_nodes", "max_depth", "max_keep"):
+                    if key in body and body[key] is not None:
+                        try:
+                            overrides[key] = int(body[key])
+                        except (TypeError, ValueError):
+                            pass
+                result = reg.start(
+                    graph,
+                    goal=goal,
+                    seed_query=seed_query,
+                    seed_atom_ids=[str(x) for x in seed_ids],
+                    moment_id=moment_id,
+                    budget_overrides=overrides or None,
+                )
+            elif action == "step":
+                expand_ids = body.get("expand_ids") or []
+                keep_ids = body.get("keep_ids") or []
+                if not isinstance(expand_ids, list):
+                    expand_ids = []
+                if not isinstance(keep_ids, list):
+                    keep_ids = []
+                scratchpad = body.get("scratchpad")
+                if scratchpad is not None:
+                    scratchpad = str(scratchpad)
+                result = reg.step(
+                    graph,
+                    session_id=session_id,
+                    expand_ids=[str(x) for x in expand_ids],
+                    keep_ids=[str(x) for x in keep_ids],
+                    scratchpad=scratchpad,
+                )
+            elif action == "finish":
+                keep_ids = body.get("keep_ids")
+                if keep_ids is not None and not isinstance(keep_ids, list):
+                    keep_ids = []
+                summary_hint = body.get("summary_hint")
+                if summary_hint is not None:
+                    summary_hint = str(summary_hint)
+                result = reg.finish(
+                    graph,
+                    session_id=session_id,
+                    keep_ids=(
+                        [str(x) for x in keep_ids] if keep_ids is not None else None
+                    ),
+                    summary_hint=summary_hint,
+                )
+            else:  # abandon
+                reason = str(body.get("reason") or "abandoned")
+                result = reg.abandon(session_id=session_id, reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("POST /api/memory/graph/traverse action=%s failed", action)
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error_reason": "traverse_error",
+                    "error": str(exc) or type(exc).__name__,
+                    "action": action,
+                    "memory": flags,
+                    "traversal": trav_flags,
+                },
+            )
+            return
+
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        out = dict(result)
+        out["action"] = action
+        out["memory"] = flags
+        out["traversal"] = trav_flags
+        # Attach glass-enriched session view when useful (finish returns full).
+        if action == "finish" and out.get("ok") and out.get("session_id"):
+            out["session"] = enrich_session_for_glass(
+                {k: v for k, v in out.items() if k not in ("ok", "thin_surface", "memory", "traversal", "action")}
+            )
+        # Also expose sticky glass view for operator after any mutating call.
+        try:
+            gview = reg.get_graph_session_view()
+            from elyra.memory.inspect import graph_session_view_to_inspect
+
+            out["graph_view"] = graph_session_view_to_inspect(gview)
+        except Exception:  # noqa: BLE001
+            pass
+        self._json(200, out)
 
     # ── Glass session + identity panel helpers ───────────────────────────
 
@@ -1039,6 +2508,134 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             "provider": fields.get("provider"),
             "models_available": fields.get("models_available"),
         }
+
+    # ── xAI OAuth device login (PR3) ─────────────────────────────────────
+
+    def _get_auth_xai(self) -> None:
+        """GET /api/auth/xai — public OAuth meta only (never tokens)."""
+        meta = oauth_public_meta(self.paths.data_dir)
+        payload: dict[str, Any] = {
+            "ok": True,
+            "configured": meta.configured,
+            "email": meta.email,
+            "expires_at": meta.expires_at,
+            "updated_at": meta.updated_at,
+            "auth_method": meta.auth_method,
+            "reauth_required": meta.reauth_required,
+        }
+        if not self._provider_unavailable():
+            fields = self.provider.status_provider_fields()
+            payload["credential_source"] = fields.get("credential_source")
+            payload["credential_ok"] = fields.get("credential_ok")
+            payload["oauth_configured"] = fields.get("oauth_configured")
+        else:
+            payload["oauth_configured"] = meta.configured
+        self._json(200, self._strip_auth_secrets(payload))
+
+    def _get_auth_xai_device_status(self) -> None:
+        """GET /api/auth/xai/device/status — session state; never tokens/device_code."""
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+        try:
+            status = self.provider.xai_device_status()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai device status failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"device_status_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(status, dict):
+            status = {"ok": True, "state": "idle"}
+        self._json(200, self._strip_auth_secrets(dict(status)))
+
+    def _post_auth_xai_device_start(self, body: dict[str, Any]) -> None:
+        """POST /api/auth/xai/device/start — mint user_code; server holds device_code."""
+        if self._reject_if_auth_origin_bad():
+            return
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+
+        activate = True
+        if "activate" in body:
+            raw = body.get("activate")
+            if not isinstance(raw, bool):
+                self._json(400, {"ok": False, "error": "invalid body", "detail": "activate must be bool"})
+                return
+            activate = raw
+
+        try:
+            result = self.provider.start_xai_device_login(activate=activate)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai device start failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"device_start_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": False, "error": "device_start_failed"}
+        # 200 even on protocol-level start failure (ok=False + state=error).
+        self._json(200, self._strip_auth_secrets(dict(result)))
+
+    def _post_auth_xai_device_cancel(self, body: dict[str, Any]) -> None:  # noqa: ARG002
+        """POST /api/auth/xai/device/cancel — stop poller; state cancelled."""
+        if self._reject_if_auth_origin_bad():
+            return
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+        try:
+            result = self.provider.cancel_xai_device_login()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai device cancel failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"device_cancel_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": True, "state": "cancelled"}
+        self._json(200, self._strip_auth_secrets(dict(result)))
+
+    def _post_auth_xai_logout(self, body: dict[str, Any]) -> None:  # noqa: ARG002
+        """POST /api/auth/xai/logout — delete bundle; rebuild if source oauth."""
+        if self._reject_if_auth_origin_bad():
+            return
+        if self._provider_unavailable():
+            self._json(503, {"ok": False, "error": "provider unavailable"})
+            return
+        if self._reject_if_resetting():
+            return
+        try:
+            fields = self.provider.logout_xai_oauth()
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("xai logout failed")
+            self._json(
+                500,
+                {"ok": False, "error": f"logout_failed:{type(exc).__name__}"},
+            )
+            return
+        if not isinstance(fields, dict):
+            fields = {}
+        payload = {
+            "ok": True,
+            "oauth_configured": bool(fields.get("oauth_configured", False)),
+            "credential_source": fields.get("credential_source"),
+            "credential_ok": fields.get("credential_ok"),
+            "credential_detail": fields.get("credential_detail"),
+            "credential_email": fields.get("credential_email"),
+            "credential_expires_at": fields.get("credential_expires_at"),
+        }
+        self._json(200, self._strip_auth_secrets(payload))
 
     def _patch_provider(self, body: dict[str, Any]) -> None:
         """PATCH /api/provider — ``{ model?, credential_source?, reasoning_effort? }``.
@@ -1533,6 +3130,39 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         result = self.worker.set_dev_speed(
             enabled=enabled if isinstance(enabled, bool) else None,
             delay_seconds=float(delay) if delay is not None else None,
+        )
+        if result.get("error") == "resetting":
+            self._json(503, result)
+            return
+        self._json(200, result)
+
+    def _patch_semantic_wait(self, body: dict[str, Any]) -> None:
+        """PATCH /api/semantic-wait — ``{ "enabled"?: bool, "max_ms"?: number }``.
+
+        Wait-for-select for meal semantic channel. Default product ON
+        (15000ms, clamp 1000–120000). When on, slow query encodes are kept.
+        """
+        if "enabled" not in body and "max_ms" not in body:
+            self._json(
+                400,
+                {"ok": False, "error": "enabled or max_ms required"},
+            )
+            return
+        enabled = body.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            self._json(400, {"ok": False, "error": "enabled must be a boolean"})
+            return
+        max_ms = body.get("max_ms")
+        if max_ms is not None:
+            if isinstance(max_ms, bool) or not isinstance(max_ms, (int, float)):
+                self._json(
+                    400,
+                    {"ok": False, "error": "max_ms must be a number"},
+                )
+                return
+        result = self.worker.set_semantic_wait(
+            enabled=enabled if isinstance(enabled, bool) else None,
+            max_ms=int(max_ms) if max_ms is not None else None,
         )
         if result.get("error") == "resetting":
             self._json(503, result)

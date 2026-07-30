@@ -1,0 +1,35 @@
+{
+  "backend": "svg",
+  "created_at": "2026-07-29T05:49:18.733480+00:00",
+  "dpi": 96,
+  "figsize": [
+    9,
+    5.5
+  ],
+  "kind": "scatter",
+  "path": "/workspace/tmp/graphing_tool/out/scatter.svg",
+  "request": {
+    "backend": "auto",
+    "color": null,
+    "data_columns": [
+      "x",
+      "y"
+    ],
+    "data_rows": 200,
+    "kind": "scatter",
+    "out": "/workspace/tmp/graphing_tool/out/scatter.svg",
+    "theme": "solarized",
+    "title": "Scatter",
+    "x": "x",
+    "y": "y"
+  },
+  "request_sha256": "bc38274833d67176111a897c1e11f835c1ac976ebe446dd5e28448421820fc0d",
+  "theme": "solarized",
+  "versions": {
+    "backend": "svg-stdlib",
+    "elyra_graph": "0.1.0"
+  },
+  "warnings": [
+    "stdlib-svg"
+  ]
+}

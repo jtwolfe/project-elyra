@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "description": "Optional active session id (defaults to the sole active session)."
+    },
+    "keep_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Final keep-set (must be considered). Omit to confirm provisional keeps."
+    },
+    "summary_hint": {
+      "type": "string",
+      "description": "Optional short note appended to the template walk summary (≤240)."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

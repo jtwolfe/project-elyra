@@ -60,6 +60,7 @@ class CreditsPoller:
         resolve_fn: Callable[..., Any] | None = None,
         get_credential_source: Callable[[], str] | None = None,
         get_usage_settings: Callable[[], UsageSettings] | None = None,
+        on_access_refreshed: Callable[..., None] | None = None,
         enabled: bool = True,
     ) -> None:
         self._meter = meter
@@ -73,6 +74,8 @@ class CreditsPoller:
         self._resolve_fn = resolve_fn or resolve_bearer
         self._get_credential_source = get_credential_source
         self._get_usage_settings = get_usage_settings
+        # KD22: when resolve rotates OAuth access, rebind live chat bearer.
+        self._on_access_refreshed = on_access_refreshed
         self._enabled = bool(enabled)
 
         self._stop = threading.Event()
@@ -82,6 +85,8 @@ class CreditsPoller:
         self._meta_lock = threading.Lock()
         self._last_attempt_mono: float = 0.0
         self._auth_log_mono: float = 0.0
+        # Last access token string seen by poller (rotation detection fallback).
+        self._last_access_token: str | None = None
         # api_key: once unsupported, skip HTTP until credential_source changes.
         self._api_key_unsupported = False
         self._unsupported_for_source: str | None = None
@@ -249,6 +254,9 @@ class CreditsPoller:
             self._maybe_log_auth(snap)
             return
 
+        # KD22 / PR2: if OAuth access rotated (or token string changed), rebind chat.
+        self._maybe_signal_access_refreshed(resolution)
+
         # HTTP outside meter lock.
         try:
             snap = self._fetch_fn(
@@ -294,6 +302,33 @@ class CreditsPoller:
             # Durable state rolled back inside meter; log and continue.
             _LOG.warning("credits.apply_failed: %s", type(exc).__name__)
 
+    def _maybe_signal_access_refreshed(self, resolution: Any) -> None:
+        """If access rotated or token string changed, call on_access_refreshed.
+
+        Pure resolve remains in auth; rebind is runtime-owned (KD21/KD22).
+        """
+        token = getattr(resolution, "token", None)
+        if not token or not isinstance(token, str):
+            return
+        rotated = bool(getattr(resolution, "rotated", False))
+        with self._meta_lock:
+            prev = self._last_access_token
+            changed = prev is not None and prev != token
+            self._last_access_token = token
+        if not rotated and not changed:
+            return
+        cb = self._on_access_refreshed
+        if cb is None:
+            return
+        try:
+            cb(
+                token,
+                getattr(resolution, "expires_at", None),
+                getattr(resolution, "email", None),
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.debug("credits on_access_refreshed failed", exc_info=True)
+
     def _maybe_log_auth(self, snap: CreditsSnapshot) -> None:
         if (snap.status or "") != STATUS_AUTH_FAILED:
             return
@@ -303,7 +338,9 @@ class CreditsPoller:
                 return
             self._auth_log_mono = now
         # Never log bearer. Do not set chat credential_ok=false solely from this.
+        # Re-auth messaging points at Elyra login (not grok login) when oauth.
+        detail = snap.detail or "auth_failed"
         _LOG.warning(
             "credits.poll auth_failed detail=%s (chat credentials unchanged)",
-            snap.detail or "auth_failed",
+            detail,
         )
