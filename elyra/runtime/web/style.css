@@ -3091,10 +3091,6 @@ body {
   word-break: break-all;
 }
 
-.memory-status-card .memory-semantic-meta {
-  margin: 0.35rem 0 0;
-}
-
 .memory-channel-card.memory-ch-directed_keep {
   border-left: 3px solid color-mix(in srgb, #c084fc 45%, var(--border));
 }
