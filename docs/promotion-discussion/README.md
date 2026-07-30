@@ -394,4 +394,18 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 
 ---
 
-*Promotion discussion seed 2026-07-30. Capture decisions here as they firm; link the GitHub Project URL when created.*
+## 9. GitHub Project (live)
+
+| Field | Value |
+|-------|--------|
+| **Title** | Project Elyra — Autopoiesis Commons |
+| **URL** | https://github.com/users/jtwolfe/projects/2 |
+| **Owner** | `jtwolfe` (user project #2) |
+| **Created** | 2026-07-30 |
+| **Seed** | Draft items for v0.1 exit criteria, Stage 1 process, memory dogfood, BUG-mem-gpu-01, meal/context, `grok_build`, operating SHA, Colin name confirm, branch tip, Phase 3 defer |
+
+Convert draft cards to Issues when work starts; keep the board as the gym surface of record.
+
+---
+
+*Promotion discussion seed 2026-07-30. GitHub Project linked above.*
