@@ -42,6 +42,9 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
+| `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (open) | **In progress** — raise outer meal budget toward ~250k |
+| `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — LLM period summary atoms (not template-only) |
+| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — glass-tail / immediate chat history in memory meal |
 
 ---
 
@@ -961,6 +964,57 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 - Project setup today: [docs/README.md](README.md) / `scripts/setup_venv.sh` — to grow into multi-backend setup (ongoing).
 - Operator start (LuxPrimata / new terminal): [radeon-vii-dev/README.md](radeon-vii-dev/README.md) § *New terminal session — start Elyra*.
 - v0.1 promotion / gym / meal size & chat-chain notes: [promotion-discussion/README.md](promotion-discussion/README.md).
+
+---
+
+## BUG-meal-01 — Raise outer meal budget toward ~250k (~50% of model window)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open — **In Progress** |
+| **Issue** | [#91](https://github.com/jtwolfe/project-elyra/issues/91) |
+| **Severity now** | Med |
+| **Severity later** | Med–High if meal stays starved while model window is 500k |
+| **Area** | `sliding_input_tokens`, meal compose budget, `in_turn_max_tokens`, glass context rail |
+| **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §5.6 |
+
+### Goal
+
+Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), measuring cost/latency; raise/review in-turn budget together. Does not fix missing glass chat alone (**BUG-meal-03**).
+
+---
+
+## BUG-meal-02 — Period summary atoms: real LLM narratives (not template-only)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open — **In Progress** |
+| **Issue** | [#92](https://github.com/jtwolfe/project-elyra/issues/92) |
+| **Severity now** | Med |
+| **Severity later** | High if episodic meal stays unreadable template highlights |
+| **Area** | `elyra/memory/ladder.py`, summary atom bodies; residual of closed [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
+| **Design home** | Stretch 2 Phase 1 ladder; optional `summary_mode = template \| llm` |
+
+### Goal
+
+Replace (or supplement) template-first period summaries with **budgeted LLM narratives** of each ladder window’s content; keep template fallback.
+
+---
+
+## BUG-meal-03 — Persistent immediate chat history in memory meal (glass-tail)
+
+| Field | Value |
+|-------|--------|
+| **Status** | Open — **In Progress** |
+| **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) |
+| **Severity now** | High for dogfood (chat-amnesic when memory meal on) |
+| **Severity later** | High for multi-moment continuity |
+| **Area** | Memory meal rebuild vs sliding glass; glass-tail band; durable `messages.jsonl` |
+| **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §4 |
+
+### Goal
+
+When memory meal is active, include a durable **immediate chat / glass-tail** band so recent user↔assistant turns survive **moment boundaries and restarts** (not load-only). Coordinate with **BUG-meal-01** budget. Adjacent: **#68** wake-02 (wrong work thread), not the same fix.
 
 ---
 
