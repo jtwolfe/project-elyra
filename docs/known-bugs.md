@@ -24,7 +24,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-wake-01` | [#67](https://github.com/jtwolfe/project-elyra/issues/67) (open) | Open (defer) |
 | `BUG-wake-02` | [#68](https://github.com/jtwolfe/project-elyra/issues/68) (open) | Open (defer) |
 | `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
-| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (open) | Tool JSON pretty-print on fix/known-bugs; residual special-cases |
+| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on fix/known-bugs (pretty-print; pending main) |
 | `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
 | `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Partial — better; more improvement needed |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
@@ -275,7 +275,7 @@ Also: gates care about **overall weekly limit + cumulative Elyra spend**; produc
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Improved** on `fix/known-bugs` — compact tool content pretty-printed (same delimiters as raw fields); further special-case cards optional |
+| **Status** | **Fixed** (operator dogfood 2026-07-30 on `fix/known-bugs` — tool JSON pretty-print; pending main)|
 | **Issue** | [#70](https://github.com/jtwolfe/project-elyra/issues/70) |
 | **Severity now** | Low–Med (operator readability; dogfood friction) |
 | **Severity later** | Med if Moments remain a primary debug surface |
