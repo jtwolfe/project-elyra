@@ -71,12 +71,47 @@ Treat the Grok Web structure as **loose architectural guidance** to grow into, n
 
 ### Stage 1 — Kickoff (do soon — low cost)
 
-1. **One GitHub Project** (Backlog → Doing → Review → Done, or similar).  
-2. **Light protection on `main`**: PR required; optional single review; **no** expensive required Actions yet.  
+1. **One GitHub Project** — **done** ([Autopoiesis Commons #2](https://github.com/users/jtwolfe/projects/2)).  
+2. **Light protection on `main`** — **blocked on free private repo** (see §3.1); soft policy until Pro or public.  
 3. **Branch hygiene** documented: short-lived only; delete after merge; `feature/…` `fix/…` `improve/…` `self/…`.  
 4. **Write the map** (this file + [README.md](README.md)): `main` integration; releases = tags; later operating pin; worktrees for real changes.  
 5. **Running instance stays fully manual** for now.  
 6. Optional: issue/PR templates; labels (`bug`, `self-mod`, `public-release`, `memory`, `context-meal`, `multi-instance`).
+
+### 3.1 `main` protection status (2026-07-30)
+
+**GitHub hard branch protection / rulesets** on a **private** personal repo require **GitHub Pro** (or org Team/Enterprise), or the repository to be **public**. API response:
+
+```text
+Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)
+```
+
+| Intended rule (Stage 1) | Hard enforce now? | Soft / free-tier substitute |
+|-------------------------|-------------------|-----------------------------|
+| No direct push to `main` | No (needs Pro/public) | Process: always PR; do not push `main` locally |
+| Require PR before merge | No | Same — human/PE habit + Project board |
+| Optional 1 review | No | Dual review for risky changes when Colin available |
+| No required CI status checks yet | N/A | Local `pytest -m 'not llm'` before merge |
+| Delete head branch after merge | **Yes — enabled** | `delete_branch_on_merge=true` on `jtwolfe/project-elyra` |
+| No force-push to main | No hard | Never force-push `main`; lease-only elsewhere |
+
+**To enable real protection later (pick one):**
+
+1. **GitHub Pro** on the owner account → Settings → Branches → add rule for `main`, or:  
+   ```bash
+   gh api -X PUT repos/jtwolfe/project-elyra/branches/main/protection \
+     -H "Accept: application/vnd.github+json" \
+     -f required_status_checks='null' \
+     -F enforce_admins=false \
+     -f required_pull_request_reviews='{"required_approving_review_count":1}' \
+     -f restrictions='null' \
+     -F allow_force_pushes=false \
+     -F allow_deletions=false
+   ```
+2. **Make the repository public** (product/policy decision — not automatic).  
+3. **Move to a GitHub Team org** with protection included in plan.
+
+Until then, treat the table above as **policy law** even without the red padlock in GitHub UI.
 
 ### Stage 2 — Intermediate (while shipping v0.1)
 
