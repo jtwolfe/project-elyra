@@ -44,7 +44,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — LLM period summary atoms (not template-only) |
-| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — instance continuity: glass-tail + sticky directed keep (design ready for implement plan; review report landed) |
+| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
 
 ---
 
@@ -1014,14 +1014,15 @@ Replace (or supplement) template-first period summaries with **budgeted LLM narr
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **In Progress** (design **Ready for implement plan**; continuity review complete) |
+| **Status** | Open — **In Progress** (implement plan ready; product PRs S1–S6; continuity review complete) |
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) |
 | **Severity now** | High for dogfood (chat-amnesic / wrong wait-reply framing when memory meal on) |
 | **Severity later** | High for multi-moment + multi-hour instance memory |
 | **Area** | Memory meal rebuild; glass-tail band; wait/interject/restart paths; directed_keep tray TTL/LRU |
 | **Design home** | [stretch-2/design-instance-continuity-glass-tail-directed-keep.md](stretch-2/design-instance-continuity-glass-tail-directed-keep.md) (refined from review DRAFT-EXTENSIONS) |
+| **Implement plan** | [stretch-2/design-instance-continuity-implement-plan.md](stretch-2/design-instance-continuity-implement-plan.md) — ordered product PRs S1 glass-tail → S2 framing dual-write → S3 sticky keep B5+B5b → S4 merge/confirm → S5 recall nudge → S6 graph UX defer |
 | **Review report** | [stretch-2/meal-continuity-review/REPORT.md](stretch-2/meal-continuity-review/REPORT.md) — fault isolation (B1/B12 co-primary; B5+B5b sticky keep dual kill); evidence `meal-continuity-review/evidence/sa9b-e6d460f2/` |
-| **Also** | [stretch-2/design-meal-formation-continuity-review-plan.md](stretch-2/design-meal-formation-continuity-review-plan.md) (review method; done); [promotion-discussion/README.md](promotion-discussion/README.md) §4; Phase 2a keep channel |
+| **Also** | [stretch-2/design-meal-formation-continuity-review-plan.md](stretch-2/design-meal-formation-continuity-review-plan.md) (review method; done); [stretch-2/design-instance-continuity-implement-plan.md](stretch-2/design-instance-continuity-implement-plan.md) (execute-plan); [promotion-discussion/README.md](promotion-discussion/README.md) §4; Phase 2a keep channel |
 
 ### Goal
 

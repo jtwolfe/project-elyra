@@ -160,8 +160,10 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
 | [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | **Soft guidance** — IIT/sheaf/holographic and reconstructive influences; not goals |
 | [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — open moment vs episodic, slide-off, labels, dedup, re-gather |
-| [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md) | **Draft** instance continuity for #93 — glass-tail + sticky directed keep + path parity |
+| [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md) | **Refined product draft** instance continuity for #93 — glass-tail + sticky directed keep + path parity (Ready for implement plan) |
+| [design-instance-continuity-implement-plan.md](design-instance-continuity-implement-plan.md) | **Implement plan** for #93 — ordered product PRs S1–S6 (glass-tail → framing → sticky keep → merge → nudge → graph UX defer) |
 | [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) | **Executable review methodology** (inspection + fault isolation) refining the #93 draft — not product code |
+| [meal-continuity-review/REPORT.md](meal-continuity-review/REPORT.md) | **Review report** (S0 done) — fault isolation B1/B12 co-primary; B5+B5b; evidence sa9b |
 | [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
 | [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
 | [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |
