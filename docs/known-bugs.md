@@ -30,8 +30,8 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (closed) | **Fixed** on main (Atoms soft-skip under glass-03) |
 | `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | **Partial** on main — knip soft-skip shipped; residual poll architecture later |
-| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | **Dogfood OK** on fix/known-bugs (equations); merge then close |
-| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | **Dogfood OK** on fix/known-bugs (newlines); merge then close |
+| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (closed) | **Done** — KaTeX on fix/known-bugs (dogfood OK) |
+| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (closed) | **Done** — soft newlines on fix/known-bugs (dogfood OK) |
 | `BUG-chat-03` | [#88](https://github.com/jtwolfe/project-elyra/issues/88) (open) | Open — Sources / reference links must open correctly |
 | `BUG-wait-01` | [#89](https://github.com/jtwolfe/project-elyra/issues/89) (open) | Open — multi-choice wait after speak; strong instruction nudge |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
