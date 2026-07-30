@@ -2485,6 +2485,39 @@ function renderMoments(moments) {
   }
 }
 
+function formatBeatTs(ts) {
+  if (!ts) return "";
+  const s = String(ts);
+  // Compact ISO for operators: 2026-07-30T12:34:56Z → 07-30 12:34:56Z
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (m) return `${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}Z`;
+  return s.length > 24 ? s.slice(0, 24) : s;
+}
+
+function beatKindClass(type) {
+  const t = String(type || "beat").toLowerCase();
+  if (t === "speak" || t === "assistant" || t === "model") return "beat-kind-speak";
+  if (t === "tool" || t === "tool_call" || t === "tool_result") return "beat-kind-tool";
+  if (t === "obs" || t === "observation" || t === "host") return "beat-kind-obs";
+  if (t === "stop" || t === "error") return "beat-kind-stop";
+  if (t === "user" || t === "social") return "beat-kind-user";
+  return "beat-kind-other";
+}
+
+function appendBeatRawFold(row, label, text) {
+  if (text == null || text === "") return;
+  const details = document.createElement("details");
+  details.className = "reason-fold beat-raw-fold";
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  details.appendChild(summary);
+  const pre = document.createElement("pre");
+  pre.className = "beat-body";
+  pre.textContent = String(text);
+  details.appendChild(pre);
+  row.appendChild(details);
+}
+
 function renderBeats(beats) {
   const wrap = document.createElement("div");
   wrap.className = "beats";
@@ -2496,62 +2529,89 @@ function renderBeats(beats) {
   const ordered = beats.slice().reverse();
   for (const b of ordered) {
     const row = document.createElement("div");
-    row.className = "beat";
     const type = b.type || "beat";
+    row.className = `beat ${beatKindClass(type)}`;
     const head = document.createElement("div");
     head.className = "beat-head";
-    head.innerHTML = `<span class="badge">${escapeHtml(type)}</span>
-      <span class="meta">${escapeHtml(b.ts || "")}</span>`;
+    head.innerHTML = `<span class="badge beat-kind-chip">${escapeHtml(
+      type
+    )}</span>
+      <span class="meta beat-ts">${escapeHtml(formatBeatTs(b.ts))}</span>`;
     row.appendChild(head);
+
+    // Prose-first speak / content (not mono dump).
+    if (b.content) {
+      const prose = document.createElement("div");
+      prose.className = "beat-prose";
+      prose.innerHTML = renderMarkdown(String(b.content));
+      row.appendChild(prose);
+    }
+
+    // Tool name line as structured meta, not JSON blob.
+    const toolName = b.name || b.tool;
+    if (toolName) {
+      const toolLine = document.createElement("div");
+      toolLine.className = "beat-tool-line meta";
+      toolLine.textContent = `tool · ${toolName}`;
+      row.appendChild(toolLine);
+    }
+    if (b.error_reason) {
+      const err = document.createElement("div");
+      err.className = "beat-error";
+      err.textContent = `error · ${b.error_reason}`;
+      row.appendChild(err);
+    }
+    if (b.stop_reason) {
+      const stop = document.createElement("div");
+      stop.className = "meta";
+      stop.textContent = `stop · ${b.stop_reason}`;
+      row.appendChild(stop);
+    }
 
     // Reasoning collapsed.
     if (b.reasoning) {
-      const details = document.createElement("details");
-      details.className = "reason-fold";
-      const summary = document.createElement("summary");
-      summary.textContent = "reasoning";
-      details.appendChild(summary);
-      const pre = document.createElement("pre");
-      pre.className = "beat-body";
-      pre.textContent = b.reasoning;
-      details.appendChild(pre);
-      row.appendChild(details);
+      appendBeatRawFold(row, "reasoning", b.reasoning);
     }
 
-    const bodyBits = [];
-    if (b.content) bodyBits.push(b.content);
-    if (b.name) bodyBits.push(`tool: ${b.name}`);
-    if (b.tool) bodyBits.push(`tool: ${b.tool}`);
-    if (b.error_reason) bodyBits.push(`error: ${b.error_reason}`);
-    if (b.stop_reason) bodyBits.push(`stop: ${b.stop_reason}`);
+    // Payload / residual keys as collapsible raw (not inline dump).
     if (b.payload != null && typeof b.payload === "object") {
       try {
-        bodyBits.push(JSON.stringify(b.payload, null, 2).slice(0, 1200));
+        appendBeatRawFold(
+          row,
+          "raw payload",
+          JSON.stringify(b.payload, null, 2).slice(0, 4000)
+        );
       } catch {
         /* ignore */
       }
     }
-    // Fallback dump of remaining keys (lean).
-    if (!bodyBits.length) {
-      const skip = new Set(["type", "ts", "reasoning"]);
-      const rest = {};
-      for (const [k, v] of Object.entries(b)) {
-        if (!skip.has(k)) rest[k] = v;
-      }
-      if (Object.keys(rest).length) {
-        try {
-          bodyBits.push(JSON.stringify(rest, null, 2).slice(0, 1200));
-        } catch {
-          /* ignore */
-        }
+    const skip = new Set([
+      "type",
+      "ts",
+      "reasoning",
+      "content",
+      "name",
+      "tool",
+      "error_reason",
+      "stop_reason",
+      "payload",
+    ]);
+    const rest = {};
+    for (const [k, v] of Object.entries(b)) {
+      if (!skip.has(k) && v != null && v !== "") rest[k] = v;
+    }
+    if (Object.keys(rest).length) {
+      try {
+        appendBeatRawFold(
+          row,
+          "raw fields",
+          JSON.stringify(rest, null, 2).slice(0, 4000)
+        );
+      } catch {
+        /* ignore */
       }
     }
-    if (bodyBits.length) {
-      const pre = document.createElement("pre");
-      pre.className = "beat-body";
-      pre.textContent = bodyBits.join("\n");
-      row.appendChild(pre);
-    }
+
     wrap.appendChild(row);
   }
   return wrap;

@@ -1479,11 +1479,76 @@ body {
   background: var(--bg);
 }
 
+/* Kind accent (BUG-glass-01 / #70) */
+.beat.beat-kind-speak {
+  border-color: color-mix(in srgb, var(--gold-primary) 45%, var(--border));
+}
+.beat.beat-kind-tool {
+  border-color: color-mix(in srgb, #6ea8fe 40%, var(--border));
+}
+.beat.beat-kind-obs {
+  border-color: color-mix(in srgb, var(--muted) 50%, var(--border));
+}
+.beat.beat-kind-stop {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.beat.beat-kind-user {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+}
+
 .beat-head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.35rem;
+}
+
+.beat-kind-chip {
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.beat-ts {
+  font-variant-numeric: tabular-nums;
+}
+
+.beat-prose {
+  margin: 0.25rem 0 0.15rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 48rem;
+}
+
+.beat-prose p {
+  margin: 0 0 0.45rem;
+}
+
+.beat-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.beat-tool-line {
+  margin-top: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.beat-error {
+  margin-top: 0.25rem;
+  color: var(--warn);
+  font-size: 0.85rem;
+}
+
+.beat-raw-fold {
+  margin-top: 0.35rem;
+}
+
+.beat-raw-fold > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .beat-body {
