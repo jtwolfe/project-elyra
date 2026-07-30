@@ -28,8 +28,8 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
 | `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Inspect + soft-refresh; dogfood then close |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
-| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open — same poll class as Context; Atoms next |
-| `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | Open — systemic Glass poll hard-rebuild / soft-refresh pass |
+| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Soft-skip landed on fix/known-bugs; dogfood then close |
+| `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | Bounded soft-refresh patch on fix/known-bugs; residual / larger fault later |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
@@ -381,30 +381,24 @@ Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time vis
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) — **next pass after Context soft-refresh** |
+| **Status** | Soft-skip landed on `fix/known-bugs` (BUG-glass-03 patch) — dogfood then close |
 | **Issue** | [#74](https://github.com/jtwolfe/project-elyra/issues/74) |
-| **Severity now** | Med (actively interferes with inspection) |
-| **Severity later** | Med |
-| **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active); possibly status/system strip re-render |
-| **Dogfood** | 2026-07-28 — inspector keeps flashing; system update also impacts ability to select text |
-| **Related** | Same root class as Context inspect flash (fixed on `fix/known-bugs`: meal fingerprint soft-skip + preserve open folds). **Atoms tab** still full-rebuilds on each tick — apply the same pattern next. |
+| **Severity now** | Low residual if any (status strip still polled) |
+| **Severity later** | Med if soft-skip regresses |
+| **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active) |
+| **Dogfood** | 2026-07-28 — inspector flash; 2026-07-30 — list + detail soft-skip on branch |
+| **Related** | Same root class as Context inspect flash. Implement under **BUG-glass-03** (#86). |
 
 ### Symptom
 
-While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular cadence. Selecting text for copy is interrupted or reset — likely full DOM rebuild from the global poll. Operator also reports **system update** (status rail / status refresh) interfering with text selection.
+While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular cadence. Selecting text for copy is interrupted or reset — full DOM rebuild from the global poll.
 
-### Likely cause (confirmed for Context; same for Atoms)
+### Fix (landed on `fix/known-bugs`)
 
-`setInterval(tick, 1500)` always runs `refreshStatus()` + `refreshMessages()`, and when `activePanel === "memory"` also `refreshMemory()`, which rebuilds Context/Atoms DOM even when data is unchanged. Context now soft-skips when the meal fingerprint is unchanged; **Atoms list/detail still needs the same treatment** (#74).
-
-### Fix directions
-
-1. Diff-then-patch or skip re-render when payload hash/etag unchanged. **(Context: done; Atoms: todo)**
-2. Do not replace nodes that contain an active text selection / focus.
-3. Pause aggressive panel refresh while pointer is selecting or detail is focused.
-4. Audit status/system strip updates for the same full-replace pattern.
-5. Mirror Context: fingerprint atom list + preserve `selectedAtomId` detail DOM / selection.
-6. Prefer implementing under **BUG-glass-03** (systemic soft-refresh) rather than one-off Atoms-only patches forever.
+1. `refreshMemoryAtoms` fingerprints list payload; skip list wipe when unchanged.
+2. Open detail uses soft `loadAtomDetail` with body fingerprint — no loading flash / re-paint when body stable.
+3. Manual Apply / kind filter / nav still `force: true`.
+4. Residual: status rail thrash and any larger poll architecture review deferred to #86 residual / later.
 
 ---
 
@@ -412,22 +406,16 @@ While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular ca
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **program-level pass** (not a single-widget bug) |
+| **Status** | **Bounded soft-refresh patch landed** on `fix/known-bugs` — dogfood; larger poll architecture later |
 | **Issue** | [#86](https://github.com/jtwolfe/project-elyra/issues/86) |
-| **Severity now** | **High for dogfood** — blocks inspect/copy on every catalog panel on a ~1.5s cadence |
-| **Severity later** | High as more inspectors land (Context inspect already fought this) |
-| **Area** | `elyra/runtime/web/app.js`: `setInterval(tick, 1500)` → always `refreshStatus` + `refreshMessages`; when `activePanel` ∈ goals/moments/memory/tools/identity/secrets → `refreshActivePanel()` full refresh |
-| **Dogfood** | 2026-07-30 — Atoms inspector flash; Goals text deselect; Tools/Skills inspector flash; Identity body selection loss; Context inspect flash (mitigated on `fix/known-bugs`); Secrets grant editors likely same class |
+| **Severity now** | Med residual (status strip; any fingerprint gaps) |
+| **Severity later** | High if soft-skip regresses or new panels omit the pattern |
+| **Area** | `elyra/runtime/web/app.js`: `tick` → soft `refreshActivePanel`; nav/mutations use `force: true` |
+| **Dogfood** | 2026-07-30 — patch pass; operator verify selection survives idle poll |
 
 ### Symptom
 
-While a Glass catalog panel is open, UI **rebuilds on a regular ~1.5s period**:
-
-- Open inspectors flash (loading → paint → wiped → again)
-- Selecting text for copy is cleared
-- Expand folds / grant editors / chips can disappear mid-interaction
-
-Operators experience this as many “panel bugs”; root is **one poll architecture**.
+While a Glass catalog panel is open, UI **rebuilded on a regular ~1.5s period** (inspectors flash, text selection dies). Root is **one poll architecture** that always hard-rebuilt DOM.
 
 ### Root cause (confirmed)
 
@@ -439,59 +427,54 @@ tick (1.5s)
         refreshTools | refreshIdentity | refreshSecrets
 ```
 
-Most of those paths **always** do destructive DOM updates (`innerHTML = ""` or unconditional `.textContent = …`) even when data is unchanged. Selection and open inspector state live in that DOM → they die.
+Most paths used to **always** do destructive DOM updates even when data was unchanged.
 
-### What already has soft-skip (do not regress)
+### Soft-skip surfaces (do not regress)
 
 | Surface | Mechanism |
 |---------|-----------|
-| **Chat messages** | `messagesFingerprint` — skip rebuild when unchanged |
-| **Memory → Context** | `fingerprintMemoryMeal` + preserve open inspect folds + atom cache (`fix/known-bugs`) |
-| **Moments detail** | Soft `loadMomentDetail` / skip when closed + snapshot unchanged |
+| **Chat messages** | `messagesFingerprint` |
+| **Memory → Context** | `fingerprintMemoryMeal` + preserve open inspect folds |
+| **Moments detail** | Soft `loadMomentDetail` / snapshot |
+| **Goals** | `stableFingerprint` list skip |
+| **Moments list** | list meta fingerprint (detail remains soft) |
+| **Memory → Atoms** | list FP + soft detail (**#74**) |
+| **Memory → Vectors / Graph** | payload fingerprint |
+| **Tools / Skills** | catalog list FP + soft inspector |
+| **Identity** | payload FP + `setTextIfChanged` |
+| **Secrets** | list FP (open grant editors preserved when unchanged) |
 
-### Surfaces still hard-refreshing (in scope for this bug)
+### Force paths (must rebuild after write / nav)
 
-| Panel | Tick path | Typical wipe |
-|-------|-----------|--------------|
-| **Goals** | `refreshGoals` → `renderGoals` | Full list `innerHTML = ""` |
-| **Moments list** | `refreshMoments` → `renderMoments` | Full list (detail is softer) |
-| **Memory → Atoms** | `refreshMemoryAtoms` | List wipe + **forced `loadAtomDetail`** (**#74**) |
-| **Memory → Vectors** | `refreshMemoryVectors` | Health + lists |
-| **Memory → Graph** | `refreshMemoryGraph` | Session / lists / neighbors |
-| **Tools / Skills** | `refreshTools` | Catalog wipe + re-`selectCatalogItem` |
-| **Identity** | `refreshIdentity` | Unconditional body `textContent`; chips/versions rebuild |
-| **Secrets** | `refreshSecrets` | Full list wipe (open grant UI dies) |
-| **Status** (always) | `refreshStatus` | Control chrome thrash (lower prose pain) |
+Nav click, Memory tab/Apply, catalog Rescan, secret save/delete/grants, identity chip switch / promote / session user switch, `refreshAllPanels` (reset). Tick stays soft (`refreshActivePanel()` without force).
 
-### Fix direction (bounded “knip” — not a framework rewrite)
+### Residual / later (not this patch)
 
-1. **Shared helpers:** payload fingerprint; skip DOM replace when equal; optional selection guard.
-2. **Per panel:** wire Goals, Tools, Identity, Secrets, Atoms, Vectors, Graph (+ Moments list).
-3. **Inspectors:** Atoms/Tools must not force full detail reload when selection + body fingerprint unchanged.
-4. **Identity:** set `.textContent` only when the string actually changed.
-5. **Preserve:** selected id, open inspector cache, scroll positions where cheap.
-6. **Non-goals for v1 of this pass:** virtual DOM, changing chat architecture, slowing status poll without dogfood need.
+- Full poll architecture review (whether tick should refresh every catalog panel this way)
+- Status strip thrash / selection during `refreshStatus`
+- Diff-patch DOM instead of skip-or-full-rebuild
+- Selection-aware pause while pointer is selecting
 
 ### Success criteria
 
-- [ ] With Goals / Tools inspector / Identity / Secrets / Atoms detail open, text selection survives ≥10s of idle poll with **unchanged** server data
-- [ ] New server data still appears without manual nav re-click (fingerprint changes → rebuild OK)
+- [x] Shared `stableFingerprint` / force-vs-soft convention on catalog panels
+- [ ] Operator dogfood: Goals / Tools inspector / Identity / Secrets / Atoms detail — text selection survives ≥10s idle poll with unchanged data
+- [ ] New server data still appears without manual nav re-click
 - [ ] Context + chat soft-skip still work
-- [ ] #74 closable as part of this work or immediately after
-- [ ] Doc + dogfood note in known-bugs
+- [ ] #74 closable after dogfood
+- [x] Doc note in known-bugs
 
 ### Related
 
-- **#74** BUG-mem-ui-03 — Atoms instance of this class (implement under this umbrella)
-- **#72** BUG-mem-ui-01 — Context inspect; soft-refresh already landed for meal tree
-- Moments soft detail path — pattern to copy
-- Chat `messagesFingerprint` — pattern to copy
+- **#74** BUG-mem-ui-03 — Atoms instance (soft-skip in this patch)
+- **#72** BUG-mem-ui-01 — Context inspect meal soft-refresh
+- Moments soft detail / chat `messagesFingerprint` — patterns copied
 
 ### Explicit non-goals
 
 - Do not disable live updates entirely
 - Do not require per-tool output contracts
-- Do not block v0.1 forever — ship soft-skip panel-by-panel if needed, but track under this BUG-id
+- Do not rewrite Glass as a framework — knip soft-skip only
 
 ---
 

@@ -382,6 +382,37 @@ function messagesFingerprint(messages) {
 }
 
 /**
+ * Stable JSON fingerprint for Glass soft-refresh (BUG-glass-03).
+ * Tick may fetch often; DOM replace only when this changes (unless force).
+ */
+function stableFingerprint(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** Set textContent only when the string actually changed (preserve selection). */
+function setTextIfChanged(el, text) {
+  if (!el) return;
+  const next = text == null ? "" : String(text);
+  if (el.textContent !== next) el.textContent = next;
+}
+
+// Soft-refresh fingerprints for catalog panels (BUG-glass-03 / #86).
+let lastGoalsFp = null;
+let lastMomentsListFp = null;
+let lastAtomsListFp = null;
+let lastAtomDetailFp = null;
+let lastVectorsFp = null;
+let lastGraphFp = null;
+let lastToolsCatalogFp = null;
+let lastCatalogDetailFp = null;
+let lastIdentityFp = null;
+let lastSecretsFp = null;
+
+/**
  * Resolve markdown media/link targets for glass CSP.
  * attachment:<id> and /api/media/<id> → same-origin serve URL; else http(s)/data:image.
  * Rejects javascript:, path traversal, and non-image data:.
@@ -2417,9 +2448,21 @@ function renderGoals(goals) {
   }
 }
 
-async function refreshGoals() {
+async function refreshGoals(opts = {}) {
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/goals");
-  renderGoals(data.goals || []);
+  const goals = data.goals || [];
+  const fp = stableFingerprint(goals);
+  if (
+    !force &&
+    fp === lastGoalsFp &&
+    goalsList &&
+    goalsList.childElementCount > 0
+  ) {
+    return;
+  }
+  lastGoalsFp = fp;
+  renderGoals(goals);
 }
 
 function escapeHtml(s) {
@@ -2816,10 +2859,30 @@ async function loadMomentDetail(id, opts = {}) {
   }
 }
 
-async function refreshMoments() {
+async function refreshMoments(opts = {}) {
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/moments?limit=40");
   const moments = data.moments || [];
-  renderMoments(moments);
+  // List fingerprint: identity + hop/end meta (not full beat bodies).
+  const listFp = stableFingerprint(
+    moments.map((m) => ({
+      id: m.id,
+      hop_count: m.hop_count,
+      ended_at: m.ended_at,
+      stop_reason: m.stop_reason,
+      why_now: m.why_now,
+      started_at: m.started_at,
+    }))
+  );
+  if (
+    force ||
+    listFp !== lastMomentsListFp ||
+    !momentsList ||
+    !momentsList.childElementCount
+  ) {
+    lastMomentsListFp = listFp;
+    renderMoments(moments);
+  }
   // Soft detail refresh while a moment is open.
   if (!selectedMomentId) return;
   const row = moments.find((m) => m.id === selectedMomentId);
@@ -3649,11 +3712,13 @@ function renderMemoryChannelCard(item) {
   return card;
 }
 
-async function refreshMemoryContext() {
+async function refreshMemoryContext(opts = {}) {
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/memory/context");
   const fp = fingerprintMemoryMeal(data);
   // Soft path: meal unchanged — update flags only; keep open inspect DOM.
   if (
+    !force &&
     fp &&
     fp === memoryContextMealFp &&
     memoryContextBody &&
@@ -3674,9 +3739,11 @@ function setAtomDetailOpen(on) {
 function closeAtomDetail() {
   memoryAtomDetailLoadGen += 1;
   selectedAtomId = null;
+  lastAtomDetailFp = null;
   if (memoryAtomDetail) {
     memoryAtomDetail.hidden = true;
     memoryAtomDetail.innerHTML = "";
+    delete memoryAtomDetail.dataset.atomId;
   }
   setAtomDetailOpen(false);
   if (memoryAtomsList) {
@@ -3734,17 +3801,20 @@ function renderAtomsList(atoms) {
   }
 }
 
-async function loadAtomDetail(id) {
+async function loadAtomDetail(id, opts = {}) {
   if (!id || !memoryAtomDetail) return;
+  const soft = Boolean(opts.soft);
   const gen = ++memoryAtomDetailLoadGen;
   selectedAtomId = id;
   memoryAtomDetail.hidden = false;
   setAtomDetailOpen(true);
-  memoryAtomDetail.innerHTML = `<div class="card-head"><strong>${escapeHtml(
-    id
-  )}</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">loading…</p>`;
-  const closeBtn = $("#close-atom-detail");
-  if (closeBtn) closeBtn.addEventListener("click", closeAtomDetail);
+  if (!soft) {
+    memoryAtomDetail.innerHTML = `<div class="card-head"><strong>${escapeHtml(
+      id
+    )}</strong><button type="button" class="link-btn" id="close-atom-detail">close</button></div><p class="muted">loading…</p>`;
+    const closeBtn = $("#close-atom-detail");
+    if (closeBtn) closeBtn.addEventListener("click", closeAtomDetail);
+  }
   try {
     const data = await fetchJson(`/api/memory/atoms/${encodeURIComponent(id)}`);
     if (selectedAtomId !== id || gen !== memoryAtomDetailLoadGen) return;
@@ -3754,9 +3824,30 @@ async function loadAtomDetail(id) {
       )}</p>`;
       const c = $("#close-atom-detail");
       if (c) c.addEventListener("click", closeAtomDetail);
+      lastAtomDetailFp = null;
       return;
     }
     const a = data.atom;
+    const detailFp = stableFingerprint({
+      atom_id: a.atom_id,
+      kind: a.kind,
+      t_start: a.t_start,
+      content_text: a.content_text,
+      content_truncated: a.content_truncated,
+      embedding_status: a.embedding_status,
+      moment_id: a.moment_id,
+    });
+    // Soft poll: keep painted detail when body unchanged (BUG-glass-03 / #74).
+    if (
+      soft &&
+      detailFp === lastAtomDetailFp &&
+      memoryAtomDetail.dataset.atomId === id &&
+      memoryAtomDetail.childElementCount > 0
+    ) {
+      return;
+    }
+    lastAtomDetailFp = detailFp;
+    memoryAtomDetail.dataset.atomId = id;
     fillAtomInspectInto(memoryAtomDetail, a, {
       showClose: true,
       onClose: closeAtomDetail,
@@ -3782,7 +3873,8 @@ async function loadAtomDetail(id) {
   }
 }
 
-async function refreshMemoryAtoms() {
+async function refreshMemoryAtoms(opts = {}) {
+  const force = Boolean(opts.force);
   const params = new URLSearchParams();
   params.set("limit", "60");
   const kind = memoryAtomKind ? memoryAtomKind.value.trim() : "";
@@ -3796,11 +3888,26 @@ async function refreshMemoryAtoms() {
         data.error || "store unavailable"
       )}</p>`;
     }
+    lastAtomsListFp = null;
     return;
   }
-  renderAtomsList(data.atoms || []);
+  const atoms = data.atoms || [];
+  const listFp = stableFingerprint({ kind, moment, atoms });
+  if (
+    force ||
+    listFp !== lastAtomsListFp ||
+    !memoryAtomsList ||
+    !memoryAtomsList.childElementCount
+  ) {
+    lastAtomsListFp = listFp;
+    renderAtomsList(atoms);
+  } else if (selectedAtomId && memoryAtomsList) {
+    memoryAtomsList.querySelectorAll(".card-btn").forEach((el) => {
+      el.classList.toggle("card-selected", el.dataset.atomId === selectedAtomId);
+    });
+  }
   if (selectedAtomId) {
-    await loadAtomDetail(selectedAtomId);
+    await loadAtomDetail(selectedAtomId, { soft: !force });
   }
 }
 
@@ -4114,10 +4221,9 @@ function renderNeighborsList(data) {
   }
 }
 
-async function refreshMemoryVectors() {
+async function refreshMemoryVectors(opts = {}) {
+  const force = Boolean(opts.force);
   const health = await fetchJson("/api/memory/vectors");
-  renderVectorsHealth(health);
-
   const params = new URLSearchParams();
   params.set("limit", "50");
   const status = memoryVectorStatus ? memoryVectorStatus.value.trim() : "";
@@ -4125,7 +4231,19 @@ async function refreshMemoryVectors() {
   const data = await fetchJson(
     `/api/memory/vectors/atoms?${params.toString()}`
   );
-  if (!data.ok && !(data.atoms || []).length) {
+  const atoms = data.atoms || [];
+  const fp = stableFingerprint({ health, status, ok: data.ok, atoms });
+  if (
+    !force &&
+    fp === lastVectorsFp &&
+    memoryVectorsList &&
+    memoryVectorsList.childElementCount > 0
+  ) {
+    return;
+  }
+  lastVectorsFp = fp;
+  renderVectorsHealth(health);
+  if (!data.ok && !atoms.length) {
     if (memoryVectorsList) {
       memoryVectorsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
         data.error || "store unavailable"
@@ -4133,7 +4251,7 @@ async function refreshMemoryVectors() {
     }
     return;
   }
-  renderVectorsAtomsList(data.atoms || []);
+  renderVectorsAtomsList(atoms);
 }
 
 async function runNeighborSearch() {
@@ -4654,10 +4772,9 @@ async function runGraphNeighborSearch() {
   }
 }
 
-async function refreshMemoryGraph() {
+async function refreshMemoryGraph(opts = {}) {
+  const force = Boolean(opts.force);
   const overview = await fetchJson("/api/memory/graph");
-  renderGraphOverview(overview);
-
   const session = await fetchJson("/api/memory/graph/session");
   // Merge honesty from overview when session has none.
   if (!session.honesty && overview.honesty) {
@@ -4668,52 +4785,65 @@ async function refreshMemoryGraph() {
   if (session.has_last_session == null) {
     session.has_last_session = overview.has_last_session;
   }
+  const fp = stableFingerprint({ overview, session });
+  if (!force && fp === lastGraphFp) {
+    return;
+  }
+  lastGraphFp = fp;
+  renderGraphOverview(overview);
   renderGraphSession(session);
   renderGraphLists(session);
 }
 
-async function refreshMemory() {
+async function refreshMemory(opts = {}) {
+  const force = Boolean(opts.force);
   if (memoryActiveTab === "atoms") {
-    await refreshMemoryAtoms();
+    await refreshMemoryAtoms({ force });
     return;
   }
   if (memoryActiveTab === "vectors") {
-    await refreshMemoryVectors();
+    await refreshMemoryVectors({ force });
     return;
   }
   if (memoryActiveTab === "graph") {
-    await refreshMemoryGraph();
+    await refreshMemoryGraph({ force });
     return;
   }
-  await refreshMemoryContext();
+  await refreshMemoryContext({ force });
 }
 
 if (memoryRefreshBtn) {
   memoryRefreshBtn.addEventListener("click", () => {
-    refreshMemory().catch((e) => panelLoadError("Memory", e));
+    refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
   });
 }
 document.querySelectorAll(".memory-tab").forEach((btn) => {
   btn.addEventListener("click", () => {
     setMemoryTab(btn.dataset.memoryTab || "context");
-    refreshMemory().catch((e) => panelLoadError("Memory", e));
+    refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
   });
 });
 if (memoryAtomsApply) {
   memoryAtomsApply.addEventListener("click", () => {
-    refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+    refreshMemoryAtoms({ force: true }).catch((e) =>
+      panelLoadError("Memory atoms", e)
+    );
   });
 }
 if (memoryAtomKind) {
   memoryAtomKind.addEventListener("change", () => {
     if (memoryActiveTab === "atoms") {
-      refreshMemoryAtoms().catch((e) => panelLoadError("Memory atoms", e));
+      refreshMemoryAtoms({ force: true }).catch((e) =>
+        panelLoadError("Memory atoms", e)
+      );
     }
   });
 }
 if (memoryVectorsApply) {
   memoryVectorsApply.addEventListener("click", () => {
-    refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+    refreshMemoryVectors({ force: true }).catch((e) =>
+      panelLoadError("Memory vectors", e)
+    );
   });
 }
 if (memoryVectorsRebuild) {
@@ -4724,7 +4854,9 @@ if (memoryVectorsRebuild) {
 if (memoryVectorStatus) {
   memoryVectorStatus.addEventListener("change", () => {
     if (memoryActiveTab === "vectors") {
-      refreshMemoryVectors().catch((e) => panelLoadError("Memory vectors", e));
+      refreshMemoryVectors({ force: true }).catch((e) =>
+        panelLoadError("Memory vectors", e)
+      );
     }
   });
 }
@@ -4788,7 +4920,7 @@ async function rebuildVectorIndex() {
           : `Vector index rebuild: ${notice}`
       );
     }
-    await refreshMemoryVectors();
+    await refreshMemoryVectors({ force: true });
   } finally {
     memoryVectorsRebuildInFlight = false;
     if (memoryVectorsRebuild) {
@@ -4999,8 +5131,9 @@ async function loadCatalogVersion(kind, name, versionId) {
   }
 }
 
-async function selectCatalogItem(kind, name) {
+async function selectCatalogItem(kind, name, opts = {}) {
   if (!name) return;
+  const soft = Boolean(opts.soft);
   catalogSelection = { kind, name };
   markCatalogSelectionHighlight();
   const base = kind === "tool" ? "/api/tools/" : "/api/skills/";
@@ -5010,41 +5143,61 @@ async function selectCatalogItem(kind, name) {
     hideCatalogInspector();
     catalogSelection = null;
     clearCatalogSelectionHighlight();
+    lastCatalogDetailFp = null;
     throw new Error(detail?.error || `${kind} not found`);
   }
+  const detailFp = stableFingerprint({ kind, name, detail });
+  if (soft && detailFp === lastCatalogDetailFp) {
+    return;
+  }
+  lastCatalogDetailFp = detailFp;
   setCatalogInspecting(true);
   renderCatalogInspector(kind, detail);
 }
 
-async function refreshTools() {
+async function refreshTools(opts = {}) {
+  const force = Boolean(opts.force);
   const [tools, skills] = await Promise.all([
     fetchJson("/api/tools"),
     fetchJson("/api/skills"),
   ]);
   const toolItems = tools.tools || [];
   const skillItems = skills.skills || [];
-  renderCatalog(toolsList, toolItems, "No tools.", "tool");
-  renderCatalog(skillsList, skillItems, "No skills.", "skill");
+  const listFp = stableFingerprint({ toolItems, skillItems });
+  if (
+    force ||
+    listFp !== lastToolsCatalogFp ||
+    !toolsList ||
+    !toolsList.childElementCount
+  ) {
+    lastToolsCatalogFp = listFp;
+    renderCatalog(toolsList, toolItems, "No tools.", "tool");
+    renderCatalog(skillsList, skillItems, "No skills.", "skill");
+  }
   markCatalogSelectionHighlight();
-  if (toolsCountEl) toolsCountEl.textContent = String(toolItems.length);
-  if (skillsCountEl) skillsCountEl.textContent = String(skillItems.length);
+  if (toolsCountEl) setTextIfChanged(toolsCountEl, String(toolItems.length));
+  if (skillsCountEl) setTextIfChanged(skillsCountEl, String(skillItems.length));
   if (catalogMeta) {
     const localTools = toolItems.filter((t) => t.source === "local").length;
     const localSkills = skillItems.filter((s) => s.source === "local").length;
-    catalogMeta.textContent = `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · select a package to inspect · rescanned from disk`;
+    setTextIfChanged(
+      catalogMeta,
+      `${toolItems.length} tools (${localTools} local) · ${skillItems.length} skills (${localSkills} local) · select a package to inspect · rescanned from disk`
+    );
   }
-  // Refresh open inspector if still selected
+  // Soft-refresh open inspector if still selected (skip re-render when detail unchanged).
   if (catalogSelection) {
     const stillThere =
       catalogSelection.kind === "tool"
         ? toolItems.some((t) => t.name === catalogSelection.name)
         : skillItems.some((s) => s.name === catalogSelection.name);
     if (stillThere) {
-      selectCatalogItem(catalogSelection.kind, catalogSelection.name).catch(
-        () => hideCatalogInspector()
-      );
+      selectCatalogItem(catalogSelection.kind, catalogSelection.name, {
+        soft: !force,
+      }).catch(() => hideCatalogInspector());
     } else {
       catalogSelection = null;
+      lastCatalogDetailFp = null;
       hideCatalogInspector();
     }
   }
@@ -5085,7 +5238,10 @@ function renderUserChips(users, selectedId) {
     btn.title = u.user_id;
     btn.addEventListener("click", () => {
       identityPanelUserId = u.user_id;
-      refreshIdentity().catch((e) => panelLoadError("Identity", e));
+      lastIdentityFp = null;
+      refreshIdentity({ force: true }).catch((e) =>
+        panelLoadError("Identity", e)
+      );
     });
     identityUserChips.appendChild(btn);
   }
@@ -5176,7 +5332,7 @@ async function switchSessionUser(userId) {
   await Promise.all([
     refreshLabelCache(),
     refreshMessages({ force: true }),
-    refreshIdentity().catch(() => {}),
+    refreshIdentity({ force: true }).catch(() => {}),
   ]);
 }
 
@@ -5250,7 +5406,7 @@ async function promoteSelfDraft() {
       identityGrantToken.textContent = "";
     }
     showNotice("Self identity promoted.");
-    await refreshIdentity();
+    await refreshIdentity({ force: true });
     await refreshLabelCache();
   } catch (err) {
     showNotice(String(err.message || err));
@@ -5276,7 +5432,7 @@ async function promoteUserDraft() {
       return;
     }
     showNotice(`User ${uid} identity promoted.`);
-    await refreshIdentity();
+    await refreshIdentity({ force: true });
     await refreshLabelCache();
   } catch (err) {
     showNotice(String(err.message || err));
@@ -5303,7 +5459,8 @@ function disablePromoteButtons() {
   });
 }
 
-async function refreshIdentity() {
+async function refreshIdentity(opts = {}) {
+  const force = Boolean(opts.force);
   try {
     const uid = identityPanelUserId || getSessionUserId();
     const [self, user, usersList] = await Promise.all([
@@ -5312,16 +5469,22 @@ async function refreshIdentity() {
       fetchJson("/api/users"),
     ]);
     const s = (self && self.self) || {};
-    if (identitySelf) {
-      identitySelf.textContent = s.body || s.digest || "(empty self digest)";
+    const users = (usersList && usersList.users) || [];
+    const fp = stableFingerprint({ uid, self, user, users });
+    if (!force && fp === lastIdentityFp) {
+      return;
     }
+    lastIdentityFp = fp;
+
+    setTextIfChanged(
+      identitySelf,
+      s.body || s.digest || "(empty self digest)"
+    );
     const selfName =
       s.display_name ||
       (s.meta && (s.meta.display_name || s.meta.goes_by)) ||
       "Elyra";
-    if (identitySelfLabel) {
-      identitySelfLabel.textContent = selfName;
-    }
+    setTextIfChanged(identitySelfLabel, selfName);
     labelCache.self = selfName;
     updateBrandChrome();
     const hasSelfDraft = Boolean(s.has_draft);
@@ -5331,7 +5494,7 @@ async function refreshIdentity() {
       // KD20: leave collapsed on has_draft; force closed when draft gone
       if (!hasSelfDraft) identitySelfDraftFold.open = false;
       if (identitySelfDraft) {
-        identitySelfDraft.textContent = s.draft_body || "(empty draft)";
+        setTextIfChanged(identitySelfDraft, s.draft_body || "(empty draft)");
       }
     }
     setPromoteBtnState(identityPromoteSelfBtn, hasSelfDraft, {
@@ -5343,20 +5506,23 @@ async function refreshIdentity() {
       // a version query — for v1 show id in the version body area from list only.
       if (identitySelfVersionBody) {
         identitySelfVersionBody.hidden = false;
-        identitySelfVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+        setTextIfChanged(
+          identitySelfVersionBody,
+          `version ${vid} (body via model get_identity / review-identity)`
+        );
       }
     });
 
-    const users = (usersList && usersList.users) || [];
     renderUserChips(users, uid);
 
-    if (identityUser) {
-      identityUser.textContent = user.body || user.profile || "(empty profile)";
-    }
-    if (identityUserLabel) {
-      identityUserLabel.textContent =
-        user.goes_by || (user.meta && user.meta.goes_by) || uid;
-    }
+    setTextIfChanged(
+      identityUser,
+      user.body || user.profile || "(empty profile)"
+    );
+    setTextIfChanged(
+      identityUserLabel,
+      user.goes_by || (user.meta && user.meta.goes_by) || uid
+    );
     if (identityUserMeta && user.meta) {
       const m = user.meta;
       const bits = [
@@ -5366,7 +5532,7 @@ async function refreshIdentity() {
         `provisional ${Boolean(m.provisional)}`,
         `real_name_known ${Boolean(m.real_name_known)}`,
       ].filter(Boolean);
-      identityUserMeta.textContent = bits.join(" · ");
+      setTextIfChanged(identityUserMeta, bits.join(" · "));
     }
     const hasUserDraft = Boolean(user.has_draft);
     if (identityUserDraftBadge) identityUserDraftBadge.hidden = !hasUserDraft;
@@ -5374,7 +5540,7 @@ async function refreshIdentity() {
       identityUserDraftFold.hidden = !hasUserDraft;
       if (!hasUserDraft) identityUserDraftFold.open = false;
       if (identityUserDraft) {
-        identityUserDraft.textContent = user.draft_body || "(empty draft)";
+        setTextIfChanged(identityUserDraft, user.draft_body || "(empty draft)");
       }
     }
     setPromoteBtnState(identityPromoteUserBtn, hasUserDraft, {
@@ -5384,13 +5550,17 @@ async function refreshIdentity() {
     renderVersionList(identityUserVersions, user.versions || [], (vid) => {
       if (identityUserVersionBody) {
         identityUserVersionBody.hidden = false;
-        identityUserVersionBody.textContent = `version ${vid} (body via model get_identity / review-identity)`;
+        setTextIfChanged(
+          identityUserVersionBody,
+          `version ${vid} (body via model get_identity / review-identity)`
+        );
       }
     });
     if (user.goes_by) labelCache.users[uid] = user.goes_by;
   } catch (err) {
     // Hard failure: do not leave promote enabled against stale draft UI
     disablePromoteButtons();
+    lastIdentityFp = null;
     throw err;
   }
 }
@@ -5530,11 +5700,23 @@ function parseGrantsCsv(raw) {
     .filter(Boolean);
 }
 
-async function refreshSecrets() {
+async function refreshSecrets(opts = {}) {
   if (!secretsListEl) return;
+  const force = Boolean(opts.force);
   const data = await fetchJson("/api/secrets");
   const secrets = (data && data.secrets) || [];
-  if (secretsCountBadge) secretsCountBadge.textContent = String(secrets.length);
+  if (secretsCountBadge) {
+    setTextIfChanged(secretsCountBadge, String(secrets.length));
+  }
+  const fp = stableFingerprint(secrets);
+  if (
+    !force &&
+    fp === lastSecretsFp &&
+    secretsListEl.childElementCount > 0
+  ) {
+    return;
+  }
+  lastSecretsFp = fp;
   if (!secrets.length) {
     secretsListEl.textContent = "No named secrets yet.";
     return;
@@ -5595,7 +5777,7 @@ async function refreshSecrets() {
             body: JSON.stringify({ grants: parseGrantsCsv(inp.value) }),
           });
           showNotice(`Grants updated for ${s.name}.`);
-          await refreshSecrets();
+          await refreshSecrets({ force: true });
         } catch (err) {
           showNotice(`Grants failed: ${err && err.message ? err.message : err}`);
         } finally {
@@ -5619,7 +5801,7 @@ async function refreshSecrets() {
           method: "DELETE",
         });
         showNotice(`Deleted secret ${s.name}.`);
-        await refreshSecrets();
+        await refreshSecrets({ force: true });
       } catch (err) {
         showNotice(`Delete failed: ${err && err.message ? err.message : err}`);
       } finally {
@@ -5665,7 +5847,7 @@ async function saveSecret() {
     }
     if (secretsFormMeta) secretsFormMeta.textContent = `Saved ${name} (value not stored in UI).`;
     showNotice(`Secret ${name} saved.`);
-    await refreshSecrets();
+    await refreshSecrets({ force: true });
   } catch (err) {
     showNotice(`Save secret failed: ${err && err.message ? err.message : err}`);
   } finally {
@@ -5719,11 +5901,13 @@ function syncResetConfirmEnabled() {
 async function refreshAllPanels() {
   await Promise.all([
     refreshStatus(),
-    refreshMessages(),
-    refreshGoals().catch(() => {}),
-    refreshMoments().catch(() => {}),
-    refreshTools().catch(() => {}),
-    refreshIdentity().catch(() => {}),
+    refreshMessages({ force: true }),
+    refreshGoals({ force: true }).catch(() => {}),
+    refreshMoments({ force: true }).catch(() => {}),
+    refreshTools({ force: true }).catch(() => {}),
+    refreshIdentity({ force: true }).catch(() => {}),
+    refreshSecrets({ force: true }).catch(() => {}),
+    refreshMemory({ force: true }).catch(() => {}),
   ]);
 }
 
@@ -6436,7 +6620,7 @@ if (catalogInspectorClose) {
 
 if (catalogRefreshBtn) {
   catalogRefreshBtn.addEventListener("click", () => {
-    refreshTools()
+    refreshTools({ force: true })
       .then(() => showNotice("Tools & skills rescanned from disk."))
       .catch((e) => panelLoadError("Tools", e));
   });
@@ -6486,14 +6670,16 @@ function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);
 }
 
-function refreshActivePanel() {
+function refreshActivePanel(opts = {}) {
+  const force = Boolean(opts.force);
   const name = activePanel;
-  if (name === "goals") return refreshGoals();
-  if (name === "moments") return refreshMoments();
-  if (name === "memory") return refreshMemory();
-  if (name === "tools") return refreshTools();
-  if (name === "identity") return refreshIdentity();
-  if (name === "secrets") return refreshSecrets();
+  // Tick uses soft-refresh (force=false); nav click / buttons pass force=true.
+  if (name === "goals") return refreshGoals({ force });
+  if (name === "moments") return refreshMoments({ force });
+  if (name === "memory") return refreshMemory({ force });
+  if (name === "tools") return refreshTools({ force });
+  if (name === "identity") return refreshIdentity({ force });
+  if (name === "secrets") return refreshSecrets({ force });
   // chat / status: covered by refreshMessages / refreshStatus
   return Promise.resolve();
 }
@@ -6507,13 +6693,23 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     activePanel = name || "chat";
     const panel = document.getElementById(`panel-${name}`);
     if (panel) panel.classList.add("active");
-    // Refresh panel data when opened; surface failures (parity with chat).
-    if (name === "goals") refreshGoals().catch((e) => panelLoadError("Goals", e));
-    if (name === "moments") refreshMoments().catch((e) => panelLoadError("Moments", e));
-    if (name === "memory") refreshMemory().catch((e) => panelLoadError("Memory", e));
-    if (name === "tools") refreshTools().catch((e) => panelLoadError("Tools", e));
-    if (name === "identity") refreshIdentity().catch((e) => panelLoadError("Identity", e));
-    if (name === "secrets") refreshSecrets().catch((e) => panelLoadError("Secrets", e));
+    // Force refresh on nav so opening a panel always shows current disk state.
+    if (name === "goals")
+      refreshGoals({ force: true }).catch((e) => panelLoadError("Goals", e));
+    if (name === "moments")
+      refreshMoments({ force: true }).catch((e) => panelLoadError("Moments", e));
+    if (name === "memory")
+      refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
+    if (name === "tools")
+      refreshTools({ force: true }).catch((e) => panelLoadError("Tools", e));
+    if (name === "identity")
+      refreshIdentity({ force: true }).catch((e) =>
+        panelLoadError("Identity", e)
+      );
+    if (name === "secrets")
+      refreshSecrets({ force: true }).catch((e) =>
+        panelLoadError("Secrets", e)
+      );
   });
 });
 
