@@ -1,0 +1,232 @@
+{
+  "compose_A_dogfood_jsonl": {
+    "channels_present": [
+      "episodic",
+      "temporal"
+    ],
+    "channel_token_totals": {
+      "episodic": 186,
+      "temporal": 27
+    },
+    "total_item_tokens": 213,
+    "items": [
+      {
+        "channel": "episodic",
+        "label": "episodic/summary 1m",
+        "role": "user",
+        "tokens": 93,
+        "n": 343,
+        "has_rockets": false,
+        "has_fabric": false,
+        "has_philosophy": false,
+        "wake_mid": null,
+        "preview": "[summary 1m | 2026-07-01T00:00:00Z \u2192 2026-08-01T00:00:00Z] | moments: 0 | atoms: 1 | speaks: 0 | tools: 0 | goals touched: \u2014 | highlights: | - 2026-07-27T00:00:00Z summary: [summary 1w | 2026-07-27T00:00:00Z \u2192 2026-08-03T00:00:0"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/summary 1w",
+        "role": "user",
+        "tokens": 93,
+        "n": 343,
+        "has_rockets": false,
+        "has_fabric": false,
+        "has_philosophy": false,
+        "wake_mid": null,
+        "preview": "[summary 1w | 2026-07-27T00:00:00Z \u2192 2026-08-03T00:00:00Z] | moments: 0 | atoms: 1 | speaks: 0 | tools: 0 | goals touched: \u2014 | highlights: | - 2026-07-28T00:00:00Z summary: [summary 1d | 2026-07-28T00:00:00Z \u2192 2026-07-29T00:00:0"
+      },
+      {
+        "channel": "temporal",
+        "label": "temporal/moment e6d460f2",
+        "role": "user",
+        "tokens": 27,
+        "n": 75,
+        "has_rockets": true,
+        "has_fabric": false,
+        "has_philosophy": false,
+        "wake_mid": "04f85fc6-195a-4b3c-b0bf-8b307c7baa2f",
+        "preview": "[08:47] (observation) what is the coolest thing you remember about rockets?"
+      }
+    ],
+    "wake_id_in_meal": true,
+    "assistant_role_count": 0,
+    "message_summary": [
+      {
+        "i": 0,
+        "role": "system",
+        "id": null,
+        "n": 6024,
+        "has_rockets": false,
+        "preview": "# Elyra system  You are Elyra \u2014 a digital teammate, not a chatbot persona fused with the user.  ## Hard walls  - **Self \u2260 user.** Your ident"
+      },
+      {
+        "i": 1,
+        "role": "user",
+        "id": null,
+        "n": 373,
+        "has_rockets": false,
+        "preview": "[context:episodic/summary 1m] [summary 1m | 2026-07-01T00:00:00Z \u2192 2026-08-01T00:00:00Z] moments: 0 | atoms: 1 | speaks: 0 | tools: 0 goals "
+      },
+      {
+        "i": 2,
+        "role": "user",
+        "id": null,
+        "n": 373,
+        "has_rockets": false,
+        "preview": "[context:episodic/summary 1w] [summary 1w | 2026-07-27T00:00:00Z \u2192 2026-08-03T00:00:00Z] moments: 0 | atoms: 1 | speaks: 0 | tools: 0 goals "
+      },
+      {
+        "i": 3,
+        "role": "user",
+        "id": "04f85fc6-195a-4b3c-b0bf-8b307c7baa2f",
+        "n": 110,
+        "has_rockets": true,
+        "preview": "[context:temporal/moment e6d460f2] [08:47] (observation) what is the coolest thing you remember about rockets?"
+      },
+      {
+        "i": 4,
+        "role": "user",
+        "id": null,
+        "n": 1658,
+        "has_rockets": false,
+        "preview": "# Orient  ## NOW 2026-07-30T08:47:53Z  ## SELF (self stub)  ## USER (user jim stub)  ## Why now wait reply (wait_id=c13ae60a-40ed-45c6-a75a-"
+      }
+    ]
+  },
+  "compose_B_hermetic_pressure": {
+    "channels_present": [
+      "episodic",
+      "temporal"
+    ],
+    "channel_token_totals": {
+      "episodic": 981,
+      "temporal": 27
+    },
+    "total_item_tokens": 1008,
+    "items": [
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment m_fab",
+        "role": "user",
+        "tokens": 60,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[08:28] (speak) Fabric manufacturing history research is done. Full multisection report + working notes in sandbox. Goal closed. | [08:41] (speak) Fabric manufacturing history research is done. Closed w"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment m_phil",
+        "role": "user",
+        "tokens": 54,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[00:30] (speak) Philosophy pack complete. Chinese room, consciousness notes. Both threads closed. | [00:39] (observation) User: open ended research about AI consciousness philosophy."
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment era_3",
+        "role": "user",
+        "tokens": 172,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[10:08] (speak) Closed work block 8: philosophy pack and fabric report scaffolding complete; no open goals. | [12:18] (speak) Closed work block 18: philosophy pack and fabric report scaffolding complete"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment era_0",
+        "role": "user",
+        "tokens": 145,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[11:25] (speak) Closed work block 25: philosophy pack and fabric report scaffolding complete; no open goals. | [12:10] (speak) Closed work block 10: philosophy pack and fabric report scaffolding complet"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment era_2",
+        "role": "user",
+        "tokens": 172,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[11:17] (speak) Closed work block 17: philosophy pack and fabric report scaffolding complete; no open goals. | [12:02] (speak) Closed work block 2: philosophy pack and fabric report scaffolding complete"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment era_4",
+        "role": "user",
+        "tokens": 172,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[10:24] (speak) Closed work block 24: philosophy pack and fabric report scaffolding complete; no open goals. | [11:09] (speak) Closed work block 9: philosophy pack and fabric report scaffolding complete"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment era_1",
+        "role": "user",
+        "tokens": 172,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[10:16] (speak) Closed work block 16: philosophy pack and fabric report scaffolding complete; no open goals. | [11:01] (speak) Closed work block 1: philosophy pack and fabric report scaffolding complete"
+      },
+      {
+        "channel": "episodic",
+        "label": "episodic/prior-moment m_cont",
+        "role": "user",
+        "tokens": 34,
+        "has_rockets": false,
+        "has_closed_work": true,
+        "preview": "[10:35] (speak) Open continuity work is finished. Goal closed. Anything else you want next, or idle?"
+      },
+      {
+        "channel": "temporal",
+        "label": "temporal/moment e6d460f2",
+        "role": "user",
+        "tokens": 27,
+        "has_rockets": true,
+        "has_closed_work": false,
+        "preview": "[08:47] (observation) what is the coolest thing you remember about rockets?"
+      }
+    ],
+    "assistant_role_count": 0,
+    "all_meal_item_roles_user": true
+  },
+  "flags": {
+    "glass_tail_band_present": false,
+    "why_now_has_user_text": false,
+    "skill_bias": "Prefer skill: talk (social reply first; speak before wait).",
+    "prior_assistant_glass_in_outer": false,
+    "wait_prompt_in_outer": false,
+    "hybrid_skipped_when_wake_id_on_temporal": true,
+    "rockets_in_temporal": true
+  },
+  "carrier_ranking": [
+    {
+      "rank": 1,
+      "bucket": "B12",
+      "carrier": "orient_why_now + skill_bias BIAS_TALK",
+      "detail": "Tape reasoning invents wait ceremony; why_now has wait_id only; user rockets absent from orient"
+    },
+    {
+      "rank": 2,
+      "bucket": "B11",
+      "carrier": "episodic closed-work mass",
+      "detail": "A epi_tokens=186; B hermetic epi_tokens=981 with fabric/philosophy/closed \u2014 no tip precedence"
+    },
+    {
+      "rank": 3,
+      "bucket": "B3",
+      "carrier": "temporal observation role collapse",
+      "detail": "rockets as `[hhmm] (observation) \u2026` under single role=user host block; 0 assistant roles for channel items"
+    },
+    {
+      "rank": 4,
+      "bucket": "B7",
+      "carrier": "hybrid wake inject",
+      "detail": "Skipped when temporal meta.wake_message_id present; when injects only one glass user row \u2014 no prior assistant"
+    },
+    {
+      "rank": 5,
+      "bucket": "B1",
+      "carrier": "missing glass-tail band",
+      "detail": "compose_outer_messages order system\u2192epi\u2192sem\u2192dk\u2192temp\u2192orient; list_messages used only for hybrid/media"
+    }
+  ]
+}
