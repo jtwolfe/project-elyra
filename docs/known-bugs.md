@@ -26,9 +26,9 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
 | `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on fix/known-bugs (pretty-print; pending main) |
 | `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
-| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Unified inspect on fix/known-bugs (pending dogfood/main) |
+| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Inspect + soft-refresh; dogfood then close |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
-| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open (defer) |
+| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open — same poll class as Context; Atoms next |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
@@ -380,27 +380,29 @@ Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time vis
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | Open (defer) — **next pass after Context soft-refresh** |
 | **Issue** | [#74](https://github.com/jtwolfe/project-elyra/issues/74) |
 | **Severity now** | Med (actively interferes with inspection) |
 | **Severity later** | Med |
 | **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active); possibly status/system strip re-render |
 | **Dogfood** | 2026-07-28 — inspector keeps flashing; system update also impacts ability to select text |
+| **Related** | Same root class as Context inspect flash (fixed on `fix/known-bugs`: meal fingerprint soft-skip + preserve open folds). **Atoms tab** still full-rebuilds on each tick — apply the same pattern next. |
 
 ### Symptom
 
 While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular cadence. Selecting text for copy is interrupted or reset — likely full DOM rebuild from the global poll. Operator also reports **system update** (status rail / status refresh) interfering with text selection.
 
-### Likely cause (unverified)
+### Likely cause (confirmed for Context; same for Atoms)
 
-`setInterval(tick, 1500)` always runs `refreshStatus()` + `refreshMessages()`, and when `activePanel === "memory"` also `refreshMemory()`, which rebuilds Context/Atoms DOM even when data is unchanged.
+`setInterval(tick, 1500)` always runs `refreshStatus()` + `refreshMessages()`, and when `activePanel === "memory"` also `refreshMemory()`, which rebuilds Context/Atoms DOM even when data is unchanged. Context now soft-skips when the meal fingerprint is unchanged; **Atoms list/detail still needs the same treatment** (#74).
 
 ### Fix directions
 
-1. Diff-then-patch or skip re-render when payload hash/etag unchanged.
+1. Diff-then-patch or skip re-render when payload hash/etag unchanged. **(Context: done; Atoms: todo)**
 2. Do not replace nodes that contain an active text selection / focus.
 3. Pause aggressive panel refresh while pointer is selecting or detail is focused.
 4. Audit status/system strip updates for the same full-replace pattern.
+5. Mirror Context: fingerprint atom list + preserve `selectedAtomId` detail DOM / selection.
 
 ---
 

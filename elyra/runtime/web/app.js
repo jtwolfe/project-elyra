@@ -71,6 +71,10 @@ let memoryActiveTab = "context";
 /** @type {string | null} */
 let selectedAtomId = null;
 let memoryAtomDetailLoadGen = 0;
+/** Last meal fingerprint for Context soft-refresh (avoid wiping open inspect). */
+let memoryContextMealFp = null;
+/** @type {Map<string, object>} atom_id → last fetched detail for Context inspect restore */
+const memoryContextAtomCache = new Map();
 const toolsList = $("#tools-list");
 const skillsList = $("#skills-list");
 const catalogInspector = $("#catalog-inspector");
@@ -2884,8 +2888,127 @@ function renderMemoryFlags(mem) {
   }
 }
 
+/**
+ * Stable fingerprint of the meal package (not flag/status churn).
+ * Used to skip full Context rebuild on the 1.5s poll (inspect flash).
+ */
+function fingerprintMemoryMeal(data) {
+  const meal = (data && data.meal) || {};
+  const items = Array.isArray(meal.items) ? meal.items : [];
+  const fixed = meal.fixed || {};
+  const parts = [
+    data && data.source,
+    meal.recorded_at,
+    meal.open_moment_id,
+    meal.total_tokens,
+    meal.budget_tokens,
+    meal.slid_off_count,
+    meal.semantic_omitted_reason,
+    meal.directed_keep_omitted_reason,
+    JSON.stringify(meal.semantic_select_meta || null),
+    JSON.stringify(meal.directed_keep_meta || null),
+    fixed.system && fixed.system.content_chars,
+    fixed.orient && fixed.orient.content_chars,
+    fixed.system && fixed.system.snippet,
+    fixed.orient && fixed.orient.snippet,
+  ];
+  for (const it of items) {
+    parts.push(
+      it.channel,
+      it.atom_id,
+      it.label,
+      it.token_estimate,
+      it.content_chars,
+      it.snippet,
+      it.t_start,
+      it.meta && it.meta.scale,
+      it.meta && it.meta.atom_count,
+      it.meta && Array.isArray(it.meta.atom_ids)
+        ? it.meta.atom_ids.join(",")
+        : ""
+    );
+  }
+  return parts.map((x) => (x == null ? "" : String(x))).join("|");
+}
+
+/** Capture open Context inspect folds before destructive re-render. */
+function captureMemoryContextUi() {
+  if (!memoryContextBody) return { openAtomIds: [], openChannels: [], scrollTop: 0 };
+  const openAtomIds = [];
+  memoryContextBody
+    .querySelectorAll("details.memory-atom-inspect-fold[data-inspect-atom-id][open]")
+    .forEach((el) => {
+      const id = el.getAttribute("data-inspect-atom-id");
+      if (id) openAtomIds.push(id);
+    });
+  const openChannels = [];
+  memoryContextBody
+    .querySelectorAll(
+      "details.memory-atom-inspect-fold[data-inspect-channel][open]"
+    )
+    .forEach((el) => {
+      const ch = el.getAttribute("data-inspect-channel");
+      if (ch) openChannels.push(ch);
+    });
+  const openMembers = [];
+  memoryContextBody
+    .querySelectorAll(
+      "details.memory-atom-inspect-fold[data-inspect-members][open]"
+    )
+    .forEach((el) => {
+      const key = el.getAttribute("data-inspect-members");
+      if (key) openMembers.push(key);
+    });
+  return {
+    openAtomIds,
+    openChannels,
+    openMembers,
+    scrollTop: memoryContextBody.scrollTop || 0,
+  };
+}
+
+/** Escape a value for use inside a double-quoted CSS attribute selector. */
+function cssAttrValue(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/** Re-open inspect folds after rebuild; use cache to avoid loading flash. */
+function restoreMemoryContextUi(saved) {
+  if (!memoryContextBody || !saved) return;
+  for (const id of saved.openAtomIds || []) {
+    const details = memoryContextBody.querySelector(
+      `details.memory-atom-inspect-fold[data-inspect-atom-id="${cssAttrValue(id)}"]`
+    );
+    if (!details) continue;
+    details.open = true;
+    const panel = details.querySelector(".memory-atom-inspect-panel");
+    if (panel && memoryContextAtomCache.has(id)) {
+      fillAtomInspectInto(panel, memoryContextAtomCache.get(id), {
+        showClose: false,
+      });
+      panel.dataset.inspectLoaded = "1";
+    }
+  }
+  for (const ch of saved.openChannels || []) {
+    const details = memoryContextBody.querySelector(
+      `details.memory-atom-inspect-fold[data-inspect-channel="${cssAttrValue(ch)}"]`
+    );
+    if (details) details.open = true;
+  }
+  for (const key of saved.openMembers || []) {
+    const details = memoryContextBody.querySelector(
+      `details.memory-atom-inspect-fold[data-inspect-members="${cssAttrValue(key)}"]`
+    );
+    if (details) details.open = true;
+  }
+  if (typeof saved.scrollTop === "number") {
+    memoryContextBody.scrollTop = saved.scrollTop;
+  }
+}
+
 function renderMemoryContext(data) {
   if (!memoryContextBody) return;
+  const savedUi = captureMemoryContextUi();
   memoryContextBody.innerHTML = "";
   const mem = data.memory || {};
   renderMemoryFlags(mem);
@@ -3018,6 +3141,8 @@ function renderMemoryContext(data) {
     }
     memoryContextBody.appendChild(section);
   }
+
+  restoreMemoryContextUi(savedUi);
 }
 
 /**
@@ -3239,10 +3364,17 @@ function fillAtomInspectInto(container, a, opts = {}) {
  */
 function bindContextAtomInspect(panel, atomId) {
   if (!panel || !atomId) return;
-  let loaded = false;
   let gen = 0;
   const run = async () => {
-    if (loaded) return;
+    if (panel.dataset.inspectLoaded === "1" && panel.childElementCount) return;
+    // Prefer cache after soft restore / prior expand.
+    if (memoryContextAtomCache.has(atomId)) {
+      fillAtomInspectInto(panel, memoryContextAtomCache.get(atomId), {
+        showClose: false,
+      });
+      panel.dataset.inspectLoaded = "1";
+      return;
+    }
     const my = ++gen;
     panel.innerHTML = `<p class="muted">loading…</p>`;
     try {
@@ -3256,8 +3388,14 @@ function bindContextAtomInspect(panel, atomId) {
         )}</p>`;
         return;
       }
+      memoryContextAtomCache.set(atomId, data.atom);
+      // Cap cache size (simple LRU-ish drop of oldest keys).
+      if (memoryContextAtomCache.size > 40) {
+        const first = memoryContextAtomCache.keys().next().value;
+        if (first != null) memoryContextAtomCache.delete(first);
+      }
       fillAtomInspectInto(panel, data.atom, { showClose: false });
-      loaded = true;
+      panel.dataset.inspectLoaded = "1";
     } catch (err) {
       if (my !== gen) return;
       panel.innerHTML = `<p class="muted">${escapeHtml(
@@ -3265,7 +3403,6 @@ function bindContextAtomInspect(panel, atomId) {
       )}</p>`;
     }
   };
-  // details may already be open when re-rendered (unlikely); load on toggle.
   const details = panel.closest("details");
   if (details) {
     details.addEventListener("toggle", () => {
@@ -3386,6 +3523,7 @@ function renderMemoryChannelCard(item) {
     // In-place inspect fold (unified with Atoms detail chrome).
     const details = document.createElement("details");
     details.className = "memory-atom-inspect-fold";
+    details.setAttribute("data-inspect-atom-id", item.atom_id);
     const summary = document.createElement("summary");
     summary.textContent = "inspect atom";
     details.appendChild(summary);
@@ -3398,6 +3536,7 @@ function renderMemoryChannelCard(item) {
     // Fixed blocks: expand shows meal snippet text (no store atom).
     const details = document.createElement("details");
     details.className = "memory-atom-inspect-fold";
+    details.setAttribute("data-inspect-channel", ch);
     const summary = document.createElement("summary");
     summary.textContent = "inspect";
     details.appendChild(summary);
@@ -3421,6 +3560,8 @@ function renderMemoryChannelCard(item) {
   if (memberIds.length && !item.atom_id) {
     const details = document.createElement("details");
     details.className = "memory-atom-inspect-fold";
+    const membersKey = `${ch}:${item.label || ""}:${memberIds[0] || ""}`;
+    details.setAttribute("data-inspect-members", membersKey);
     const summary = document.createElement("summary");
     summary.textContent = `inspect members (${memberIds.length}${
       metaObj.atom_count != null && metaObj.atom_count > memberIds.length
@@ -3448,6 +3589,7 @@ function renderMemoryChannelCard(item) {
       row.appendChild(openBtn);
       const sub = document.createElement("details");
       sub.className = "memory-atom-inspect-fold memory-atom-inspect-nested";
+      sub.setAttribute("data-inspect-atom-id", mid);
       const subSum = document.createElement("summary");
       subSum.textContent = "inspect";
       sub.appendChild(subSum);
@@ -3467,6 +3609,18 @@ function renderMemoryChannelCard(item) {
 
 async function refreshMemoryContext() {
   const data = await fetchJson("/api/memory/context");
+  const fp = fingerprintMemoryMeal(data);
+  // Soft path: meal unchanged — update flags only; keep open inspect DOM.
+  if (
+    fp &&
+    fp === memoryContextMealFp &&
+    memoryContextBody &&
+    memoryContextBody.querySelector(".memory-channel-section, .memory-channel-card")
+  ) {
+    renderMemoryFlags(data.memory || {});
+    return;
+  }
+  memoryContextMealFp = fp;
   renderMemoryContext(data);
 }
 
