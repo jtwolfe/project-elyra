@@ -30,8 +30,8 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (closed) | **Fixed** on main (Atoms soft-skip under glass-03) |
 | `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | **Partial** on main — knip soft-skip shipped; residual poll architecture later |
-| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
-| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
+| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | KaTeX on fix/known-bugs; dogfood then close |
+| `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Soft newlines on fix/known-bugs; dogfood then close |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
 | `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** on main |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** on main |
@@ -483,28 +483,28 @@ Nav click, Memory tab/Apply, catalog Rescan, secret save/delete/grants, identity
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) — feature gap |
+| **Status** | Landed on `fix/known-bugs` — dogfood then close |
 | **Issue** | [#75](https://github.com/jtwolfe/project-elyra/issues/75) |
-| **Severity now** | Low–Med (depends on dogfood topics; calculator / STEM chats unreadable) |
-| **Severity later** | Med for teaching / technical work |
-| **Area** | Glass chat message render (`app.js` message HTML); speak / model content pipeline |
-| **Dogfood** | 2026-07-28 operator request — add equation rendering (LaTeX? whatever format models emit) |
+| **Severity now** | Low residual (edge TeX / currency `$` false positives) |
+| **Severity later** | Med if models change delimiter style |
+| **Area** | Glass `renderMarkdown` + vendored KaTeX (`elyra/runtime/web/vendor/katex/`) |
+| **Dogfood** | 2026-07-28 request; 2026-07-30 Grok speak uses multi-line `\[ … \]` (Schrödinger moment) |
 
 ### Symptom
 
-Math in chat shows as raw `$...$` / `$$...$$` / `\(...\)` (or similar) instead of rendered equations.
+Math in chat showed as raw `\[…\]` / `$…$` instead of rendered equations.
 
-### Fix directions
+### Fix (landed)
 
-1. Inventory what Grok / tools actually emit (KaTeX-friendly `$`, `$$`, code fences, Unicode).
-2. Client-side render with a maintained math library (e.g. KaTeX) on assistant/user bubbles; CSP-safe, no remote fonts required if vendored.
-3. Fallback: keep raw source on render failure; never execute untrusted HTML.
-4. Decide speak-tool vs model-beat parity (only surface promoted speak, or also debug model content).
+1. **Grok primary format:** multi-line display `\[ … \]` (also `$$`, `\(...\)`, conservative `$…$`).
+2. Extract math to placeholders **before** markdown escape/italic; restore via `katex.renderToString` (`throwOnError: false`).
+3. Self-hosted KaTeX 0.16.21 under `/vendor/katex/` (no CDN).
+4. Covers chat bubbles + Moments speak prose that already uses `renderMarkdown`.
 
 ### Explicit non-goals
 
 - Do not treat this as memory/atom formatting (separate from **BUG-mem-ui-***).
-- Do not pull a heavy full Markdown+math stack without need.
+- Do not pull MathJax or a full MDX stack.
 
 ---
 
@@ -512,43 +512,24 @@ Math in chat shows as raw `$...$` / `$$...$$` / `\(...\)` (or similar) instead o
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open |
+| **Status** | Landed on `fix/known-bugs` — dogfood then close |
 | **Issue** | [#84](https://github.com/jtwolfe/project-elyra/issues/84) |
-| **Severity now** | Low–Med (multi-line chat composition looks flattened in history) |
-| **Severity later** | Med for any structured prompts / poetry / lists typed with Enter in the composer |
-| **Area** | Glass chat history render (`elyra/runtime/web/app.js` `renderMarkdown` / message bubbles); user social text path is fine into store |
-| **Dogfood** | 2026-07-30 operator: newlines typed in chat input **do not appear** in Glass chat history, but **do appear** in Memory atoms |
+| **Severity now** | — |
+| **Severity later** | — |
+| **Area** | Glass `renderMarkdown` paragraph flush |
+| **Dogfood** | 2026-07-30 — multi-line composer flattened in history; atoms OK |
 
 ### Symptom
 
-Operator composes a multi-line message in the Glass chat input (soft line breaks via Enter). After send:
+Multi-line chat input showed as a single run-on paragraph in Glass history; atoms kept real newlines (display-only defect).
 
-- **Glass Chat** history shows the text as a **single run-on paragraph** (line breaks collapsed / invisible).
-- **Memory atoms** (and likely raw store / meal) still contain the **real newlines** — so fidelity is not lost on the backend, only on Glass chat presentation.
+### Fix (landed)
 
-Confirms storage path is OK; defect is **display** of user (and possibly assistant) bubbles after markdown-ish rendering.
-
-### Likely cause (unverified — dig on fix)
-
-`renderMarkdown` flushes paragraph lines with `para.join(" ")` — single newlines become spaces, Markdown-style. Chat soft-breaks are not converted to `<br>` and message CSS may not use `white-space: pre-wrap` for user bubbles. Atoms UI shows raw-ish text, so newlines survive there.
-
-### Fix directions
-
-1. For **chat history bubbles**, preserve soft line breaks: either treat single `\n` as `<br>` (GFM-style / chat-composer style) or render user messages with `white-space: pre-wrap` and skip aggressive join-space collapse.
-2. Prefer fixing **user** role first (composer source of truth); then decide if assistant speak should match.
-3. Regression: multi-line user message still looks multi-line after refresh / re-open Glass; atom body unchanged.
-4. Do not strip newlines from the wire format or atom promote path.
-
-### Explicit non-goals
-
-- Do not change atom schema or meal composition for this bug.
-- Do not require full CommonMark hard-break rules unless we adopt them product-wide.
-- Separate from **BUG-chat-01** (math); fix can land without KaTeX.
+`flushPara` joins soft-broken lines with `<br>` instead of spaces; blockquotes match. Store/atom paths unchanged.
 
 ### Related
 
-- **BUG-chat-01** — math rendering (same chat bubble pipeline).
-- **BUG-mem-ui-*** — atoms already show newlines; good contrast for dogfood.
+- **BUG-chat-01** — same `renderMarkdown` pipeline (math placeholders).
 
 ---
 
