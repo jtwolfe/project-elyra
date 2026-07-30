@@ -269,7 +269,14 @@ let oauthPollTimer = null;
 let lastOauthConfigured = false;
 /** True while PATCH /api/usage (hard-stop override) is in flight. */
 let usageOverrideInFlight = false;
-/** Last known hard_stop_override / override_active from status. */
+/**
+ * Desired override while a PATCH is in flight. If the operator toggles again
+ * before the first request finishes, we apply this after the in-flight call
+ * (BUG-status-03 / #78 — dropped OFF clicks left disk stuck ON).
+ * @type {boolean|null}
+ */
+let pendingOverrideTarget = null;
+/** Last known hard_stop_override / override_active from status (server truth). */
 let lastOverrideActive = false;
 /** Last known usage.hard_stop value (for transition notices). */
 let lastHardStop = null;
@@ -1919,7 +1926,11 @@ function renderUsageCard(s) {
     usageOverrideToggle.checked = overrideActive;
     usageOverrideToggle.disabled = !enabled;
   }
-  lastOverrideActive = overrideActive;
+  // Never clobber lastOverrideActive mid-PATCH with a concurrent status poll
+  // (stale ON would undo a successful OFF on error rollback).
+  if (!usageOverrideInFlight) {
+    lastOverrideActive = overrideActive;
+  }
   if (usageOverrideMeta) {
     usageOverrideMeta.textContent = overrideActive
       ? "override ON"
@@ -2014,20 +2025,43 @@ async function clearApiKey() {
 }
 
 async function setHardStopOverride(active) {
-  if (usageOverrideInFlight) return;
+  const want = Boolean(active);
+  // Coalesce toggles while a PATCH is in flight so OFF is never dropped.
+  if (usageOverrideInFlight) {
+    pendingOverrideTarget = want;
+    if (usageOverrideToggle) usageOverrideToggle.checked = want;
+    return;
+  }
   usageOverrideInFlight = true;
+  pendingOverrideTarget = null;
   if (usageOverrideToggle) {
     usageOverrideToggle.disabled = true;
-    usageOverrideToggle.checked = active;
+    usageOverrideToggle.checked = want;
   }
   try {
-    await fetchJson("/api/usage", {
+    const body = await fetchJson("/api/usage", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hard_stop_override: Boolean(active) }),
+      body: JSON.stringify({ hard_stop_override: want }),
     });
-    if (active) {
+    const serverActive = Boolean(
+      body && body.usage && body.usage.override_active
+    );
+    lastOverrideActive = serverActive;
+    if (usageOverrideToggle) usageOverrideToggle.checked = serverActive;
+    if (usageOverrideMeta) {
+      usageOverrideMeta.textContent = serverActive
+        ? "override ON"
+        : "default off";
+    }
+    if (serverActive !== want) {
+      showNotice(
+        "Hard-stop override did not stick on server — check Status after refresh."
+      );
+    } else if (want) {
       showNotice("Hard-stop override ON — model calls continue past budget.");
+    } else {
+      showNotice("Hard-stop override OFF — budget hard-stop enforced again.");
     }
     await refreshStatus();
   } catch (err) {
@@ -2035,7 +2069,19 @@ async function setHardStopOverride(active) {
     showNotice(String(err.message || err));
   } finally {
     usageOverrideInFlight = false;
-    if (usageOverrideToggle) usageOverrideToggle.disabled = false;
+    if (usageOverrideToggle) {
+      usageOverrideToggle.disabled = false;
+    }
+    // Apply last click during flight (e.g. ON then OFF before first finished).
+    if (pendingOverrideTarget !== null) {
+      const next = pendingOverrideTarget;
+      pendingOverrideTarget = null;
+      if (next !== lastOverrideActive) {
+        void setHardStopOverride(next);
+      } else if (usageOverrideToggle) {
+        usageOverrideToggle.checked = lastOverrideActive;
+      }
+    }
   }
 }
 

@@ -599,6 +599,33 @@ def test_restart_survival(tmp_path: Path):
     assert m2.can_call() is True  # override ON
 
 
+def test_restart_override_off_persists(tmp_path: Path):
+    """BUG-status-03: OFF must survive process restart (disk + new meter)."""
+    s = _settings(
+        weekly_allowed_tokens=100,
+        day_allowed_tokens=100,
+        hour_allowed_tokens=10,
+        day_hard_stop_enabled=True,
+        hour_hard_stop_enabled=True,
+    )
+    clock = _Clock(datetime(2026, 7, 24, 14, 0, tzinfo=UTC))
+    m1 = _meter(tmp_path, s, clock=clock)
+    m1.record(TokenUsage(total_tokens=10))
+    assert m1.can_call() is False
+    m1.set_hard_stop_override(True)
+    assert m1.snapshot().override_active is True
+    assert m1.can_call() is True
+    m1.set_hard_stop_override(False)
+    assert m1.snapshot().override_active is False
+    assert m1.can_call() is False
+    data = json.loads((tmp_path / "runtime" / "usage.json").read_text(encoding="utf-8"))
+    assert data["hard_stop_override"] is False
+
+    m2 = UsageMeter.load(tmp_path, s, clock=clock)
+    assert m2.snapshot().override_active is False
+    assert m2.can_call() is False  # still over hour budget, override OFF
+
+
 def test_restart_after_hard_stop_without_override(tmp_path: Path):
     s = _settings(
         weekly_allowed_tokens=100,

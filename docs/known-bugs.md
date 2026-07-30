@@ -34,7 +34,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
 | `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Fixed on fix branch (pending main) |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (open) | Fixed on fix branch (pending main) |
-| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Open (defer) |
+| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Fixed on fix branch (pending main) |
 | `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
 | `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
@@ -583,7 +583,7 @@ Hard-stop override / continuous use `input.continuous-toggle` + `.toggle-track` 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | Fixed on `fix/BUG-status-03-78` (pending merge to main) |
 | **Issue** | [#78](https://github.com/jtwolfe/project-elyra/issues/78) |
 | **Severity now** | Med (budget safety + operator trust; override ON is dangerous if sticky) |
 | **Severity later** | High if ON sticks unintentionally across restarts |
