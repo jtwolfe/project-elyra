@@ -543,7 +543,8 @@ def test_walk_summary_template():
 # ── moment close + clear ────────────────────────────────────────────────────
 
 
-def test_moment_close_clears_sticky(store):
+def test_moment_close_clears_last_session_retains_meal_tray(store):
+    """S3 / B5: moment close clears last_session (KD-A19); retains meal tray."""
     atoms = _chain_store(store, 2)
     reg = _reg(_enabled_settings(traverse_keep_adjacent=False))
     gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
@@ -551,10 +552,56 @@ def test_moment_close_clears_sticky(store):
     reg.finish(keep_ids=[atoms[0].atom_id])
     assert reg.last_session is not None
     assert reg.last_confirmed_keep is not None
+    ids_before, _ = reg.get_meal_keep_ids()
+    assert atoms[0].atom_id in ids_before
     reg.on_moment_close("m1")
     assert reg.active_session is None
-    assert reg.last_session is None
-    assert reg.last_confirmed_keep is None
+    assert reg.last_session is None  # KD-A19 glass walk view cleared
+    # Meal keep retained (tray + thin snap for compat).
+    assert reg.last_confirmed_keep is not None
+    ids_after, summary = reg.get_meal_keep_ids()
+    assert atoms[0].atom_id in ids_after
+    assert summary is not None
+
+
+def test_directed_keep_survives_moment_close(store):
+    """B5: confirm → close moment → meal keep still available."""
+    atoms = _chain_store(store, 2)
+    reg = _reg(_enabled_settings(traverse_keep_adjacent=False))
+    gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
+    reg.start(gv, goal="g", seed_atom_ids=[atoms[0].atom_id], moment_id="m_a")
+    reg.finish(keep_ids=[atoms[0].atom_id])
+    reg.on_moment_close("m_a")
+    ids, summary = reg.get_meal_keep_ids()
+    assert ids == [atoms[0].atom_id]
+    assert summary
+
+
+def test_directed_keep_packs_across_moment_ids(store):
+    """B5b: confirm in moment A, meal read under open moment B still packs."""
+    atoms = _chain_store(store, 2, moment_id="m_a")
+    reg = _reg(_enabled_settings(traverse_keep_adjacent=False))
+    gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
+    reg.start(gv, goal="g", seed_atom_ids=[atoms[0].atom_id], moment_id="m_a")
+    reg.finish(keep_ids=[atoms[0].atom_id])
+    # Snap has moment_id=m_a; meal path must NOT require open == m_a.
+    snap = reg.get_last_confirmed_keep("m_b")
+    assert snap is None  # equality filter still on thin snap API
+    ids, _ = reg.get_meal_keep_ids()  # tray: no moment filter
+    assert atoms[0].atom_id in ids
+
+
+def test_confirm_then_compose_same_process_sees_union(store):
+    """KD-TRAY-SOT: two confirms then meal ids see union without restart."""
+    atoms = _chain_store(store, 3)
+    reg = _reg(_enabled_settings(traverse_keep_adjacent=False))
+    gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
+    reg.start(gv, goal="g1", seed_atom_ids=[atoms[0].atom_id], moment_id="m1")
+    reg.finish(keep_ids=[atoms[0].atom_id])
+    reg.start(gv, goal="g2", seed_atom_ids=[atoms[1].atom_id], moment_id="m1")
+    reg.finish(keep_ids=[atoms[1].atom_id])
+    ids, _ = reg.get_meal_keep_ids()
+    assert set(ids) >= {atoms[0].atom_id, atoms[1].atom_id}
 
 
 def test_clear_confirmed_keep_optional_glass(store):
@@ -565,6 +612,7 @@ def test_clear_confirmed_keep_optional_glass(store):
     reg.finish(keep_ids=[atoms[0].atom_id])
     reg.clear_confirmed_keep(clear_glass=False)
     assert reg.last_confirmed_keep is None
+    assert reg.get_meal_keep_ids()[0] == []  # tray cleared with operator clear
     assert reg.last_session is not None  # glass retained
     reg.clear_confirmed_keep(clear_glass=True)
     assert reg.last_session is None
@@ -649,5 +697,9 @@ def test_worker_graph_view_and_traversal_registry(tmp_path):
     w.traversal.finish(keep_ids=[a.atom_id])
     assert w.traversal.last_confirmed_keep is not None
     w._close_traversal_for_moment("mw")
-    assert w.traversal.last_session is None
-    assert w.traversal.last_confirmed_keep is None
+    assert w.traversal.last_session is None  # KD-A19
+    # Meal tray retained (B5); worker meal path delegates to registry tray.
+    assert w.traversal.last_confirmed_keep is not None
+    meal_ids, meal_summary = w._last_confirmed_keep_for_meal("other_moment")
+    assert a.atom_id in meal_ids
+    assert meal_summary

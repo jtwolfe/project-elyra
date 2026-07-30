@@ -525,7 +525,8 @@ class PresenceWorker:
         from elyra.memory.traverse import TraversalRegistry
 
         self._traversal: TraversalRegistry = TraversalRegistry(
-            settings=self.settings.memory
+            settings=self.settings.memory,
+            paths=paths,
         )
 
         self._phase: str = PHASE_IDLE
@@ -1519,7 +1520,10 @@ class PresenceWorker:
             _LOG.exception("traversal idle TTL sweep failed")
 
     def _close_traversal_for_moment(self, moment_id: str | None) -> None:
-        """Moment end hygiene: abandon active; clear sticky keep + last_session."""
+        """Moment end hygiene: abandon active; clear last_session (KD-A19).
+
+        Meal directed_keep tray is retained on the registry (B5); do not wipe.
+        """
         try:
             self._traversal.on_moment_close(moment_id)
         except Exception:  # noqa: BLE001
@@ -1530,21 +1534,18 @@ class PresenceWorker:
     def _last_confirmed_keep_for_meal(
         self, moment_id: str | None = None
     ) -> tuple[list[str], str | None]:
-        """Thin keep-set for next compose_meal (KD-A16 — no soft re-outer).
+        """Keep-set for next compose_meal from registry tray (KD-TRAY-SOT).
 
-        Returns ``(keep_ids, walk_summary_nl)`` from sticky
-        ``last_confirmed_keep`` only (not active provisional keeps).
+        ``moment_id`` is ignored for the meal path (B5b fix — no open-moment
+        equality filter). Delegates only to ``TraversalRegistry.get_meal_keep_ids``;
+        no worker-side tray cache.
         """
+        del moment_id  # B5b: meal reads instance tray, not snap.moment filter
         try:
-            snap = self._traversal.get_last_confirmed_keep(moment_id)
+            return self._traversal.get_meal_keep_ids()
         except Exception:  # noqa: BLE001
-            _LOG.exception("read last_confirmed_keep for meal failed")
+            _LOG.exception("read meal keep ids from registry tray failed")
             return [], None
-        if snap is None:
-            return [], None
-        ids = [str(i) for i in (snap.keep_ids or ()) if i]
-        summary = (snap.walk_summary_nl or "").strip() or None
-        return ids, summary
 
     def _record_last_meal_snapshot(
         self,

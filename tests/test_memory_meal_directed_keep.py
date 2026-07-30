@@ -717,4 +717,102 @@ def test_compose_meal_traversal_flag_enables_keep_oq_a1(store):
         directed_keep_summary="walk",
     )
     assert "directed_keep" in pkg.channels_present
+
+
+def test_directed_keep_packs_across_moment_ids(store):
+    """B5b / cross-moment: keep atoms from moment A pack into open moment B."""
+    open_id = "m_open_b"
+    store.put_atom(
+        _atom(t="2026-07-28T14:50:00Z", text="open B", moment_id=open_id)
+    )
+    store.put_atom(
+        _atom(
+            t="2026-07-20T10:00:00Z",
+            text="pinned from moment A",
+            moment_id="m_a",
+            atom_id="a_from_a",
+        )
+    )
+    cfg = MemorySettings(
+        directed_keep_enabled=True,
+        semantic_enabled=False,
+        episodic_horizon_hours=1.0,
+    )
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=datetime(2026, 7, 28, 15, 0, tzinfo=UTC),
+        settings=cfg,
+        directed_keep_ids=["a_from_a"],
+        directed_keep_summary="cross moment pin",
+    )
+    assert "directed_keep" in pkg.channels_present
+    dk_ids = [i.atom_id for i in pkg.items if i.channel == "directed_keep" and i.atom_id]
+    assert "a_from_a" in dk_ids
+
+
+def test_directed_keep_soft_age_cut_before_tip_floor(store):
+    """Under tight dk cap, soft-aged ids skip while young pack (age-soft first)."""
+    young = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="young pin body " + ("y" * 40),
+        atom_id="a_young",
+        moment_id="m_k",
+    )
+    soft = _atom(
+        t="2026-07-26T10:00:00Z",
+        text="soft aged pin body " + ("s" * 40),
+        atom_id="a_soft",
+        moment_id="m_k",
+    )
+    store.put_atom(young)
+    store.put_atom(soft)
+    # Cap large enough for one body + tiny summary, not both.
+    items, reason, meta = select_directed_keep(
+        store,
+        keep_ids=["a_soft", "a_young"],  # soft listed first; reordered young-first
+        walk_summary="",
+        cap_tokens=40,  # ~one short line
+        enabled=True,
+        soft_aged_ids={"a_soft"},
+    )
+    assert reason is None or meta is not None
+    packed_ids = [i.atom_id for i in items if i.atom_id]
+    # Young should win under pressure; soft cut first.
+    assert "a_young" in packed_ids
+    assert "a_soft" not in packed_ids
+    assert meta is not None
+    assert meta.get("soft_aged_skipped", 0) >= 1
+
+
+def test_directed_keep_flags_off_budget_parity(store):
+    """Flags off / empty tray: Phase 1/2 parity (no directed_keep channel)."""
+    open_id = "m_openmoment02"
+    store.put_atom(
+        _atom(
+            t="2026-07-28T14:50:00Z",
+            text="wake hi",
+            moment_id=open_id,
+        )
+    )
+    now = datetime(2026, 7, 28, 15, 0, tzinfo=UTC)
+    cfg = MemorySettings(
+        semantic_enabled=False,
+        directed_keep_enabled=False,
+        directed_traversal_enabled=False,
+    )
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        system_text="SYS",
+        orient_text="ORIENT",
+        now=now,
+        settings=cfg,
+        directed_keep_ids=None,
+    )
+    assert "directed_keep" not in pkg.channels_present
+    assert pkg.directed_keep_omitted_reason is None
+    assert any(i.channel == "temporal" for i in pkg.items)
     assert pkg.directed_keep_omitted_reason is None

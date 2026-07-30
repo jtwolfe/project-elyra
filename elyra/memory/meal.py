@@ -1359,13 +1359,17 @@ def select_directed_keep(
     settings: MemorySettings | None = None,
     exclude_atom_ids: set[str] | None = None,
     enabled: bool | None = None,
+    soft_aged_ids: set[str] | Sequence[str] | None = None,
+    entry_ages_s: Mapping[str, float] | None = None,
 ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
     """Pack confirmed keep-set atoms as the ``directed_keep`` meal channel.
 
-    Returns ``(items, omitted_reason, meta)``. Keep order is preserved.
-    Parcel ids map to parent (KD21). Dedupe drops ids already in temporal /
-    episodic / semantic (caller supplies ``exclude_atom_ids``). Prepends a
-    single summary item when ``walk_summary`` is non-empty and fits.
+    Returns ``(items, omitted_reason, meta)``. Keep order is preserved, but
+    soft-aged ids (when provided) are packed **after** young ones so budget
+    pressure cuts age-soft entries first. Parcel ids map to parent (KD21).
+    Dedupe drops ids already in temporal / episodic / semantic (caller supplies
+    ``exclude_atom_ids``). Prepends a single summary item when ``walk_summary``
+    is non-empty and fits. No open-moment equality filter (B5b — tray ids).
 
     Omit reasons: ``disabled`` / ``empty`` / ``deduped`` / ``budget``.
     """
@@ -1376,18 +1380,29 @@ def select_directed_keep(
         else is_directed_keep_enabled(cfg)
     )
     cap = max(0, int(cap_tokens))
-    ids = [str(i).strip() for i in (keep_ids or ()) if str(i or "").strip()]
+    ids_raw = [str(i).strip() for i in (keep_ids or ()) if str(i or "").strip()]
+    soft_set: set[str] = {str(x) for x in (soft_aged_ids or ()) if x}
+    # Prefer young before soft-aged under pressure (age-soft cut first).
+    if soft_set:
+        young = [i for i in ids_raw if i not in soft_set]
+        aged = [i for i in ids_raw if i in soft_set]
+        ids = young + aged
+    else:
+        ids = list(ids_raw)
     exclude: set[str] = set(exclude_atom_ids or ())
     summary = (walk_summary or "").strip()
+    ages = dict(entry_ages_s or {})
 
     def _meta(**extra: Any) -> dict[str, Any]:
         base: dict[str, Any] = {
-            "keep_ids_in": len(ids),
+            "keep_ids_in": len(ids_raw),
             "packed": 0,
             "deduped": 0,
             "missing": 0,
             "cap_tokens": cap,
             "enabled": channel_on,
+            "soft_aged_in": len(soft_set),
+            "soft_aged_skipped": 0,
         }
         base.update(extra)
         return base
@@ -1406,6 +1421,7 @@ def select_directed_keep(
     deduped = 0
     missing = 0
     skipped_budget = 0
+    soft_aged_skipped = 0
     candidates = 0  # loadable non-excluded keeps considered for pack
     seen: set[str] = set(exclude)
 
@@ -1452,21 +1468,30 @@ def select_directed_keep(
             "directed-keep/parcel→parent" if via_parcel else "directed-keep"
         )
         body = format_atom_line(parent)
+        is_soft = aid in soft_set or parent.atom_id in soft_set
+        item_meta: dict[str, Any] = {
+            "via_parcel": via_parcel,
+            "hit_atom_id": atom.atom_id,
+            "kind": parent.kind,
+            "moment_id": parent.moment_id,
+            "soft_aged": is_soft,
+        }
+        if aid in ages:
+            item_meta["age_seconds"] = ages[aid]
+        elif parent.atom_id in ages:
+            item_meta["age_seconds"] = ages[parent.atom_id]
         item = _item_from_parts(
             atom_id=parent.atom_id,
             channel="directed_keep",
             label=label,
             content=body,
             t_start=parent.t_start,
-            meta={
-                "via_parcel": via_parcel,
-                "hit_atom_id": atom.atom_id,
-                "kind": parent.kind,
-                "moment_id": parent.moment_id,
-            },
+            meta=item_meta,
         )
         if used + item.token_estimate > cap:
             skipped_budget += 1
+            if is_soft:
+                soft_aged_skipped += 1
             continue
         atom_items.append(item)
         seen.add(parent.atom_id)
@@ -1477,6 +1502,7 @@ def select_directed_keep(
         deduped=deduped,
         missing=missing,
         skipped_budget=skipped_budget,
+        soft_aged_skipped=soft_aged_skipped,
         summary_packed=False,
         tokens_used=used if atom_items or summary_item else 0,
     )
@@ -1742,6 +1768,8 @@ def compose_meal(
     embedder: Any | None = None,
     directed_keep_ids: Sequence[str] | None = None,
     directed_keep_summary: str | None = None,
+    directed_keep_soft_aged_ids: Sequence[str] | set[str] | None = None,
+    directed_keep_ages_s: Mapping[str, float] | None = None,
     glass_rows: Sequence[Mapping[str, Any]] | None = None,
     social_wake: bool = False,
     glass_tail_active: bool | None = None,
@@ -1938,6 +1966,8 @@ def compose_meal(
             settings=cfg,
             exclude_atom_ids=exclude_dk,
             enabled=dk_flag,
+            soft_aged_ids=directed_keep_soft_aged_ids,
+            entry_ages_s=directed_keep_ages_s,
         )
 
     # Message order (KD-ORD): epi → sem → dk → glass_tail → temporal.

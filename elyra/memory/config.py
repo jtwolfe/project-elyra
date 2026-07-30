@@ -200,6 +200,10 @@ class MemorySettings:
     directed_traversal_enabled: bool = False
     directed_keep_enabled: bool = False
     directed_keep_fraction: float = 0.08  # meal residual share when channel active
+    # Sticky directed-keep tray TTL / cap (S3 / #93 B5+B5b). Host-owned.
+    directed_keep_hard_ttl_hours: float = 24.0  # hard drop on load + compose
+    directed_keep_soft_ttl_hours: float = 3.0  # prefer cut under meal pressure
+    directed_keep_entry_cap: int = 32  # hard safety LRU cap
 
     # --- Glass-tail band (S1 / #93 instance continuity) ---
     # Soft residual share + absolute message floor for social wakes (KD-SOC).

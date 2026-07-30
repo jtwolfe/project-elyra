@@ -3,10 +3,11 @@
 Scope: temporary session state machine (start / step / finish / abandon),
 seed union, expand/keep, template NL summary, budgets (KD-A18: idle TTL +
 expand_ms + steps — no multi-hop session wall-clock), dual sticky snapshots
-(KD-A9 / KD-A19), process-local TraversalRegistry for the presence worker.
+(KD-A9 / KD-A19), process-local TraversalRegistry for the presence worker,
+sticky directed-keep tray ownership (S3 / KD-TRAY-SOT).
 
 Out of scope: meal directed_keep packing (PR-A3), tools/skill (PR-A4),
-glass Graph tab (PR-A5).
+glass Graph tab (PR-A5), replace mode (S4).
 """
 
 from __future__ import annotations
@@ -16,13 +17,24 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
 
+from elyra.config import ElyraPaths
 from elyra.memory.config import (
     MemorySettings,
     is_directed_traversal_enabled,
 )
 from elyra.memory.graph import GraphView
+from elyra.memory.keep_tray import (
+    DEFAULT_ENTRY_CAP,
+    DEFAULT_HARD_TTL_HOURS,
+    DEFAULT_SOFT_TTL_HOURS,
+    DirectedKeepTray,
+    load_directed_keep_tray,
+    save_directed_keep_tray,
+    seed_tray_from_keep_ids,
+)
 from elyra.memory.store import MemoryStore
 from elyra.memory.types import Atom, parse_iso_z, to_iso_z, utc_now_iso
 
@@ -474,11 +486,13 @@ def inspect_atoms(
 
 
 class TraversalRegistry:
-    """Process-local session registry: active + last_session + last_confirmed_keep.
+    """Process-local session registry: active + last_session + keep tray.
 
     Single active session (one open moment at a time in the worker). Sticky
-    ``last_session`` (glass KD-A19) and ``last_confirmed_keep`` (meal-thin)
-    survive abandon / idle TTL / new start; moment-close clears both.
+    ``last_session`` (glass KD-A19) survives abandon / idle TTL / new start;
+    moment-close clears ``last_session`` only. Meal directed_keep is owned by
+    the registry tray (KD-TRAY-SOT) — survives moment close; reloads from disk.
+    Thin ``last_confirmed_keep`` snapshot remains for compat/inspect.
     """
 
     def __init__(
@@ -487,6 +501,7 @@ class TraversalRegistry:
         settings: MemorySettings | None = None,
         now_fn: Callable[[], str] | None = None,
         monotonic_fn: Callable[[], float] | None = None,
+        paths: ElyraPaths | Path | None = None,
     ) -> None:
         self._settings = settings or MemorySettings()
         self._now_fn = now_fn or utc_now_iso
@@ -494,11 +509,18 @@ class TraversalRegistry:
         self._active: TraversalSession | None = None
         self._last_session: TraversalSession | None = None
         self._last_confirmed_keep: ConfirmedKeepSnapshot | None = None
+        # KD-TRAY-SOT: single live tray; lazy-loaded via ensure_tray().
+        self._directed_keep_tray: DirectedKeepTray | None = None
+        self._tray_paths: ElyraPaths | Path | None = paths
 
     # -- settings / factories ------------------------------------------------
 
     def bind_settings(self, settings: MemorySettings) -> None:
         self._settings = settings
+
+    def bind_paths(self, paths: ElyraPaths | Path | None) -> None:
+        """Bind data paths for tray load/save (worker construction)."""
+        self._tray_paths = paths
 
     @property
     def settings(self) -> MemorySettings:
@@ -516,8 +538,88 @@ class TraversalRegistry:
     def last_confirmed_keep(self) -> ConfirmedKeepSnapshot | None:
         return self._last_confirmed_keep
 
+    @property
+    def directed_keep_tray(self) -> DirectedKeepTray | None:
+        """Live tray if already loaded; None until ensure_tray()."""
+        return self._directed_keep_tray
+
     def enabled(self) -> bool:
         return is_directed_traversal_enabled(self._settings)
+
+    def _tray_policy(self) -> tuple[float, float, int]:
+        cfg = self._settings
+        hard = float(
+            getattr(cfg, "directed_keep_hard_ttl_hours", DEFAULT_HARD_TTL_HOURS)
+            or DEFAULT_HARD_TTL_HOURS
+        )
+        soft = float(
+            getattr(cfg, "directed_keep_soft_ttl_hours", DEFAULT_SOFT_TTL_HOURS)
+            or DEFAULT_SOFT_TTL_HOURS
+        )
+        cap = int(
+            getattr(cfg, "directed_keep_entry_cap", DEFAULT_ENTRY_CAP)
+            or DEFAULT_ENTRY_CAP
+        )
+        return hard, soft, max(1, cap)
+
+    def ensure_tray(self) -> DirectedKeepTray:
+        """Lazy-load tray from disk (or empty); apply hard TTL; return SoT.
+
+        If tray file missing but RAM ``last_confirmed_keep`` present, seed from
+        snap (process-local upgrade) then save when paths are bound.
+        """
+        hard, soft, cap = self._tray_policy()
+        now = self._now_fn()
+        if self._directed_keep_tray is not None:
+            tray = self._directed_keep_tray
+            tray.max_age_hard_hours = hard
+            tray.soft_evict_after_hours = soft
+            tray.entry_cap = cap
+            tray.drop_hard_ttl(now=now, hard_hours=hard)
+            return tray
+
+        tray = load_directed_keep_tray(self._tray_paths)
+        tray.max_age_hard_hours = hard
+        tray.soft_evict_after_hours = soft
+        tray.entry_cap = cap
+
+        # Migration: seed from thin snap when file empty (process upgrade).
+        if not tray.entries and self._last_confirmed_keep is not None:
+            snap = self._last_confirmed_keep
+            tray = seed_tray_from_keep_ids(
+                list(snap.keep_ids),
+                now=snap.finished_at or now,
+                session_id=snap.session_id,
+                moment_id=snap.moment_id,
+                walk_summary_nl=snap.walk_summary_nl or None,
+                hard_hours=hard,
+                soft_hours=soft,
+                entry_cap=cap,
+            )
+            try:
+                save_directed_keep_tray(tray, paths=self._tray_paths)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("seed save directed_keep_tray failed")
+
+        tray.drop_hard_ttl(now=now, hard_hours=hard)
+        self._directed_keep_tray = tray
+        return tray
+
+    def get_meal_keep_ids(
+        self,
+    ) -> tuple[list[str], str | None]:
+        """Meal path: tray ids + summary. No open-moment equality (B5b)."""
+        hard, soft, _cap = self._tray_policy()
+        tray = self.ensure_tray()
+        ids, summary, _soft = tray.meal_keep_ids(
+            now=self._now_fn(), hard_hours=hard, soft_hours=soft
+        )
+        return ids, summary
+
+    def get_tray_inspect(self) -> dict[str, Any]:
+        """Tray ages / entries for context inspect (via registry SoT)."""
+        tray = self.ensure_tray()
+        return tray.inspect_block(now=self._now_fn())
 
     # -- queries -------------------------------------------------------------
 
@@ -555,8 +657,12 @@ class TraversalRegistry:
         self, moment_id: str | None = None, *, which: str | None = None
     ) -> GraphSessionView:
         """Prefer active if present else last_session (glass GET)."""
-        meal = self.get_last_confirmed_keep(moment_id)
-        meal_ids = list(meal.keep_ids) if meal else []
+        # Meal keep ids from tray (B5b-free) — not snap.moment_id filter.
+        try:
+            meal_ids, _summary = self.get_meal_keep_ids()
+        except Exception:  # noqa: BLE001
+            meal = self.get_last_confirmed_keep(moment_id)
+            meal_ids = list(meal.keep_ids) if meal else []
         active = self._active
         last = self.get_last_session(moment_id)
         has_active = active is not None
@@ -1006,7 +1112,7 @@ class TraversalRegistry:
         )
         session.frontier = []  # freeze / empty frontier on confirm
 
-        # Dual snapshot (KD-A9 + KD-A19).
+        # Dual snapshot (KD-A9 + KD-A19) + sticky tray merge (S3 / KD-MRG).
         frozen = copy.deepcopy(session)
         self._last_session = frozen
         self._last_confirmed_keep = ConfirmedKeepSnapshot(
@@ -1017,12 +1123,30 @@ class TraversalRegistry:
             finished_at=now,
             moment_id=session.moment_id,
         )
+        # Registry-owned tray: merge-on-confirm default (union under cap/TTL).
+        hard, soft, cap = self._tray_policy()
+        tray = self.ensure_tray()
+        tray.merge_confirm(
+            list(session.keep_ids),
+            now=now,
+            session_id=session.session_id,
+            moment_id=session.moment_id,
+            walk_summary_nl=session.walk_summary_nl,
+            hard_hours=hard,
+            soft_hours=soft,
+            entry_cap=cap,
+        )
+        try:
+            save_directed_keep_tray(tray, paths=self._tray_paths)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("save directed_keep_tray after finish failed")
         self._active = None
 
         view = frozen.to_view()
         view["ok"] = True
         view["keep_set"] = list(frozen.keep_ids)
         view["thin_surface"] = frozen.to_thin_surface()
+        view["tray_entry_count"] = len(tray.entries)
         return view
 
     def abandon(
@@ -1059,12 +1183,23 @@ class TraversalRegistry:
         moment_id: str | None = None,
         clear_glass: bool = False,
     ) -> dict[str, Any]:
-        """Clear meal thin snapshot; optional clear_glass drops last_session."""
+        """Clear meal thin snapshot + tray; optional clear_glass drops last_session."""
         snap = self._last_confirmed_keep
         if moment_id is not None and snap is not None:
             if snap.moment_id not in (None, moment_id):
                 return {"ok": True, "cleared_keep": False, "cleared_glass": False}
         self._last_confirmed_keep = None
+        # Operator clear: wipe live tray and persist empty (meal path uses tray).
+        empty = DirectedKeepTray()
+        hard, soft, cap = self._tray_policy()
+        empty.max_age_hard_hours = hard
+        empty.soft_evict_after_hours = soft
+        empty.entry_cap = cap
+        self._directed_keep_tray = empty
+        try:
+            save_directed_keep_tray(empty, paths=self._tray_paths)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("save empty directed_keep_tray after clear failed")
         cleared_glass = False
         if clear_glass:
             if moment_id is None or (
@@ -1104,26 +1239,28 @@ class TraversalRegistry:
         )
 
     def on_moment_close(self, moment_id: str | None = None) -> None:
-        """Moment end: abandon active; clear last_confirmed_keep AND last_session."""
+        """Moment end: abandon active; clear last_session only (KD-A19).
+
+        Retains registry tray and meal-thin last_confirmed_keep (B5 fix).
+        Meal path reads tray via get_meal_keep_ids — no moment equality (B5b).
+        """
         now = self._now_fn()
         if self._active is not None:
             if moment_id is None or self._active.moment_id in (None, moment_id):
                 self._drop_active(status="abandoned", now=now)
-        if self._last_confirmed_keep is not None:
-            if moment_id is None or self._last_confirmed_keep.moment_id in (
-                None,
-                moment_id,
-            ):
-                self._last_confirmed_keep = None
+        # B5: do NOT clear _directed_keep_tray or last_confirmed_keep.
         if self._last_session is not None:
             if moment_id is None or self._last_session.moment_id in (None, moment_id):
                 self._last_session = None
 
     def reset(self) -> None:
-        """Full process reset (runtime wipe)."""
+        """Process RAM reset: clear sessions + snap + tray RAM (file survives)."""
         self._active = None
         self._last_session = None
         self._last_confirmed_keep = None
+        # KD-TRAY-LOAD: drop RAM tray; next ensure_tray reloads from disk.
+        # Do NOT delete directed_keep_tray.json.
+        self._directed_keep_tray = None
 
     # -- internals -----------------------------------------------------------
 

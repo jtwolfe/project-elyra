@@ -891,15 +891,20 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 loop = self.worker.settings.loop
                 budget = int(getattr(loop, "sliding_input_tokens", 250_000))
             # Avoid loading full prompts on inspect poll — empty fixed cost.
-            # Include last_confirmed keep so Context can show directed_keep.
+            # Include registry tray keep so Context can show directed_keep (B5b).
             dk_ids: list[str] = []
             dk_summary: str | None = None
+            tray_block: dict[str, Any] | None = None
             try:
                 dk_ids, dk_summary = self.worker._last_confirmed_keep_for_meal(  # noqa: SLF001
                     str(open_mid) if open_mid else None
                 )
             except Exception:  # noqa: BLE001
                 dk_ids, dk_summary = [], None
+            try:
+                tray_block = self.worker.traversal.get_tray_inspect()
+            except Exception:  # noqa: BLE001
+                tray_block = None
             package = compose_meal(
                 store,
                 open_moment_id=str(open_mid) if open_mid else None,
@@ -910,7 +915,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 directed_keep_ids=dk_ids or None,
                 directed_keep_summary=dk_summary,
             )
-            return meal_package_to_inspect(
+            snap = meal_package_to_inspect(
                 package,
                 system_text="",
                 orient_text="",
@@ -918,6 +923,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 source="on_demand",
                 recorded_at=utc_now_iso(),
             )
+            if tray_block is not None:
+                snap["directed_keep_tray"] = tray_block
+            return snap
         except Exception:  # noqa: BLE001
             _LOG.exception("on-demand memory meal compose failed")
             return None
