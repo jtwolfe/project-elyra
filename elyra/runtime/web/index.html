@@ -724,13 +724,113 @@
                 <div class="status-row">
                   <span class="status-label">Credential</span>
                   <select id="provider-credential-select" class="status-select" aria-label="Credential source">
-                    <option value="grok_build">Grok Build (auth.json)</option>
+                    <option value="xai_oauth">xAI login (Elyra)</option>
                     <option value="api_key">API key</option>
+                    <option value="grok_build">Grok Build auth.json (legacy)</option>
                   </select>
                 </div>
                 <div class="status-row">
                   <span class="status-label">Credential ok</span>
                   <span id="provider-credential-ok" class="status-value">—</span>
+                </div>
+                <div class="status-row status-row-stack" id="oauth-login-row">
+                  <span class="status-label">xAI login</span>
+                  <div class="oauth-login-stack" id="oauth-login-stack">
+                    <div
+                      id="oauth-legacy-banner"
+                      class="oauth-banner oauth-banner-legacy"
+                      hidden
+                      role="status"
+                    >
+                      You can log in with xAI inside Elyra (recommended). Grok Build
+                      <code>auth.json</code> remains available as a legacy source.
+                    </div>
+                    <div
+                      id="oauth-cta-banner"
+                      class="oauth-banner oauth-banner-cta"
+                      hidden
+                      role="status"
+                    ></div>
+                    <span id="oauth-meta" class="muted status-helper">not configured</span>
+                    <div class="oauth-actions-row">
+                      <button
+                        type="button"
+                        id="oauth-login-btn"
+                        class="btn-primary btn-sm"
+                      >
+                        Log in with xAI
+                      </button>
+                      <button
+                        type="button"
+                        id="oauth-logout-btn"
+                        class="btn-secondary btn-sm"
+                        hidden
+                      >
+                        Log out xAI
+                      </button>
+                      <button
+                        type="button"
+                        id="oauth-cancel-btn"
+                        class="btn-secondary btn-sm"
+                        hidden
+                      >
+                        Cancel login
+                      </button>
+                    </div>
+                    <label class="oauth-activate-label" for="oauth-activate-checkbox">
+                      <input
+                        type="checkbox"
+                        id="oauth-activate-checkbox"
+                        checked
+                      />
+                      Switch credential source to Elyra login
+                    </label>
+                    <div id="oauth-pending-panel" class="oauth-pending-panel" hidden>
+                      <div class="oauth-pending-status">
+                        <span class="oauth-spinner" aria-hidden="true"></span>
+                        <span id="oauth-pending-label">Waiting for authorization…</span>
+                      </div>
+                      <div class="oauth-code-row">
+                        <span class="oauth-field-label">User code</span>
+                        <code
+                          id="oauth-user-code"
+                          class="oauth-user-code"
+                          aria-live="polite"
+                          aria-label="Device user code"
+                        ></code>
+                        <button
+                          type="button"
+                          id="oauth-copy-code-btn"
+                          class="btn-secondary btn-sm"
+                          aria-label="Copy user code"
+                        >
+                          Copy code
+                        </button>
+                      </div>
+                      <div class="oauth-uri-row">
+                        <a
+                          id="oauth-verify-link"
+                          class="oauth-verify-link"
+                          href="#"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >Open verification page</a>
+                        <button
+                          type="button"
+                          id="oauth-copy-uri-btn"
+                          class="btn-secondary btn-sm"
+                          aria-label="Copy verification link"
+                        >
+                          Copy link
+                        </button>
+                      </div>
+                      <p class="muted status-helper oauth-remote-help">
+                        Open the link on any device; you do not need a browser on the
+                        Elyra host. Consent screen may say Grok Build — shared xAI app
+                        name. Tokens stay in this instance’s data/secrets (never shown here).
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <div class="status-row status-row-stack">
                   <span class="status-label">API key</span>
@@ -754,7 +854,7 @@
               </div>
               <p class="muted status-helper">
                 Model applies to next call. Effort applies to next Completions request (no credential rebuild).
-                API key save does not switch source until you select it.
+                API key save does not switch source until you select it. xAI device login never displays tokens.
               </p>
             </div>
             <div class="card status-card" id="context-card">

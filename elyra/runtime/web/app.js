@@ -133,6 +133,20 @@ const providerApiKeyInput = $("#provider-api-key-input");
 const providerApiKeySave = $("#provider-api-key-save");
 const providerApiKeyClear = $("#provider-api-key-clear");
 const providerApiKeyMeta = $("#provider-api-key-meta");
+const oauthLoginStack = $("#oauth-login-stack");
+const oauthLegacyBanner = $("#oauth-legacy-banner");
+const oauthCtaBanner = $("#oauth-cta-banner");
+const oauthMeta = $("#oauth-meta");
+const oauthLoginBtn = $("#oauth-login-btn");
+const oauthLogoutBtn = $("#oauth-logout-btn");
+const oauthCancelBtn = $("#oauth-cancel-btn");
+const oauthActivateCheckbox = $("#oauth-activate-checkbox");
+const oauthPendingPanel = $("#oauth-pending-panel");
+const oauthPendingLabel = $("#oauth-pending-label");
+const oauthUserCode = $("#oauth-user-code");
+const oauthCopyCodeBtn = $("#oauth-copy-code-btn");
+const oauthVerifyLink = $("#oauth-verify-link");
+const oauthCopyUriBtn = $("#oauth-copy-uri-btn");
 const usageBadge = $("#usage-badge");
 const usageWeekPct = $("#usage-week-pct");
 const usageDayPct = $("#usage-day-pct");
@@ -241,6 +255,16 @@ let resetInFlight = false;
 let providerPatchInFlight = false;
 /** True while PUT/DELETE api-key is in flight. */
 let apiKeyInFlight = false;
+/** True while xAI device start/cancel/logout is in flight. */
+let oauthActionInFlight = false;
+/** True while a device-code login is pending (server-side poll). */
+let oauthDevicePending = false;
+/** Public fields from last device start/status (never tokens / device_code). */
+let oauthPendingPublic = null;
+/** Interval handle for GET /api/auth/xai/device/status while pending. */
+let oauthPollTimer = null;
+/** Last known oauth_configured from status. */
+let lastOauthConfigured = false;
 /** True while PATCH /api/usage (hard-stop override) is in flight. */
 let usageOverrideInFlight = false;
 /** Last known hard_stop_override / override_active from status. */
@@ -1177,6 +1201,50 @@ function renderProviderPill(s) {
   setPill(pillProvider, `${provider} ready`, "pill-on");
 }
 
+/**
+ * Status-safe credential_detail → operator CTA (mirrors design CTA table;
+ * never includes tokens). Used by hard-stop banner + OAuth panel.
+ */
+const OAUTH_REAUTH_DETAILS = new Set([
+  "missing_oauth_tokens",
+  "invalid_oauth_tokens",
+  "oauth_token_expired",
+  "oauth_refresh_failed",
+  "oauth_reauth_required",
+  "oauth_denied",
+  "oauth_device_expired",
+  "oauth_ineligible",
+  "oauth_pending",
+]);
+
+function credentialDetailCta(detail) {
+  if (!detail) return null;
+  const map = {
+    missing_oauth_tokens: "Log in with xAI in Status (or elyra auth login).",
+    invalid_oauth_tokens: "Log in again; if it persists, log out then log in.",
+    oauth_token_expired: "Re-login with xAI if refresh also failed.",
+    oauth_refresh_failed: "Wait / retry; check network; re-login if persistent.",
+    oauth_reauth_required: "Log in with xAI again.",
+    oauth_denied: "Retry login and approve on the consent screen.",
+    oauth_device_expired: "Start login again — the device code timed out.",
+    oauth_ineligible:
+      "Account not eligible for this client/scopes — try API key or contact xAI.",
+    oauth_pending: "Complete the verification URL + user code in your browser.",
+    missing_auth_json:
+      "Missing Grok Build auth.json — use Elyra xAI login (recommended) or grok login.",
+    invalid_auth_json: "Invalid auth.json — re-run grok login or switch to Elyra xAI login.",
+    missing_token: "auth.json has no access token — re-run grok login or use Elyra xAI login.",
+    token_expired:
+      "Grok Build token expired — use Elyra xAI login (recommended) or grok login.",
+    missing_api_key: "Missing API key — paste key in Status or set XAI_API_KEY.",
+    empty_api_key: "Empty API key rejected.",
+    unknown_source: "Unknown credential source.",
+    client_build_failed: "Failed to build chat client.",
+    credential_unavailable: "Credentials unavailable.",
+  };
+  return map[detail] || detail;
+}
+
 function renderHardStopBanner(s) {
   if (!hardStopBanner) return;
   const usage = (s && s.usage) || {};
@@ -1188,7 +1256,10 @@ function renderHardStopBanner(s) {
     hardStopBanner.hidden = false;
     hardStopBanner.className = "hard-stop-banner hard-stop-auth";
     const detail = (s && s.credential_detail) || "credential missing";
-    hardStopBanner.textContent = `Auth paused — ${detail}. Model moments will not open until credentials resolve.`;
+    const cta = credentialDetailCta(detail);
+    hardStopBanner.textContent = cta
+      ? `Auth paused — ${detail}. ${cta}`
+      : `Auth paused — ${detail}. Model moments will not open until credentials resolve.`;
     return;
   }
 
@@ -1299,6 +1370,18 @@ function renderProviderCard(s) {
     fillModelSelect(s && s.models_available, s && s.model);
     lastProviderModel = (s && s.model) || null;
     if (providerCredentialSelect && s && s.credential_source) {
+      // Ensure option exists if server returns a known source we ship.
+      if (
+        s.credential_source &&
+        !Array.from(providerCredentialSelect.options).some(
+          (o) => o.value === s.credential_source
+        )
+      ) {
+        const opt = document.createElement("option");
+        opt.value = s.credential_source;
+        opt.textContent = s.credential_source;
+        providerCredentialSelect.appendChild(opt);
+      }
       providerCredentialSelect.value = s.credential_source;
       lastCredentialSource = s.credential_source;
     }
@@ -1325,6 +1408,382 @@ function renderProviderCard(s) {
     providerApiKeyMeta.textContent = configured
       ? "API key configured (secret not shown)"
       : "not configured";
+  }
+  renderOauthLoginPanel(s);
+}
+
+/**
+ * Paint xAI OAuth login panel from status (+ local pending public fields).
+ * Never displays access_token / refresh_token / device_code.
+ */
+function renderOauthLoginPanel(s) {
+  const source = (s && s.credential_source) || lastCredentialSource || "";
+  const detail = (s && s.credential_detail) || "";
+  const oauthConfigured = Boolean(s && s.oauth_configured);
+  lastOauthConfigured = oauthConfigured;
+
+  const reauthCta =
+    OAUTH_REAUTH_DETAILS.has(detail) ||
+    (source === "xai_oauth" && s && s.credential_ok === false);
+  const prominent = source === "xai_oauth" || reauthCta || oauthDevicePending;
+
+  if (oauthLoginStack) {
+    oauthLoginStack.classList.toggle("oauth-login-prominent", Boolean(prominent));
+  }
+
+  if (oauthLegacyBanner) {
+    oauthLegacyBanner.hidden = source !== "grok_build";
+  }
+
+  if (oauthCtaBanner) {
+    if (reauthCta && !oauthDevicePending) {
+      const cta = credentialDetailCta(detail) || "Log in with xAI.";
+      oauthCtaBanner.hidden = false;
+      oauthCtaBanner.textContent = detail ? `${detail} — ${cta}` : cta;
+    } else {
+      oauthCtaBanner.hidden = true;
+      oauthCtaBanner.textContent = "";
+    }
+  }
+
+  if (oauthMeta) {
+    if (oauthDevicePending) {
+      oauthMeta.textContent = "Login in progress — complete the code below.";
+    } else if (oauthConfigured) {
+      const parts = ["xAI login configured"];
+      const email = (s && s.credential_email) || "";
+      // Only show email when active source is oauth (avoids stale email on other sources).
+      if (email && source === "xai_oauth") parts.push(email);
+      if (s && s.credential_expires_at && source === "xai_oauth") {
+        parts.push(`exp ${s.credential_expires_at}`);
+      }
+      parts.push("(tokens never shown)");
+      oauthMeta.textContent = parts.join(" · ");
+    } else {
+      oauthMeta.textContent = "not configured — Log in with xAI to store tokens in this instance";
+    }
+  }
+
+  if (oauthLogoutBtn) {
+    oauthLogoutBtn.hidden = !oauthConfigured || oauthDevicePending;
+    oauthLogoutBtn.disabled = oauthActionInFlight;
+  }
+
+  if (oauthCancelBtn) {
+    oauthCancelBtn.hidden = !oauthDevicePending;
+    oauthCancelBtn.disabled = oauthActionInFlight;
+  }
+
+  if (oauthLoginBtn) {
+    // Debounce / disable while pending or action in flight.
+    oauthLoginBtn.disabled = oauthActionInFlight || oauthDevicePending;
+    oauthLoginBtn.textContent = oauthDevicePending
+      ? "Login pending…"
+      : oauthConfigured
+        ? "Re-login with xAI"
+        : "Log in with xAI";
+  }
+
+  if (oauthActivateCheckbox) {
+    oauthActivateCheckbox.disabled = oauthActionInFlight || oauthDevicePending;
+  }
+
+  paintOauthPendingPanel(oauthPendingPublic);
+}
+
+function paintOauthPendingPanel(publicFields) {
+  if (!oauthPendingPanel) return;
+  if (!oauthDevicePending || !publicFields) {
+    oauthPendingPanel.hidden = true;
+    return;
+  }
+  oauthPendingPanel.hidden = false;
+
+  const userCode = publicFields.user_code || "";
+  const uri =
+    publicFields.verification_uri_complete ||
+    publicFields.verification_uri ||
+    "";
+  const plainUri = publicFields.verification_uri || uri;
+
+  if (oauthUserCode) {
+    oauthUserCode.textContent = userCode || "—";
+  }
+  if (oauthVerifyLink) {
+    if (uri) {
+      oauthVerifyLink.href = uri;
+      oauthVerifyLink.textContent = publicFields.verification_uri_complete
+        ? "Open verification page (pre-filled code)"
+        : plainUri || "Open verification page";
+      oauthVerifyLink.hidden = false;
+    } else {
+      oauthVerifyLink.removeAttribute("href");
+      oauthVerifyLink.textContent = "Verification URL unavailable — start login again";
+    }
+  }
+  if (oauthPendingLabel) {
+    oauthPendingLabel.textContent = userCode
+      ? "Waiting for authorization on auth.x.ai…"
+      : "Waiting for authorization…";
+  }
+  if (oauthCopyCodeBtn) oauthCopyCodeBtn.disabled = !userCode;
+  if (oauthCopyUriBtn) oauthCopyUriBtn.disabled = !uri;
+}
+
+function stopOauthDevicePoll() {
+  if (oauthPollTimer != null) {
+    clearInterval(oauthPollTimer);
+    oauthPollTimer = null;
+  }
+}
+
+function startOauthDevicePoll() {
+  stopOauthDevicePoll();
+  oauthPollTimer = setInterval(() => {
+    pollOauthDeviceStatus().catch(() => {
+      /* transient; next tick retries */
+    });
+  }, 1500);
+  // Immediate first poll after a short beat so start response paints first.
+  setTimeout(() => {
+    pollOauthDeviceStatus().catch(() => {});
+  }, 400);
+}
+
+/**
+ * Strip any accidental secret keys from client-held OAuth public state.
+ * Defense-in-depth: API already never returns these.
+ */
+function publicOauthFieldsOnly(data) {
+  if (!data || typeof data !== "object") return null;
+  const out = {};
+  for (const key of [
+    "user_code",
+    "verification_uri",
+    "verification_uri_complete",
+    "expires_in",
+    "interval",
+    "state",
+    "detail",
+    "email",
+    "expires_at",
+    "pending",
+    "ok",
+  ]) {
+    if (data[key] !== undefined && data[key] !== null) out[key] = data[key];
+  }
+  // Explicitly never retain these even if server misbehaves.
+  delete out.access_token;
+  delete out.refresh_token;
+  delete out.device_code;
+  delete out.id_token;
+  return out;
+}
+
+async function startXaiDeviceLogin() {
+  if (oauthActionInFlight || oauthDevicePending) return;
+  oauthActionInFlight = true;
+  if (oauthLoginBtn) oauthLoginBtn.disabled = true;
+  try {
+    const activate = oauthActivateCheckbox
+      ? Boolean(oauthActivateCheckbox.checked)
+      : true;
+    const data = await fetchJson("/api/auth/xai/device/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ activate }),
+    });
+    const pub = publicOauthFieldsOnly(data);
+    if (!data || data.ok === false) {
+      const detail = (data && data.detail) || (data && data.error) || "device_start_failed";
+      oauthDevicePending = false;
+      oauthPendingPublic = null;
+      stopOauthDevicePoll();
+      showNotice(`xAI login failed to start — ${detail}`);
+      return;
+    }
+    oauthDevicePending = true;
+    oauthPendingPublic = pub;
+    paintOauthPendingPanel(pub);
+    startOauthDevicePoll();
+    showNotice("xAI login started — open the link and enter the code.");
+  } catch (err) {
+    oauthDevicePending = false;
+    oauthPendingPublic = null;
+    stopOauthDevicePoll();
+    showNotice(String(err.message || err));
+  } finally {
+    oauthActionInFlight = false;
+    // Re-paint so disabled state reflects pending vs idle.
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+    });
+  }
+}
+
+async function pollOauthDeviceStatus() {
+  if (!oauthDevicePending) return;
+  let data;
+  try {
+    data = await fetchJson("/api/auth/xai/device/status");
+  } catch (err) {
+    // 503 provider unavailable mid-flow: surface once, keep panel.
+    if (err && err.status === 503) {
+      if (oauthPendingLabel) {
+        oauthPendingLabel.textContent =
+          "Provider unavailable — retry shortly or start login again.";
+      }
+    }
+    return;
+  }
+  const state = (data && data.state) || "idle";
+  const pub = publicOauthFieldsOnly(data);
+
+  if (state === "pending") {
+    // Merge public fields so user_code survives status payloads that omit them
+    // only when we already have them; status should include them while pending.
+    oauthPendingPublic = {
+      ...(oauthPendingPublic || {}),
+      ...(pub || {}),
+    };
+    paintOauthPendingPanel(oauthPendingPublic);
+    return;
+  }
+
+  // Terminal or idle (process restart mid-flow).
+  stopOauthDevicePoll();
+  oauthDevicePending = false;
+
+  if (state === "success") {
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    const email = (data && data.email) || "";
+    showNotice(
+      email
+        ? `xAI login complete (${email}). Tokens stored in this instance.`
+        : "xAI login complete. Tokens stored in this instance."
+    );
+    await refreshStatus();
+    return;
+  }
+
+  if (state === "cancelled") {
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    showNotice("xAI login cancelled.");
+    await refreshStatus();
+    return;
+  }
+
+  if (state === "error") {
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    const detail = (data && data.detail) || "oauth_device_error";
+    const cta = credentialDetailCta(detail);
+    showNotice(cta ? `xAI login failed — ${detail}. ${cta}` : `xAI login failed — ${detail}`);
+    await refreshStatus();
+    return;
+  }
+
+  // idle: process likely restarted mid-flow (in-memory session gone).
+  oauthPendingPublic = null;
+  paintOauthPendingPanel(null);
+  showNotice("Login session lost (server restarted?) — start login again.");
+  await refreshStatus();
+}
+
+async function cancelXaiDeviceLogin() {
+  if (oauthActionInFlight) return;
+  oauthActionInFlight = true;
+  if (oauthCancelBtn) oauthCancelBtn.disabled = true;
+  try {
+    await fetchJson("/api/auth/xai/device/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    stopOauthDevicePoll();
+    oauthDevicePending = false;
+    oauthPendingPublic = null;
+    paintOauthPendingPanel(null);
+    showNotice("xAI login cancelled.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    oauthActionInFlight = false;
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+    });
+  }
+}
+
+async function logoutXaiOauth() {
+  if (oauthActionInFlight || oauthDevicePending) return;
+  oauthActionInFlight = true;
+  if (oauthLogoutBtn) oauthLogoutBtn.disabled = true;
+  try {
+    // Canonical logout path (PR3): POST /api/auth/xai/logout
+    await fetchJson("/api/auth/xai/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    showNotice("xAI login cleared for this instance.");
+    await refreshStatus();
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    oauthActionInFlight = false;
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+    });
+  }
+}
+
+async function copyOauthText(text, btn, label) {
+  if (!text) {
+    showNotice(`Nothing to copy (${label}).`);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(() => {
+        btn.textContent = prev || label;
+      }, 1200);
+    }
+  } catch {
+    showNotice(`Copy failed — select the ${label} manually.`);
+  }
+}
+
+/**
+ * If the browser reloaded mid device-flow, the server still has the pending
+ * session — resume polling and re-show user_code / verification URI.
+ */
+async function maybeResumeOauthDeviceSession() {
+  if (oauthDevicePending || oauthActionInFlight) return;
+  try {
+    const data = await fetchJson("/api/auth/xai/device/status");
+    if (!data || data.state !== "pending") return;
+    oauthDevicePending = true;
+    oauthPendingPublic = publicOauthFieldsOnly(data);
+    paintOauthPendingPanel(oauthPendingPublic);
+    startOauthDevicePoll();
+    renderOauthLoginPanel({
+      credential_source: lastCredentialSource,
+      oauth_configured: lastOauthConfigured,
+      credential_detail: (data && data.detail) || "oauth_pending",
+      credential_ok: false,
+    });
+  } catch {
+    /* provider offline / 503 — ignore on boot */
   }
 }
 
@@ -4344,6 +4803,45 @@ if (providerApiKeyInput) {
   });
 }
 
+// ── xAI OAuth device login (PR4) — never display tokens ─────────────────
+if (oauthLoginBtn) {
+  oauthLoginBtn.addEventListener("click", () => {
+    startXaiDeviceLogin();
+  });
+}
+if (oauthLogoutBtn) {
+  oauthLogoutBtn.addEventListener("click", () => {
+    logoutXaiOauth();
+  });
+}
+if (oauthCancelBtn) {
+  oauthCancelBtn.addEventListener("click", () => {
+    cancelXaiDeviceLogin();
+  });
+}
+if (oauthCopyCodeBtn) {
+  oauthCopyCodeBtn.addEventListener("click", () => {
+    const code =
+      (oauthPendingPublic && oauthPendingPublic.user_code) ||
+      (oauthUserCode && oauthUserCode.textContent) ||
+      "";
+    copyOauthText(code.trim() === "—" ? "" : code.trim(), oauthCopyCodeBtn, "Copy code");
+  });
+}
+if (oauthCopyUriBtn) {
+  oauthCopyUriBtn.addEventListener("click", () => {
+    const uri =
+      (oauthPendingPublic &&
+        (oauthPendingPublic.verification_uri_complete ||
+          oauthPendingPublic.verification_uri)) ||
+      (oauthVerifyLink && oauthVerifyLink.href) ||
+      "";
+    const safe =
+      uri && uri !== "#" && !uri.endsWith("#") ? uri : "";
+    copyOauthText(safe, oauthCopyUriBtn, "Copy link");
+  });
+}
+
 // ── Secrets panel (PR5) — write-only values, never re-display ───────────
 const secretsListEl = $("#secrets-list");
 const secretsCountBadge = $("#secrets-count-badge");
@@ -5373,5 +5871,5 @@ async function tick() {
   }
 }
 
-tick();
+tick().then(() => maybeResumeOauthDeviceSession().catch(() => {}));
 setInterval(tick, 1500);
