@@ -2960,7 +2960,8 @@ body {
   margin: 0.15rem 0 0.45rem;
 }
 
-/* Semantic select note on Memory → Context (omit / dedupe visibility). */
+/* Channel status notes on Memory → Context (semantic + directed_keep).
+   Shared chrome: title case head, state badge, muted meta body, left accent. */
 .memory-semantic-note {
   border-left: 3px solid var(--border);
 }
@@ -2979,6 +2980,13 @@ body {
   line-height: 1.4;
   color: var(--muted);
   word-break: break-word;
+}
+/* Subtle channel tint on the shared status bubble (state border still wins). */
+.memory-channel-status-directed.memory-semantic-note-ok {
+  border-left-color: color-mix(in srgb, #c084fc 55%, var(--ok, #3d9a5f));
+}
+.memory-channel-status-directed.memory-semantic-note-deduped {
+  border-left-color: color-mix(in srgb, #c084fc 35%, var(--warn, #c9a227));
 }
 
 .memory-snippet {

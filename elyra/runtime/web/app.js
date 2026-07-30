@@ -3253,46 +3253,88 @@ function renderSemanticChannelNote(meal) {
   return card;
 }
 
-/** One muted Context line: directed_keep omit / pack (PR-A3). */
+/**
+ * Human-readable directed_keep select status (parity with formatSemanticSelectLine).
+ * No leading "directed_keep" token — the card title carries the channel name.
+ */
 function formatDirectedKeepLine(meal) {
   if (!meal) return "";
   const reason = meal.directed_keep_omitted_reason || null;
   const dm = meal.directed_keep_meta || null;
   if (!reason && !dm) return "";
-  const parts = ["directed_keep"];
+  const parts = [];
   if (reason) {
     parts.push(`omitted (${reason})`);
   } else if (dm && dm.packed != null) {
     parts.push(`packed=${dm.packed}`);
   }
-  if (dm && dm.keep_ids_in != null) {
-    parts.push(`keeps_in=${dm.keep_ids_in}`);
-  }
   if (reason === "deduped") {
-    parts.push("already in temporal/episodic/semantic");
+    parts.push(
+      "keeps already in temporal/episodic/semantic (not re-listed as directed_keep)"
+    );
   } else if (reason === "disabled") {
-    parts.push("flag off");
+    parts.push("directed keep is off for this run");
   } else if (reason === "empty") {
-    parts.push("no confirmed keep-set");
+    parts.push("no confirmed keep-set from traverse");
   } else if (reason === "budget") {
-    parts.push("cap too small");
+    parts.push("meal budget too small to pack keeps");
+  } else if (reason) {
+    parts.push("channel not packed this compose");
+  }
+  if (dm && dm.keep_ids_in != null) {
+    const n = Number(dm.keep_ids_in);
+    if (!Number.isNaN(n)) {
+      parts.push(
+        n === 1 ? "1 keep id in session" : `${n} keep ids in session`
+      );
+    }
+  }
+  if (dm && dm.packed != null && !reason) {
+    const n = Number(dm.packed);
+    if (!Number.isNaN(n) && n > 0) {
+      parts.push(
+        n === 1 ? "1 atom in meal" : `${n} atoms in meal`
+      );
+    }
   }
   return parts.join(" · ");
 }
 
-/** Status card for directed_keep (same chrome as meal channels when not packed). */
+/**
+ * Status card for directed_keep — same bubble chrome as Semantic note.
+ */
 function renderDirectedKeepStatusCard(meal) {
   const line = formatDirectedKeepLine(meal);
   if (!line) return null;
   const reason = meal.directed_keep_omitted_reason || null;
+  const dm = meal.directed_keep_meta || null;
   const card = document.createElement("div");
-  card.className = "card memory-channel-card memory-ch-directed_keep memory-status-card";
-  if (reason) card.classList.add("memory-semantic-note-omit");
+  // Reuse semantic note visual language (title + state badge + meta body).
+  card.className = "card memory-channel-card memory-semantic-note memory-channel-status-directed";
+  if (reason === "deduped") {
+    card.classList.add("memory-semantic-note-deduped");
+  } else if (reason) {
+    card.classList.add("memory-semantic-note-omit");
+  } else {
+    card.classList.add("memory-semantic-note-ok");
+  }
   const head = document.createElement("div");
   head.className = "card-head";
-  head.innerHTML = `<strong>directed_keep</strong><span class="badge">${
-    reason ? `omitted · ${escapeHtml(reason)}` : "status"
-  }</span>`;
+  const title = document.createElement("strong");
+  title.textContent = "Directed keep";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  if (reason === "deduped") {
+    badge.textContent = "deduped";
+  } else if (reason) {
+    badge.textContent = `omitted · ${reason}`;
+  } else if (dm && dm.packed != null) {
+    badge.textContent = `packed · ${dm.packed}`;
+  } else {
+    badge.textContent = "select";
+  }
+  head.appendChild(title);
+  head.appendChild(badge);
   card.appendChild(head);
   const body = document.createElement("p");
   body.className = "memory-semantic-meta";
