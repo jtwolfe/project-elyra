@@ -46,9 +46,11 @@ from elyra.memory.config import (
 )
 from elyra.memory.embed.types import CHANNEL_SET
 
+from elyra.llm.auth import VALID_SOURCES as _CREDENTIAL_SOURCES
+
 _CLOSE_GATES = frozenset({"soft", "hard"})
 _PROVIDER_NAMES = frozenset({"xai", "local"})
-_CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
+# SSOT: VALID_SOURCES from elyra.llm.auth (KD14). Default flip is PR5b only.
 _MEMORY_BACKENDS = MEMORY_BACKENDS
 _MEMORY_EMBED_BACKENDS = MEMORY_EMBED_BACKENDS
 _MEMORY_EMBED_DEVICES = MEMORY_EMBED_DEVICES
@@ -142,7 +144,8 @@ class ProviderSettings:
     model: str = DEFAULT_XAI_MODEL
     model_label: str = DEFAULT_XAI_MODEL_LABEL
     base_url: str = "https://api.x.ai/v1"
-    credential_source: str = "grok_build"  # grok_build | api_key
+    # Default remains grok_build until PR5b (after Glass login UI).
+    credential_source: str = "grok_build"  # xai_oauth | api_key | grok_build
     grok_auth_path: str | None = None  # None → ~/.grok/auth.json
     request_timeout_s: float = 120.0
 

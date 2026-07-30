@@ -364,11 +364,17 @@ class HttpChatClient:
         model: str | None = None,
         bearer_token: str | None = None,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+        refresh_cb: Callable[[], str | None] | None = None,
     ) -> None:
         """Internal / BC constructor. Prefer ``for_local`` / ``for_xai``.
 
         ``profile`` in ``{'local','xai'}``. When omitted: ``XaiClientConfig``
         → xai; otherwise local (``LocalClientConfig`` or default).
+
+        ``refresh_cb`` (xai only): on HTTP 401, called once before wrapping as
+        RuntimeError; if it returns a new access token, bearer is updated and
+        the request is retried once. Auth layer stays pure — callers wire the
+        callback (ProviderRuntime ensure_fresh + rebind).
         """
         if profile is None:
             if isinstance(config, XaiClientConfig):
@@ -381,6 +387,7 @@ class HttpChatClient:
         self._profile = profile
         self._lock = threading.Lock()
         self._reasoning_effort = resolve_reasoning_effort(reasoning_effort)
+        self._refresh_cb = refresh_cb
 
         if profile == "local":
             if config is None:
@@ -435,6 +442,7 @@ class HttpChatClient:
         model: str,
         bearer_token: str,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+        refresh_cb: Callable[[], str | None] | None = None,
     ) -> HttpChatClient:
         """Build an xAI client (Bearer + model; top-level reasoning_effort)."""
         return cls(
@@ -443,6 +451,7 @@ class HttpChatClient:
             model=model,
             bearer_token=bearer_token,
             reasoning_effort=reasoning_effort,
+            refresh_cb=refresh_cb,
         )
 
     def set_model(self, model: str) -> None:
@@ -460,6 +469,11 @@ class HttpChatClient:
             if self._profile != "xai":
                 return
             self._bearer_token = token
+
+    def set_refresh_cb(self, refresh_cb: Callable[[], str | None] | None) -> None:
+        """Thread-safe; wire or clear the 401 single-retry refresh callback."""
+        with self._lock:
+            self._refresh_cb = refresh_cb
 
     def set_reasoning_effort(self, effort: str) -> None:
         """Thread-safe; next chat_completion uses effort (xai only)."""
@@ -501,81 +515,111 @@ class HttpChatClient:
 
         xai: Authorization Bearer; body includes ``model`` and top-level
         ``reasoning_effort``; omit ``top_k``, ``thinking_budget_tokens``,
-        and ``reasoning`` wire keys.
+        and ``reasoning`` wire keys. On HTTP 401 with ``refresh_cb`` set,
+        intercept **before** RuntimeError wrap, refresh once, rebind bearer,
+        retry once.
 
         Never emit chat-body key ``reasoning_budget_tokens``.
         Never put Authorization values into exception messages.
         """
-        # Copy mutables under lock; release before HTTP I/O.
-        with self._lock:
-            profile = self._profile
-            chat_url = self._config.chat_url
-            request_timeout = self._config.request_timeout
+        # At most one 401→refresh→retry for xai (KD17 path C).
+        for attempt in (0, 1):
+            # Copy mutables under lock; release before HTTP I/O.
+            with self._lock:
+                profile = self._profile
+                chat_url = self._config.chat_url
+                request_timeout = self._config.request_timeout
+                refresh_cb = self._refresh_cb
+                if profile == "local":
+                    assert self._local_config is not None
+                    cfg_local = self._local_config
+                    model: str | None = None
+                    bearer: str | None = None
+                    reasoning_effort: str | None = None
+                else:
+                    assert self._xai_config is not None
+                    cfg_xai = self._xai_config
+                    model = self._model
+                    bearer = self._bearer_token
+                    reasoning_effort = self._reasoning_effort
+
             if profile == "local":
-                assert self._local_config is not None
-                cfg_local = self._local_config
-                model: str | None = None
-                bearer: str | None = None
-                reasoning_effort: str | None = None
+                payload = self._build_local_payload(
+                    cfg_local,
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+                headers = {"Content-Type": "application/json"}
+                # Optional Bearer for self-hosted OpenAI-compat (never log key).
+                if cfg_local.api_key:
+                    headers["Authorization"] = f"Bearer {cfg_local.api_key}"
             else:
-                assert self._xai_config is not None
-                cfg_xai = self._xai_config
-                model = self._model
-                bearer = self._bearer_token
-                reasoning_effort = self._reasoning_effort
+                payload = self._build_xai_payload(
+                    cfg_xai,
+                    messages,
+                    model=model or "",
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    reasoning_effort=reasoning_effort or DEFAULT_REASONING_EFFORT,
+                )
+                headers = {"Content-Type": "application/json"}
+                if bearer:
+                    headers["Authorization"] = f"Bearer {bearer}"
 
-        if profile == "local":
-            payload = self._build_local_payload(
-                cfg_local,
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                tools=tools,
-                tool_choice=tool_choice,
+            body = json.dumps(payload).encode("utf-8")
+            request = urllib.request.Request(
+                chat_url,
+                data=body,
+                headers=headers,
+                method="POST",
             )
-            headers = {"Content-Type": "application/json"}
-            # Optional Bearer for self-hosted OpenAI-compat (never log key).
-            if cfg_local.api_key:
-                headers["Authorization"] = f"Bearer {cfg_local.api_key}"
-        else:
-            payload = self._build_xai_payload(
-                cfg_xai,
-                messages,
-                model=model or "",
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                tools=tools,
-                tool_choice=tool_choice,
-                reasoning_effort=reasoning_effort or DEFAULT_REASONING_EFFORT,
-            )
-            headers = {"Content-Type": "application/json"}
-            if bearer:
-                headers["Authorization"] = f"Bearer {bearer}"
+            try:
+                with urllib.request.urlopen(request, timeout=request_timeout) as response:
+                    raw = response.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                # Read body once (HTTPError fp is single-shot).
+                try:
+                    err_body = exc.read()
+                except Exception:  # noqa: BLE001
+                    err_body = b""
+                if isinstance(err_body, bytes):
+                    detail = err_body.decode("utf-8", errors="replace")
+                else:
+                    detail = str(err_body or "")
+                # MUST intercept 401 here — never parse RuntimeError strings.
+                if (
+                    profile == "xai"
+                    and exc.code == 401
+                    and refresh_cb is not None
+                    and attempt == 0
+                ):
+                    try:
+                        new_token = refresh_cb()
+                    except Exception:  # noqa: BLE001 — treat as failed refresh
+                        new_token = None
+                    if new_token and isinstance(new_token, str) and new_token.strip():
+                        self.set_bearer_token(new_token.strip())
+                        continue  # single retry with new bearer
+                # Never include Authorization header values in the message.
+                raise RuntimeError(f"chat HTTP {exc.code}: {detail[:500]}") from exc
+            except urllib.error.URLError as exc:
+                raise RuntimeError(f"chat connection failed: {exc.reason}") from exc
 
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            chat_url,
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=request_timeout) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            # Never include Authorization header values in the message.
-            raise RuntimeError(f"chat HTTP {exc.code}: {detail[:500]}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"chat connection failed: {exc.reason}") from exc
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise RuntimeError("chat response is not a JSON object")
+            return _result_from_response_data(data, raw)
 
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise RuntimeError("chat response is not a JSON object")
-        return _result_from_response_data(data, raw)
+        # Unreachable: loop either returns or raises.
+        raise RuntimeError("chat HTTP 401: refresh retry exhausted")  # pragma: no cover
 
     @staticmethod
     def _build_local_payload(

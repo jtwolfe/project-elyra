@@ -201,9 +201,31 @@ class ToolRegistry:
             if tool_name in TOOL_SECRET_REQUIREMENTS:
                 secret_env = resolve_for_tool(tool_name, secrets_store)
             try:
-                known_secret_values = secrets_store.known_values()
+                known_secret_values = list(secrets_store.known_values())
             except Exception as exc:  # noqa: BLE001 — redaction best-effort
                 _LOG.debug("secrets known_values failed: %s", exc)
+            # Union reserved auth secrets (api key + oauth access/refresh).
+            try:
+                from elyra.llm.auth import auth_secret_values_for_redaction
+
+                auth_vals = auth_secret_values_for_redaction(self._paths.data_dir)
+                if auth_vals:
+                    # Prefer provider snapshot when live runtime is present.
+                    if isinstance(ctx.extras, dict):
+                        provider = ctx.extras.get("provider")
+                        snap_fn = getattr(provider, "auth_redaction_values", None)
+                        if callable(snap_fn):
+                            try:
+                                snap = snap_fn()
+                                if snap:
+                                    auth_vals = list(snap)
+                            except Exception:  # noqa: BLE001
+                                pass
+                    known_secret_values = list(
+                        dict.fromkeys([*known_secret_values, *auth_vals])
+                    )
+            except Exception as exc:  # noqa: BLE001 — redaction best-effort
+                _LOG.debug("auth secret redaction union failed: %s", exc)
             if isinstance(ctx.extras, dict):
                 ctx.extras["secret_env"] = secret_env
         except Exception as exc:  # noqa: BLE001 — inject must not block tools

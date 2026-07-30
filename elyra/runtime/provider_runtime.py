@@ -1,7 +1,8 @@
 """Shared live provider handles for supervisor + API (not serialized to status).
 
 Owns rebuild_chat_stack / can_open_model_moment. Worker.client is rebindable
-after credential repair without process restart.
+after credential repair without process restart. OAuth live rebind:
+``on_access_refreshed`` / ``complete_oauth_login`` / keep-alive (KD17).
 """
 
 from __future__ import annotations
@@ -14,8 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 from elyra.llm.auth import (
     SOURCE_API_KEY,
+    SOURCE_XAI_OAUTH,
     VALID_SOURCES,
     api_key_is_configured,
+    auth_secret_values_for_redaction,
     delete_stored_api_key,
     resolve_bearer,
     write_stored_api_key,
@@ -34,6 +37,11 @@ from elyra.llm.models import (
     list_remote_models,
     models_for_picker,
 )
+from elyra.llm.oauth_store import (
+    delete_oauth_bundle,
+    oauth_is_configured,
+    persist_oauth_login,
+)
 from elyra.llm.provider_prefs import (
     DEFAULT_REASONING_EFFORT,
     resolve_reasoning_effort,
@@ -42,6 +50,7 @@ from elyra.llm.provider_prefs import (
 )
 from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import UsageMeter, UsageSnapshot
+from elyra.llm.xai_oauth import DEFAULT_SKEW_S, ensure_fresh_access
 from elyra.settings import UsageSettings
 
 if TYPE_CHECKING:
@@ -50,6 +59,9 @@ if TYPE_CHECKING:
     from elyra.runtime.state import RuntimeState
 
 _LOG = logging.getLogger(__name__)
+
+# OAuth keep-alive: check interval when access is still far from expiry.
+_OAUTH_KEEPALIVE_INTERVAL_S = 60.0
 
 
 def _usage_status_disabled_placeholder() -> dict[str, Any]:
@@ -155,11 +167,21 @@ class ProviderRuntime:
     credits_poller: CreditsPoller | None = None
     # Resolved wire effort (always low|medium|high; default high).
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
+    # Last-known auth secret strings for tool-result redaction (never status).
+    _auth_redaction_values: list[str] = field(default_factory=list, repr=False)
+    # OAuth keep-alive daemon (started when source=xai_oauth + credential_ok).
+    _oauth_keepalive_stop: threading.Event = field(
+        default_factory=threading.Event, repr=False
+    )
+    _oauth_keepalive_thread: threading.Thread | None = field(
+        default=None, repr=False
+    )
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def status_provider_fields(self) -> dict[str, Any]:
         """Non-secret provider block for /api/status."""
         with self._lock:
+            oauth_cfg = oauth_is_configured(self.data_dir)
             return {
                 "provider": self.provider_name,
                 "model": self.model,
@@ -171,9 +193,28 @@ class ProviderRuntime:
                 "credential_expires_at": self.credential_expires_at,
                 "credential_email": self.credential_email,
                 "api_key_configured": self.api_key_configured,
+                "oauth_configured": oauth_cfg,
                 "models_available": list(self.models_available),
                 "reasoning_effort": resolve_reasoning_effort(self.reasoning_effort),
             }
+
+    def auth_redaction_values(self) -> list[str]:
+        """Return copy of last-known auth secrets for tool redaction."""
+        with self._lock:
+            if self._auth_redaction_values:
+                return list(self._auth_redaction_values)
+        # Fall back to disk read when snapshot empty.
+        try:
+            return auth_secret_values_for_redaction(self.data_dir)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _refresh_auth_redaction_snapshot_unlocked(self) -> None:
+        """Update in-memory redaction set from disk (caller holds lock optional)."""
+        try:
+            self._auth_redaction_values = auth_secret_values_for_redaction(self.data_dir)
+        except Exception:  # noqa: BLE001
+            self._auth_redaction_values = []
 
     def usage_status_block(self) -> dict[str, Any]:
         """Live meter.snapshot() or disabled placeholder. Called every GET.
@@ -338,6 +379,7 @@ class ProviderRuntime:
             return
 
         # --- xai path ---
+        # Pure resolve (no rebind hook on this path — new client *is* the rebind).
         resolution = resolve_bearer(
             source=source,
             data_dir=data_dir,
@@ -355,8 +397,10 @@ class ProviderRuntime:
                 self.api_key_configured = configured
                 self.http_client = None
                 self.chat_client = failing
+                self._refresh_auth_redaction_snapshot_unlocked()
                 self._bind_worker_unlocked()
                 self._sync_state_unlocked()
+            self._stop_oauth_keepalive()
             if self.state is not None:
                 # Cred failures stay on credential_*; chat stack not ready (KD14).
                 self.state.set_chat_posture(ready=False, error=None)
@@ -372,12 +416,17 @@ class ProviderRuntime:
             base_url=base_url,
             read_timeout=timeout_s,
         )
+        # Wire 401 refresh_cb only for xai_oauth (KD17 path C).
+        refresh_cb = (
+            self._make_chat_refresh_cb() if source == SOURCE_XAI_OAUTH else None
+        )
         try:
             http = HttpChatClient.for_xai(
                 cfg,
                 model=model,
                 bearer_token=resolution.token,
                 reasoning_effort=reasoning_effort,
+                refresh_cb=refresh_cb,
             )
             if usage_settings.enabled:
                 outer: ChatClient = UsageGatedChatClient(http, meter)
@@ -396,6 +445,7 @@ class ProviderRuntime:
                 self.chat_client = failing
                 self._bind_worker_unlocked()
                 self._sync_state_unlocked()
+            self._stop_oauth_keepalive()
             if self.state is not None:
                 self.state.set_chat_posture(ready=False, error=None)
             return
@@ -409,16 +459,176 @@ class ProviderRuntime:
             self.http_client = http
             self.chat_client = outer
             self.xai_config = cfg
+            self._refresh_auth_redaction_snapshot_unlocked()
             self._bind_worker_unlocked()
             self._sync_state_unlocked()
         if self.state is not None:
             self.state.set_chat_posture(ready=True, error=None)
+
+        if source == SOURCE_XAI_OAUTH:
+            self._start_oauth_keepalive()
+        else:
+            self._stop_oauth_keepalive()
 
         # Best-effort models refresh (network); never undo a successful rebuild.
         try:
             self.refresh_models()
         except Exception:  # noqa: BLE001 — best-effort
             _LOG.debug("refresh_models after rebuild failed", exc_info=True)
+
+    def _make_chat_refresh_cb(self):
+        """Build 401 refresh_cb: force ensure_fresh → on_access_refreshed → token."""
+
+        def _cb() -> str | None:
+            try:
+                fresh = ensure_fresh_access(self.data_dir, force=True)
+            except Exception:  # noqa: BLE001
+                _LOG.warning("chat 401 refresh_cb: ensure_fresh failed", exc_info=True)
+                return None
+            if not fresh.ok or not fresh.access_token:
+                return None
+            self.on_access_refreshed(
+                fresh.access_token,
+                fresh.expires_at,
+                fresh.email,
+            )
+            return fresh.access_token
+
+        return _cb
+
+    def on_access_refreshed(
+        self,
+        access: str | None,
+        expires_at: str | None = None,
+        email: str | None = None,
+    ) -> None:
+        """Rebind live HttpChatClient bearer after OAuth rotation (KD17 path B).
+
+        Hold lock only for field/bearer swap — never network I/O.
+        """
+        if not access or not isinstance(access, str) or not access.strip():
+            return
+        token = access.strip()
+        with self._lock:
+            http = self.http_client
+            if http is not None:
+                http.set_bearer_token(token)
+            self.credential_expires_at = expires_at
+            if email is not None:
+                self.credential_email = email
+            # Keep credential_ok true when we successfully rebind.
+            if http is not None:
+                self.credential_ok = True
+                self.credential_detail = None
+            self._refresh_auth_redaction_snapshot_unlocked()
+            self._sync_state_unlocked()
+        _LOG.debug("oauth access rebound on live chat client")
+
+    def complete_oauth_login(
+        self,
+        tokens: Any,
+        *,
+        activate: bool = True,
+    ) -> dict[str, Any]:
+        """Persist OAuth login then live rebind/rebuild (KD13).
+
+        Lock/I/O order: (1) disk+prefs outside lock, (2) short lock for source
+        + redaction, (3) rebuild outside lock when activate or source is oauth.
+        """
+        # (1) Disk + prefs WITHOUT holding ProviderRuntime._lock
+        persist_oauth_login(self.data_dir, tokens, activate=activate)
+
+        # (2) Under lock: in-memory source + redaction snapshot only
+        with self._lock:
+            if activate:
+                self.credential_source = SOURCE_XAI_OAUTH
+            self._refresh_auth_redaction_snapshot_unlocked()
+            # do not rebuild under this lock
+            active_source = self.credential_source
+
+        # (3) Outside lock: rebuild uses its own lock discipline
+        if activate or active_source == SOURCE_XAI_OAUTH:
+            self.rebuild_chat_stack()
+
+        return self.status_provider_fields()
+
+    def logout_xai_oauth(self) -> dict[str, Any]:
+        """Delete OAuth bundle + tmp; clear redaction; rebuild if source oauth."""
+        delete_oauth_bundle(self.data_dir)
+        with self._lock:
+            self._auth_redaction_values = []
+            source = self.credential_source
+        if source == SOURCE_XAI_OAUTH:
+            self.rebuild_chat_stack()
+        else:
+            # Leave other source stack intact; still refresh status oauth flag.
+            pass
+        return self.status_provider_fields()
+
+    def _start_oauth_keepalive(self) -> None:
+        """Start OAuth keep-alive daemon if not already running."""
+        t = self._oauth_keepalive_thread
+        if t is not None and t.is_alive():
+            return
+        self._oauth_keepalive_stop.clear()
+        thread = threading.Thread(
+            target=self._oauth_keepalive_loop,
+            name="elyra-oauth-keepalive",
+            daemon=True,
+        )
+        self._oauth_keepalive_thread = thread
+        thread.start()
+
+    def _stop_oauth_keepalive(self) -> None:
+        """Signal keep-alive thread to stop (best-effort)."""
+        self._oauth_keepalive_stop.set()
+        t = self._oauth_keepalive_thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=1.0)
+        self._oauth_keepalive_thread = None
+
+    def stop_background_tasks(self) -> None:
+        """Stop oauth keep-alive (supervisor shutdown hook)."""
+        self._stop_oauth_keepalive()
+
+    def _oauth_keepalive_loop(self) -> None:
+        """Proactive ensure_fresh + rebind when rotated (KD17 path B)."""
+        stop = self._oauth_keepalive_stop
+        while not stop.is_set():
+            with self._lock:
+                source = self.credential_source
+                ok = self.credential_ok
+                provider = self.provider_name
+            if provider != "xai" or source != SOURCE_XAI_OAUTH or not ok:
+                # Sleep full interval; may be restarted after rebuild.
+                if stop.wait(timeout=_OAUTH_KEEPALIVE_INTERVAL_S):
+                    return
+                continue
+            try:
+                # Never hold provider lock across refresh HTTP.
+                fresh = ensure_fresh_access(self.data_dir, skew_s=DEFAULT_SKEW_S)
+            except Exception:  # noqa: BLE001
+                _LOG.debug("oauth keep-alive ensure_fresh failed", exc_info=True)
+                fresh = None
+            if fresh is not None and fresh.ok and fresh.rotated:
+                self.on_access_refreshed(
+                    fresh.access_token,
+                    fresh.expires_at,
+                    fresh.email,
+                )
+            elif fresh is not None and not fresh.ok:
+                # Fail closed: mark credential bad so Glass shows re-auth CTA.
+                with self._lock:
+                    self.credential_ok = False
+                    self.credential_detail = fresh.detail
+                    self.credential_expires_at = fresh.expires_at
+                    self.credential_email = fresh.email
+                    self._sync_state_unlocked()
+                if self.state is not None:
+                    self.state.set_chat_posture(ready=False, error=None)
+            # Wake every ~60s (or sooner if stop set).
+            if stop.wait(timeout=_OAUTH_KEEPALIVE_INTERVAL_S):
+                return
 
     def _rebuild_stub(
         self,
@@ -659,6 +869,23 @@ def credential_detail_message(detail: str | None) -> str | None:
         "unknown_source": "unknown credential source",
         "client_build_failed": "failed to build chat client",
         "credential_unavailable": "credentials unavailable",
+        # OAuth (Elyra-owned login — not `grok login`)
+        "missing_oauth_tokens": (
+            "missing xAI login — use Glass “Log in with xAI” or `elyra auth login`"
+        ),
+        "invalid_oauth_tokens": (
+            "invalid xAI login tokens — log in again via Glass or `elyra auth login`"
+        ),
+        "oauth_token_expired": (
+            "xAI access expired — refresh failed; log in again via Glass"
+        ),
+        "oauth_refresh_failed": (
+            "xAI token refresh failed — check network or log in again via Glass"
+        ),
+        "oauth_reauth_required": (
+            "xAI login revoked — log in again via Glass or `elyra auth login`"
+        ),
+        "oauth_denied": "xAI login denied — try again via Glass or `elyra auth login`",
     }
     return messages.get(detail, detail)
 

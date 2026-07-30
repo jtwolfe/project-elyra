@@ -1,15 +1,10 @@
 """Reserved xAI OAuth token bundle under ``data/secrets/xai_oauth.json``.
 
 Scope: load/save/delete/public_meta, atomic write (tmp + replace + 0600),
-optional flock (lock file first), ``persist_oauth_login`` (disk only in PR1).
-Out of scope: HTTP OAuth, resolve_bearer, Glass, ProviderRuntime rebind.
+optional flock (lock file first), ``persist_oauth_login`` (disk + optional prefs).
+Out of scope: HTTP OAuth, Glass, ProviderRuntime rebind (see complete_oauth_login).
 
 Never put tokens in public meta, logs, or status payloads.
-
-PR1 note: ``persist_oauth_login(activate=...)`` defaults to False and does
-**not** write ``provider.json``. Activate/prefs wiring lands in PR2 once
-``VALID_SOURCES`` accepts ``xai_oauth`` (raw writes of unknown sources are
-clobbered by current load/save prefs).
 """
 
 from __future__ import annotations
@@ -23,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from elyra.llm.auth import ensure_secrets_dir, secrets_dir
+from elyra.llm.auth import SOURCE_XAI_OAUTH, ensure_secrets_dir, secrets_dir
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +30,8 @@ except ImportError:  # pragma: no cover - non-POSIX
 OAUTH_FILENAME = "xai_oauth.json"
 OAUTH_TMP_FILENAME = "xai_oauth.json.tmp"
 OAUTH_BUNDLE_VERSION = 1
-SOURCE_XAI_OAUTH = "xai_oauth"
+# Re-export for callers that import from oauth_store (same string as auth).
+# SOURCE_XAI_OAUTH imported from auth above.
 
 # Process-local write serialization (complements flock across processes).
 _write_lock = threading.Lock()
@@ -335,17 +331,15 @@ def persist_oauth_login(
     data_dir: Path,
     tokens: OAuthBundle | dict[str, Any],
     *,
-    activate: bool = False,
+    activate: bool = True,
 ) -> OAuthPublicMeta:
-    """Atomic write OAuth bundle (``reauth_required=false``).
+    """Atomic write OAuth bundle (``reauth_required=false``) + optional prefs.
 
     No ProviderRuntime, no rebuild, no set_bearer_token. Returns public meta only.
 
-    ``activate`` defaults to **False** in PR1 and is a no-op if True: prefs
-    ``credential_source=xai_oauth`` must not be raw-written until PR2 extends
-    ``VALID_SOURCES`` / ``provider_prefs`` (unknown sources are dropped and
-    clobbered by any subsequent prefs save). PR2 will wire activate via
-    ``update_provider_prefs`` (preferably atomic).
+    When ``activate`` is True (default, KD13): set
+    ``credential_source=xai_oauth`` via ``update_provider_prefs`` (load-merge-save).
+    CLI ``--no-activate`` / Glass checkbox off pass ``activate=False``.
     """
     if isinstance(tokens, OAuthBundle):
         bundle = tokens
@@ -382,11 +376,9 @@ def persist_oauth_login(
     save_oauth_bundle(data_dir, bundle)
 
     if activate:
-        logger.warning(
-            "persist_oauth_login: activate=True ignored in PR1 "
-            "(prefs VALID_SOURCES lacks xai_oauth until PR2); "
-            "bundle written only"
-        )
+        from elyra.llm.provider_prefs import update_provider_prefs
+
+        update_provider_prefs(data_dir, credential_source=SOURCE_XAI_OAUTH)
 
     return public_meta(data_dir)
 

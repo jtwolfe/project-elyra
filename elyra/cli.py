@@ -12,6 +12,7 @@ import logging
 import sys
 
 from elyra.config import resolve_paths
+from elyra.llm.auth import VALID_SOURCES
 from elyra.runtime.config import load_merged_settings, runtime_config_from_settings
 from elyra.runtime.provider_runtime import (
     credential_detail_message,
@@ -41,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     start.add_argument(
         "--credential-source",
-        choices=("grok_build", "api_key"),
+        choices=tuple(sorted(VALID_SOURCES)),
         default=None,
         help="Override active credential source",
     )

@@ -14,11 +14,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from elyra.llm.auth import VALID_SOURCES
+
 logger = logging.getLogger(__name__)
 
 PROVIDER_PREFS_REL = Path("runtime") / "provider.json"
 
-_VALID_CREDENTIAL_SOURCES = frozenset({"grok_build", "api_key"})
+# SSOT: import from auth — never maintain a parallel frozenset (KD14).
+_VALID_CREDENTIAL_SOURCES = VALID_SOURCES
 _VALID_REASONING_EFFORTS = frozenset({"low", "medium", "high"})
 DEFAULT_REASONING_EFFORT = "high"
 

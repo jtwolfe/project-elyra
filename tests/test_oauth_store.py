@@ -129,10 +129,10 @@ def test_reauth_required_roundtrip(data_dir: Path) -> None:
     assert meta.reauth_required is True
 
 
-def test_persist_oauth_login_clears_reauth_default_no_prefs(data_dir: Path) -> None:
-    """Default activate=False: bundle only; no provider.json footgun in PR1."""
+def test_persist_oauth_login_clears_reauth_activate_false_no_prefs(data_dir: Path) -> None:
+    """activate=False: bundle only; no provider.json write."""
     b = _bundle(reauth=True)
-    meta = persist_oauth_login(data_dir, b)
+    meta = persist_oauth_login(data_dir, b, activate=False)
     assert meta.configured is True
     assert meta.reauth_required is False
     loaded = load_oauth_bundle(data_dir)
@@ -142,12 +142,21 @@ def test_persist_oauth_login_clears_reauth_default_no_prefs(data_dir: Path) -> N
     assert not prefs_path.exists()
 
 
-def test_persist_oauth_login_activate_true_is_noop_pr1(data_dir: Path) -> None:
-    """activate=True ignored until PR2 (VALID_SOURCES); must not raw-write prefs."""
-    meta = persist_oauth_login(data_dir, _bundle(), activate=True)
+def test_persist_oauth_login_default_activate_writes_prefs(data_dir: Path) -> None:
+    """KD13: default activate=True sets credential_source=xai_oauth via prefs."""
+    from elyra.llm.provider_prefs import load_provider_prefs
+
+    meta = persist_oauth_login(data_dir, _bundle())
     assert meta.configured is True
+    prefs = load_provider_prefs(data_dir)
+    assert prefs.credential_source == "xai_oauth"
     prefs_path = data_dir / "runtime" / "provider.json"
-    assert not prefs_path.exists()
+    assert prefs_path.is_file()
+    raw = json.loads(prefs_path.read_text(encoding="utf-8"))
+    assert raw["credential_source"] == "xai_oauth"
+    # no secrets in prefs
+    assert "access_token" not in raw
+    assert "refresh_token" not in raw
 
 
 def test_persist_oauth_login_from_dict(data_dir: Path) -> None:
@@ -163,6 +172,7 @@ def test_persist_oauth_login_from_dict(data_dir: Path) -> None:
             "auth_method": "device_code",
             "reauth_required": True,  # forced false on login
         },
+        activate=False,
     )
     assert meta.email == "d@e.f"
     loaded = load_oauth_bundle(data_dir)
