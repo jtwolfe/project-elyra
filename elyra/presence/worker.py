@@ -175,6 +175,30 @@ def _media_ids_from_wake(
     return tuple(out)
 
 
+# Hard cap for wait_reply why_now user content dual-write (OQ7 / BUG-meal-03 S2).
+_WHY_NOW_SNIPPET_MAX_CHARS = 160
+
+
+def _snippet(text: Any, *, max_chars: int = _WHY_NOW_SNIPPET_MAX_CHARS) -> str:
+    """Collapse whitespace and hard-cap a user content snippet for why_now.
+
+    Empty / non-string / whitespace-only → empty string. Cap is inclusive of
+    the trailing ellipsis when truncated (same shape as orient_slice._truncate).
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    text = " ".join(text.split()).strip()
+    if not text:
+        return ""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars <= 1:
+        return text[:max_chars]
+    return text[: max_chars - 1].rstrip() + "…"
+
+
 def _why_now(wake: WakeItem) -> str:
     kind = wake.kind
     payload = wake.payload or {}
@@ -182,7 +206,13 @@ def _why_now(wake: WakeItem) -> str:
         uid = payload.get("user_id") or "user"
         return f"user message from {uid}"
     if kind == "wait_reply":
-        return f"wait reply (wait_id={payload.get('wait_id') or '?'})"
+        # Dual-write: wait_id + capped user content snippet (complements BIAS_TALK;
+        # does not replace skill bias). Full dialogue remains glass-tail SoT.
+        wid = payload.get("wait_id") or "?"
+        snippet = _snippet(payload.get("content"), max_chars=_WHY_NOW_SNIPPET_MAX_CHARS)
+        if snippet:
+            return f"wait reply (wait_id={wid}): {snippet}"
+        return f"wait reply (wait_id={wid})"
     if kind == "wait_timeout":
         return f"wait timeout (wait_id={payload.get('wait_id') or '?'})"
     if kind == "timer":
