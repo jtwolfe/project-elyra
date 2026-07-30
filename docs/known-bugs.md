@@ -677,6 +677,7 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 - [radeon-vii-dev/scripts/00_inject_gfx906_tensile.py](radeon-vii-dev/scripts/00_inject_gfx906_tensile.py) — **dev-only** gfx906 path, not generic AMD.
 - Project setup today: [docs/README.md](README.md) / `scripts/setup_venv.sh` — to grow into multi-backend setup (ongoing).
 - Operator start (LuxPrimata / new terminal): [radeon-vii-dev/README.md](radeon-vii-dev/README.md) § *New terminal session — start Elyra*.
+- v0.1 promotion / gym / meal size & chat-chain notes: [promotion-discussion/README.md](promotion-discussion/README.md).
 
 ---
 
