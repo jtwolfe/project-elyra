@@ -7,7 +7,7 @@ essays. When an item is fixed, mark **Status** and leave a one-line resolution
 
 | Field | Value |
 |-------|--------|
-| **Branch** | `main` (product tip after #66) |
+| **Branch** | `main` (product tip after known-bugs Glass batch) |
 | **Project** | [Autopoiesis Commons #2](https://github.com/users/jtwolfe/projects/2) |
 | **Epic** | [#59](https://github.com/jtwolfe/project-elyra/issues/59) — break-out into issues |
 | **Audience** | Operators + implementers |
@@ -24,18 +24,18 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-wake-01` | [#67](https://github.com/jtwolfe/project-elyra/issues/67) (open) | Open (defer) |
 | `BUG-wake-02` | [#68](https://github.com/jtwolfe/project-elyra/issues/68) (open) | Open (defer) |
 | `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
-| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on fix/known-bugs (pretty-print; pending main) |
-| `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Moments tab under Memory; dogfood then close |
-| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Inspect + soft-refresh; dogfood then close |
+| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on main (Moments pretty-print) |
+| `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (closed) | **Fixed** on main — Moments tab under Memory |
+| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (closed) | **Fixed** on main (Context chrome + inspect); residual: ladder narrative |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
-| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Soft-skip landed on fix/known-bugs; dogfood then close |
-| `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | Bounded soft-refresh patch on fix/known-bugs; residual / larger fault later |
+| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (closed) | **Fixed** on main (Atoms soft-skip under glass-03) |
+| `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | **Partial** on main — knip soft-skip shipped; residual poll architecture later |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (open) | Open — soft newlines lost in Glass chat, kept in atoms |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
-| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** (dogfood; pending main) |
-| `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** (dogfood; pending main) |
-| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (closed) | **Fixed** (dogfood; pending main) |
+| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** on main |
+| `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** on main |
+| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (closed) | **Fixed** on main |
 | `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
 | `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
@@ -299,12 +299,12 @@ Moments UI presents beats / payload in a raw or near-JSON shape that is hard to 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Landed on `fix/known-bugs` — dogfood then close |
+| **Status** | **Fixed** on main |
 | **Issue** | [#71](https://github.com/jtwolfe/project-elyra/issues/71) |
-| **Severity now** | Low residual (habit / bookmark to old nav) |
+| **Severity now** | — |
 | **Severity later** | — |
 | **Area** | Glass nav + Memory tabs |
-| **Dogfood** | 2026-07-28 request; 2026-07-30 IA move on branch |
+| **Dogfood** | 2026-07-28 request; 2026-07-30 IA move |
 
 ### Symptom
 
@@ -329,7 +329,7 @@ Moments was a top-level nav peer of Memory; operators wanted one place for meal 
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Improved** on `fix/known-bugs` — link + in-place inspect across temporal/episodic/semantic/directed_keep; pending dogfood |
+| **Status** | **Fixed** on main (Glass Context chrome + inspect soft-refresh). Residual: template ladder / narrative summary quality — open separately if needed. |
 | **Issue** | [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
 | **Severity now** | Med (hard to understand what the model is “eating”) |
 | **Severity later** | High if Context is the primary trust surface for meal/ladder correctness |
@@ -382,9 +382,9 @@ Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time vis
 
 | Field | Value |
 |-------|--------|
-| **Status** | Soft-skip landed on `fix/known-bugs` (BUG-glass-03 patch) — dogfood then close |
+| **Status** | **Fixed** on main (list + soft detail under BUG-glass-03) |
 | **Issue** | [#74](https://github.com/jtwolfe/project-elyra/issues/74) |
-| **Severity now** | Low residual if any (status strip still polled) |
+| **Severity now** | — (status-rail thrash residual under #86 if still felt) |
 | **Severity later** | Med if soft-skip regresses |
 | **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active) |
 | **Dogfood** | 2026-07-28 — inspector flash; 2026-07-30 — list + detail soft-skip on branch |
@@ -407,9 +407,9 @@ While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular ca
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Bounded soft-refresh patch landed** on `fix/known-bugs` — dogfood; larger poll architecture later |
+| **Status** | **Partial** on main — catalog soft-skip knip shipped; residual poll architecture / status strip later |
 | **Issue** | [#86](https://github.com/jtwolfe/project-elyra/issues/86) |
-| **Severity now** | Med residual (status strip; any fingerprint gaps) |
+| **Severity now** | Low–Med residual (status strip; larger poll architecture) |
 | **Severity later** | High if soft-skip regresses or new panels omit the pattern |
 | **Area** | `elyra/runtime/web/app.js`: `tick` → soft `refreshActivePanel`; nav/mutations use `force: true` |
 | **Dogfood** | 2026-07-30 — patch pass; operator verify selection survives idle poll |
