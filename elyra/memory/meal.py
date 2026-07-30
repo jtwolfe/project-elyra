@@ -902,33 +902,116 @@ def _embedder_is_warm(embedder: Any) -> bool:
     return True
 
 
+def _last_glass_user_text(
+    glass_rows: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    glass_items: Sequence[MealItem] | None = None,
+) -> str | None:
+    """Newest non-empty user glass content (rows preferred; else packed items)."""
+    if glass_rows:
+        for row in reversed(list(glass_rows)):
+            if str(row.get("role") or "") != "user":
+                continue
+            body = _glass_row_content(row).strip()
+            if body:
+                return body
+    if glass_items:
+        for item in reversed(list(glass_items)):
+            if item.role != "user":
+                continue
+            body = (item.content or "").strip()
+            if body:
+                return body
+    return None
+
+
+def _semantic_seed_source(*, glass_used: bool, open_used: bool) -> str:
+    """Classify seed provenance for semantic_select_meta.seed_source."""
+    if glass_used and open_used:
+        return "mixed"
+    if glass_used:
+        return "glass_tail"
+    if open_used:
+        return "open_moment"
+    return "empty"
+
+
 def build_semantic_query_seed(
     open_moment_atoms: Sequence[Atom],
     *,
     max_chars: int = _SEMANTIC_SEED_MAX_CHARS,
+    glass_tail_user_text: str | None = None,
+    social_wake: bool = False,
 ) -> str:
-    """Build query text from open-moment seed (latest obs/speak/model, ≤2k)."""
+    """Prefer glass-tail last user text when social and present; else open-moment.
+
+    Priority concat (within ``max_chars``):
+
+    1. Glass-tail last user text when ``social_wake`` and non-empty text.
+    2. Open-moment obs/speak/model (latest-first walk, chronological join).
+
+    Returns query text only; callers that need provenance should use
+    :func:`build_semantic_query_seed_with_source`.
+    """
+    seed, _src = build_semantic_query_seed_with_source(
+        open_moment_atoms,
+        max_chars=max_chars,
+        glass_tail_user_text=glass_tail_user_text,
+        social_wake=social_wake,
+    )
+    return seed
+
+
+def build_semantic_query_seed_with_source(
+    open_moment_atoms: Sequence[Atom],
+    *,
+    max_chars: int = _SEMANTIC_SEED_MAX_CHARS,
+    glass_tail_user_text: str | None = None,
+    social_wake: bool = False,
+) -> tuple[str, str]:
+    """Like :func:`build_semantic_query_seed` plus seed_source tag.
+
+    ``seed_source`` is one of ``glass_tail`` | ``open_moment`` | ``mixed`` | ``empty``.
+    """
+    limit = max(0, int(max_chars))
+    parts: list[str] = []
+    total = 0
+    glass_used = False
+    open_used = False
+
+    # 1. Social tip: glass-tail last user (prefer when present).
+    glass = (glass_tail_user_text or "").strip() if social_wake else ""
+    if glass and limit > 0:
+        piece = glass[:limit]
+        if piece:
+            parts.append(piece)
+            total += len(piece)
+            glass_used = True
+
+    # 2. Open-moment obs/speak/model (prefer latest; concat chronological).
     candidates = [
         a
         for a in open_moment_atoms
         if a.kind in _SEMANTIC_SEED_KINDS and (a.content_text or "").strip()
     ]
     candidates.sort(key=lambda a: (to_iso_z(a.t_start), a.atom_id))
-    chunks: list[str] = []
-    total = 0
-    # Prefer latest: walk reverse, then reverse for chronological concat.
+    open_chunks: list[str] = []
     for atom in reversed(candidates):
-        if total >= max_chars:
+        if total >= limit:
             break
         body = (atom.content_text or "").strip()
-        remain = max_chars - total
+        remain = limit - total
         piece = body[:remain]
         if not piece:
             continue
-        chunks.append(piece)
+        open_chunks.append(piece)
         total += len(piece)
-    chunks.reverse()
-    return "\n".join(chunks)
+        open_used = True
+    open_chunks.reverse()
+    parts.extend(open_chunks)
+
+    seed = "\n".join(parts)
+    return seed, _semantic_seed_source(glass_used=glass_used, open_used=open_used)
 
 
 def _atom_ids_in_meal_items(items: Sequence[MealItem]) -> set[str]:
@@ -981,6 +1064,8 @@ def select_semantic(
     deadline_ms: int | None = None,
     wait_for_completion: bool | None = None,
     wait_max_ms: int | None = None,
+    glass_tail_user_text: str | None = None,
+    social_wake: bool = False,
 ) -> tuple[list[MealItem], str | None, dict[str, Any] | None]:
     """Select supporting semantic neighbours under a hard wall-clock budget.
 
@@ -990,13 +1075,20 @@ def select_semantic(
     ``exclude_atom_ids`` (KD11). Parcel hits map to parent atoms (label
     ``semantic/parcel→parent``).
 
+    When ``social_wake`` and ``glass_tail_user_text`` are set, the query seed
+    prefers the glass tip user text so social hops avoid ``empty_seed`` while
+    open-moment promote is still pending (S5 / OQ8). ``select_meta.seed_source``
+    reports ``glass_tail`` | ``open_moment`` | ``mixed`` | ``empty``.
+
     Wait-for-select (CPU dogfood): when ``wait_for_completion`` / settings
     ``semantic_wait_for_select`` is on, use ``semantic_wait_max_ms`` as the
     ceiling, drop the snappy encode sub-budget discard, and keep a finished
     encode when the vector is usable — including when encode alone already
     exceeded the ceiling (search+pack still run). Under wait, mid-pack does
     not hard-timeout an empty pack after a good encode. Fail-fast paths
-    (no_index / cold encoder / empty_seed) are unchanged.
+    (no_index / cold encoder / empty_seed) are unchanged. Encode lag: new
+    observations may still miss ANN until indexed — tip + keep carry
+    immediate recall; semantic is support only.
 
     Empty-pack omit priority (KD-R6): timeout > encoder > no_index >
     empty_seed > min_score > deduped > no_hits. ``select_meta`` carries
@@ -1018,6 +1110,7 @@ def select_semantic(
             "cap_tokens": 0,
             "wait": wait,
             "deadline_ms": 0,
+            "seed_source": "empty",
         }
 
     # Absolute ceiling: explicit deadline wins; else wait ceiling or snappy budget.
@@ -1060,12 +1153,22 @@ def select_semantic(
     if not _embedder_is_warm(embedder):
         return early(SEMANTIC_OMIT_ENCODER)
 
-    seed = build_semantic_query_seed(open_moment_atoms)
+    seed, seed_source = build_semantic_query_seed_with_source(
+        open_moment_atoms,
+        glass_tail_user_text=glass_tail_user_text,
+        social_wake=bool(social_wake),
+    )
+    seed_meta: dict[str, Any] = {"seed_source": seed_source}
+    # Light encode-lag awareness: tip seed does not wait for reindex of new atoms.
+    if seed_source in ("glass_tail", "mixed"):
+        seed_meta["encode_lag_note"] = (
+            "new observations may lag ANN index; tip+keep carry immediate recall"
+        )
     if not seed.strip():
-        return early(SEMANTIC_OMIT_EMPTY_SEED)
+        return early(SEMANTIC_OMIT_EMPTY_SEED, meta=seed_meta)
 
     if over_deadline():
-        return early(SEMANTIC_OMIT_TIMEOUT)
+        return early(SEMANTIC_OMIT_TIMEOUT, meta=seed_meta)
 
     # Query encode. Wait mode keeps a finished good vector even past max_ms
     # (paid for encode → search+pack). Snappy mode caps with encode_query_max_ms
@@ -1081,12 +1184,12 @@ def select_semantic(
         query_vec = embedder.encode_text(seed)
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic query encode failed")
-        return early(SEMANTIC_OMIT_ENCODER)
+        return early(SEMANTIC_OMIT_ENCODER, meta=seed_meta)
     enc_elapsed = _now_ms() - t_enc0
     if not query_vec:
-        return early(SEMANTIC_OMIT_ENCODER)
+        return early(SEMANTIC_OMIT_ENCODER, meta=seed_meta)
     if not wait and (enc_elapsed > encode_budget or over_deadline()):
-        return early(SEMANTIC_OMIT_TIMEOUT)
+        return early(SEMANTIC_OMIT_TIMEOUT, meta=seed_meta)
 
     if now is None:
         from elyra.memory.types import utc_now_iso
@@ -1119,7 +1222,7 @@ def select_semantic(
         if str(health.get("backend") or "").lower() == "null":
             return early(
                 SEMANTIC_OMIT_NO_INDEX,
-                meta={"backend": "null", "joint_repair_remaining": 0},
+                meta={**seed_meta, "backend": "null", "joint_repair_remaining": 0},
             )
         joint_repair_remaining = int(health.get("joint_repair_remaining") or 0)
         channel_req = str(
@@ -1142,6 +1245,7 @@ def select_semantic(
     except Exception:  # noqa: BLE001
         _LOG.exception("semantic index.search failed")
         fail_meta: dict[str, Any] = {
+            **seed_meta,
             "joint_repair_remaining": joint_repair_remaining,
         }
         if concrete is not None:
@@ -1151,6 +1255,7 @@ def select_semantic(
         return early(SEMANTIC_OMIT_NO_INDEX, meta=fail_meta)
 
     channel_meta: dict[str, Any] = {
+        **seed_meta,
         "joint_repair_remaining": joint_repair_remaining,
     }
     if concrete is not None:
@@ -1686,6 +1791,7 @@ def select_glass_tail(
         and len(items) >= min(target_floor, len(window))
         and not floor_shortfall
     )
+    last_user = _last_glass_user_text(window if window else eligible)
     meta: dict[str, Any] = {
         "packed": len(items),
         "available": len(eligible),
@@ -1696,6 +1802,8 @@ def select_glass_tail(
         "floor_applied": floor_applied,
         "floor_shortfall": floor_shortfall,
         "social_wake": bool(social_wake),
+        # S5: tip user text for semantic seed (not logged at INFO; meta only).
+        "last_user_text": last_user,
     }
     return items, meta
 
@@ -1928,6 +2036,13 @@ def compose_meal(
     temporal_items = _temporal_items(kept, compact, open_moment_id)
 
     # Semantic supporting channel (Phase 2).
+    # S5: prefer glass-tail last user as query seed on social wakes (OQ8).
+    glass_seed_text: str | None = None
+    if glass_tail_meta and isinstance(glass_tail_meta.get("last_user_text"), str):
+        glass_seed_text = glass_tail_meta.get("last_user_text") or None
+    if not glass_seed_text and glass_list:
+        glass_seed_text = _last_glass_user_text(glass_list)
+
     semantic_items: list[MealItem] = []
     semantic_omitted: str | None = None
     semantic_meta: dict[str, Any] | None = None
@@ -1945,6 +2060,8 @@ def compose_meal(
             settings=cfg,
             now=now_dt,
             exclude_atom_ids=exclude,
+            glass_tail_user_text=glass_seed_text,
+            social_wake=bool(social_wake),
         )
 
     # Directed-keep supporting channel (Phase 2a) — after semantic so
@@ -2322,6 +2439,7 @@ __all__ = [
     "MealPackage",
     "build_compact_text",
     "build_semantic_query_seed",
+    "build_semantic_query_seed_with_source",
     "compose_meal",
     "compose_outer_messages",
     "estimate_glass_tail_floor_tokens",
