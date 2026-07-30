@@ -106,7 +106,7 @@
               <div id="rail-context-bar" class="usage-bar-fill"></div>
             </div>
           </div>
-          <div id="rail-context-meta" class="rail-context-meta muted">meal ≤50k · model 500k</div>
+          <div id="rail-context-meta" class="rail-context-meta muted">meal ≤250k · model 500k</div>
         </div>
         <div class="rail-foot" role="group" aria-label="System status">
           <div class="rail-foot-label muted">System</div>
@@ -890,9 +890,23 @@
                   </div>
                 </div>
               </div>
+              <div class="status-row meal-budget-row" style="margin-top: 0.75rem">
+                <span class="status-label">Meal budget</span>
+                <input
+                  type="range"
+                  id="meal-budget-fraction"
+                  class="status-range"
+                  min="0.10"
+                  max="0.60"
+                  step="0.01"
+                  value="0.50"
+                  aria-label="Meal budget fraction of model window"
+                />
+                <span id="meal-budget-readout" class="muted meal-budget-readout">50% → 250k of 500k</span>
+              </div>
               <p id="context-detail" class="muted status-helper">
-                Product meals slide at ~50k; Grok model window ~500k. Gold mark on the model bar is the meal budget.
-                Heuristic tokens (not a provider tokenizer). For memory source-split planning.
+                Product meal size is a fraction of the model window (default 50% → 250k of 500k; clamp 10–60%).
+                Bars and gold mark are read-only; use the range control to set the budget. Heuristic tokens (len/4).
               </p>
             </div>
             <div class="card status-card" id="usage-card">

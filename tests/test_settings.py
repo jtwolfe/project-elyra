@@ -25,8 +25,8 @@ def test_default_settings_match_design():
     assert s.loop.moment_wall_clock_minutes == 45
     assert s.loop.continue_max_injects == 3
     assert s.loop.max_tool_hops == 200
-    assert s.loop.sliding_input_tokens == 50000
-    assert s.loop.in_turn_max_tokens == 50000
+    assert s.loop.sliding_input_tokens == 250_000
+    assert s.loop.in_turn_max_tokens == 250_000
     assert s.loop.tool_result_max_chars == 8000
     assert s.loop.generation_max_tokens == 8192
     assert s.loop.orient_skill_catalog_max_tokens == 400

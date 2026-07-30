@@ -100,7 +100,7 @@ def test_estimate_tokens_len_div_4():
 
 
 def test_default_budget_is_sliding_style():
-    assert DEFAULT_MEAL_BUDGET_TOKENS == 50_000
+    assert DEFAULT_MEAL_BUDGET_TOKENS == 250_000
 
 
 def test_split_memory_budget_fraction():

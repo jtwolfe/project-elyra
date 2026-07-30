@@ -1470,3 +1470,70 @@ def test_rebuild_outer_timer_empty_ledger_rest(paths):
         assert BIAS_TIMER_LINKED not in meals[0]
     finally:
         _stop_join(worker, stop, t)
+
+
+def test_policy_a_run_do_loop_gets_matching_sliding_and_in_turn(paths):
+    """BUG-meal-01 Policy A: fraction 0.4 → both caps 200k into run_do_loop."""
+    seen: list[Any] = []
+
+    def capture(**kwargs: Any) -> DoLoopResult:
+        seen.append(kwargs.get("settings"))
+        ctx = kwargs["ctx"]
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            moment_id=ctx.moment_id,
+        )
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=capture)
+    t = _start(worker)
+    try:
+        result = worker.set_meal_budget(fraction=0.4)
+        assert result["ok"] is True
+        assert result["meal_budget"]["meal_budget_tokens"] == 200_000
+        worker.enqueue_user_message("policy a meal budget")
+        assert _wait_until(lambda: len(seen) >= 1, timeout=2.0)
+        assert _wait_until(lambda: not worker.busy, timeout=2.0)
+        settings = seen[0]
+        assert settings is not None
+        assert settings.loop.sliding_input_tokens == 200_000
+        assert settings.loop.in_turn_max_tokens == 200_000
+        assert (
+            settings.loop.sliding_input_tokens
+            == settings.loop.in_turn_max_tokens
+            == 200_000
+        )
+    finally:
+        _stop_join(worker, stop, t)
+
+
+def test_set_meal_budget_persist_failure_leaves_live_state(paths, monkeypatch):
+    """Fail-clean: OSError on save does not mutate live fraction or claim ok."""
+    from elyra.runtime import meal_budget as meal_budget_mod
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    t = _start(worker)
+    try:
+        assert worker.set_meal_budget(fraction=0.5)["ok"] is True
+        assert worker._meal_budget.fraction == 0.5  # noqa: SLF001
+
+        def boom(*_a: Any, **_k: Any) -> Path:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(meal_budget_mod, "save_meal_budget_runtime", boom)
+        # Worker imports save at module level — patch the bound name on worker module.
+        import elyra.presence.worker as worker_mod
+
+        monkeypatch.setattr(worker_mod, "save_meal_budget_runtime", boom)
+
+        result = worker.set_meal_budget(fraction=0.4)
+        assert result["ok"] is False
+        assert result["error"] == "persist_failed"
+        assert result["meal_budget"]["fraction"] == 0.5
+        assert worker._meal_budget.fraction == 0.5  # noqa: SLF001
+        # Status still reports previous durable/live value.
+        snap = worker.status_snapshot()
+        assert snap["meal_budget"]["fraction"] == 0.5
+        assert snap["meal_budget"]["meal_budget_tokens"] == 250_000
+    finally:
+        _stop_join(worker, stop, t)

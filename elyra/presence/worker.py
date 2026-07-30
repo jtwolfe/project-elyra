@@ -7,7 +7,7 @@ Out of scope: HTTP/web, tool internals, glass UI panels.
 
 Public API: enqueue_wake, enqueue_user_message, interject, resolve_user_input,
 busy, active_moment_id, pending_wait, status_snapshot, reset_runtime_state,
-set_continuous_enabled, set_dev_speed, set_semantic_wait.
+set_continuous_enabled, set_dev_speed, set_semantic_wait, set_meal_budget.
 Must not import runtime.web.
 """
 
@@ -50,6 +50,14 @@ from elyra.runtime.dev_speed import (
     effective_hop_delay_seconds,
     load_dev_speed_runtime,
     save_dev_speed_runtime,
+)
+from elyra.runtime.meal_budget import (
+    MealBudgetState,
+    clamp_fraction,
+    effective_meal_budget_tokens,
+    load_meal_budget_runtime,
+    meal_budget_status_block,
+    save_meal_budget_runtime,
 )
 from elyra.runtime.semantic_wait import (
     SemanticWaitState,
@@ -457,6 +465,11 @@ class PresenceWorker:
         )
         # Dev-speed pacing (default ON): inter-hop pause for followable glass.
         self._dev_speed: DevSpeedState = load_dev_speed_runtime(paths.data_dir)
+        # Meal budget fraction of model window (default 0.5 → 250k @ 500k).
+        # Missing runtime JSON → product default; does not mutate Settings.
+        self._meal_budget: MealBudgetState = load_meal_budget_runtime(
+            paths.data_dir
+        )
         # Semantic wait-for-select (default ON): keep slow encodes for meal pack.
         # Missing runtime JSON seeds from settings.memory (elyra.toml).
         self._semantic_wait: SemanticWaitState = load_semantic_wait_runtime(
@@ -635,6 +648,77 @@ class PresenceWorker:
                     or prev_max != int(self._semantic_wait.max_ms)
                 ),
                 "semantic_wait": block,
+            }
+
+    def set_meal_budget(
+        self,
+        *,
+        fraction: float | None = None,
+    ) -> dict[str, Any]:
+        """Set meal budget fraction of model window; persist runtime JSON.
+
+        Product paths apply the derived token budget to both sliding and
+        in-turn caps (policy A). Does not invent wakes or mutate Settings.
+        When fraction is None, returns current state.
+
+        Fail-clean durable path: clamp first, ``save_meal_budget_runtime``
+        **before** mutating live state; on ``OSError`` leave memory unchanged
+        and return ``ok: False`` / ``error: persist_failed``.
+        """
+        with self._lock:
+            window = int(self.settings.loop.model_context_window_tokens)
+            prev_block = meal_budget_status_block(
+                self._meal_budget, model_window=window
+            )
+            if self._continuous.resetting:
+                return {
+                    "ok": False,
+                    "error": "resetting",
+                    "meal_budget": prev_block,
+                }
+            prev = float(self._meal_budget.fraction)
+            if fraction is None:
+                return {
+                    "ok": True,
+                    "changed": False,
+                    "meal_budget": prev_block,
+                }
+            try:
+                new_frac = clamp_fraction(fraction)
+            except (TypeError, ValueError) as exc:
+                return {
+                    "ok": False,
+                    "error": "invalid_fraction",
+                    "detail": str(exc),
+                    "meal_budget": prev_block,
+                }
+            if abs(new_frac - prev) <= 1e-12:
+                return {
+                    "ok": True,
+                    "changed": False,
+                    "meal_budget": prev_block,
+                }
+            try:
+                save_meal_budget_runtime(
+                    self.paths.data_dir,
+                    fraction=new_frac,
+                )
+            except OSError as exc:
+                _LOG.warning("persist meal_budget.json failed: %s", exc)
+                return {
+                    "ok": False,
+                    "error": "persist_failed",
+                    "detail": str(exc),
+                    "meal_budget": prev_block,
+                }
+            self._meal_budget.fraction = new_frac
+            block = meal_budget_status_block(
+                self._meal_budget, model_window=window
+            )
+            return {
+                "ok": True,
+                "changed": True,
+                "meal_budget": block,
             }
 
     def reset_runtime_state(
@@ -1017,24 +1101,27 @@ class PresenceWorker:
                 last_tool=live_tool,
             )
             loop = self.settings.loop
-            meal_budget = min(
-                int(loop.sliding_input_tokens),
-                int(loop.in_turn_max_tokens),
+            model_window = int(loop.model_context_window_tokens)
+            # Policy A: effective fraction×window applies to product meal size
+            # (not min(frozen sliding, in_turn) which left budgets stuck at 50k).
+            meal_budget = effective_meal_budget_tokens(
+                self.settings, self._meal_budget
+            )
+            meal_budget_block = meal_budget_status_block(
+                self._meal_budget, model_window=model_window
             )
             try:
                 from elyra.loop import context_meter
 
                 context_block = context_meter.status_block(
                     meal_budget_tokens=meal_budget,
-                    model_window_tokens=int(loop.model_context_window_tokens),
+                    model_window_tokens=model_window,
                 )
             except Exception:
                 context_block = {
                     "meal_used_tokens": 0,
                     "meal_budget_tokens": meal_budget,
-                    "model_window_tokens": int(
-                        getattr(loop, "model_context_window_tokens", 500_000)
-                    ),
+                    "model_window_tokens": model_window,
                     "meal_used_fraction": 0.0,
                     "window_used_fraction": 0.0,
                     "hop": None,
@@ -1067,6 +1154,7 @@ class PresenceWorker:
                         self.settings.memory.semantic_select_max_ms
                     ),
                 ),
+                "meal_budget": meal_budget_block,
                 "context": context_block,
                 "memory": self._memory_status_block(),
             }
@@ -1869,11 +1957,19 @@ class PresenceWorker:
         )
         why = _why_now(wake)
 
-        # Snapshot continuous + open-work for in-moment work_context (no lock
-        # held during do-loop; toggle mid-moment takes effect next moment).
+        # Snapshot continuous + meal budget for this moment (no lock held during
+        # do-loop). Mid-moment glass PATCH to meal_budget applies **next moment**
+        # so outer meal size and in-turn cap stay Policy A-aligned for the hop.
         with self._lock:
             cont_on = bool(self._continuous.enabled)
+            meal_state_for_moment = MealBudgetState(
+                fraction=float(self._meal_budget.fraction)
+            )
         has_open = self._has_open_work()
+        # Policy A: one moment-scoped effective budget for sliding + in-turn.
+        meal_tokens = effective_meal_budget_tokens(
+            self.settings, meal_state_for_moment
+        )
 
         def rebuild_outer() -> list[dict[str, Any]]:
             # Re-read glass + goals from disk every rebuild (ledger edits mid-moment
@@ -1888,6 +1984,8 @@ class PresenceWorker:
             # across hops; never expand after ids are stripped.
             # Memory path (PR6): when enabled + store healthy use labeled meal
             # (no full sliding glass) + expand_memory_meal_for_provider.
+            # Meal token budget is moment-scoped (meal_tokens) — not re-read
+            # from runtime mid-moment (avoids outer/in-turn desync).
             glass = list_messages(limit=80, paths=self.paths)
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
@@ -1927,6 +2025,8 @@ class PresenceWorker:
             glass_by_id = index_glass(glass)
             provider_name = self.settings.provider.name
 
+            budget = meal_tokens
+
             use_memory_meal = self._memory_meal_active()
             if use_memory_meal:
                 try:
@@ -1950,7 +2050,6 @@ class PresenceWorker:
                         skill_catalog=skill_catalog_s,
                         skill_bias=skill_bias_s,
                     )
-                    budget = int(loop.sliding_input_tokens)
                     mem_cfg = self.settings.memory
                     # Overlay runtime wait toggle so first outer + re-outer both
                     # honor glass/API wait-for-select (CPU dogfood).
@@ -2030,6 +2129,7 @@ class PresenceWorker:
                 skill_bias=skill_bias_s,
                 wake_content=wake_content_s,
                 wake_message_id=wake_message_id_s,
+                sliding_input_tokens=budget,
                 retain_ids=True,
             )
             expanded = expand_meal_for_provider(
@@ -2044,13 +2144,22 @@ class PresenceWorker:
         registry = self._ensure_registry()
         with self._lock:
             hop_delay = effective_hop_delay_seconds(self._dev_speed)
+        # Policy A: both sliding and in-turn use the same moment-scoped tokens.
+        settings_for_loop = replace(
+            self.settings,
+            loop=replace(
+                self.settings.loop,
+                sliding_input_tokens=meal_tokens,
+                in_turn_max_tokens=meal_tokens,
+            ),
+        )
         mem = self._ensure_memory_store()
         result = self._run_do_loop(
             client=self.client,
             registry=registry,
             ctx=ctx,
             rebuild_outer=rebuild_outer,
-            settings=self.settings,
+            settings=settings_for_loop,
             moments=self._moments,
             social_wake=social,
             wake_kind=wake.kind,

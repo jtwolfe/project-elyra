@@ -274,10 +274,14 @@ def assemble_outer_meal(
     2. Sliding recent glass history (user + assistant only; **no reasoning**)
     3. Orient near the end (``prompts/orient.md`` filled)
 
-    Budget: ``settings.loop.sliding_input_tokens`` (default 50000). Drops oldest
-    history first. Never drops system or orient. Always keeps **at least one**
-    triggering user row when ``wake_content`` / ``wake_message_id`` is set
-    (prefer id; else last matching content). Older duplicate triggers may drop.
+    Budget: ``sliding_input_tokens`` override when provided, else
+    ``settings.loop.sliding_input_tokens`` (fallback
+    ``DEFAULT_SLIDING_INPUT_TOKENS`` = 250_000). Product paths pass effective
+    meal budget (runtime ``meal_budget_fraction`` × model window; default 0.5
+    → 250k @ 500k). Drops oldest history first. Never drops system or orient.
+    Always keeps **at least one** triggering user row when ``wake_content`` /
+    ``wake_message_id`` is set (prefer id; else last matching content). Older
+    duplicate triggers may drop.
 
     Dedupe: if ``wake_content`` / ``wake_message_id`` already appears in glass
     history, do not inject a second copy.

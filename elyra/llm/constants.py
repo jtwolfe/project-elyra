@@ -20,12 +20,14 @@ GENERATION_MAX_TOKENS = GENERATION_RESERVED_TOKENS
 CONTEXT_BUDGET_TOKENS = CONTEXT_WINDOW_TOKENS - GENERATION_RESERVED_TOKENS
 
 # Prefer sliding meals well under model window (VRAM / cost / latency).
-# Grok 500k class: product meal default 50k (raised from 24k).
-DEFAULT_SLIDING_INPUT_TOKENS = 50_000
+# Grok 500k class: product meal default 250k (~50% of model window; BUG-meal-01).
+# Runtime SSOT is data/runtime/meal_budget.json (fraction); this constant is the
+# settings/unit-test fallback when runtime meal budget is not applied.
+DEFAULT_SLIDING_INPUT_TOKENS = 250_000
 
 # Provider model context window for glass / memory-planning UI (Grok 4.5 class).
-# Distinct from CONTEXT_WINDOW_TOKENS meal-math ceiling. Display + future memory
-# source-split design; does not change sliding meal assembly by itself.
+# Distinct from CONTEXT_WINDOW_TOKENS (historical 86k meal-math ceiling).
+# Product meal size = meal_budget_fraction × this window (default 0.5 → 250k).
 MODEL_CONTEXT_WINDOW_TOKENS = 500_000
 
 # Chat temperature product default for local OpenAI-compat factory defaults.

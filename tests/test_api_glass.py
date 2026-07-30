@@ -845,6 +845,102 @@ def test_patch_semantic_wait_validation(paths):
         h.close()
 
 
+def test_patch_meal_budget_and_status(paths):
+    """PATCH /api/meal-budget sets fraction; status exposes tokens (not stuck at 50k)."""
+    from elyra.runtime.meal_budget import (
+        load_meal_budget_runtime,
+        meal_budget_runtime_path,
+    )
+
+    h = _ApiHarness(paths)
+    try:
+        # Default product: 0.5 → 250k of 500k.
+        code, st = h.get("/api/status")
+        assert code == 200
+        assert "meal_budget" in st
+        assert st["meal_budget"]["fraction"] == 0.5
+        assert st["meal_budget"]["meal_budget_tokens"] == 250_000
+        assert st["meal_budget"]["model_window_tokens"] == 500_000
+        assert st["context"]["meal_budget_tokens"] == 250_000
+
+        code, body = h.patch("/api/meal-budget", {"fraction": 0.4})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["changed"] is True
+        assert body["meal_budget"]["fraction"] == 0.4
+        assert body["meal_budget"]["meal_budget_tokens"] == 200_000
+
+        code, st = h.get("/api/status")
+        assert code == 200
+        assert st["meal_budget"]["fraction"] == 0.4
+        assert st["meal_budget"]["meal_budget_tokens"] == 200_000
+        assert st["context"]["meal_budget_tokens"] == 200_000
+
+        path = meal_budget_runtime_path(paths.data_dir)
+        assert path.is_file()
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["fraction"] == 0.4
+        assert "updated_at" in raw
+
+        reloaded = load_meal_budget_runtime(paths.data_dir)
+        assert reloaded.fraction == 0.4
+
+        # Clamp out-of-band rather than 400.
+        code, body = h.patch("/api/meal-budget", {"fraction": 0.99})
+        assert code == 200, body
+        assert body["meal_budget"]["fraction"] == 0.6
+        assert body["meal_budget"]["meal_budget_tokens"] == 300_000
+    finally:
+        h.close()
+
+
+def test_patch_meal_budget_validation(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch("/api/meal-budget", {})
+        assert code == 400
+        assert body["ok"] is False
+        assert "fraction" in body["error"]
+
+        code, body = h.patch("/api/meal-budget", {"fraction": "half"})
+        assert code == 400
+        assert body["ok"] is False
+
+        code, body = h.patch("/api/meal-budget", {"fraction": True})
+        assert code == 400
+        assert body["ok"] is False
+    finally:
+        h.close()
+
+
+def test_patch_meal_budget_persist_failure_500(paths, monkeypatch):
+    """PATCH does not claim success when durable save fails (live unchanged)."""
+    import elyra.presence.worker as worker_mod
+
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch("/api/meal-budget", {"fraction": 0.5})
+        assert code == 200, body
+        assert body["meal_budget"]["fraction"] == 0.5
+
+        def boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(worker_mod, "save_meal_budget_runtime", boom)
+        code, body = h.patch("/api/meal-budget", {"fraction": 0.4})
+        assert code == 500, body
+        assert body["ok"] is False
+        assert body["error"] == "persist_failed"
+        assert body["meal_budget"]["fraction"] == 0.5
+
+        code, st = h.get("/api/status")
+        assert code == 200
+        assert st["meal_budget"]["fraction"] == 0.5
+        assert st["context"]["meal_budget_tokens"] == 250_000
+    finally:
+        h.close()
+
+
 def test_patch_unknown_path_404(paths):
     h = _ApiHarness(paths)
     try:
@@ -950,6 +1046,14 @@ def test_static_index_served(paths):
         assert "When ON, model calls continue past budget limits. Usage is still recorded." in html
         assert "Usage budget" in html
         assert "Provider / model" in html
+        # BUG-meal-01: Context card meal-budget range (not bars-as-sliders)
+        assert 'id="context-card"' in html
+        assert 'id="meal-budget-fraction"' in html
+        assert 'id="meal-budget-readout"' in html
+        assert 'type="range"' in html
+        assert "meal-budget-fraction" in html
+        assert "50% → 250k of 500k" in html
+        assert "Gold mark" in html or "gold mark" in html.lower()
         # Primary meters: Elyra week + SuperGrok pool; soft day/hour demoted
         assert "Elyra week" in html
         assert "SuperGrok pool" in html
@@ -989,6 +1093,12 @@ def test_static_app_js_active_panel_poll(paths):
         assert "tasks.push(refreshActivePanel" in js
         # Continuous meta targets rail control (single source of truth).
         assert "continuous-status-rail" in js
+        # BUG-meal-01: meal budget range → PATCH + soft-poll focus guard
+        assert 'meal-budget-fraction' in js
+        assert "/api/meal-budget" in js
+        assert "patchMealBudget" in js
+        assert "renderMealBudget" in js
+        assert "document.activeElement !== mealBudgetFraction" in js
         # Soft refresh commits snapshot only after success / retries on change.
         assert "momentSnapshotChanged(selectedMomentSnapshot" in js
         assert "tickInFlight" in js

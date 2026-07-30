@@ -191,6 +191,8 @@ const semanticWaitToggle = $("#semantic-wait-toggle");
 const semanticWaitMeta = $("#semantic-wait-meta");
 const semanticWaitBadge = $("#semantic-wait-badge");
 const semanticWaitMaxMs = $("#semantic-wait-max-ms");
+const mealBudgetFraction = $("#meal-budget-fraction");
+const mealBudgetReadout = $("#meal-budget-readout");
 
 /** Active glass session user (who is typing) — not orient USER on pure work. */
 let sessionUserId =
@@ -255,6 +257,14 @@ let semanticWaitInFlight = false;
 let lastSemanticWaitEnabled = true;
 /** Last known semantic_wait.max_ms from status. */
 let lastSemanticWaitMaxMs = 15000;
+/** True while PATCH /api/meal-budget is in flight. */
+let mealBudgetInFlight = false;
+/** Last known meal_budget.fraction from status. */
+let lastMealBudgetFraction = 0.5;
+/** Last known model window for meal budget readout. */
+let lastMealBudgetModelWindow = 500000;
+/** Debounce timer for meal-budget range PATCH. */
+let mealBudgetPatchTimer = null;
 /** True while POST /api/reset is in flight. */
 let resetInFlight = false;
 /** True while PATCH /api/provider is in flight. */
@@ -1170,11 +1180,103 @@ function setMealBudgetMark(markEl, mealBudget, modelWindow) {
   markEl.title = `Product meal budget ${formatTokenCount(budget)} (${pct.toFixed(1)}% of model window)`;
 }
 
+function mealBudgetReadoutText(fraction, tokens, modelWindow) {
+  const pct = Math.round(Number(fraction) * 100);
+  return `${pct}% → ${formatTokenCount(tokens)} of ${formatTokenCount(modelWindow)}`;
+}
+
+function updateMealBudgetReadout(fraction, modelWindow) {
+  const frac = Math.max(0.1, Math.min(0.6, Number(fraction) || 0.5));
+  const window = Math.max(1, Number(modelWindow) || 500000);
+  const tokens = Math.max(1, Math.round(frac * window));
+  if (mealBudgetReadout) {
+    mealBudgetReadout.textContent = mealBudgetReadoutText(frac, tokens, window);
+  }
+  return { fraction: frac, tokens, modelWindow: window };
+}
+
+function renderMealBudget(s) {
+  const mb = (s && s.meal_budget) || {};
+  const ctx = (s && s.context) || null;
+  const fraction =
+    typeof mb.fraction === "number" && !Number.isNaN(mb.fraction)
+      ? mb.fraction
+      : 0.5;
+  const modelWindow =
+    typeof mb.model_window_tokens === "number" && !Number.isNaN(mb.model_window_tokens)
+      ? mb.model_window_tokens
+      : ctx && typeof ctx.model_window_tokens === "number"
+        ? ctx.model_window_tokens
+        : 500000;
+  const tokens =
+    typeof mb.meal_budget_tokens === "number" && !Number.isNaN(mb.meal_budget_tokens)
+      ? mb.meal_budget_tokens
+      : Math.max(1, Math.round(fraction * modelWindow));
+  lastMealBudgetFraction = fraction;
+  lastMealBudgetModelWindow = modelWindow;
+
+  if (!mealBudgetInFlight) {
+    if (
+      mealBudgetFraction &&
+      document.activeElement !== mealBudgetFraction
+    ) {
+      mealBudgetFraction.value = String(fraction);
+      const minF =
+        typeof mb.min_fraction === "number" ? mb.min_fraction : 0.1;
+      const maxF =
+        typeof mb.max_fraction === "number" ? mb.max_fraction : 0.6;
+      mealBudgetFraction.min = String(minF);
+      mealBudgetFraction.max = String(maxF);
+    }
+  }
+  if (mealBudgetReadout && document.activeElement !== mealBudgetFraction) {
+    mealBudgetReadout.textContent = mealBudgetReadoutText(
+      fraction,
+      tokens,
+      modelWindow
+    );
+  }
+}
+
+async function patchMealBudget(body) {
+  if (mealBudgetInFlight) return;
+  mealBudgetInFlight = true;
+  if (mealBudgetFraction) mealBudgetFraction.disabled = true;
+  try {
+    await fetchJson("/api/meal-budget", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await refreshStatus();
+  } catch (err) {
+    if (mealBudgetFraction) {
+      mealBudgetFraction.value = String(lastMealBudgetFraction);
+    }
+    updateMealBudgetReadout(lastMealBudgetFraction, lastMealBudgetModelWindow);
+    showNotice(String(err.message || err));
+  } finally {
+    mealBudgetInFlight = false;
+    if (mealBudgetFraction) mealBudgetFraction.disabled = false;
+  }
+}
+
 function renderContextMeters(s) {
   const ctx = (s && s.context) || null;
+  const mb = (s && s.meal_budget) || null;
   const used = ctx ? ctx.meal_used_tokens : null;
-  const mealBudget = ctx ? ctx.meal_budget_tokens : 50000;
-  const modelWindow = ctx ? ctx.model_window_tokens : 500000;
+  const mealBudget =
+    (mb && mb.meal_budget_tokens != null
+      ? mb.meal_budget_tokens
+      : ctx
+        ? ctx.meal_budget_tokens
+        : null) ?? 250000;
+  const modelWindow =
+    (mb && mb.model_window_tokens != null
+      ? mb.model_window_tokens
+      : ctx
+        ? ctx.model_window_tokens
+        : null) ?? 500000;
   const windowFrac = ctx ? ctx.window_used_fraction : null;
   const mealFrac = ctx ? ctx.meal_used_fraction : null;
 
@@ -1204,11 +1306,17 @@ function renderContextMeters(s) {
   }
   if (contextDetail) {
     const hop = ctx && ctx.hop != null ? ` · hop ${ctx.hop}` : "";
+    const frac =
+      mb && typeof mb.fraction === "number"
+        ? Math.round(mb.fraction * 100)
+        : null;
+    const fracBit = frac != null ? ` · setpoint ${frac}%` : "";
     contextDetail.textContent =
       `Last meal ${formatTokenCount(used)} of meal budget ${formatTokenCount(mealBudget)}` +
-      ` (${formatTokenCount(modelWindow)} model window)${hop}. ` +
-      `Gold mark = meal budget on model bar. Heuristic tokens (len/4); for memory source-split planning.`;
+      ` (${formatTokenCount(modelWindow)} model window)${fracBit}${hop}. ` +
+      `Gold mark = meal budget on model bar (read-only). Use the range control to change fraction. Heuristic tokens (len/4).`;
   }
+  renderMealBudget(s);
 }
 
 function setUsageBar(barEl, frac, { usedMode = false, unavailable = false } = {}) {
@@ -5706,6 +5814,25 @@ if (semanticWaitMaxMs) {
     if (!Number.isFinite(n)) return;
     patchSemanticWait({ max_ms: n });
   });
+}
+
+if (mealBudgetFraction) {
+  // Live readout while dragging; do not thrash status poll into the control.
+  mealBudgetFraction.addEventListener("input", () => {
+    const n = Number(mealBudgetFraction.value);
+    if (!Number.isFinite(n)) return;
+    updateMealBudgetReadout(n, lastMealBudgetModelWindow);
+  });
+  const scheduleMealBudgetPatch = () => {
+    const n = Number(mealBudgetFraction.value);
+    if (!Number.isFinite(n)) return;
+    if (mealBudgetPatchTimer) clearTimeout(mealBudgetPatchTimer);
+    mealBudgetPatchTimer = setTimeout(() => {
+      mealBudgetPatchTimer = null;
+      patchMealBudget({ fraction: n });
+    }, 200);
+  };
+  mealBudgetFraction.addEventListener("change", scheduleMealBudgetPatch);
 }
 
 if (providerModelSelect) {

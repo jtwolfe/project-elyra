@@ -570,6 +570,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._patch_semantic_wait(body)
             return
 
+        if path == "/api/meal-budget":
+            self._patch_meal_budget(body)
+            return
+
         if path == "/api/provider":
             self._patch_provider(body)
             return
@@ -871,8 +875,21 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             from elyra.memory.types import utc_now_iso
 
             mem_cfg = self.worker.settings.memory
-            loop = self.worker.settings.loop
-            budget = int(getattr(loop, "sliding_input_tokens", 50_000))
+            # Policy A: inspect uses same effective product meal budget.
+            try:
+                from elyra.runtime.meal_budget import (
+                    effective_meal_budget_tokens,
+                )
+
+                budget = int(
+                    effective_meal_budget_tokens(
+                        self.worker.settings,
+                        self.worker._meal_budget,  # noqa: SLF001
+                    )
+                )
+            except Exception:  # noqa: BLE001
+                loop = self.worker.settings.loop
+                budget = int(getattr(loop, "sliding_input_tokens", 250_000))
             # Avoid loading full prompts on inspect poll — empty fixed cost.
             # Include last_confirmed keep so Context can show directed_keep.
             dk_ids: list[str] = []
@@ -3171,6 +3188,35 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         )
         if result.get("error") == "resetting":
             self._json(503, result)
+            return
+        self._json(200, result)
+
+    def _patch_meal_budget(self, body: dict[str, Any]) -> None:
+        """PATCH /api/meal-budget — ``{ "fraction": 0.5 }``.
+
+        Meal size as a fraction of model_context_window_tokens. Default 0.5
+        (250k of 500k). Clamped to 0.10–0.60. Persists data/runtime/meal_budget.json.
+        Does not mutate frozen Settings.
+        """
+        if "fraction" not in body:
+            self._json(400, {"ok": False, "error": "fraction required"})
+            return
+        fraction = body.get("fraction")
+        if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+            self._json(
+                400,
+                {"ok": False, "error": "fraction must be a number"},
+            )
+            return
+        result = self.worker.set_meal_budget(fraction=float(fraction))
+        if result.get("error") == "resetting":
+            self._json(503, result)
+            return
+        if not result.get("ok"):
+            # invalid_fraction → 400; persist_failed → 500 (live state unchanged).
+            err = result.get("error")
+            code = 400 if err == "invalid_fraction" else 500
+            self._json(code, result)
             return
         self._json(200, result)
 

@@ -26,21 +26,22 @@ ln -sfn ../aurimago/project-elyra2/model model
 | Knob | Default | Meaning |
 |------|---------|---------|
 | llama-server **`-c`** | **86000** (`CONTEXT_WINDOW_TOKENS`) | Server **KV ceiling** (allocated window) |
-| Client / meal **`sliding_input_tokens`** | **50000** (`DEFAULT_SLIDING_INPUT_TOKENS`) | Product **input budget** per outer meal + in-turn chain (was 24k; Grok 500k class) |
+| Client / meal **`sliding_input_tokens`** | **250000** (`DEFAULT_SLIDING_INPUT_TOKENS`) | Settings/unit-test fallback meal size (was 50k / 24k) |
+| Runtime **`meal_budget_fraction`** | **0.5** (clamp 0.10–0.60) | Product SSOT: fraction of model window → effective meal tokens (default **250k** of **500k**). `data/runtime/meal_budget.json` + `PATCH /api/meal-budget` |
 | Generation headroom | **~8192** (`generation_max_tokens`) | Tool-loop max_tokens; do not starve multi-hop |
-| Model window (glass) | **500000** (`MODEL_CONTEXT_WINDOW_TOKENS`) | Grok-class context for UI / memory planning — not meal assembly |
+| Model window (glass) | **500000** (`MODEL_CONTEXT_WINDOW_TOKENS`) | Grok-class context; product meal = fraction × this window |
 
 **Important:** starting with `-c 86000` does **not** mean every prompt is 86k tokens.  
 Crashes were mostly large prefills / VRAM, not “full context successfully used.”  
-Always assemble **sliding** meals well under the ceiling; never pack the full KV by default.
+Always assemble **sliding** meals well under the model window; never pack the full KV by default.
 
 ```text
                     ┌── model window (e.g. Grok 500k) / legacy -c 86000 ──┐
                     │                                                     │
-  [ sliding meal ~50k ]  [ generation headroom ]  [ unused context  …  ]
+  [ sliding meal ~250k @ 50% ]  [ generation headroom ]  [ unused …  ]
 ```
 
-Code constants: `elyra/llm/constants.py`. Runtime settings: `Settings.loop.sliding_input_tokens` / `in_turn_max_tokens` (see `elyra/settings.py`). CLI `--context-tokens N` only changes **`-c`**, not the 50k meal budget (lower `-c` if VRAM crashes; keep meals smaller than the new ceiling).
+Code constants: `elyra/llm/constants.py`. Runtime fraction: `elyra/runtime/meal_budget.py`. Settings fallbacks: `Settings.loop.sliding_input_tokens` / `in_turn_max_tokens` (see `elyra/settings.py`). Product paths apply effective tokens to **both** sliding and in-turn (policy A).
 
 ### What elyra2 used (historical)
 

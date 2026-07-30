@@ -42,7 +42,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
-| `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (open) | **In progress** — raise outer meal budget toward ~250k |
+| `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (open) | **Fixed** — runtime fraction default 0.5 → ~250k of model window |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — LLM period summary atoms (not template-only) |
 | `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — glass-tail / immediate chat history in memory meal |
 
@@ -971,16 +971,23 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **In Progress** |
+| **Status** | Fixed (runtime fraction + product paths; dogfood measure cost/latency) |
 | **Issue** | [#91](https://github.com/jtwolfe/project-elyra/issues/91) |
 | **Severity now** | Med |
 | **Severity later** | Med–High if meal stays starved while model window is 500k |
-| **Area** | `sliding_input_tokens`, meal compose budget, `in_turn_max_tokens`, glass context rail |
+| **Area** | `meal_budget_fraction`, `sliding_input_tokens`, meal compose budget, `in_turn_max_tokens`, glass context rail |
 | **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §5.6 |
 
 ### Goal
 
 Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), measuring cost/latency; raise/review in-turn budget together. Does not fix missing glass chat alone (**BUG-meal-03**).
+
+### Fix (product)
+
+- Primary knob: `meal_budget_fraction` of `model_context_window_tokens` (default **0.5** → **250k** @ 500k; clamp **0.10–0.60**).
+- Persisted `data/runtime/meal_budget.json` + `PATCH /api/meal-budget`; does not mutate frozen Settings.
+- **Policy A:** effective tokens apply to **both** sliding and in-turn caps on product paths (worker meal compose, do-loop, inspect, status context).
+- Glass Status Context card: range + readout; bars/gold mark read-only monitoring.
 
 ---
 

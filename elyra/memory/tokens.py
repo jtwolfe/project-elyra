@@ -11,7 +11,8 @@ Out of scope: multimodal content estimates (media expand lives in meal).
 from __future__ import annotations
 
 # Align with LoopSettings.sliding_input_tokens / DEFAULT_SLIDING_INPUT_TOKENS.
-DEFAULT_MEAL_BUDGET_TOKENS = 50_000
+# Product path uses runtime meal_budget fraction (default 0.5 → 250k @ 500k).
+DEFAULT_MEAL_BUDGET_TOKENS = 250_000
 
 # Summary share of the episodic channel before raw fill (design select_episodic).
 EPISODIC_SUMMARY_SHARE = 0.70

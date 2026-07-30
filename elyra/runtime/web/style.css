@@ -1865,6 +1865,25 @@ body {
   color: var(--text);
 }
 
+/* Meal budget fraction control (Context card) — range + live readout. */
+.status-range {
+  width: 100%;
+  max-width: 100%;
+  accent-color: var(--gold-primary);
+  cursor: pointer;
+}
+
+.meal-budget-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.meal-budget-readout {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
 .status-select:focus-visible,
 .status-input:focus-visible {
   outline: none;
