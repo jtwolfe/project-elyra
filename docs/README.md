@@ -27,7 +27,7 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
 | 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
 | 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog (wake storms, usage pacing, glass polish, chat math, soften system prompt post-memory) |
-| 16a | **[promotion-discussion/README.md](promotion-discussion/README.md)** | **v0.1 promotion / gym** — remaining pillars, GitHub Project, meal/context, Phase 3 defer |
+| 16a | **[promotion-discussion/README.md](promotion-discussion/README.md)** | **v0.1 promotion / gym** — pillars, meal/context, Phase 3 defer; **[governance](promotion-discussion/development-governance.md)** multi-party + operating pin ladder |
 | 17 | **[stretch-2/README.md](stretch-2/README.md)** | **Stretch 2 memory** — **Phase 1 done** (caveats in known-bugs); Phase 2/2a code done (dogfood pending); Phase 3 experimental |
 | 17a | [stretch-2/inspiration-activity-model-and-storage.md](stretch-2/inspiration-activity-model-and-storage.md) | Activity model, data prototype, storage requirements |
 | 17b | [stretch-2/design-context-meal-composition.md](stretch-2/design-context-meal-composition.md) | Provisional labeled meal + slide-off |

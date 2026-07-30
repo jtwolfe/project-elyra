@@ -14,9 +14,12 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 | Doc | Role |
 |-----|------|
 | **This README** | Charter, roadmap reflection, GitHub Project, meal reconstruction & budgets |
+| **[development-governance.md](development-governance.md)** | Git model (main / operating pin / public tags), Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Jamie×Colin dual approaches, **naming** |
 | *(later)* | Exit criteria checklist, milestone seed issues, merge plan |
 
 Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md).
+
+**Programme name (working):** *Project Elyra — Committee of Self-Development* (runtime stays “Elyra”; branding open with Colin — see governance §6).
 
 ---
 
@@ -117,15 +120,18 @@ Phase 3 (procedural / success-path) remains **interesting** for a long-term gym 
 
 In ~1–2 weeks the repo became **large and featureful**: harness, Grok path, Stage B, identity, full memory phases 1–2a, GPU embed train, glass panels, known-bugs sprawl. Markdown alone is no longer a reliable **tracking surface**. Instantiating a **GitHub Project** is justified **almost immediately** — even before `grok_build` lands — as the outer loop for humans (and later Elyra-assisted issue updates).
 
+**Broader than one-agent self-mod:** the gym must serve **Jamie, Colin, each PE instance, and later others**. Full git/operating-pin model and Stage ladder: **[development-governance.md](development-governance.md)**. Treat prior “enterprise self-mod only” advice as **loose guidance**, not gospel — PE has advanced; multi-party is first-class.
+
 ### 3.2 What the gym is
 
-Not a second mind. Same philosophy as goals/tasks:
+Not a second mind. Same philosophy as goals/tasks — and, in Colin’s framing, a **committee surface** where structure is extracted from a landscape of work:
 
-| Inner (Elyra) | Outer (GitHub Project) |
-|---------------|-------------------------|
+| Inner (each PE instance) | Outer (GitHub Project + `main`) |
+|--------------------------|----------------------------------|
 | Goals / tasks / moments | Issues / milestones / status |
 | Glass | Project board views |
-| Person + instrument later | Humans own promote/quota; Elyra may file/update cards later |
+| Own operating pin + `ELYRA_HOME` | Shared code lineage; public tags |
+| Person (continuity) | Humans own promote/release; PE may draft PRs later |
 
 ### 3.3 Suggested shape (first instantiation)
 
@@ -356,7 +362,9 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 
 ## 7. Immediate checklist (promotion program)
 
-- [ ] Create GitHub Project + **v0.1** milestone; seed issues from §3.3  
+- [ ] Create GitHub Project (**Committee of Self-Development** programme label) + **v0.1** milestone; seed issues from §3.3  
+- [ ] Stage 1 process: light `main` protection, branch hygiene, link [development-governance.md](development-governance.md)  
+- [ ] Agree with Colin: programme name, review/promote roles, dual-instance operating pins  
 - [ ] Refresh [project-status-pass.md](../project-status-pass.md) or replace with link to this folder  
 - [ ] Branch FF/merge plan: product tip includes memory + radeon dogfood  
 - [ ] Dogfood: Phase 2 semantic smoke; moment encode; note chat-chain inclusion  
@@ -364,6 +372,7 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 - [ ] Design/implement **`grok_build`** (GI Phase 1)  
 - [ ] Explicitly **defer** Stretch 2 Phase 3 unless reopened  
 - [ ] Keep BUG-mem-gpu-01 Open until product-path encode + durable setup story  
+- [ ] Manual **operating SHA** record when restarting live PE (precursor to operating pin)
 
 ---
 
