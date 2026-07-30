@@ -14,8 +14,15 @@ from typing import Any
 # treated as named operator secrets (llm.auth + store layout).
 RESERVED_SECRET_NAMES = frozenset(
     {
+        # llm.auth — API key
         "xai_api_key",
         "xai_api_key.tmp",
+        # llm.auth — OAuth bundle (file + bare name + future inject alias)
+        "xai_oauth",
+        "xai_oauth.json",
+        "xai_oauth.json.tmp",
+        "xai_access_token",  # future system name; block named-store collisions
+        # store layout
         "meta.json",
         "values",
     }
