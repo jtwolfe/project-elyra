@@ -507,20 +507,78 @@ function updateJumpLatestVisibility() {
 }
 
 /**
+ * Render TeX via vendored KaTeX (BUG-chat-01 / #75). Safe fallback = escaped source.
+ * @param {string} tex
+ * @param {boolean} display
+ * @param {(s: string) => string} escape
+ */
+function renderKatexHtml(tex, display, escape) {
+  const src = String(tex || "").trim();
+  if (!src) return "";
+  const katexApi =
+    typeof globalThis !== "undefined" ? globalThis.katex : undefined;
+  if (!katexApi || typeof katexApi.renderToString !== "function") {
+    return `<code class="md-math-fallback">${escape(src)}</code>`;
+  }
+  try {
+    const html = katexApi.renderToString(src, {
+      displayMode: Boolean(display),
+      throwOnError: false,
+      strict: "ignore",
+      trust: false,
+      output: "html",
+    });
+    return display
+      ? `<div class="md-math md-math-display">${html}</div>`
+      : `<span class="md-math md-math-inline">${html}</span>`;
+  } catch {
+    return `<code class="md-math-fallback">${escape(src)}</code>`;
+  }
+}
+
+/**
  * Safe markdown → HTML for chat glass (GFM-ish subset).
  * Escapes first; allows headings, emphasis, lists, quotes, code, tables, links.
+ * Soft newlines → <br> (BUG-chat-02 / #84). Math via KaTeX placeholders (BUG-chat-01 / #75).
  */
 function renderMarkdown(src) {
   const raw = String(src || "");
   if (!raw.trim()) return "<p></p>";
 
   const fences = [];
+  const math = [];
   let text = raw.replace(/\r\n/g, "\n");
+
+  // Code fences first so LaTeX inside ``` is not treated as math.
   text = text.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const i = fences.length;
     fences.push({ lang: String(lang || "").trim(), code: code.replace(/\n$/, "") });
     return `\n\n%%FENCE${i}%%\n\n`;
   });
+
+  // Math placeholders before escape/italic so \frac{a}{b} and e^{-i} survive.
+  // Order matches Grok dogfood: \[ \] primary; \( \), $$, $ as fallbacks.
+  const pushMath = (tex, display) => {
+    const i = math.length;
+    math.push({ tex: String(tex || "").trim(), display: Boolean(display) });
+    return `%%MATH${i}%%`;
+  };
+  // Display blocks: own paragraph so we do not wrap <div> in <p>.
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => `\n\n${pushMath(tex, true)}\n\n`);
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => `\n\n${pushMath(tex, true)}\n\n`);
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => pushMath(tex, false));
+  // Single $…$: no spaces inside (avoids "$5 and real $x^2$" eating the closer).
+  // Grok dogfood primary is \[ \]; $ is OpenAI-style fallback for compact TeX.
+  text = text.replace(
+    /(?<!\\)\$(?!\$)((?:\\.|[^$\n\\\s])+)(?<!\\)\$(?!\$)/g,
+    (full, tex) => {
+      const body = String(tex || "").trim();
+      if (!body) return full;
+      // Skip pure currency-like $12.50$
+      if (/^\d+([.,]\d+)?$/.test(body)) return full;
+      return pushMath(body, false);
+    }
+  );
 
   const escape = (s) =>
     String(s)
@@ -569,7 +627,7 @@ function renderMarkdown(src) {
     });
     // inline code
     t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escape(code)}</code>`);
-    // bold / italic
+    // bold / italic (skip if only a math placeholder left in the segment)
     t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     t = t.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
     t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
@@ -584,7 +642,14 @@ function renderMarkdown(src) {
 
   const flushPara = () => {
     if (!para.length) return;
-    out.push(`<p>${inline(para.join(" "))}</p>`);
+    // Display-math-only paragraph → block (no wrapping <p>).
+    if (para.length === 1 && /^%%MATH\d+%%$/.test(para[0])) {
+      out.push(para[0]);
+      para = [];
+      return;
+    }
+    // Soft newlines (BUG-chat-02): keep line breaks inside a paragraph as <br>.
+    out.push(`<p>${para.map((line) => inline(line)).join("<br>")}</p>`);
     para = [];
   };
 
@@ -617,6 +682,14 @@ function renderMarkdown(src) {
       continue;
     }
 
+    // Standalone display math placeholder (from \[ \] / $$ extraction).
+    if (/^%%MATH\d+%%$/.test(trimmed)) {
+      flushPara();
+      out.push(trimmed);
+      i += 1;
+      continue;
+    }
+
     if (/^---+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
       flushPara();
       out.push("<hr />");
@@ -640,7 +713,9 @@ function renderMarkdown(src) {
         quote.push(lines[i].trim().replace(/^>\s?/, ""));
         i += 1;
       }
-      out.push(`<blockquote>${inline(quote.join(" "))}</blockquote>`);
+      out.push(
+        `<blockquote>${quote.map((q) => inline(q)).join("<br>")}</blockquote>`
+      );
       continue;
     }
 
@@ -706,7 +781,15 @@ function renderMarkdown(src) {
     i += 1;
   }
   flushPara();
-  return out.join("\n") || "<p></p>";
+
+  let html = out.join("\n") || "<p></p>";
+  // Expand math placeholders (after markdown so TeX was never italic-mangled).
+  html = html.replace(/%%MATH(\d+)%%/g, (_, idx) => {
+    const m = math[Number(idx)];
+    if (!m) return "";
+    return renderKatexHtml(m.tex, m.display, escape);
+  });
+  return html;
 }
 
 function wireMessageBodyInteractions(root) {
