@@ -7,9 +7,36 @@ essays. When an item is fixed, mark **Status** and leave a one-line resolution
 
 | Field | Value |
 |-------|--------|
-| **Branch** | `grok-improvement` |
+| **Branch** | `main` (product tip after #66) |
+| **Project** | [Autopoiesis Commons #2](https://github.com/users/jtwolfe/projects/2) |
+| **Epic** | [#59](https://github.com/jtwolfe/project-elyra/issues/59) — break-out into issues |
 | **Audience** | Operators + implementers |
 | **Conflict** | Code + [stretch-1.md](stretch-1.md) win if this note drifts |
+
+---
+
+## Issue index
+
+Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwolfe/project-elyra/issues/59)) on the project board.
+
+| Bug ID | Issue | Doc status (summary) |
+|--------|-------|----------------------|
+| `BUG-wake-01` | [#67](https://github.com/jtwolfe/project-elyra/issues/67) (open) | Open (defer) |
+| `BUG-wake-02` | [#68](https://github.com/jtwolfe/project-elyra/issues/68) (open) | Open (defer) |
+| `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
+| `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (open) | Open (defer) |
+| `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
+| `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Open (defer) |
+| `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
+| `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Open (defer) |
+| `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (open) | Open (defer) — feature gap |
+| `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (open) | Open (defer) |
+| `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (open) | Open (defer) |
+| `BUG-status-03` | [#78](https://github.com/jtwolfe/project-elyra/issues/78) (open) | Open (defer) |
+| `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
+| `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
+| `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
+| `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 
 ---
 
@@ -18,6 +45,7 @@ essays. When an item is fixed, mark **Status** and leave a one-line resolution
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#67](https://github.com/jtwolfe/project-elyra/issues/67) |
 | **Severity now** | Low nuisance (glass/moments spam, short rest loops) |
 | **Severity later** | **Med** — repeated storms bloat **moments index + tapes + wake/timer history**, which becomes painful when Phase 3 memory / denser recall lands |
 | **Area** | Presence wake queue, timers, ledger `task_ready`, model use of `schedule_wake` |
@@ -128,6 +156,7 @@ notion in `scripts/live_eval` — any fix should extend or reuse that language.
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#68](https://github.com/jtwolfe/project-elyra/issues/68) |
 | **Severity now** | Med nuisance — after restart (or after long idle), timed-out waits and stale context can resume **old** threads (e.g. haiku collection) instead of recent work |
 | **Severity later** | Med–High when denser memory + continuous make “zombie” threads more common |
 | **Area** | Presence startup (`_startup_recover`, `_fire_due_unlocked`), wait/timer rehydrate, orient / meal seed, rest vs work skills on `wait_timeout` |
@@ -190,6 +219,7 @@ Same class can apply without restart if a long wait expires while glass still sh
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — **better than Phase 0 linear bricks, still not the product outcome wanted** |
+| **Issue** | [#69](https://github.com/jtwolfe/project-elyra/issues/69) |
 | **Severity now** | Med (operator trust + dogfood pacing; hard-stop override papers over pain) |
 | **Severity later** | High if memory / continuous work increases Completions spend without honest pacing |
 | **Area** | `elyra/llm/usage.py`, credits poll, Glass usage rail + Status card, settings (`UsageSettings`) |
@@ -244,6 +274,7 @@ Also: gates care about **overall weekly limit + cumulative Elyra spend**; produc
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#70](https://github.com/jtwolfe/project-elyra/issues/70) |
 | **Severity now** | Low–Med (operator readability; dogfood friction) |
 | **Severity later** | Med if Moments remain a primary debug surface |
 | **Area** | Glass Moments panel (`elyra/runtime/web/`, moments API payload render) |
@@ -266,6 +297,7 @@ Moments UI presents beats / payload in a raw or near-JSON shape that is hard to 
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — product IA, not a functional defect |
+| **Issue** | [#71](https://github.com/jtwolfe/project-elyra/issues/71) |
 | **Severity now** | Low (nav clutter / split brain: Moments vs Memory) |
 | **Severity later** | Med once Memory (context/atoms/vectors/graph) is the default operator mental model |
 | **Area** | Glass nav + panels; Memory tabs (context / atoms / vectors / graph) |
@@ -294,6 +326,7 @@ Moments is a top-level nav peer of Memory. After Stretch 2 Phase 1, operators th
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
 | **Severity now** | Med (hard to understand what the model is “eating”) |
 | **Severity later** | High if Context is the primary trust surface for meal/ladder correctness |
 | **Area** | Glass Memory → Context (`inspect.meal_*`, `app.js` `renderMemoryContext`); ladder (`elyra/memory/ladder.py`) |
@@ -323,6 +356,7 @@ Context cards are hard to read: snipped text, channel labels without hierarchy, 
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#73](https://github.com/jtwolfe/project-elyra/issues/73) |
 | **Severity now** | Low–Med |
 | **Severity later** | Med as atom volume grows |
 | **Area** | Glass Memory → Atoms (`atom_to_list_row` / detail, `app.js` atoms timeline) |
@@ -345,6 +379,7 @@ Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time vis
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#74](https://github.com/jtwolfe/project-elyra/issues/74) |
 | **Severity now** | Med (actively interferes with inspection) |
 | **Severity later** | Med |
 | **Area** | Glass poll loop (`app.js` `tick` ~1.5s → `refreshMemory` / `refreshMemoryAtoms` when Memory active); possibly status/system strip re-render |
@@ -372,6 +407,7 @@ While on Memory → Atoms (inspector/detail), the UI **flashes** on a regular ca
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — feature gap |
+| **Issue** | [#75](https://github.com/jtwolfe/project-elyra/issues/75) |
 | **Severity now** | Low–Med (depends on dogfood topics; calculator / STEM chats unreadable) |
 | **Severity later** | Med for teaching / technical work |
 | **Area** | Glass chat message render (`app.js` message HTML); speak / model content pipeline |
@@ -400,6 +436,7 @@ Math in chat shows as raw `$...$` / `$$...$$` / `\(...\)` (or similar) instead o
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#76](https://github.com/jtwolfe/project-elyra/issues/76) |
 | **Severity now** | Med (lower half of Status unreachable on typical viewports) |
 | **Severity later** | Med |
 | **Area** | Glass Status panel layout/CSS (`#panel-status`, `.status-cards`, main content overflow) |
@@ -422,6 +459,7 @@ Status panel content that exceeds the viewport cannot be scrolled; cards below t
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#77](https://github.com/jtwolfe/project-elyra/issues/77) |
 | **Severity now** | Low–Med (confusing control; one affordance appears dead) |
 | **Severity later** | Low |
 | **Area** | Glass Status → Dev speed card (`#dev-speed-toggle` in `index.html` / `app.js` `renderDevSpeed`) |
@@ -448,6 +486,7 @@ Hard-stop override / continuous use `input.continuous-toggle` + `.toggle-track` 
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) |
+| **Issue** | [#78](https://github.com/jtwolfe/project-elyra/issues/78) |
 | **Severity now** | Med (budget safety + operator trust; override ON is dangerous if sticky) |
 | **Severity later** | High if ON sticks unintentionally across restarts |
 | **Area** | `UsageMeter` / `usage.json` `hard_stop_override`; `PATCH /api/usage`; Status override toggle |
@@ -479,6 +518,7 @@ Hard-stop override can be switched ON successfully. Turning it OFF appears not t
 | Field | Value |
 |-------|--------|
 | **Status** | Open (defer) — **review after memory is up** (Phase 1 meal/store stable in dogfood) |
+| **Issue** | [#79](https://github.com/jtwolfe/project-elyra/issues/79) |
 | **Severity now** | Med (over-constrains presence / tone; feels like hard identity enforcement) |
 | **Severity later** | Med–High if hard walls fight natural self from memory + identity digests |
 | **Area** | `prompts/system.md` (loaded via `elyra/prompts/loader.py` → `loop/context.py`); possibly orient copy; tests that pin system-prompt wording (`tests/test_prompts_loader.py`, skill/tool name tests) |
@@ -526,6 +566,7 @@ The fixed **system** block (esp. the leading `# Elyra system` framing and **Hard
 | Field | Value |
 |-------|--------|
 | **Status** | **Fixed in code (PR-R1–R5, 2026-07-29)** — residual: **operator smoke dogfood verification pending** before full product sign-off |
+| **Issue** | [#80](https://github.com/jtwolfe/project-elyra/issues/80) |
 | **Severity now** | Low residual (code path restored; unconfirmed on live operator corpus) |
 | **Severity later** | High if regressed — 2a seeds and meal semantic go empty again |
 | **Area** | `elyra/memory/embed/*`, `index.py`, `lance_store.py`, `meal.py`, Vectors APIs / glass |
@@ -564,6 +605,7 @@ Architecture: [architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-
 | Field | Value |
 |-------|--------|
 | **Status** | **Fixed (2026-07-29, `fcb5130`)** — **restart required** so process maps rebuild from full disk |
+| **Issue** | [#81](https://github.com/jtwolfe/project-elyra/issues/81) |
 | **Severity now** | Low residual (code fixed; live process still thin until restart) |
 | **Severity later** | High if regressed — glass / meal / graph / traverse operate on ~10-atom prefix after every restart |
 | **Area** | `elyra/memory/lance_store.py` (`_load`, migrate, promote, empty-check, health dual-count) |
@@ -609,6 +651,7 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | Field | Value |
 |-------|--------|
 | **Status** | **Open** (defer to Gate B / runtime) |
+| **Issue** | [#82](https://github.com/jtwolfe/project-elyra/issues/82) |
 | **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **moment/meal encode path not verified**; wheel reinstall loses inject |
 | **Severity later** | High when product default-on wants durable multi-device embed (CUDA / modern ROCm / CPU) + encode during live moments under meal budgets |
 | **Area** | `elyra/memory/embed/runtime.py`, encode queue / idle worker, moment/meal integration, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |
