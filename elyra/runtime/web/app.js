@@ -2922,9 +2922,12 @@ function setMemoryTab(name) {
   });
 }
 
-function renderMemoryFlags(mem) {
+/** Last flags fingerprint so soft Context tick does not wipe the flags strip. */
+let lastMemoryFlagsFp = null;
+
+function renderMemoryFlags(mem, opts = {}) {
   if (!memoryContextFlags) return;
-  memoryContextFlags.innerHTML = "";
+  const force = Boolean(opts.force);
   const m = mem || {};
   const rows = [
     ["enabled", m.enabled === true ? "true" : "false", m.enabled === true],
@@ -2934,6 +2937,16 @@ function renderMemoryFlags(mem) {
     ["atoms", m.atom_count != null ? String(m.atom_count) : "—", null],
     ["open moment", m.active_moment_id || "—", null],
   ];
+  const fp = stableFingerprint(rows);
+  if (
+    !force &&
+    fp === lastMemoryFlagsFp &&
+    memoryContextFlags.childElementCount > 0
+  ) {
+    return;
+  }
+  lastMemoryFlagsFp = fp;
+  memoryContextFlags.innerHTML = "";
   for (const [label, value, good] of rows) {
     const row = document.createElement("div");
     row.className = "status-row";
@@ -2954,20 +2967,27 @@ function renderMemoryFlags(mem) {
 /**
  * Stable fingerprint of the meal package (not flag/status churn).
  * Used to skip full Context rebuild on the 1.5s poll (inspect flash).
+ *
+ * Intentionally omits meal.recorded_at: on-demand compose (no last-hop
+ * snapshot) re-stamps utc_now every GET even when channel content is
+ * identical — including it forced a full DOM wipe every tick and killed
+ * text selection / open inspect folds.
  */
 function fingerprintMemoryMeal(data) {
   const meal = (data && data.meal) || {};
   const items = Array.isArray(meal.items) ? meal.items : [];
   const fixed = meal.fixed || {};
   const parts = [
-    data && data.source,
-    meal.recorded_at,
+    // Prefer meal.source over envelope source (both stable when content is).
+    meal.source || (data && data.source),
     meal.open_moment_id,
     meal.total_tokens,
     meal.budget_tokens,
     meal.slid_off_count,
     meal.semantic_omitted_reason,
     meal.directed_keep_omitted_reason,
+    // sort_keys via stableFingerprint would be ideal; meta is small and
+    // server key order is stable enough for same process.
     JSON.stringify(meal.semantic_select_meta || null),
     JSON.stringify(meal.directed_keep_meta || null),
     fixed.system && fixed.system.content_chars,
@@ -3074,7 +3094,8 @@ function renderMemoryContext(data) {
   const savedUi = captureMemoryContextUi();
   memoryContextBody.innerHTML = "";
   const mem = data.memory || {};
-  renderMemoryFlags(mem);
+  // Full context rebuild: always repaint flags strip with this payload.
+  renderMemoryFlags(mem, { force: true });
 
   if (!data.ok && !data.meal) {
     const p = document.createElement("p");
@@ -3716,7 +3737,7 @@ async function refreshMemoryContext(opts = {}) {
   const force = Boolean(opts.force);
   const data = await fetchJson("/api/memory/context");
   const fp = fingerprintMemoryMeal(data);
-  // Soft path: meal unchanged — update flags only; keep open inspect DOM.
+  // Soft path: meal content unchanged — keep body/inspect DOM + selection.
   if (
     !force &&
     fp &&
@@ -3724,7 +3745,7 @@ async function refreshMemoryContext(opts = {}) {
     memoryContextBody &&
     memoryContextBody.querySelector(".memory-channel-section, .memory-channel-card")
   ) {
-    renderMemoryFlags(data.memory || {});
+    renderMemoryFlags(data.memory || {}, { force: false });
     return;
   }
   memoryContextMealFp = fp;
