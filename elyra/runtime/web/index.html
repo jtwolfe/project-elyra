@@ -25,7 +25,6 @@
         <nav class="nav">
           <button type="button" class="nav-btn active" data-panel="chat">Chat</button>
           <button type="button" class="nav-btn" data-panel="goals">Goals</button>
-          <button type="button" class="nav-btn" data-panel="moments">Moments</button>
           <button type="button" class="nav-btn" data-panel="memory">Memory</button>
           <button type="button" class="nav-btn" data-panel="tools">Tools</button>
           <button type="button" class="nav-btn" data-panel="identity">Identity</button>
@@ -210,23 +209,13 @@
           <div id="goals-list" class="list-panel">loading…</div>
         </section>
 
-        <section id="panel-moments" class="panel">
-          <header class="panel-head">
-            <h1>Moments</h1>
-            <p class="muted">
-              Recent work loops. Reasoning stays collapsed until you open it.
-            </p>
-          </header>
-          <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
-          <div id="moment-detail" class="list-panel detail-panel" hidden></div>
-        </section>
-
         <section id="panel-memory" class="panel">
           <header class="panel-head panel-head-row">
             <div>
               <h1>Memory</h1>
               <p class="muted">
-                What the model is fed (context meal) and store atoms. Read-only.
+                Context meal, work-loop moments, store atoms, vectors, and graph.
+                Read-only.
               </p>
             </div>
             <button type="button" id="memory-refresh-btn" class="btn-secondary btn-sm">
@@ -242,6 +231,15 @@
               aria-selected="true"
             >
               Context
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
+              data-memory-tab="moments"
+              aria-selected="false"
+            >
+              Moments
             </button>
             <button
               type="button"
@@ -274,6 +272,13 @@
           <div id="memory-tab-context" class="memory-tab-panel active" role="tabpanel">
             <div id="memory-context-flags" class="memory-flags status-fields">loading…</div>
             <div id="memory-context-body" class="list-panel memory-context-body">loading…</div>
+          </div>
+          <div id="memory-tab-moments" class="memory-tab-panel" role="tabpanel" hidden>
+            <p class="muted status-helper memory-moments-hint">
+              Recent work loops (do-loop tapes). Reasoning stays collapsed until you open it.
+            </p>
+            <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
+            <div id="moment-detail" class="list-panel detail-panel" hidden></div>
           </div>
           <div id="memory-tab-atoms" class="memory-tab-panel" role="tabpanel" hidden>
             <div class="memory-atoms-toolbar">

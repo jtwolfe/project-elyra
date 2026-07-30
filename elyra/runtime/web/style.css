@@ -1346,9 +1346,15 @@ body {
   min-height: 0;
 }
 
-#panel-moments.moment-detail-open #moments-list {
+/* Moments lives under Memory (BUG-glass-02); same list/detail split as Atoms. */
+#panel-memory.moment-detail-open #moments-list {
   flex: 0 1 36%;
   max-height: min(40vh, 42%);
+}
+
+.memory-moments-hint {
+  padding: 0.5rem 1.5rem 0.25rem;
+  margin: 0;
 }
 
 .detail-panel {

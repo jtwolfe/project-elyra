@@ -291,7 +291,7 @@ let lastProviderModel = null;
 let lastCredentialSource = null;
 /** Last *server-confirmed* reasoning effort (never set by optimistic paint). */
 let lastReasoningEffort = "high";
-/** Active nav panel name (chat | goals | moments | tools | identity | secrets | status). */
+/** Active nav panel name (chat | goals | memory | tools | identity | secrets | status). */
 let activePanel = "chat";
 /** True while secrets PUT/DELETE is in flight. */
 let secretsInFlight = false;
@@ -2722,8 +2722,11 @@ function renderBeats(beats) {
 }
 
 function setMomentDetailOpen(on) {
-  const panel = document.getElementById("panel-moments");
+  // Moments is a Memory tab (BUG-glass-02); class lives on the Memory panel.
+  const panel = document.getElementById("panel-memory");
   if (panel) panel.classList.toggle("moment-detail-open", !!on);
+  const tab = document.getElementById("memory-tab-moments");
+  if (tab) tab.classList.toggle("moment-detail-open", !!on);
 }
 
 function closeMomentDetail() {
@@ -4818,6 +4821,10 @@ async function refreshMemoryGraph(opts = {}) {
 
 async function refreshMemory(opts = {}) {
   const force = Boolean(opts.force);
+  if (memoryActiveTab === "moments") {
+    await refreshMoments({ force });
+    return;
+  }
   if (memoryActiveTab === "atoms") {
     await refreshMemoryAtoms({ force });
     return;
@@ -6695,8 +6702,8 @@ function refreshActivePanel(opts = {}) {
   const force = Boolean(opts.force);
   const name = activePanel;
   // Tick uses soft-refresh (force=false); nav click / buttons pass force=true.
+  // Moments is a Memory tab — polled via refreshMemory when activePanel === "memory".
   if (name === "goals") return refreshGoals({ force });
-  if (name === "moments") return refreshMoments({ force });
   if (name === "memory") return refreshMemory({ force });
   if (name === "tools") return refreshTools({ force });
   if (name === "identity") return refreshIdentity({ force });
@@ -6717,8 +6724,6 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     // Force refresh on nav so opening a panel always shows current disk state.
     if (name === "goals")
       refreshGoals({ force: true }).catch((e) => panelLoadError("Goals", e));
-    if (name === "moments")
-      refreshMoments({ force: true }).catch((e) => panelLoadError("Moments", e));
     if (name === "memory")
       refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
     if (name === "tools")
@@ -6741,9 +6746,9 @@ async function tick() {
   try {
     const tasks = [refreshStatus(), refreshMessages()];
     // Also poll the active catalog panel so creates appear without nav re-click.
+    // Moments is under Memory (active tab) — no separate activePanel.
     if (
       activePanel === "goals" ||
-      activePanel === "moments" ||
       activePanel === "memory" ||
       activePanel === "tools" ||
       activePanel === "identity" ||

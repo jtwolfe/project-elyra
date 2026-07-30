@@ -25,7 +25,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-wake-02` | [#68](https://github.com/jtwolfe/project-elyra/issues/68) (open) | Open (defer) |
 | `BUG-usage-01` | [#69](https://github.com/jtwolfe/project-elyra/issues/69) (open) | Open (defer) — better than Phase 0 linear bricks, still not the pro… |
 | `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on fix/known-bugs (pretty-print; pending main) |
-| `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Open (defer) — product IA, not a functional defect |
+| `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (open) | Moments tab under Memory; dogfood then close |
 | `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (open) | Inspect + soft-refresh; dogfood then close |
 | `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (open) | Soft-skip landed on fix/known-bugs; dogfood then close |
@@ -299,28 +299,29 @@ Moments UI presents beats / payload in a raw or near-JSON shape that is hard to 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) — product IA, not a functional defect |
+| **Status** | Landed on `fix/known-bugs` — dogfood then close |
 | **Issue** | [#71](https://github.com/jtwolfe/project-elyra/issues/71) |
-| **Severity now** | Low (nav clutter / split brain: Moments vs Memory) |
-| **Severity later** | Med once Memory (context/atoms/vectors/graph) is the default operator mental model |
-| **Area** | Glass nav + panels; Memory tabs (context / atoms / vectors / graph) |
-| **Dogfood** | 2026-07-28 operator request: Moments should sit next to Context, Atoms, Vectors, Graph |
+| **Severity now** | Low residual (habit / bookmark to old nav) |
+| **Severity later** | — |
+| **Area** | Glass nav + Memory tabs |
+| **Dogfood** | 2026-07-28 request; 2026-07-30 IA move on branch |
 
 ### Symptom
 
-Moments is a top-level nav peer of Memory. After Stretch 2 Phase 1, operators think “history / tape / meal” as one place; two panels force context-switching and duplicate mental models (moment tape vs atom store).
+Moments was a top-level nav peer of Memory; operators wanted one place for meal / tape / store.
 
-### Fix directions
+### Fix (landed)
 
-1. Add a **Moments** (or **Tape**) tab under Memory next to Context / Atoms / Vectors / Graph.
-2. Retire or demote top-level Moments nav once the subsection is at parity.
-3. Preserve deep-link / refresh behavior; do not break moment-id filters used by Atoms.
-4. Pair with **BUG-glass-01** beautify so the moved panel is worth opening.
+1. **Moments** tab under Memory: order **Context · Moments · Atoms · Vectors · Graph**.
+2. Top-level Moments nav + `#panel-moments` removed.
+3. `refreshMemory` / tick poll Moments when that Memory tab is active; soft-refresh unchanged.
+4. List/detail open class on `#panel-memory` (same pattern as Atoms).
+5. Element ids (`#moments-list`, `#moment-detail`) and `/api/moments` unchanged.
 
 ### Explicit non-goals
 
 - Do not delete the moment store or change moment = do-loop semantics.
-- Do not block on Vectors/Graph product before the IA move.
+- No hash deep-link router in this pass.
 
 ---
 
