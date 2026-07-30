@@ -1,10 +1,15 @@
 """Reserved xAI OAuth token bundle under ``data/secrets/xai_oauth.json``.
 
 Scope: load/save/delete/public_meta, atomic write (tmp + replace + 0600),
-optional flock, ``persist_oauth_login`` (disk + optional prefs activate).
+optional flock (lock file first), ``persist_oauth_login`` (disk only in PR1).
 Out of scope: HTTP OAuth, resolve_bearer, Glass, ProviderRuntime rebind.
 
 Never put tokens in public meta, logs, or status payloads.
+
+PR1 note: ``persist_oauth_login(activate=...)`` defaults to False and does
+**not** write ``provider.json``. Activate/prefs wiring lands in PR2 once
+``VALID_SOURCES`` accepts ``xai_oauth`` (raw writes of unknown sources are
+clobbered by current load/save prefs).
 """
 
 from __future__ import annotations
@@ -204,9 +209,11 @@ def bundle_to_dict(bundle: OAuthBundle) -> dict[str, Any]:
 
 
 def save_oauth_bundle(data_dir: Path, bundle: OAuthBundle) -> Path:
-    """Atomically write OAuth bundle: tmp + chmod 0600 + os.replace + fsync.
+    """Atomically write OAuth bundle: flock → tmp + chmod 0600 + os.replace + fsync.
 
-    Creates ``data/secrets`` with mode 0700. Prefer fcntl.flock when available.
+    Creates ``data/secrets`` with mode 0700. Acquires ``xai_oauth.json.lock``
+    **before** creating the shared tmp so concurrent processes cannot unlink
+    each other's in-flight tmp (O_EXCL retry path).
     """
     ensure_secrets_dir(data_dir)
     final = oauth_path(data_dir)
@@ -217,48 +224,65 @@ def save_oauth_bundle(data_dir: Path, bundle: OAuthBundle) -> Path:
         return _atomic_write_json(final, tmp, payload)
 
 
-def _atomic_write_json(final: Path, tmp: Path, payload: str) -> Path:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_EXCL"):
-        try:
-            fd = os.open(str(tmp), flags | os.O_EXCL, 0o600)
-        except FileExistsError:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
-            fd = os.open(str(tmp), flags | os.O_EXCL, 0o600)
-    else:
-        fd = os.open(str(tmp), flags, 0o600)
-
+def _acquire_bundle_lock(final: Path) -> int | None:
+    """Open and exclusive-flock ``final.name + '.lock'``. Returns fd or None."""
+    if fcntl is None:
+        return None
+    lock_path = final.parent / (final.name + ".lock")
     lock_fd: int | None = None
     try:
-        # Optional flock on a side lock file for multi-process last-writer-wins.
-        if fcntl is not None:
-            lock_path = final.parent / (final.name + ".lock")
+        lock_fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.warning(
+                "oauth bundle write: lock contended on %s (last-writer-wins)",
+                final.name,
+            )
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        return lock_fd
+    except OSError:
+        if lock_fd is not None:
             try:
-                lock_fd = os.open(
-                    str(lock_path),
-                    os.O_WRONLY | os.O_CREAT,
-                    0o600,
-                )
-                try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    logger.warning(
-                        "oauth bundle write: lock contended on %s (last-writer-wins)",
-                        final.name,
-                    )
-                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                os.close(lock_fd)
             except OSError:
-                if lock_fd is not None:
-                    try:
-                        os.close(lock_fd)
-                    except OSError:
-                        pass
-                    lock_fd = None
+                pass
+        return None
+
+
+def _release_bundle_lock(lock_fd: int | None) -> None:
+    if lock_fd is None or fcntl is None:
+        return
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+
+
+def _atomic_write_json(final: Path, tmp: Path, payload: str) -> Path:
+    # Flock first so O_EXCL tmp create/unlink cannot race another writer.
+    lock_fd = _acquire_bundle_lock(final)
+    fd: int | None = None
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_EXCL"):
+            try:
+                fd = os.open(str(tmp), flags | os.O_EXCL, 0o600)
+            except FileExistsError:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                fd = os.open(str(tmp), flags | os.O_EXCL, 0o600)
+        else:
+            fd = os.open(str(tmp), flags, 0o600)
 
         with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = None  # ownership transferred to fdopen
             f.write(payload)
             f.flush()
             os.fsync(f.fileno())
@@ -269,21 +293,18 @@ def _atomic_write_json(final: Path, tmp: Path, payload: str) -> Path:
         except OSError:
             pass
     except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
         raise
     finally:
-        if lock_fd is not None and fcntl is not None:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-            try:
-                os.close(lock_fd)
-            except OSError:
-                pass
+        _release_bundle_lock(lock_fd)
     return final
 
 
@@ -310,43 +331,21 @@ def delete_oauth_bundle(data_dir: Path) -> bool:
     return removed
 
 
-def _activate_credential_source(data_dir: Path) -> None:
-    """Write ``credential_source=xai_oauth`` into provider.json.
-
-    PR1 keeps VALID_SOURCES in auth/prefs as-is (PR2 wires ``xai_oauth`` through
-    resolve). We still persist the preferred source so cold start after PR2
-    picks it up. Uses raw JSON merge to avoid prefs validation rejecting the
-    new source before PR2.
-    """
-    from elyra.llm.provider_prefs import provider_prefs_path
-
-    path = provider_prefs_path(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body: dict[str, Any] = {}
-    if path.is_file():
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                body = dict(raw)
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            body = {}
-    body["credential_source"] = SOURCE_XAI_OAUTH
-    body["updated_at"] = _utc_now_iso_z()
-    path.write_text(
-        json.dumps(body, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
 def persist_oauth_login(
     data_dir: Path,
     tokens: OAuthBundle | dict[str, Any],
     *,
-    activate: bool = True,
+    activate: bool = False,
 ) -> OAuthPublicMeta:
-    """Atomic write OAuth bundle (reauth_required=false) + optional prefs activate.
+    """Atomic write OAuth bundle (``reauth_required=false``).
 
     No ProviderRuntime, no rebuild, no set_bearer_token. Returns public meta only.
+
+    ``activate`` defaults to **False** in PR1 and is a no-op if True: prefs
+    ``credential_source=xai_oauth`` must not be raw-written until PR2 extends
+    ``VALID_SOURCES`` / ``provider_prefs`` (unknown sources are dropped and
+    clobbered by any subsequent prefs save). PR2 will wire activate via
+    ``update_provider_prefs`` (preferably atomic).
     """
     if isinstance(tokens, OAuthBundle):
         bundle = tokens
@@ -383,13 +382,11 @@ def persist_oauth_login(
     save_oauth_bundle(data_dir, bundle)
 
     if activate:
-        try:
-            _activate_credential_source(data_dir)
-        except OSError as exc:
-            logger.warning(
-                "persist_oauth_login: prefs activate failed: %s",
-                type(exc).__name__,
-            )
+        logger.warning(
+            "persist_oauth_login: activate=True ignored in PR1 "
+            "(prefs VALID_SOURCES lacks xai_oauth until PR2); "
+            "bundle written only"
+        )
 
     return public_meta(data_dir)
 

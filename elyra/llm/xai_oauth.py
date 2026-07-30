@@ -276,7 +276,8 @@ def _http_form_post(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"token_response_not_json:{raw[:80]!r}") from exc
+        # Do not embed response body prefixes (may land in logs/traces).
+        raise ValueError(f"token_response_not_json:status={code}:len={len(raw)}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("token_response_not_object")
     return code, parsed
@@ -512,8 +513,8 @@ def _token_poll_result_from_body(code: int, data: dict[str, Any]) -> TokenPollRe
             detail=DETAIL_OAUTH_REAUTH_REQUIRED,
             error=err_s,
         )
-    # Account / client eligibility style errors
-    if err_l in {"unauthorized_client", "access_denied", "invalid_scope"}:
+    # Account / client eligibility style errors (access_denied handled above).
+    if err_l in {"unauthorized_client", "invalid_scope"}:
         return TokenPollResult(
             ok=False,
             pending=False,
@@ -800,7 +801,9 @@ def _ensure_fresh_access_locked(
     if poll.detail == DETAIL_OAUTH_REAUTH_REQUIRED or (
         poll.error and str(poll.error).lower() == "invalid_grant"
     ):
-        # KD15: durable reauth_required before return; keep tokens for forensics.
+        # KD15: durable reauth_required MUST land on disk before return.
+        # Soft-failing the write would leave reauth_required=false with an
+        # unexpired access JWT → cold-start resurrection. Retry once, then raise.
         marked = OAuthBundle(
             version=bundle.version,
             client_id=bundle.client_id,
@@ -818,8 +821,21 @@ def _ensure_fresh_access_locked(
         )
         try:
             save_oauth_bundle(data_dir, marked)
-        except OSError as exc:
-            logger.warning("oauth reauth_required write failed: %s", type(exc).__name__)
+        except OSError as first_exc:
+            logger.warning(
+                "oauth reauth_required write failed (%s); retrying once",
+                type(first_exc).__name__,
+            )
+            try:
+                save_oauth_bundle(data_dir, marked)
+            except OSError as second_exc:
+                logger.error(
+                    "oauth reauth_required write failed after retry: %s",
+                    type(second_exc).__name__,
+                )
+                # Do not return oauth_reauth_required as if durable — re-raise
+                # so callers cannot assume disk is marked (no resurrection path).
+                raise
         return FreshAccessResult(
             ok=False,
             access_token=None,

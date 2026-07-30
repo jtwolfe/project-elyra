@@ -362,6 +362,60 @@ def test_ensure_fresh_refresh_success(data_dir: Path) -> None:
     assert loaded.reauth_required is False
 
 
+def test_ensure_fresh_missing_refresh_token(data_dir: Path) -> None:
+    """Near-expiry with no refresh_token → reauth_required, no network, no disk flag."""
+    save_oauth_bundle(
+        data_dir,
+        _bundle(refresh=None, expires_at=_near(10)),
+    )
+    before = load_oauth_bundle(data_dir)
+    assert before.reauth_required is False
+    assert before.refresh_token is None
+
+    def urlopen(req: Any, timeout: float = 30.0) -> Any:
+        raise AssertionError("must not hit network when refresh_token is missing")
+
+    r = ensure_fresh_access(data_dir, skew_s=120, urlopen=urlopen)
+    assert r.ok is False
+    assert r.access_token is None
+    assert r.detail == DETAIL_OAUTH_REAUTH_REQUIRED
+    assert r.rotated is False
+    # Disk policy: missing refresh is not invalid_grant — do not flip reauth flag
+    after = load_oauth_bundle(data_dir)
+    assert after.reauth_required is False
+    assert after.access_token == before.access_token
+
+
+def test_ensure_fresh_reauth_write_failure_raises(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """KD15: if durable reauth_required cannot be written, raise (no soft resurrection)."""
+    save_oauth_bundle(data_dir, _bundle(expires_at=_near(10)))
+
+    urlopen = _urlopen_router(
+        {
+            "openid-configuration": {
+                "issuer": "https://auth.x.ai",
+                "device_authorization_endpoint": "https://auth.x.ai/oauth2/device/code",
+                "token_endpoint": "https://auth.x.ai/oauth2/token",
+            },
+            "/token": (400, {"error": "invalid_grant"}),
+        }
+    )
+
+    calls = {"n": 0}
+
+    def boom(*_a: Any, **_k: Any) -> Path:
+        calls["n"] += 1
+        raise OSError("disk full")
+
+    monkeypatch.setattr("elyra.llm.xai_oauth.save_oauth_bundle", boom)
+    with pytest.raises(OSError, match="disk full"):
+        ensure_fresh_access(data_dir, skew_s=120, urlopen=urlopen)
+    assert calls["n"] == 2  # initial + one retry
+    # Original bundle unchanged (monkeypatched save never wrote)
+    loaded = load_oauth_bundle(data_dir)
+    assert loaded.reauth_required is False
+
+
 def test_ensure_fresh_invalid_grant_sets_reauth(data_dir: Path) -> None:
     save_oauth_bundle(data_dir, _bundle(expires_at=_near(10)))
 
