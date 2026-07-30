@@ -44,7 +44,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — LLM period summary atoms (not template-only) |
-| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — glass-tail / immediate chat history in memory meal |
+| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — instance continuity: glass-tail + sticky directed keep (draft design) |
 
 ---
 
