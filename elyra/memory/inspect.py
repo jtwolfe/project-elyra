@@ -75,6 +75,18 @@ def meal_item_to_inspect(item: MealItem) -> dict[str, Any]:
     atom_ids = meta.get("atom_ids")
     if isinstance(atom_ids, (list, tuple)):
         slim_meta["atom_count"] = len(atom_ids)
+        # Cap for Glass Context multi-atom inspect (BUG-mem-ui-01).
+        ids_out: list[str] = []
+        for raw_id in atom_ids:
+            if not isinstance(raw_id, str):
+                continue
+            s = raw_id.strip()
+            if s:
+                ids_out.append(s)
+            if len(ids_out) >= 24:
+                break
+        if ids_out:
+            slim_meta["atom_ids"] = ids_out
     media_ids = meta.get("media_ids")
     if isinstance(media_ids, (list, tuple)) and media_ids:
         slim_meta["media_count"] = len(media_ids)

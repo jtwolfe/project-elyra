@@ -2923,20 +2923,7 @@ function renderMemoryContext(data) {
   head.appendChild(meta);
   memoryContextBody.appendChild(head);
 
-  // Semantic channel note (omit / packed) — always visible when select ran.
-  const semNote = renderSemanticChannelNote(meal);
-  if (semNote) memoryContextBody.appendChild(semNote);
-
-  // PR-A3: one muted line for directed_keep omit / pack meta.
-  const dkLine = formatDirectedKeepLine(meal);
-  if (dkLine) {
-    const p = document.createElement("p");
-    p.className = "muted memory-directed-keep-meta";
-    p.textContent = dkLine;
-    memoryContextBody.appendChild(p);
-  }
-
-  // Fixed system/orient if present.
+  // Fixed system/orient if present (same card chrome as meal channels).
   const fixed = meal.fixed || {};
   for (const key of ["system", "orient"]) {
     const block = fixed[key];
@@ -2959,7 +2946,7 @@ function renderMemoryContext(data) {
     p.textContent =
       "Meal has no labeled channels yet (empty store or meal not composed).";
     memoryContextBody.appendChild(p);
-    return;
+    // Still show channel status notes below if select ran.
   }
 
   // Group variable meal items by channel for scan hierarchy (BUG-mem-ui-01).
@@ -2980,18 +2967,52 @@ function renderMemoryContext(data) {
     ...channelOrder.filter((k) => byChannel.has(k)),
     ...[...byChannel.keys()].filter((k) => !channelOrder.includes(k)),
   ];
+
+  const semNote = renderSemanticChannelNote(meal);
+  const dkCard = renderDirectedKeepStatusCard(meal);
+
+  // Ensure status-only channels still appear in order when they have no items.
+  const ensureStatusChannel = (ch) => {
+    if (!orderedKeys.includes(ch)) orderedKeys.push(ch);
+  };
+  if (semNote && !byChannel.has("semantic")) ensureStatusChannel("semantic");
+  if (dkCard && !byChannel.has("directed_keep")) ensureStatusChannel("directed_keep");
+
+  // Re-sort keys with fixed channel order after possible status-only inserts.
+  const orderIndex = (ch) => {
+    const i = channelOrder.indexOf(ch);
+    return i === -1 ? 1000 : i;
+  };
+  orderedKeys.sort((a, b) => {
+    const d = orderIndex(a) - orderIndex(b);
+    if (d !== 0) return d;
+    return String(a).localeCompare(String(b));
+  });
+
   for (const ch of orderedKeys) {
     const group = byChannel.get(ch) || [];
-    if (!group.length) continue;
+    const statusOnly =
+      !group.length &&
+      ((ch === "semantic" && semNote) || (ch === "directed_keep" && dkCard));
+    if (!group.length && !statusOnly) continue;
+
     const section = document.createElement("div");
     section.className = "memory-channel-section";
     section.dataset.channel = ch;
     const h = document.createElement("div");
     h.className = "memory-channel-section-head";
-    h.innerHTML = `<strong>${escapeHtml(ch)}</strong><span class="badge">${
-      group.length
-    }</span>`;
+    const badge =
+      group.length > 0
+        ? String(group.length)
+        : ch === "semantic" || ch === "directed_keep"
+          ? "status"
+          : "0";
+    h.innerHTML = `<strong>${escapeHtml(ch)}</strong><span class="badge">${badge}</span>`;
     section.appendChild(h);
+
+    if (ch === "semantic" && semNote) section.appendChild(semNote);
+    if (ch === "directed_keep" && dkCard) section.appendChild(dkCard);
+
     for (const item of group) {
       section.appendChild(renderMemoryChannelCard(item));
     }
@@ -3134,6 +3155,128 @@ function formatDirectedKeepLine(meal) {
   return parts.join(" · ");
 }
 
+/** Status card for directed_keep (same chrome as meal channels when not packed). */
+function renderDirectedKeepStatusCard(meal) {
+  const line = formatDirectedKeepLine(meal);
+  if (!line) return null;
+  const reason = meal.directed_keep_omitted_reason || null;
+  const card = document.createElement("div");
+  card.className = "card memory-channel-card memory-ch-directed_keep memory-status-card";
+  if (reason) card.classList.add("memory-semantic-note-omit");
+  const head = document.createElement("div");
+  head.className = "card-head";
+  head.innerHTML = `<strong>directed_keep</strong><span class="badge">${
+    reason ? `omitted · ${escapeHtml(reason)}` : "status"
+  }</span>`;
+  card.appendChild(head);
+  const body = document.createElement("p");
+  body.className = "memory-semantic-meta";
+  body.textContent = line;
+  card.appendChild(body);
+  return card;
+}
+
+/**
+ * Shared atom inspect chrome (Atoms tab detail + Context expand).
+ * @param {HTMLElement} container
+ * @param {object} a atom detail from GET /api/memory/atoms/:id
+ * @param {{ showClose?: boolean, onClose?: () => void }} opts
+ */
+function fillAtomInspectInto(container, a, opts = {}) {
+  container.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const strong = document.createElement("strong");
+  strong.textContent = a.kind || "atom";
+  head.appendChild(strong);
+  if (opts.showClose) {
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "link-btn";
+    closeBtn.id = "close-atom-detail";
+    closeBtn.textContent = "close";
+    if (typeof opts.onClose === "function") {
+      closeBtn.addEventListener("click", opts.onClose);
+    }
+    head.appendChild(closeBtn);
+  }
+  container.appendChild(head);
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = [
+    a.atom_id,
+    a.moment_id ? `moment=${a.moment_id}` : null,
+    a.t_start ? formatBeatTs(a.t_start) || a.t_start : null,
+    a.scale ? `scale=${a.scale}` : null,
+    a.embedding_status ? `embed=${a.embedding_status}` : null,
+    a.prev_atom_id ? `prev=${a.prev_atom_id}` : null,
+    a.next_atom_id ? `next=${a.next_atom_id}` : null,
+    a.content_truncated ? "text truncated" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  container.appendChild(meta);
+  const text = a.content_text != null ? String(a.content_text) : "";
+  const pretty = tryPrettyJsonContent(text);
+  if (pretty != null) {
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet beat-json-body";
+    pre.textContent = pretty;
+    container.appendChild(pre);
+  } else {
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet memory-snippet-prose";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.textContent = text || "(empty)";
+    container.appendChild(pre);
+  }
+}
+
+/**
+ * Lazy-load atom into a Context inspect fold (does not switch tabs).
+ * @param {HTMLElement} panel
+ * @param {string} atomId
+ */
+function bindContextAtomInspect(panel, atomId) {
+  if (!panel || !atomId) return;
+  let loaded = false;
+  let gen = 0;
+  const run = async () => {
+    if (loaded) return;
+    const my = ++gen;
+    panel.innerHTML = `<p class="muted">loading…</p>`;
+    try {
+      const data = await fetchJson(
+        `/api/memory/atoms/${encodeURIComponent(atomId)}`
+      );
+      if (my !== gen) return;
+      if (!data.ok || !data.atom) {
+        panel.innerHTML = `<p class="muted">${escapeHtml(
+          data.error || "not found"
+        )}</p>`;
+        return;
+      }
+      fillAtomInspectInto(panel, data.atom, { showClose: false });
+      loaded = true;
+    } catch (err) {
+      if (my !== gen) return;
+      panel.innerHTML = `<p class="muted">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+  };
+  // details may already be open when re-rendered (unlikely); load on toggle.
+  const details = panel.closest("details");
+  if (details) {
+    details.addEventListener("toggle", () => {
+      if (details.open) void run();
+    });
+    if (details.open) void run();
+  } else {
+    void run();
+  }
+}
+
 function renderMemoryChannelCard(item) {
   const card = document.createElement("div");
   const ch = item.channel || "other";
@@ -3161,15 +3304,20 @@ function renderMemoryChannelCard(item) {
       ? Number(item.content_chars)
       : null;
   const truncated = fullChars != null && fullChars > snipLen;
+  const metaObj = item.meta && typeof item.meta === "object" ? item.meta : {};
+  const memberIds = Array.isArray(metaObj.atom_ids)
+    ? metaObj.atom_ids.filter((x) => typeof x === "string" && x.trim())
+    : [];
 
   const meta = document.createElement("div");
   meta.className = "meta";
   const mbits = [];
   if (item.atom_id) mbits.push(item.atom_id);
   if (item.t_start) mbits.push(formatBeatTs(item.t_start) || item.t_start);
-  if (item.meta && item.meta.scale) mbits.push(`scale=${item.meta.scale}`);
-  if (item.meta && item.meta.atom_count != null) {
-    mbits.push(`${item.meta.atom_count} atoms`);
+  if (metaObj.scale) mbits.push(`scale=${metaObj.scale}`);
+  if (metaObj.moment_id) mbits.push(`moment=${metaObj.moment_id}`);
+  if (metaObj.atom_count != null) {
+    mbits.push(`${metaObj.atom_count} atoms`);
   }
   if (fullChars != null) {
     mbits.push(
@@ -3208,13 +3356,15 @@ function renderMemoryChannelCard(item) {
     const note = document.createElement("p");
     note.className = "muted memory-trunc-note";
     note.textContent =
-      "Showing Glass inspect snippet only — full atom body may be longer (open atom for detail).";
+      "Showing Glass inspect snippet only — expand inspect or open atom for full body.";
     card.appendChild(note);
   }
 
+  const actions = document.createElement("div");
+  actions.className = "memory-channel-actions";
+  let hasAction = false;
+
   if (item.atom_id) {
-    const actions = document.createElement("div");
-    actions.className = "memory-channel-actions";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "link-btn";
@@ -3225,8 +3375,93 @@ function renderMemoryChannelCard(item) {
       void loadAtomDetail(item.atom_id);
     });
     actions.appendChild(btn);
+    hasAction = true;
+  }
+
+  if (hasAction) {
     card.appendChild(actions);
   }
+
+  if (item.atom_id) {
+    // In-place inspect fold (unified with Atoms detail chrome).
+    const details = document.createElement("details");
+    details.className = "memory-atom-inspect-fold";
+    const summary = document.createElement("summary");
+    summary.textContent = "inspect atom";
+    details.appendChild(summary);
+    const panel = document.createElement("div");
+    panel.className = "memory-atom-inspect-panel";
+    details.appendChild(panel);
+    bindContextAtomInspect(panel, item.atom_id);
+    card.appendChild(details);
+  } else if (ch === "system" || ch === "orient") {
+    // Fixed blocks: expand shows meal snippet text (no store atom).
+    const details = document.createElement("details");
+    details.className = "memory-atom-inspect-fold";
+    const summary = document.createElement("summary");
+    summary.textContent = "inspect";
+    details.appendChild(summary);
+    const panel = document.createElement("div");
+    panel.className = "memory-atom-inspect-panel";
+    const pre = document.createElement("pre");
+    pre.className = "memory-snippet memory-snippet-prose";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.textContent = snippet || "(empty)";
+    panel.appendChild(pre);
+    const note = document.createElement("p");
+    note.className = "muted memory-trunc-note";
+    note.textContent =
+      "Fixed meal channel (not a store atom). Body is the inspect snippet.";
+    panel.appendChild(note);
+    details.appendChild(panel);
+    card.appendChild(details);
+  }
+
+  // Multi-atom summaries: member list with per-id open + inspect.
+  if (memberIds.length && !item.atom_id) {
+    const details = document.createElement("details");
+    details.className = "memory-atom-inspect-fold";
+    const summary = document.createElement("summary");
+    summary.textContent = `inspect members (${memberIds.length}${
+      metaObj.atom_count != null && metaObj.atom_count > memberIds.length
+        ? ` of ${metaObj.atom_count}`
+        : ""
+    })`;
+    details.appendChild(summary);
+    const list = document.createElement("div");
+    list.className = "memory-atom-member-list";
+    for (const mid of memberIds) {
+      const row = document.createElement("div");
+      row.className = "memory-atom-member-row";
+      const idSpan = document.createElement("code");
+      idSpan.textContent = mid;
+      row.appendChild(idSpan);
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = "link-btn";
+      openBtn.textContent = "open";
+      openBtn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        setMemoryTab("atoms");
+        void loadAtomDetail(mid);
+      });
+      row.appendChild(openBtn);
+      const sub = document.createElement("details");
+      sub.className = "memory-atom-inspect-fold memory-atom-inspect-nested";
+      const subSum = document.createElement("summary");
+      subSum.textContent = "inspect";
+      sub.appendChild(subSum);
+      const subPanel = document.createElement("div");
+      subPanel.className = "memory-atom-inspect-panel";
+      sub.appendChild(subPanel);
+      bindContextAtomInspect(subPanel, mid);
+      row.appendChild(sub);
+      list.appendChild(row);
+    }
+    details.appendChild(list);
+    card.appendChild(details);
+  }
+
   return card;
 }
 
@@ -3326,31 +3561,10 @@ async function loadAtomDetail(id) {
       return;
     }
     const a = data.atom;
-    const body = document.createDocumentFragment();
-    const head = document.createElement("div");
-    head.className = "card-head";
-    head.innerHTML = `<strong>${escapeHtml(a.kind || "atom")}</strong>
-      <button type="button" class="link-btn" id="close-atom-detail">close</button>`;
-    body.appendChild(head);
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = [
-      a.atom_id,
-      a.moment_id ? `moment=${a.moment_id}` : null,
-      a.t_start || null,
-      a.scale ? `scale=${a.scale}` : null,
-      a.prev_atom_id ? `prev=${a.prev_atom_id}` : null,
-      a.next_atom_id ? `next=${a.next_atom_id}` : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    body.appendChild(meta);
-    const pre = document.createElement("pre");
-    pre.className = "memory-snippet";
-    pre.textContent = a.content_text || "(empty)";
-    body.appendChild(pre);
-    memoryAtomDetail.innerHTML = "";
-    memoryAtomDetail.appendChild(body);
+    fillAtomInspectInto(memoryAtomDetail, a, {
+      showClose: true,
+      onClose: closeAtomDetail,
+    });
     const c2 = $("#close-atom-detail");
     if (c2) c2.addEventListener("click", closeAtomDetail);
     if (memoryAtomsList) {

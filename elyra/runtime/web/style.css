@@ -3012,6 +3012,83 @@ body {
 
 .memory-channel-actions {
   margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+/* Context in-place atom inspect (unified with Atoms tab chrome). */
+.memory-atom-inspect-fold {
+  margin-top: 0.45rem;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: 0.35rem;
+}
+
+.memory-atom-inspect-fold > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.82rem;
+  user-select: none;
+  list-style: none;
+}
+
+.memory-atom-inspect-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.memory-atom-inspect-fold > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.memory-atom-inspect-fold[open] > summary::before {
+  content: "▾ ";
+}
+
+.memory-atom-inspect-panel {
+  margin-top: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-soft) 75%, transparent);
+}
+
+.memory-atom-inspect-nested {
+  margin-top: 0.25rem;
+  border-top: none;
+  padding-top: 0;
+}
+
+.memory-atom-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+
+.memory-atom-member-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.memory-atom-member-row code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.memory-status-card .memory-semantic-meta {
+  margin: 0.35rem 0 0;
+}
+
+.memory-channel-card.memory-ch-directed_keep {
+  border-left: 3px solid color-mix(in srgb, #c084fc 45%, var(--border));
 }
 
 .memory-channel-card.memory-ch-temporal {
