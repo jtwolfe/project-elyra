@@ -92,7 +92,7 @@ Upgrade to GitHub Pro or make this repository public to enable this feature. (HT
 | Require PR before merge | No | Same — human/PE habit + Project board |
 | Optional 1 review | No | Dual review for risky changes when Colin available |
 | No required CI status checks yet | N/A | Local `pytest -m 'not llm'` before merge |
-| Delete head branch after merge | **Yes — enabled** | `delete_branch_on_merge=true` on `jtwolfe/project-elyra` |
+| Delete head branch after merge | **Off** (operator preference 2026-07-30) | Manual branch cleanup; may re-enable later |
 | No force-push to main | No hard | Never force-push `main`; lease-only elsewhere |
 
 **To enable real protection later (pick one):**
