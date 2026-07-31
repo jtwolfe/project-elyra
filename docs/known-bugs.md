@@ -44,7 +44,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — LLM period summary atoms (not template-only) |
-| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (open) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
+| `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (closed) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
 
 ---
 
@@ -1014,7 +1014,7 @@ Replace (or supplement) template-first period summaries with **budgeted LLM narr
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **In Progress** (implement plan ready; product PRs S1–S6; continuity review complete) |
+| **Status** | **Fixed** on `main` (`2ea3580`, 2026-07-31) — glass-tail, framing, sticky keep, semantic seed; S4/S6 deferred|
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) |
 | **Severity now** | High for dogfood (chat-amnesic / wrong wait-reply framing when memory meal on) |
 | **Severity later** | High for multi-moment + multi-hour instance memory |
