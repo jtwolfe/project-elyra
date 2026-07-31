@@ -960,7 +960,8 @@ def test_llm_partial_pass_counted_on_fallback(store):
         llm=llm,
     )
     assert atom.meta["source"] == "llm_fallback_template"
-    assert int(atom.meta.get("llm_passes") or 0) >= 1
+    # Pass A succeeded + pass B failed in-flight → count both (Issue 10).
+    assert int(atom.meta.get("llm_passes") or 0) == 2
     assert llm.n == 2
 
 

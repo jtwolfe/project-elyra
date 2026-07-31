@@ -748,7 +748,8 @@ def _llm_generate_body(
             max_tokens=draft_tokens,
         )
     except SummaryLlmError as exc:
-        raise SummaryLlmError(str(exc), passes_attempted=0) from exc
+        # Count the failed in-flight pass A call.
+        raise SummaryLlmError(str(exc), passes_attempted=1) from exc
     passes_attempted = 1
     draft_chars = len(draft)
     want_b = scale in _ALWAYS_TWO_PASS or draft_chars > soft_chars
@@ -771,8 +772,9 @@ def _llm_generate_body(
             max_tokens=final_tokens,
         )
     except SummaryLlmError as exc:
+        # Include the failed in-flight pass B call (A + B = 2).
         raise SummaryLlmError(
-            str(exc), passes_attempted=passes_attempted
+            str(exc), passes_attempted=passes_attempted + 1
         ) from exc
     return final.strip(), 2, draft_chars, None
 
@@ -1581,11 +1583,12 @@ def process_closed_hours(
             if cas.get("stopped_reason") == "budget":
                 # Issue 1: do not treat hour as done — keep cascade pending
                 # and cursor on this hour so next tick resumes parents.
+                # After a successful 1h put, drop dirty so resume is cascade-only
+                # (avoids re-running refresh_window for 1h before cascade).
                 stopped_reason = "budget"
                 budget_break_hour = w_start
                 cascade_pending.add(key)
-                # Keep dirty if 1h was just (re)built so needs path stays live
-                # for older code paths; cascade_pending is the primary signal.
+                dirty_set.discard(key)
                 state["catchup_cursor"] = key
                 break
             # Cascade finished cleanly.
