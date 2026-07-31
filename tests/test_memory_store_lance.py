@@ -621,6 +621,36 @@ def test_list_summaries_tips_only_and_versions(store):
     assert [a.meta.get("version") for a in versions] == [1, 2]
 
 
+def test_ladder_tip_not_stolen_by_older_version(store):
+    """Re-putting a lower version must not steal the ladder tip (KD-TIP)."""
+    from elyra.memory.types import versioned_summary_id
+
+    start, end = window_bounds("1d", datetime(2026, 7, 28, 12, 0, tzinfo=UTC))
+    v1 = versioned_summary_id("1d", start, 1)
+    v2 = versioned_summary_id("1d", start, 2)
+
+    def _row(aid: str, ver: int, text: str) -> Atom:
+        return Atom(
+            atom_id=aid,
+            t_start=to_iso_z(start),
+            kind="summary",
+            scale="1d",
+            window_start=to_iso_z(start),
+            window_end=to_iso_z(end),
+            content_text=text,
+            moment_id=None,
+            meta={"version": ver},
+        )
+
+    store.put_atom(_row(v1, 1, "day v1"))
+    store.put_atom(_row(v2, 2, "day v2"))
+    assert store.list_summaries("1d")[0].atom_id == v2
+    store.put_atom(_row(v1, 1, "day v1 re-put"))
+    assert store.list_summaries("1d")[0].atom_id == v2
+    store._rebuild_secondary_indexes()
+    assert store.list_summaries("1d")[0].atom_id == v2
+
+
 def test_global_tail_excludes_summary(store):
     obs = store.put_atom(
         _atom(t="2026-07-28T10:00:00Z", kind="observation", text="exp")

@@ -86,6 +86,8 @@ class MemoryStore(Protocol):
         ``tips_only=True`` (default, KD-TIP): resolve via ladder index only —
         one tip per ``(scale, window_start)``. ``tips_only=False``: O(n) scan
         of summary atoms (version archaeology; no secondary index in #92).
+        Archaeology callers should pass ``overlapping=`` for a single window
+        and/or raise ``limit`` deliberately (default limit can truncate).
         """
         ...
 

@@ -1204,3 +1204,150 @@ def test_1h_still_tip_replace_stable_id(store):
         tips_only=False,
     )
     assert len(versions) == 1
+
+
+def test_body_equal_still_advances_hash_no_llm_loop(store):
+    """Hash differs + same body → new version; next refresh hash-skips (no LLM)."""
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+    for hour in (10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:15:00Z",
+                kind="speak",
+                text=f"h{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+        refresh_window(store, "1h", datetime(2026, 7, 28, hour, 0, tzinfo=UTC))
+
+    llm = StubLlm(responses=["Same day body forever."] * 20)
+    settings = MemorySettings(summary_mode="llm")
+    a1 = refresh_window(
+        store, "1d", day_start, settings=settings, llm=llm, llm_max_passes=1
+    )
+    assert a1 is not None
+    assert a1.content_text == "Same day body forever."
+    assert a1.meta.get("version") == 1
+    calls_v1 = len(llm.calls)
+    assert calls_v1 >= 1
+
+    # Mutate child 1h body → child_content_hash differs; LLM still returns same body.
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:45:00Z",
+            kind="speak",
+            text="hour-ten-extra",
+            moment_id="m10",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+
+    a2 = refresh_window(
+        store, "1d", day_start, settings=settings, llm=llm, llm_max_passes=1
+    )
+    assert a2 is not None
+    assert a2.atom_id != a1.atom_id
+    assert a2.content_text == a1.content_text
+    assert a2.meta.get("child_content_hash") != a1.meta.get("child_content_hash")
+    assert a2.meta.get("version") == 2
+    assert a2.meta.get("supersedes_atom_id") == a1.atom_id
+    calls_v2 = len(llm.calls)
+    assert calls_v2 > calls_v1
+
+    # Hash now matches tip → no generate / no new version.
+    a3 = refresh_window(
+        store, "1d", day_start, settings=settings, llm=llm, llm_max_passes=1
+    )
+    assert a3 is not None
+    assert a3.atom_id == a2.atom_id
+    assert len(llm.calls) == calls_v2
+
+
+def test_child_content_hash_order_independent():
+    a = _atom(
+        t="2026-07-28T10:00:00Z",
+        text="aa",
+        atom_id="as_zzzzzzzzzzzzzzzzzzzz",
+    )
+    b = _atom(
+        t="2026-07-28T11:00:00Z",
+        text="bb",
+        atom_id="as_aaaaaaaaaaaaaaaaaaaa",
+    )
+    assert child_content_hash([a, b]) == child_content_hash([b, a])
+
+
+def test_cascade_noop_not_counted_as_refreshed(store):
+    """Hash-equal cascade must not list coarser scale under refreshed."""
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="hour work",
+            moment_id="m1",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    settings = MemorySettings(summary_mode="template")
+    r1 = cascade_from_hour(
+        store, datetime(2026, 7, 28, 10, 0, tzinfo=UTC), settings=settings
+    )
+    assert any(c.startswith("1d:") for c in r1["refreshed"])
+    r2 = cascade_from_hour(
+        store, datetime(2026, 7, 28, 10, 0, tzinfo=UTC), settings=settings
+    )
+    assert not any(c.startswith("1d:") for c in r2["refreshed"])
+
+
+def test_legacy_stable_1d_superseded_by_versioned(store):
+    """Pre-PR-B stable_summary_id tip is superseded; ladder tip becomes versioned."""
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+    day_end = day_start + timedelta(days=1)
+    legacy_id = stable_summary_id("1d", day_start)
+    store.put_atom(
+        Atom(
+            atom_id=legacy_id,
+            t_start=to_iso_z(day_start),
+            t_end=to_iso_z(day_end),
+            kind="summary",
+            scale="1d",
+            window_start=to_iso_z(day_start),
+            window_end=to_iso_z(day_end),
+            content_text="legacy day tip",
+            moment_id=None,
+            meta={"source": "template", "version": 1},
+        )
+    )
+    assert resolve_tip(store, "1d", day_start).atom_id == legacy_id
+
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="post-migration hour",
+            moment_id="m10",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    cascade_from_hour(
+        store,
+        datetime(2026, 7, 28, 10, 0, tzinfo=UTC),
+        settings=MemorySettings(summary_mode="template"),
+    )
+    tip = resolve_tip(store, "1d", day_start)
+    assert tip is not None
+    assert tip.atom_id != legacy_id
+    assert tip.atom_id == versioned_summary_id("1d", day_start, 2)
+    assert tip.meta.get("supersedes_atom_id") == legacy_id
+    # Legacy row immutable and still loadable for archaeology.
+    old = store.get_atom(legacy_id)
+    assert old is not None
+    assert old.content_text == "legacy day tip"
+    versions = store.list_summaries(
+        "1d",
+        overlapping=(day_start, day_end),
+        tips_only=False,
+    )
+    ids = {v.atom_id for v in versions}
+    assert legacy_id in ids
+    assert tip.atom_id in ids

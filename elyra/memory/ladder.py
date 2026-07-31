@@ -658,12 +658,14 @@ def uses_versioned_ids(scale: PeriodScale | str) -> bool:
 
 
 def child_content_hash(sources: Sequence[Atom]) -> str:
-    """Stable hash of child tip set for skip-unchanged cascade.
+    """Set-stable hash of child tip set for skip-unchanged cascade.
 
-    Material is ``atom_id`` + short body digest per source in source order.
+    Material is ``atom_id`` + short body digest per source, sorted by
+    ``atom_id`` so caller order cannot falsely miss a hash-equal skip.
     """
+    ordered = sorted(sources, key=lambda a: a.atom_id)
     parts: list[str] = []
-    for a in sources:
+    for a in ordered:
         body = a.content_text or ""
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
         parts.append(a.atom_id)
@@ -1032,14 +1034,14 @@ def refresh_window(
     if uses_versioned_ids(scale):
         if tip is not None:
             prev_hash = (tip.meta or {}).get("child_content_hash")
+            # Hash-equal → skip build/LLM and do not mint a version.
             if prev_hash and prev_hash == cch:
                 return tip
             prev_ver = int((tip.meta or {}).get("version") or 1)
             version = prev_ver + 1
             supersedes = tip.atom_id
     else:
-        # 1h / legacy tip-replace: skip when body would be identical.
-        # Pre-check only via existing stable id when present.
+        # 1h / legacy tip-replace: skip only when body *and* hash match tip.
         if tip is not None:
             prev_hash = (tip.meta or {}).get("child_content_hash")
             if prev_hash and prev_hash == cch:
@@ -1062,18 +1064,20 @@ def refresh_window(
     )
 
     if uses_versioned_ids(scale):
-        # Never rewrite previous version rows; put new id only. Tip moves on put.
-        if tip is not None and (tip.content_text or "") == (atom.content_text or ""):
-            # Body identical even if hash missing on older tip — avoid noise.
-            return tip
+        # Hash already differed (or no tip). Always put a new version atom so
+        # tip child_content_hash advances even when the rendered body is equal
+        # (avoids LLM/template rebuild loop with a stale tip hash).
+        # Never rewrite previous version rows; tip moves on put (KD-TIP).
         return store.put_atom(atom)
 
     # Tip-replace path (1h / legacy): same stable id.
     existing = store.get_atom(atom.atom_id)
-    if existing is not None and (existing.content_text or "") == (
-        atom.content_text or ""
-    ):
-        return existing
+    if existing is not None:
+        same_body = (existing.content_text or "") == (atom.content_text or "")
+        same_hash = (existing.meta or {}).get("child_content_hash") == cch
+        if same_body and same_hash:
+            return existing
+        # Body and/or hash changed — put so tip meta (incl. hash) stays honest.
     return store.put_atom(atom)
 
 
@@ -1388,6 +1392,26 @@ def _count_llm_usage_from_atom(
     return remaining_calls
 
 
+def _refresh_wrote(tip_before: Atom | None, atom: Atom) -> bool:
+    """True when ``refresh_window`` minted/replaced rather than returned a no-op tip.
+
+    Detects new version ids, tip-replace content/hash updates, and first writes.
+    """
+    if tip_before is None:
+        return True
+    if atom.atom_id != tip_before.atom_id:
+        return True
+    before_meta = tip_before.meta or {}
+    after_meta = atom.meta or {}
+    if before_meta.get("child_content_hash") != after_meta.get("child_content_hash"):
+        return True
+    if (tip_before.content_text or "") != (atom.content_text or ""):
+        return True
+    if int(before_meta.get("version") or 0) != int(after_meta.get("version") or 0):
+        return True
+    return False
+
+
 def cascade_from_hour(
     store: MemoryStore,
     hour_start: datetime | str,
@@ -1445,6 +1469,7 @@ def cascade_from_hour(
         use_llm = llm if (mode_llm and remaining_calls > 0) else None
         # Issue 5: cap passes so a 2-pass scale cannot overrun remaining=1.
         max_passes = min(2, remaining_calls) if use_llm is not None else 1
+        tip_before = resolve_tip(store, p, w_start, w_end)
         try:
             atom = refresh_window(
                 store,
@@ -1461,7 +1486,9 @@ def cascade_from_hour(
             _LOG.exception("cascade refresh failed scale=%s", p)
             s = p
             continue
-        if atom is not None:
+        if atom is not None and _refresh_wrote(tip_before, atom):
+            # Only count real puts — hash-equal no-ops must not inflate metrics
+            # or re-debit LLM pacing from the existing tip's meta.
             refreshed.append(f"{p}:{to_iso_z(w_start)}")
             remaining_calls = _count_llm_usage_from_atom(
                 atom,

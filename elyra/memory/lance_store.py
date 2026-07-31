@@ -62,6 +62,12 @@ _CHAIN_EXCLUDE_KINDS: frozenset[str] = frozenset(
     {"summary", "parcel", "moment_meta"}
 )
 
+
+def _summary_version_key(atom: Atom) -> tuple[int, str]:
+    """Order key for KD-TIP: higher meta.version wins; atom_id breaks ties."""
+    return (int((atom.meta or {}).get("version") or 0), atom.atom_id)
+
+
 _ATOMS_TABLE = "atoms"
 # Staging name used during emb migration recreate+copy (crash recovery target).
 _STAGING_TABLE = f"{_ATOMS_TABLE}__migrating"
@@ -835,11 +841,18 @@ class LanceMemoryStore:
     def _rebuild_secondary_indexes(self) -> None:
         self._by_moment.clear()
         self._ladder.clear()
+        # KD-TIP: tip per (scale, window_start) is max meta.version (not last-put).
+        best: dict[tuple[str, str], Atom] = {}
         for atom in self._by_id.values():
             if atom.moment_id:
                 self._by_moment.setdefault(atom.moment_id, []).append(atom.atom_id)
             if atom.kind == "summary" and atom.scale and atom.window_start:
-                self._ladder[(atom.scale, atom.window_start)] = atom.atom_id
+                key = (atom.scale, atom.window_start)
+                cur = best.get(key)
+                if cur is None or _summary_version_key(atom) > _summary_version_key(cur):
+                    best[key] = atom
+        for key, atom in best.items():
+            self._ladder[key] = atom.atom_id
         for mid, ids in self._by_moment.items():
             ids.sort(key=lambda i: (self._by_id[i].t_start, i))
 
@@ -1103,7 +1116,17 @@ class LanceMemoryStore:
                 ids.append(atom.atom_id)
             ids.sort(key=lambda i: (self._by_id[i].t_start, i))
         if atom.kind == "summary" and atom.scale and atom.window_start:
-            self._ladder[(atom.scale, atom.window_start)] = atom.atom_id
+            key = (atom.scale, atom.window_start)
+            cur_id = self._ladder.get(key)
+            # Move tip only if vacant, same atom_id (1h replace), or higher version.
+            if cur_id is None or cur_id == atom.atom_id:
+                self._ladder[key] = atom.atom_id
+            else:
+                cur = self._by_id.get(cur_id)
+                if cur is None or _summary_version_key(atom) > _summary_version_key(
+                    cur
+                ):
+                    self._ladder[key] = atom.atom_id
 
     # ── Protocol methods ─────────────────────────────────────────────────
 
@@ -1835,6 +1858,9 @@ class LanceMemoryStore:
 
         ``tips_only=False`` scans all summary atoms for ``scale`` (and optional
         window overlap), sorted by ``meta.version`` ascending then atom_id.
+        Archaeology callers should pass ``overlapping=`` for a single window
+        and/or raise ``limit`` deliberately — default ``limit=50`` can truncate
+        mid-history across many windows/versions (no secondary version index).
         """
         with self._lock:
             self._check_open()
