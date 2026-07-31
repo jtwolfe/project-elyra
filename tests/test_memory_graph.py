@@ -1081,3 +1081,89 @@ def test_lite_summary_source_cap_k8(store):
     )
     assert len(edges) == 8
     assert {e.dst_atom_id for e in edges} == set(src_ids[:8])
+
+
+def test_deep_summary_source_cap_k24(store):
+    """Deep caps summary_source expansion at K=24 when meta has more."""
+    src_ids = []
+    for i in range(30):
+        a = store.put_atom(
+            _atom(
+                atom_id=f"a_dcap_{i}",
+                t=f"2026-07-28T12:00:{i % 60:02d}Z",
+                text=f"r{i}",
+            )
+        )
+        src_ids.append(a.atom_id)
+    _put_summary(
+        store,
+        atom_id="a_sum_dcap",
+        scale="1h",
+        meta={"source_atom_ids": src_ids, "from_children": False},
+    )
+    settings = MemorySettings(traverse_summary_expand="deep")
+    gv = GraphView(store, settings=settings, now="2026-07-28T13:00:00Z")
+    edges = gv.neighbors(
+        "a_sum_dcap",
+        kinds=[EDGE_SUMMARY_SOURCE],
+        k=40,
+        allow_semantic=False,
+    )
+    assert len(edges) == 24
+    assert {e.dst_atom_id for e in edges} == set(src_ids[:24])
+
+
+def test_summary_child_requires_from_children_not_raw_fallback(store):
+    """Coarser raw fallback (from_children=false) must not emit summary_child → raw."""
+    raw = store.put_atom(
+        _atom(atom_id="a_raw_fb", t="2026-07-28T10:00:00Z", text="raw experience")
+    )
+    _put_summary(
+        store,
+        atom_id="a_day_raw_fb",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        meta={
+            "from_children": False,
+            "child_atom_ids": [raw.atom_id],
+            "source_atom_ids": [raw.atom_id],
+        },
+    )
+    gv = GraphView(store, now="2026-07-28T12:00:00Z")
+    edges = gv.neighbors(
+        "a_day_raw_fb",
+        kinds=[EDGE_SUMMARY_CHILD, EDGE_SUMMARY_SOURCE],
+        k=20,
+        allow_semantic=False,
+    )
+    assert edges == []
+    assert all(e.edge_kind != EDGE_SUMMARY_CHILD for e in edges)
+
+
+def test_summary_child_skips_non_summary_destinations(store):
+    """Even with from_children, only dst.kind==summary emit summary_child."""
+    raw = store.put_atom(
+        _atom(atom_id="a_not_sum", t="2026-07-28T10:00:00Z", text="not a summary")
+    )
+    child = _put_summary(store, atom_id="a_ok_child", scale="1h", text="hour")
+    _put_summary(
+        store,
+        atom_id="a_day_mixed",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        meta={
+            "from_children": True,
+            "child_scale": "1h",
+            "child_atom_ids": [raw.atom_id, child.atom_id],
+        },
+    )
+    gv = GraphView(store, now="2026-07-28T12:00:00Z")
+    edges = gv.neighbors(
+        "a_day_mixed",
+        kinds=[EDGE_SUMMARY_CHILD],
+        k=20,
+        allow_semantic=False,
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_atom_id == child.atom_id
+    assert edges[0].edge_kind == EDGE_SUMMARY_CHILD

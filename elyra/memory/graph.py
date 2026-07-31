@@ -482,14 +482,15 @@ class GraphView:
     ) -> list[GraphEdge]:
         """parent summary → child summary via ``meta.child_atom_ids``.
 
-        Coarser ladder fabric only: skip 1h raw windows that store the same
-        list as a legacy pointer (``from_children`` false). 1h→raw uses
-        ``summary_source``.
+        Design §6: only when coarser was built **from children**
+        (``meta.from_children``). Raw-fallback ``child_atom_ids`` (experience
+        atoms) must not emit ``summary_child``; 1h→raw uses ``summary_source``.
+        Destination must be ``kind=summary`` (defense in depth).
         """
         if atom.kind != "summary":
             return []
         meta = atom.meta or {}
-        if atom.scale == "1h" and not meta.get("from_children"):
+        if not meta.get("from_children"):
             return []
         ids = self._meta_id_list(meta, "child_atom_ids")
         if not ids:
@@ -501,7 +502,7 @@ class GraphView:
             if dst_id in exclude or dst_id == atom.atom_id:
                 continue
             dst = self._store.get_atom(dst_id)
-            if dst is None:
+            if dst is None or dst.kind != "summary":
                 continue
             e = self._weight_edge(
                 EDGE_SUMMARY_CHILD,
@@ -744,6 +745,17 @@ class GraphView:
 
         On deadline exceed returns structural edges gathered so far (+ partial
         semantic if any); ``last_expand_meta["expand_truncated"]`` is set.
+
+        Summary fabric (``kind=summary`` seed):
+        - ``summary_child`` / ``summary_source`` project from meta under lite
+          and deep (source K≤8 lite, larger deep; child only when
+          ``from_children``).
+        - **Supersedes (lite):** default expand (``kinds=None``) never walks
+          ``supersedes``. Only an **explicit** ``EDGE_SUPERSEDES`` in the
+          ``kinds`` argument, or ``traverse_summary_expand="deep"``, walks it.
+          Passing an explicit full kind list that includes ``supersedes``
+          therefore walks supersedes even under lite — use ``kinds=None`` for
+          default lite semantics.
         """
         t0 = _now_ms()
         deadline = (

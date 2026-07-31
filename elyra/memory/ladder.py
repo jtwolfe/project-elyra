@@ -2,8 +2,10 @@
 
 Scope: UTC grid windows, template render, versioned coarser tips (KD-TIP),
 source packs, budgeted ``tick`` / ``refresh_due`` for idle, cascade via write
-parent map. In scope: SummaryLlm protocol consumer (no presence / ChatClient).
-Out of scope: meal pack policy (PR-D), summary edge fabric (PR-C).
+parent map, honesty meta fabric lists (``child_atom_ids`` / ``source_atom_ids`` /
+``supersedes_atom_id``) for GraphView projection (PR-C).
+In scope: SummaryLlm protocol consumer (no presence / ChatClient import).
+Out of scope: meal pack policy (PR-D).
 """
 
 from __future__ import annotations
@@ -16,7 +18,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
-from elyra.memory.config import LADDER_DIRNAME, LADDER_STATE, MemorySettings
+from elyra.memory.config import (
+    LADDER_DIRNAME,
+    LADDER_SOURCE_EDGE_K_DEFAULT,
+    LADDER_SOURCE_EDGE_K_MAX,
+    LADDER_STATE,
+    MemorySettings,
+)
 from elyra.memory.ladder_llm import SummaryLlm, SummaryLlmError
 from elyra.memory.store import MemoryStore
 from elyra.memory.temporal import (
@@ -55,10 +63,9 @@ _MAX_HIGHLIGHTS: dict[str, int] = {
 
 # Raise 64 → 96 so a full day of 1h children fits (KD design).
 _MAX_CHILD_IDS = 96
-# Absolute ceiling for source_atom_ids; write path also respects
-# MemorySettings.ladder_source_edge_k (default 24, PR-C).
-_MAX_SOURCE_ATOM_IDS = 48
-_DEFAULT_SOURCE_EDGE_K = 24
+# Absolute ceiling for source_atom_ids (shared with config / settings).
+_MAX_SOURCE_ATOM_IDS = LADDER_SOURCE_EDGE_K_MAX
+_DEFAULT_SOURCE_EDGE_K = LADDER_SOURCE_EDGE_K_DEFAULT
 _MAX_POINTER_IDS = 24
 _HIGHLIGHT_TRUNCATE = 160
 _PACK_LINE_TRUNCATE = 200
@@ -731,7 +738,15 @@ def _build_honesty_meta(
     scale: PeriodScale | str | None = None,
 ) -> dict[str, Any]:
     stats = _count_stats(sources)
-    child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
+    # Fabric honesty: child_atom_ids are child *summaries* when from_children.
+    # 1h raw keeps a legacy pointer list; coarser raw fallback leaves empty so
+    # GraphView cannot emit summary_child → experience atoms.
+    if from_children:
+        child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
+    elif scale == "1h":
+        child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
+    else:
+        child_ids = []
     source_ids: list[str] = []
     if not from_children:
         ranked = sorted(sources, key=_highlight_rank)

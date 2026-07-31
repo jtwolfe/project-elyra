@@ -25,6 +25,9 @@ ATOMS_BLOB_DIRNAME = "atoms"
 LADDER_DIRNAME = "ladder"
 LADDER_STATE = "state.json"
 LANCE_DIRNAME = "lance"
+# Write-time cap for meta.source_atom_ids (PR-C summary edge fabric).
+LADDER_SOURCE_EDGE_K_DEFAULT = 24
+LADDER_SOURCE_EDGE_K_MAX = 48
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
 # Kept below atom_max_chars (8000) so spill is reachable under default settings
@@ -133,7 +136,8 @@ class MemorySettings:
     ladder_llm_max_calls_per_hour: int = 40
     ladder_skip_empty: bool = True  # skip put when window has no sources
     ladder_recent_1h_meal: int = 6  # meal band (PR-D consumes)
-    ladder_source_edge_k: int = 24  # write cap for source edges (PR-C)
+    # Write cap for source edges (PR-C); settings reject outside [0, MAX].
+    ladder_source_edge_k: int = LADDER_SOURCE_EDGE_K_DEFAULT
     # GraphView summary fabric expand depth (PR-C). lite = default; deep stub #103.
     traverse_summary_expand: str = "lite"  # lite | deep
     regather_every_n_hops: int = 0  # 0 = off
@@ -301,6 +305,8 @@ __all__ = [
     "ATOMS_BLOB_DIRNAME",
     "ATOMS_JSONL",
     "LADDER_DIRNAME",
+    "LADDER_SOURCE_EDGE_K_DEFAULT",
+    "LADDER_SOURCE_EDGE_K_MAX",
     "LADDER_STATE",
     "LANCE_DIRNAME",
     "MEMORY_ANN_SEARCH_BACKENDS",

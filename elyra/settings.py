@@ -22,6 +22,7 @@ from elyra.llm.constants import (
 )
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 from elyra.memory.config import (
+    LADDER_SOURCE_EDGE_K_MAX,
     MEMORY_ANN_SEARCH_BACKENDS,
     MEMORY_BACKENDS,
     MEMORY_EMBED_BACKENDS,
@@ -388,8 +389,12 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.ladder_recent_1h_meal" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
-        if path == "memory.ladder_source_edge_k" and coerced < 0:
-            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_source_edge_k":
+            if coerced < 0 or coerced > LADDER_SOURCE_EDGE_K_MAX:
+                raise ValueError(
+                    f"{path}: expected int in [0, {LADDER_SOURCE_EDGE_K_MAX}], "
+                    f"got {coerced!r}"
+                )
         if path == "memory.traverse_summary_expand":
             if isinstance(coerced, str):
                 coerced = coerced.strip().lower()
