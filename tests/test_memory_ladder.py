@@ -11,21 +11,30 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.memory.config import MemorySettings
 from elyra.memory.ladder import (
+    LADDER_ENOUGH_1D_TIPS,
+    LADDER_ENOUGH_1M_TIPS,
+    LADDER_ENOUGH_1W_TIPS,
+    allowed_scales,
     build_source_pack,
     build_summary_atom,
     cascade_from_hour,
     child_content_hash,
     collect_window_sources,
+    count_tip_summaries,
     gap_spans,
+    ladder_status_snapshot,
     load_ladder_state,
     mark_dirty_1h,
     max_highlights,
     moment_blocks_for_window,
     process_closed_hours,
+    read_instance_created_at,
     refresh_due,
     refresh_window,
     render_template_summary,
     resolve_tip,
+    save_ladder_state,
+    scale_allowed_for_instance_age,
     select_highlights,
     tick,
     uses_versioned_ids,
@@ -1405,3 +1414,306 @@ def test_legacy_stable_1d_superseded_by_versioned(store):
     ids = {v.atom_id for v in versions}
     assert legacy_id in ids
     assert tip.atom_id in ids
+
+
+# ── PR-E: catch-up, meter exhaustion, instance-age, status ─────────────────
+
+
+def test_allowed_scales_age_and_enough_tips():
+    """Design §9: soft age thresholds + provisional enough-tips constants."""
+    assert LADDER_ENOUGH_1D_TIPS == 3
+    assert LADDER_ENOUGH_1W_TIPS == 2
+    assert LADDER_ENOUGH_1M_TIPS == 2
+    created = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+    young = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)  # age 1.5d
+    assert allowed_scales(created, young, tip_counts={}) == ["1h", "1d"]
+    # Enough 1d tips unlock 1w early.
+    assert allowed_scales(
+        created, young, tip_counts={"1d": LADDER_ENOUGH_1D_TIPS}
+    ) == ["1h", "1d", "1w"]
+    # Age ≥7d unlocks 1w without tip counts.
+    weekish = created + timedelta(days=7)
+    assert "1w" in allowed_scales(created, weekish, tip_counts={})
+    assert "1m" not in allowed_scales(created, weekish, tip_counts={})
+    # Enough 1w tips unlock 1m early.
+    assert "1m" in allowed_scales(
+        created, young, tip_counts={"1d": 3, "1w": LADDER_ENOUGH_1W_TIPS}
+    )
+    # Age ≥28d unlocks 1m; ≥365d unlocks 1y.
+    monthish = created + timedelta(days=28)
+    assert allowed_scales(created, monthish, tip_counts={}) == [
+        "1h",
+        "1d",
+        "1w",
+        "1m",
+    ]
+    yearish = created + timedelta(days=365)
+    assert allowed_scales(created, yearish, tip_counts={}) == [
+        "1h",
+        "1d",
+        "1w",
+        "1m",
+        "1y",
+    ]
+    # Enough 1m tips unlock 1y early.
+    assert "1y" in allowed_scales(
+        created,
+        young,
+        tip_counts={"1d": 3, "1w": 2, "1m": LADDER_ENOUGH_1M_TIPS},
+    )
+    assert scale_allowed_for_instance_age("1w", created, young, tip_counts={}) is False
+    assert scale_allowed_for_instance_age(
+        "1w", created, young, tip_counts={"1d": 3}
+    )
+
+
+def test_read_instance_created_at_and_count_tips(store, paths):
+    created = read_instance_created_at(store)
+    assert created is not None
+    assert created.tzinfo is not None
+    # Seed two 1h tips via ladder path.
+    for hour in (10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:15:00Z",
+                kind="speak",
+                text=f"h{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+        refresh_window(store, "1h", datetime(2026, 7, 28, hour, 0, tzinfo=UTC))
+    tips = count_tip_summaries(store)
+    assert tips.get("1h", 0) >= 2
+
+
+def test_catchup_three_missing_hours_oldest_first(store):
+    """Integration: catch-up fills 3 missing closed hours oldest-first (DoD #9)."""
+    for hour in (9, 10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:20:00Z",
+                kind="speak",
+                text=f"work-{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    settings = MemorySettings(
+        summary_mode="template",
+        ladder_catchup_max_hours=24,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = load_ladder_state(store)
+    result = process_closed_hours(store, now, settings=settings, state=state)
+    processed = result["processed_1h"]
+    assert processed == [
+        "2026-07-28T09:00:00Z",
+        "2026-07-28T10:00:00Z",
+        "2026-07-28T11:00:00Z",
+    ]
+    for hour in (9, 10, 11):
+        tip = store.get_atom(
+            stable_summary_id("1h", datetime(2026, 7, 28, hour, 0, tzinfo=UTC))
+        )
+        assert tip is not None
+        assert (tip.content_text or "").strip()
+    # Cascade wrote a 1d tip (always age-allowed).
+    assert any(c.startswith("1d:") for c in result["cascaded"])
+    day_tip = resolve_tip(store, "1d", datetime(2026, 7, 28, 0, 0, tzinfo=UTC))
+    assert day_tip is not None
+    assert state.get("last_hourly_process") is not None
+
+
+def test_llm_budget_exhaustion_template_fallback_no_crash(store):
+    """Meter / per-hour LLM budget exhaustion → template path; no crash."""
+    for hour in (10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:10:00Z",
+                kind="speak",
+                text=f"hour-{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    llm = StubLlm(responses=["LLM body that should not be used"] * 20)
+    settings = MemorySettings(
+        summary_mode="llm",
+        ladder_llm_max_calls_per_tick=3,
+        ladder_llm_max_calls_per_hour=0,  # exhausted immediately
+        ladder_catchup_max_hours=24,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = {
+        **load_ladder_state(store),
+        "llm_calls_hour": {
+            "hour": to_iso_z(now.replace(minute=0, second=0, microsecond=0)),
+            "count": 99,
+        },
+    }
+    # Must not raise even with a failing / unused LLM.
+    result = process_closed_hours(
+        store, now, settings=settings, llm=llm, state=state
+    )
+    assert "2026-07-28T10:00:00Z" in result["processed_1h"]
+    assert "2026-07-28T11:00:00Z" in result["processed_1h"]
+    # With zero remaining calls, stub must not be invoked.
+    assert llm.calls == []
+    tip = store.get_atom(
+        stable_summary_id("1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    )
+    assert tip is not None
+    assert (tip.meta or {}).get("source") in ("template", "llm_fallback_template")
+
+
+def test_llm_fail_mid_cascade_falls_back_without_crash(store):
+    """SummaryLlmError during cascade → template fallback; presence-safe."""
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="hour work",
+            moment_id="m10",
+        )
+    )
+    llm = StubLlm(fail=True)
+    settings = MemorySettings(
+        summary_mode="llm",
+        ladder_llm_max_calls_per_tick=5,
+        ladder_llm_max_calls_per_hour=40,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = {
+        **load_ladder_state(store),
+        "dirty_1h_windows": ["2026-07-28T10:00:00Z"],
+    }
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    result = process_closed_hours(
+        store, now, settings=settings, llm=llm, state=state
+    )
+    assert "2026-07-28T10:00:00Z" in result["processed_1h"]
+    tip = store.get_atom(
+        stable_summary_id("1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    )
+    assert tip is not None
+    assert (tip.meta or {}).get("source") in ("template", "llm_fallback_template")
+    # Adapter hard-stop path already unit-tested; this is end-to-end process path.
+    assert llm.calls  # attempted at least once before fallback
+
+
+def test_cascade_gates_1w_when_young_instance(store, paths):
+    """Young instance without enough 1d tips does not write 1w/1m/1y tips."""
+    # Force young instance_created_at (overwrite meta.json).
+    meta_path = paths.data_dir / "memory" / "meta.json"
+    meta = {
+        "schema_version": 1,
+        "backend": "jsonl",
+        "created_at": "2026-07-28T00:00:00Z",
+    }
+    meta_path.write_text(
+        __import__("json").dumps(meta, indent=2) + "\n", encoding="utf-8"
+    )
+    assert read_instance_created_at(store) == datetime(
+        2026, 7, 28, 0, 0, tzinfo=UTC
+    )
+
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="young-hour",
+            moment_id="m10",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)  # age ~12h
+    result = cascade_from_hour(
+        store,
+        datetime(2026, 7, 28, 10, 0, tzinfo=UTC),
+        settings=MemorySettings(summary_mode="template"),
+        now=now,
+    )
+    assert any(c.startswith("1d:") for c in result["refreshed"])
+    assert not any(c.startswith("1w:") for c in result["refreshed"])
+    assert not any(c.startswith("1m:") for c in result["refreshed"])
+    assert not any(c.startswith("1y:") for c in result["refreshed"])
+    assert result.get("stopped_reason") == "instance_age"
+    assert resolve_tip(store, "1d", datetime(2026, 7, 28, 0, 0, tzinfo=UTC)) is not None
+    assert store.list_summaries("1w") == []
+
+
+def test_enough_1d_tips_unlocks_1w_cascade(store, paths):
+    """Provisional LADDER_ENOUGH_1D_TIPS unlocks 1w even when age < 7d."""
+    meta_path = paths.data_dir / "memory" / "meta.json"
+    meta_path.write_text(
+        __import__("json").dumps(
+            {
+                "schema_version": 1,
+                "backend": "jsonl",
+                "created_at": "2026-07-20T00:00:00Z",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # Three distinct day tips via template refresh on different days.
+    for day in (20, 21, 22):
+        hour_dt = datetime(2026, 7, day, 10, 0, tzinfo=UTC)
+        store.put_atom(
+            _atom(
+                t=to_iso_z(hour_dt + timedelta(minutes=15)),
+                kind="speak",
+                text=f"day-{day}",
+                moment_id=f"m{day}",
+            )
+        )
+        refresh_window(store, "1h", hour_dt)
+        cascade_from_hour(
+            store,
+            hour_dt,
+            settings=MemorySettings(summary_mode="template"),
+            # Force age-old enough that 1w is allowed only via tip count:
+            # use a now that is still young relative to created_at for 1m/1y
+            # but we unlock 1w via tip_counts after 3 days of 1d tips.
+            now=datetime(2026, 7, 22, 12, 0, tzinfo=UTC),
+        )
+    tips = count_tip_summaries(store)
+    assert tips.get("1d", 0) >= LADDER_ENOUGH_1D_TIPS
+    # After third day cascade, 1w should have been allowed.
+    week_tips = store.list_summaries("1w")
+    assert len(week_tips) >= 1
+
+
+def test_ladder_status_snapshot_exposes_knobs_and_state(store):
+    """Design §10: status snapshot carries knobs + last_hourly + llm_calls."""
+    settings = MemorySettings(
+        summary_mode="llm",
+        ladder_hourly_max_ms=9000,
+        ladder_catchup_max_hours=12,
+        ladder_llm_max_calls_per_tick=2,
+        ladder_llm_max_calls_per_hour=15,
+    )
+    state: dict = {
+        **load_ladder_state(store),
+        "last_hourly_process": "2026-07-28T12:00:00Z",
+        "last_closed_1h_processed": "2026-07-28T11:00:00Z",
+        "catchup_cursor": "2026-07-28T12:00:00Z",
+        "llm_calls_hour": {"hour": "2026-07-28T12:00:00Z", "count": 4},
+        "dirty_1h_windows": ["2026-07-28T10:00:00Z"],
+    }
+    save_ladder_state(state, store)
+    snap = ladder_status_snapshot(store, settings)
+    assert snap["enabled"] is True
+    assert snap["summary_mode"] == "llm"
+    assert snap["ladder_hourly_max_ms"] == 9000
+    assert snap["ladder_catchup_max_hours"] == 12
+    assert snap["ladder_llm_max_calls_per_tick"] == 2
+    assert snap["ladder_llm_max_calls_per_hour"] == 15
+    assert snap["last_hourly_process"] == "2026-07-28T12:00:00Z"
+    assert snap["last_closed_1h_processed"] == "2026-07-28T11:00:00Z"
+    assert snap["catchup_cursor"] == "2026-07-28T12:00:00Z"
+    assert snap["llm_calls_hour"]["count"] == 4
+    assert snap["dirty_1h_count"] == 1
+    assert "1h" in snap["allowed_scales"]
+    assert "1d" in snap["allowed_scales"]

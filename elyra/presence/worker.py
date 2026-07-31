@@ -1430,7 +1430,11 @@ class PresenceWorker:
         return bool(health.get("ok"))
 
     def _memory_status_block(self) -> dict[str, Any]:
-        """Lightweight memory health for ``/api/status`` (optional PR6)."""
+        """Lightweight memory health for ``/api/status`` (optional PR6).
+
+        Includes a compact ``ladder`` sub-block (knobs + last_hourly_process /
+        llm_calls) for dogfood observability (#92 design §10).
+        """
         mem_cfg = self.settings.memory
         block: dict[str, Any] = {
             "enabled": bool(mem_cfg.enabled),
@@ -1440,6 +1444,18 @@ class PresenceWorker:
             "ok": False,
             "has_last_meal": self._last_meal_snapshot is not None,
         }
+        # Ladder knobs always visible (even when store not yet open).
+        try:
+            from elyra.memory.ladder import ladder_status_snapshot
+
+            block["ladder"] = ladder_status_snapshot(self._memory, mem_cfg)
+        except Exception:  # noqa: BLE001 — status must never raise
+            block["ladder"] = {
+                "enabled": bool(getattr(mem_cfg, "ladder_enabled", True)),
+                "summary_mode": str(
+                    getattr(mem_cfg, "summary_mode", "template") or "template"
+                ),
+            }
         if self._memory is None:
             if self._memory_open_failed:
                 block["error"] = "open_failed"

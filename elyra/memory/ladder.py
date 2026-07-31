@@ -126,6 +126,184 @@ _ALWAYS_TWO_PASS = frozenset({"1d", "1w", "1m", "1y"})
 # 1h / legacy use stable_summary_id tip-replace (no version fan-out by default).
 _VERSIONED_SCALES = frozenset({"1d", "1w", "1m", "1y"})
 
+# Provisional dogfood knobs for instance-age scale growth (design §9; PR-E pins).
+# Not locked product law — may move after dogfood without design re-open.
+LADDER_ENOUGH_1D_TIPS = 3  # unlock 1w early if age < 7d
+LADDER_ENOUGH_1W_TIPS = 2  # unlock 1m early
+LADDER_ENOUGH_1M_TIPS = 2  # unlock 1y early
+_AGE_UNLOCK_1W = timedelta(days=7)
+_AGE_UNLOCK_1M = timedelta(days=28)
+_AGE_UNLOCK_1Y = timedelta(days=365)
+
+
+def allowed_scales(
+    instance_created_at: datetime | str | None,
+    now: datetime | str,
+    *,
+    tip_counts: Mapping[str, int] | None = None,
+) -> list[str]:
+    """Write scales allowed for this instance age / provisional tip counts.
+
+    Always returns ``1h`` and ``1d``. Coarser scales unlock by soft age
+    thresholds (7d / 28d / 365d) **or** enough child-scale tips (provisional
+    ``LADDER_ENOUGH_*`` constants).
+    """
+    now_dt = parse_iso_z(now) if not isinstance(now, datetime) else now
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=UTC)
+    if instance_created_at is None:
+        created = now_dt
+    elif isinstance(instance_created_at, datetime):
+        created = instance_created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+    else:
+        try:
+            created = parse_iso_z(instance_created_at)
+        except (TypeError, ValueError):
+            created = now_dt
+    age = now_dt - created
+    tips = dict(tip_counts or {})
+    out: list[str] = ["1h", "1d"]
+    if age >= _AGE_UNLOCK_1W or int(tips.get("1d", 0) or 0) >= LADDER_ENOUGH_1D_TIPS:
+        out.append("1w")
+    if age >= _AGE_UNLOCK_1M or int(tips.get("1w", 0) or 0) >= LADDER_ENOUGH_1W_TIPS:
+        out.append("1m")
+    if age >= _AGE_UNLOCK_1Y or int(tips.get("1m", 0) or 0) >= LADDER_ENOUGH_1M_TIPS:
+        out.append("1y")
+    return out
+
+
+def scale_allowed_for_instance_age(
+    scale: PeriodScale | str,
+    instance_created_at: datetime | str | None,
+    now: datetime | str,
+    *,
+    tip_counts: Mapping[str, int] | None = None,
+) -> bool:
+    """True when ``scale`` is in :func:`allowed_scales` for this instance."""
+    s = str(scale)
+    if s in PERIOD_SCALES_LEGACY:
+        # Legacy repair is not age-gated; write path still controlled by settings.
+        return True
+    return s in allowed_scales(
+        instance_created_at, now, tip_counts=tip_counts
+    )
+
+
+def read_instance_created_at(store: MemoryStore) -> datetime | None:
+    """Read ``created_at`` from store ``meta.json`` (best-effort)."""
+    meta_path = getattr(store, "meta_path", None)
+    if meta_path is None:
+        memory_dir = getattr(store, "memory_dir", None)
+        if memory_dir is not None:
+            meta_path = Path(memory_dir) / "meta.json"
+    if meta_path is None:
+        return None
+    try:
+        path = Path(meta_path)
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("created_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return parse_iso_z(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def count_tip_summaries(
+    store: MemoryStore,
+    scales: Sequence[PeriodScale | str] | None = None,
+) -> dict[str, int]:
+    """Count ladder-index tips per scale (KD-TIP; O(tips) via list_summaries)."""
+    scale_list = list(scales) if scales is not None else list(PERIOD_SCALE_ORDER_WRITE)
+    out: dict[str, int] = {}
+    for scale in scale_list:
+        try:
+            tips = store.list_summaries(str(scale), limit=10_000, tips_only=True)
+            out[str(scale)] = len(tips)
+        except Exception:  # noqa: BLE001 — observability / gating must not raise
+            out[str(scale)] = 0
+    return out
+
+
+def ladder_status_snapshot(
+    store: MemoryStore | None,
+    settings: MemorySettings | None = None,
+    *,
+    state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compact ladder observability for ``/api/status`` memory block (design §10)."""
+    settings = settings or MemorySettings()
+    block: dict[str, Any] = {
+        "enabled": bool(getattr(settings, "ladder_enabled", True)),
+        "summary_mode": str(getattr(settings, "summary_mode", "template") or "template"),
+        "ladder_hourly_max_ms": int(
+            getattr(settings, "ladder_hourly_max_ms", 12000) or 12000
+        ),
+        "ladder_catchup_max_hours": int(
+            getattr(settings, "ladder_catchup_max_hours", 24) or 24
+        ),
+        "ladder_llm_max_calls_per_tick": int(
+            getattr(settings, "ladder_llm_max_calls_per_tick", 3) or 3
+        ),
+        "ladder_llm_max_calls_per_hour": int(
+            getattr(settings, "ladder_llm_max_calls_per_hour", 40) or 40
+        ),
+        "ladder_max_ms_per_tick": int(
+            getattr(settings, "ladder_max_ms_per_tick", 200) or 200
+        ),
+        "last_hourly_process": None,
+        "last_closed_1h_processed": None,
+        "catchup_cursor": None,
+        "llm_calls_hour": {"hour": None, "count": 0},
+        "dirty_1h_count": 0,
+        "cascade_pending_count": 0,
+        "allowed_scales": ["1h", "1d"],
+    }
+    st = state
+    if st is None and store is not None:
+        try:
+            st = load_ladder_state(store)
+        except Exception:  # noqa: BLE001
+            st = None
+    if isinstance(st, Mapping):
+        block["last_hourly_process"] = st.get("last_hourly_process")
+        block["last_closed_1h_processed"] = st.get("last_closed_1h_processed")
+        block["catchup_cursor"] = st.get("catchup_cursor")
+        bucket = st.get("llm_calls_hour")
+        if isinstance(bucket, dict):
+            block["llm_calls_hour"] = {
+                "hour": bucket.get("hour"),
+                "count": int(bucket.get("count") or 0),
+            }
+        dirty = st.get("dirty_1h_windows") or []
+        if isinstance(dirty, list):
+            block["dirty_1h_count"] = len(dirty)
+        pending = st.get("cascade_pending_1h") or []
+        if isinstance(pending, list):
+            block["cascade_pending_count"] = len(pending)
+    if store is not None:
+        try:
+            created = read_instance_created_at(store)
+            tips = count_tip_summaries(store)
+            block["tip_counts"] = tips
+            block["allowed_scales"] = allowed_scales(
+                created, datetime.now(UTC), tip_counts=tips
+            )
+            if created is not None:
+                block["instance_created_at"] = to_iso_z(created)
+        except Exception:  # noqa: BLE001
+            pass
+    return block
+
 
 def max_highlights(scale: PeriodScale | str) -> int:
     """Return highlight budget for ``scale``."""
@@ -1476,6 +1654,7 @@ def cascade_from_hour(
     now_dt = now or datetime.now(UTC)
     refreshed: list[str] = []
     stopped_reason: str | None = None
+    instance_created = read_instance_created_at(store)
     s: str | None = "1h"
     while s is not None:
         try:
@@ -1488,8 +1667,13 @@ def cascade_from_hour(
         if elapsed >= budget:
             stopped_reason = "budget"
             break
-        # Soft instance-age: always allow 1d; coarser allowed when settings ok.
-        # PR-E hardens thresholds; PR-A generates when children exist.
+        # Instance-age / enough-tips gate (design §9): stop cascade; coarser gated too.
+        tip_counts = count_tip_summaries(store)
+        if not scale_allowed_for_instance_age(
+            p, instance_created, now_dt, tip_counts=tip_counts
+        ):
+            stopped_reason = "instance_age"
+            break
         w_start, w_end = window_bounds(p, h_start)
         skip_empty = bool(getattr(settings, "ladder_skip_empty", True))
         sources, _, _ = collect_window_sources(
@@ -1886,11 +2070,22 @@ def tick(
         if str(getattr(settings, "summary_mode", "template")).lower() == "llm"
         else None
     )
+    # Age-gate write scales; keep legacy only when repair flag is on.
+    write_legacy = bool(getattr(settings, "ladder_write_legacy_scales", False))
+    if write_legacy:
+        nibble_scales: list[str] = list(PERIOD_SCALE_ORDER)
+    else:
+        tips = count_tip_summaries(store)
+        created = read_instance_created_at(store)
+        allowed = set(allowed_scales(created, now_dt, tip_counts=tips))
+        nibble_scales = [s for s in PERIOD_SCALE_ORDER_WRITE if s in allowed]
+        if not nibble_scales:
+            nibble_scales = ["1h", "1d"]
     result = refresh_due(
         store,
         now_dt,
         max_ms=nibble_ms,
-        scales=list(PERIOD_SCALE_ORDER_WRITE),
+        scales=nibble_scales,
         state=state,
         settings=settings,
         llm=use_llm,
@@ -1903,22 +2098,30 @@ def tick(
 
 
 __all__ = [
+    "LADDER_ENOUGH_1D_TIPS",
+    "LADDER_ENOUGH_1M_TIPS",
+    "LADDER_ENOUGH_1W_TIPS",
+    "allowed_scales",
     "build_source_pack",
     "build_summary_atom",
     "cascade_from_hour",
     "child_content_hash",
     "collect_window_sources",
+    "count_tip_summaries",
     "gap_spans",
+    "ladder_status_snapshot",
     "load_ladder_state",
     "mark_dirty_1h",
     "max_highlights",
     "moment_blocks_for_window",
     "process_closed_hours",
+    "read_instance_created_at",
     "refresh_due",
     "refresh_window",
     "render_template_summary",
     "resolve_tip",
     "save_ladder_state",
+    "scale_allowed_for_instance_age",
     "select_highlights",
     "tick",
     "uses_versioned_ids",
