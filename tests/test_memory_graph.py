@@ -16,6 +16,9 @@ from elyra.memory.graph import (
     EDGE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP,
     EDGE_SEQUENTIAL,
+    EDGE_SUMMARY_CHILD,
+    EDGE_SUMMARY_SOURCE,
+    EDGE_SUPERSEDES,
     GraphEdge,
     GraphView,
     REASON_ENCODER_COLD,
@@ -28,7 +31,13 @@ from elyra.memory.graph import (
 from elyra.memory.index import MemoryEmbeddingIndex, NullEmbeddingIndex
 from elyra.memory.store import open_memory_store
 from elyra.memory.types import Atom, new_atom_id
-from elyra.memory.weights import BASE_PARENT_CHILD, BASE_SEQUENTIAL
+from elyra.memory.weights import (
+    BASE_PARENT_CHILD,
+    BASE_SEQUENTIAL,
+    BASE_SUMMARY_CHILD,
+    BASE_SUMMARY_SOURCE,
+    BASE_SUPERSEDES,
+)
 
 
 @pytest.fixture
@@ -849,3 +858,226 @@ def test_default_neighbor_weights_positive_sequential(store):
     )
     assert len(edges) == 1
     assert abs(edges[0].weight - BASE_SEQUENTIAL) < 1e-9
+
+
+# ── Summary ladder fabric (PR-C) ───────────────────────────────────────────
+
+
+def _put_summary(
+    store,
+    *,
+    atom_id: str,
+    scale: str,
+    text: str = "summary body",
+    t: str = "2026-07-28T12:00:00Z",
+    meta: dict[str, Any] | None = None,
+) -> Atom:
+    return store.put_atom(
+        Atom(
+            atom_id=atom_id,
+            t_start=t,
+            t_end=t,
+            kind="summary",
+            scale=scale,
+            window_start=t,
+            window_end=t,
+            content_text=text,
+            content_ref="inline",
+            moment_id=None,
+            meta=dict(meta or {}),
+        )
+    )
+
+
+def test_neighbors_1h_includes_summary_source(store):
+    """1h tip projects summary_source edges from meta.source_atom_ids."""
+    src_ids = []
+    for i in range(3):
+        a = store.put_atom(
+            _atom(
+                atom_id=f"a_src_{i}",
+                t=f"2026-07-28T12:0{i}:00Z",
+                text=f"raw-{i}",
+            )
+        )
+        src_ids.append(a.atom_id)
+    _put_summary(
+        store,
+        atom_id="a_sum_1h",
+        scale="1h",
+        meta={
+            "from_children": False,
+            "source_atom_ids": src_ids,
+            "child_atom_ids": src_ids,  # 1h raw pointer list — not fabric child
+        },
+    )
+    # now == dst t_start band → no temporal decay so bases are exact.
+    gv = GraphView(store, now="2026-07-28T12:00:00Z")
+    edges = gv.neighbors(
+        "a_sum_1h",
+        kinds=[EDGE_SUMMARY_SOURCE, EDGE_SUMMARY_CHILD],
+        k=20,
+        allow_semantic=False,
+    )
+    kinds = {e.edge_kind for e in edges}
+    assert EDGE_SUMMARY_SOURCE in kinds
+    assert EDGE_SUMMARY_CHILD not in kinds  # 1h raw does not project child fabric
+    dsts = {e.dst_atom_id for e in edges if e.edge_kind == EDGE_SUMMARY_SOURCE}
+    assert dsts == set(src_ids)
+    assert all(abs(e.weight - BASE_SUMMARY_SOURCE) < 1e-9 for e in edges)
+
+
+def test_neighbors_1d_includes_summary_child(store):
+    """1d tip projects summary_child edges to child 1h summaries."""
+    h1 = _put_summary(store, atom_id="a_1h_a", scale="1h", text="hour A")
+    h2 = _put_summary(store, atom_id="a_1h_b", scale="1h", text="hour B")
+    _put_summary(
+        store,
+        atom_id="a_sum_1d",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        meta={
+            "from_children": True,
+            "child_scale": "1h",
+            "child_atom_ids": [h1.atom_id, h2.atom_id],
+            "source_atom_ids": [],
+        },
+    )
+    gv = GraphView(store, now="2026-07-28T12:00:00Z")
+    edges = gv.neighbors(
+        "a_sum_1d",
+        kinds=[EDGE_SUMMARY_CHILD, EDGE_SUMMARY_SOURCE],
+        k=20,
+        allow_semantic=False,
+    )
+    assert len(edges) == 2
+    assert all(e.edge_kind == EDGE_SUMMARY_CHILD for e in edges)
+    assert {e.dst_atom_id for e in edges} == {h1.atom_id, h2.atom_id}
+    assert all(abs(e.weight - BASE_SUMMARY_CHILD) < 1e-9 for e in edges)
+
+
+def test_lite_does_not_walk_supersedes_by_default(store):
+    """Lite default neighbors skip supersedes even when meta is present."""
+    old = _put_summary(
+        store,
+        atom_id="a_day_v1",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        text="old tip",
+        meta={"version": 1},
+    )
+    _put_summary(
+        store,
+        atom_id="a_day_v2",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        text="new tip",
+        meta={
+            "version": 2,
+            "supersedes_atom_id": old.atom_id,
+            "previous_version_id": old.atom_id,
+            "from_children": True,
+            "child_atom_ids": [],
+        },
+    )
+    settings = MemorySettings(traverse_summary_expand="lite")
+    gv = GraphView(store, settings=settings, now="2026-07-28T13:00:00Z")
+    # Default kinds (None) → lite skips supersedes walk.
+    edges = gv.neighbors("a_day_v2", k=20, allow_semantic=False)
+    assert all(e.edge_kind != EDGE_SUPERSEDES for e in edges)
+    assert gv.last_expand_meta.get("summary_expand") == "lite"
+    assert gv.last_expand_meta.get("supersedes_skipped") == "lite"
+
+
+def test_supersedes_projectable_when_kinds_requested(store):
+    """Supersedes is projectable when kinds explicitly includes it (lite ok)."""
+    old = _put_summary(
+        store,
+        atom_id="a_day_prev",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        text="prev",
+        meta={"version": 1},
+    )
+    _put_summary(
+        store,
+        atom_id="a_day_tip",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        text="tip",
+        meta={
+            "version": 2,
+            "supersedes_atom_id": old.atom_id,
+            "previous_version_id": old.atom_id,
+        },
+    )
+    settings = MemorySettings(traverse_summary_expand="lite")
+    gv = GraphView(store, settings=settings, now="2026-07-28T00:00:00Z")
+    edges = gv.neighbors(
+        "a_day_tip",
+        kinds=[EDGE_SUPERSEDES],
+        k=5,
+        allow_semantic=False,
+    )
+    assert len(edges) == 1
+    assert edges[0].edge_kind == EDGE_SUPERSEDES
+    assert edges[0].dst_atom_id == old.atom_id
+    assert abs(edges[0].weight - BASE_SUPERSEDES) < 1e-9
+
+
+def test_deep_mode_includes_supersedes_by_default(store):
+    """Deep expand includes supersedes without explicit kinds filter."""
+    old = _put_summary(
+        store,
+        atom_id="a_deep_prev",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        meta={"version": 1},
+    )
+    _put_summary(
+        store,
+        atom_id="a_deep_tip",
+        scale="1d",
+        t="2026-07-28T00:00:00Z",
+        meta={
+            "version": 2,
+            "supersedes_atom_id": old.atom_id,
+            "from_children": True,
+            "child_atom_ids": [],
+        },
+    )
+    settings = MemorySettings(traverse_summary_expand="deep")
+    gv = GraphView(store, settings=settings, now="2026-07-28T13:00:00Z")
+    edges = gv.neighbors("a_deep_tip", k=20, allow_semantic=False)
+    assert any(
+        e.edge_kind == EDGE_SUPERSEDES and e.dst_atom_id == old.atom_id
+        for e in edges
+    )
+    assert gv.last_expand_meta.get("summary_expand") == "deep"
+    assert "supersedes_skipped" not in gv.last_expand_meta
+
+
+def test_lite_summary_source_cap_k8(store):
+    """Lite caps summary_source expansion at K≤8 even when meta has more."""
+    src_ids = []
+    for i in range(12):
+        a = store.put_atom(
+            _atom(atom_id=f"a_cap_{i}", t=f"2026-07-28T12:00:{i:02d}Z", text=f"r{i}")
+        )
+        src_ids.append(a.atom_id)
+    _put_summary(
+        store,
+        atom_id="a_sum_cap",
+        scale="1h",
+        meta={"source_atom_ids": src_ids, "from_children": False},
+    )
+    settings = MemorySettings(traverse_summary_expand="lite")
+    gv = GraphView(store, settings=settings, now="2026-07-28T13:00:00Z")
+    edges = gv.neighbors(
+        "a_sum_cap",
+        kinds=[EDGE_SUMMARY_SOURCE],
+        k=20,
+        allow_semantic=False,
+    )
+    assert len(edges) == 8
+    assert {e.dst_atom_id for e in edges} == set(src_ids[:8])

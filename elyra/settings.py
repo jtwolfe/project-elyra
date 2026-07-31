@@ -390,6 +390,13 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.ladder_source_edge_k" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.traverse_summary_expand":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in ("lite", "deep"):
+                raise ValueError(
+                    f"{path}: expected one of ['lite', 'deep'], got {coerced!r}"
+                )
         if path == "memory.max_tool_atoms_per_moment" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.atom_max_chars" and coerced < 0:

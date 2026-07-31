@@ -26,6 +26,9 @@ from elyra.memory.weights import (
     EDGE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP,
     EDGE_SEQUENTIAL,
+    EDGE_SUMMARY_CHILD,
+    EDGE_SUMMARY_SOURCE,
+    EDGE_SUPERSEDES,
     edge_weight,
     passes_min_weight,
 )
@@ -39,6 +42,10 @@ DEFAULT_SAME_MOMENT_K = 4
 DEFAULT_SEMANTIC_K = 8
 DEFAULT_NEIGHBOR_K = 12
 DEFAULT_SEED_K = 8
+# Lite summary fabric expand caps (PR-C design §6).
+DEFAULT_SUMMARY_SOURCE_LITE_K = 8
+DEFAULT_SUMMARY_SOURCE_DEEP_K = 24
+TRAVERSE_SUMMARY_EXPAND_MODES = frozenset({"lite", "deep"})
 
 # Empty / skip reasons (parity with Phase 2 semantic omit vocabulary where shared).
 REASON_NO_INDEX = "no_index"
@@ -50,7 +57,15 @@ REASON_PARENT_OF_UNAVAILABLE = "parent_of_unavailable"
 REASON_SEMANTIC_DISABLED = "semantic_disabled"
 
 STRUCTURAL_KINDS: frozenset[str] = frozenset(
-    {EDGE_SEQUENTIAL, EDGE_PARENT_OF, EDGE_CHILD_OF, EDGE_SAME_MOMENT}
+    {
+        EDGE_SEQUENTIAL,
+        EDGE_PARENT_OF,
+        EDGE_CHILD_OF,
+        EDGE_SAME_MOMENT,
+        EDGE_SUMMARY_CHILD,
+        EDGE_SUMMARY_SOURCE,
+        EDGE_SUPERSEDES,
+    }
 )
 
 
@@ -213,6 +228,20 @@ class GraphView:
         return _bool_setting(
             self._settings, "traverse_allow_semantic_hops", True
         )
+
+    def _summary_expand_mode(self) -> str:
+        """``lite`` (default) or ``deep`` (Phase 3 / #103 stub)."""
+        raw = getattr(self._settings, "traverse_summary_expand", None)
+        mode = str(raw or "lite").strip().lower()
+        if mode not in TRAVERSE_SUMMARY_EXPAND_MODES:
+            return "lite"
+        return mode
+
+    def _summary_source_k(self) -> int:
+        """Cap for projected ``summary_source`` edges (lite K≤8; deep larger)."""
+        if self._summary_expand_mode() == "deep":
+            return max(0, DEFAULT_SUMMARY_SOURCE_DEEP_K)
+        return max(0, DEFAULT_SUMMARY_SOURCE_LITE_K)
 
     def _weight_edge(
         self,
@@ -427,6 +456,132 @@ class GraphView:
                 scored.append(e)
         scored.sort(key=lambda e: (-e.weight, e.dst_atom_id))
         return scored[:k]
+
+    # ── Summary ladder fabric (meta projection; no edge table) ─────────────
+
+    def _meta_id_list(self, meta: Mapping[str, Any], key: str) -> list[str]:
+        raw = meta.get(key) if meta else None
+        if not isinstance(raw, (list, tuple)):
+            return []
+        out: list[str] = []
+        for item in raw:
+            if item is None:
+                continue
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+
+    def _project_summary_child(
+        self,
+        atom: Atom,
+        *,
+        exclude: AbstractSet[str],
+        deadline: float | None,
+        t0: float,
+    ) -> list[GraphEdge]:
+        """parent summary → child summary via ``meta.child_atom_ids``.
+
+        Coarser ladder fabric only: skip 1h raw windows that store the same
+        list as a legacy pointer (``from_children`` false). 1h→raw uses
+        ``summary_source``.
+        """
+        if atom.kind != "summary":
+            return []
+        meta = atom.meta or {}
+        if atom.scale == "1h" and not meta.get("from_children"):
+            return []
+        ids = self._meta_id_list(meta, "child_atom_ids")
+        if not ids:
+            return []
+        edges: list[GraphEdge] = []
+        for dst_id in ids:
+            if deadline is not None and (_now_ms() - t0) > deadline:
+                break
+            if dst_id in exclude or dst_id == atom.atom_id:
+                continue
+            dst = self._store.get_atom(dst_id)
+            if dst is None:
+                continue
+            e = self._weight_edge(
+                EDGE_SUMMARY_CHILD,
+                src_id=atom.atom_id,
+                dst=dst,
+                reason="summary_child",
+                meta={"child_scale": meta.get("child_scale")},
+            )
+            if e is not None:
+                edges.append(e)
+        return edges
+
+    def _project_summary_source(
+        self,
+        atom: Atom,
+        *,
+        exclude: AbstractSet[str],
+        deadline: float | None,
+        t0: float,
+    ) -> list[GraphEdge]:
+        """1h summary → raw source experience via ``meta.source_atom_ids``.
+
+        Lite caps K≤8; deep uses a larger K. Non-1h summaries yield no edges.
+        """
+        if atom.kind != "summary" or atom.scale != "1h":
+            return []
+        meta = atom.meta or {}
+        ids = self._meta_id_list(meta, "source_atom_ids")
+        if not ids:
+            return []
+        cap = self._summary_source_k()
+        if cap <= 0:
+            return []
+        edges: list[GraphEdge] = []
+        for dst_id in ids[:cap]:
+            if deadline is not None and (_now_ms() - t0) > deadline:
+                break
+            if dst_id in exclude or dst_id == atom.atom_id:
+                continue
+            dst = self._store.get_atom(dst_id)
+            if dst is None:
+                continue
+            e = self._weight_edge(
+                EDGE_SUMMARY_SOURCE,
+                src_id=atom.atom_id,
+                dst=dst,
+                reason="summary_source",
+                meta={"scale": atom.scale},
+            )
+            if e is not None:
+                edges.append(e)
+        return edges
+
+    def _project_supersedes(
+        self,
+        atom: Atom,
+        *,
+        exclude: AbstractSet[str],
+    ) -> list[GraphEdge]:
+        """new tip → previous version via ``meta.supersedes_atom_id``."""
+        if atom.kind != "summary":
+            return []
+        meta = atom.meta or {}
+        prev_id = meta.get("supersedes_atom_id") or meta.get("previous_version_id")
+        if not prev_id:
+            return []
+        prev_id = str(prev_id).strip()
+        if not prev_id or prev_id in exclude or prev_id == atom.atom_id:
+            return []
+        prev = self._store.get_atom(prev_id)
+        if prev is None:
+            return []
+        e = self._weight_edge(
+            EDGE_SUPERSEDES,
+            src_id=atom.atom_id,
+            dst=prev,
+            reason="supersedes",
+            meta={"version": meta.get("version")},
+        )
+        return [e] if e is not None else []
 
     # ── Semantic hop ───────────────────────────────────────────────────────
 
@@ -650,6 +805,38 @@ class GraphView:
                     atom, exclude=exclude, deadline=deadline_cap, t0=t0
                 )
             )
+
+        # Summary ladder fabric: project when seed is a summary atom.
+        # Lite (default): summary_child one hop + summary_source K≤8 from 1h;
+        # do NOT walk supersedes unless the caller explicitly requested the kind.
+        # Deep: same projections + optional supersedes (multi-hop is session depth).
+        summary_mode = self._summary_expand_mode()
+        expand_meta["summary_expand"] = summary_mode
+        if atom.kind == "summary":
+            if EDGE_SUMMARY_CHILD in wanted and not over():
+                edges.extend(
+                    self._project_summary_child(
+                        atom, exclude=exclude, deadline=deadline_cap, t0=t0
+                    )
+                )
+            if EDGE_SUMMARY_SOURCE in wanted and not over():
+                edges.extend(
+                    self._project_summary_source(
+                        atom, exclude=exclude, deadline=deadline_cap, t0=t0
+                    )
+                )
+            if EDGE_SUPERSEDES in wanted and not over():
+                # lite default expand skips supersedes; explicit kinds= still ok.
+                walk_supersedes = summary_mode == "deep" or (
+                    kinds is not None and EDGE_SUPERSEDES in kinds
+                )
+                if walk_supersedes:
+                    edges.extend(
+                        self._project_supersedes(atom, exclude=exclude)
+                    )
+                else:
+                    expand_meta["supersedes_skipped"] = "lite"
+
         if EDGE_SEMANTIC_HOP in wanted and allow_semantic and not over():
             edges.extend(
                 self._project_semantic_hop(
@@ -885,12 +1072,17 @@ __all__ = [
     "DEFAULT_SAME_MOMENT_K",
     "DEFAULT_SEED_K",
     "DEFAULT_SEMANTIC_K",
+    "DEFAULT_SUMMARY_SOURCE_DEEP_K",
+    "DEFAULT_SUMMARY_SOURCE_LITE_K",
     "EDGE_CHILD_OF",
     "EDGE_KINDS",
     "EDGE_PARENT_OF",
     "EDGE_SAME_MOMENT",
     "EDGE_SEMANTIC_HOP",
     "EDGE_SEQUENTIAL",
+    "EDGE_SUMMARY_CHILD",
+    "EDGE_SUMMARY_SOURCE",
+    "EDGE_SUPERSEDES",
     "GraphEdge",
     "GraphView",
     "REASON_ENCODER_COLD",
@@ -900,4 +1092,5 @@ __all__ = [
     "REASON_SEMANTIC_DISABLED",
     "REASON_TIMEOUT",
     "STRUCTURAL_KINDS",
+    "TRAVERSE_SUMMARY_EXPAND_MODES",
 ]

@@ -333,6 +333,60 @@ def test_build_summary_meta_child_cap_and_honesty(store):
     assert "is_tip" not in atom.meta  # KD-TIP: no live is_tip
     assert atom.meta.get("generated_at")
     assert atom.kind == "summary"
+    # Default ladder_source_edge_k=24 when settings omitted.
+    assert len(atom.meta["source_atom_ids"]) == 24
+
+
+def test_build_summary_source_edge_k_respects_settings(store):
+    """PR-C: write-time source_atom_ids capped by ladder_source_edge_k."""
+    start = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    end = start + timedelta(hours=1)
+    for i in range(40):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T12:00:{i % 60:02d}Z",
+                kind="observation",
+                text=f"src{i}",
+                moment_id="m1",
+            )
+        )
+    settings = MemorySettings(ladder_source_edge_k=5)
+    atom = build_summary_atom(store, "1h", start, end, settings=settings)
+    assert len(atom.meta["source_atom_ids"]) == 5
+    # Coarser from_children leaves source_atom_ids empty (put 1h tips first).
+    base = datetime(2026, 7, 28, 10, 0, tzinfo=UTC)
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:05:00Z",
+            kind="speak",
+            text="hour-A",
+            moment_id="mA",
+        )
+    )
+    store.put_atom(
+        _atom(
+            t="2026-07-28T11:20:00Z",
+            kind="observation",
+            text="hour-B",
+            moment_id="mB",
+        )
+    )
+    s_a = refresh_window(store, "1h", base, settings=settings)
+    s_b = refresh_window(store, "1h", base + timedelta(hours=1), settings=settings)
+    assert s_a is not None and s_b is not None
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+    day = build_summary_atom(
+        store,
+        "1d",
+        day_start,
+        day_start + timedelta(days=1),
+        settings=settings,
+    )
+    assert day.meta.get("from_children") is True
+    assert day.meta.get("source_atom_ids") == []
+    child_ids = day.meta.get("child_atom_ids") or []
+    assert s_a.atom_id in child_ids
+    assert s_b.atom_id in child_ids
 
 
 def test_gap_spans_mid_window():

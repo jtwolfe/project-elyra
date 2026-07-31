@@ -55,7 +55,10 @@ _MAX_HIGHLIGHTS: dict[str, int] = {
 
 # Raise 64 → 96 so a full day of 1h children fits (KD design).
 _MAX_CHILD_IDS = 96
+# Absolute ceiling for source_atom_ids; write path also respects
+# MemorySettings.ladder_source_edge_k (default 24, PR-C).
 _MAX_SOURCE_ATOM_IDS = 48
+_DEFAULT_SOURCE_EDGE_K = 24
 _MAX_POINTER_IDS = 24
 _HIGHLIGHT_TRUNCATE = 160
 _PACK_LINE_TRUNCATE = 200
@@ -697,6 +700,17 @@ def resolve_tip(
         if tip.window_start and to_iso_z(tip.window_start) == target:
             return tip
     return None
+def _source_edge_k(settings: MemorySettings | None) -> int:
+    """Write-time cap for ``meta.source_atom_ids`` (PR-C edge fabric)."""
+    raw = _DEFAULT_SOURCE_EDGE_K
+    if settings is not None:
+        try:
+            raw = int(getattr(settings, "ladder_source_edge_k", _DEFAULT_SOURCE_EDGE_K))
+        except (TypeError, ValueError):
+            raw = _DEFAULT_SOURCE_EDGE_K
+    if raw < 0:
+        raw = 0
+    return min(raw, _MAX_SOURCE_ATOM_IDS)
 
 
 def _build_honesty_meta(
@@ -713,13 +727,15 @@ def _build_honesty_meta(
     version: int = 1,
     supersedes_atom_id: str | None = None,
     child_content_hash_value: str | None = None,
+    settings: MemorySettings | None = None,
+    scale: PeriodScale | str | None = None,
 ) -> dict[str, Any]:
     stats = _count_stats(sources)
     child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
     source_ids: list[str] = []
     if not from_children:
         ranked = sorted(sources, key=_highlight_rank)
-        source_ids = [a.atom_id for a in ranked[:_MAX_SOURCE_ATOM_IDS]]
+        source_ids = [a.atom_id for a in ranked[: _source_edge_k(settings)]]
     goals = _goal_ids_from_atoms(sources)[:_MAX_POINTER_IDS]
     tasks = _task_ids_from_atoms(sources)[:_MAX_POINTER_IDS]
     pointer_atoms = [a.atom_id for a in select_highlights(sources, scale="1h", limit=12)]
@@ -975,6 +991,8 @@ def build_summary_atom(
         version=ver,
         supersedes_atom_id=supersedes_atom_id,
         child_content_hash_value=cch,
+        settings=settings,
+        scale=scale,
     )
     return Atom(
         atom_id=atom_id,
