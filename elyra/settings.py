@@ -371,6 +371,25 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
         if path == "memory.ladder_max_ms_per_tick" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.summary_mode":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in ("template", "llm"):
+                raise ValueError(
+                    f"{path}: expected one of ['template', 'llm'], got {coerced!r}"
+                )
+        if path == "memory.ladder_hourly_max_ms" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_catchup_max_hours" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_llm_max_calls_per_tick" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_llm_max_calls_per_hour" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_recent_1h_meal" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_source_edge_k" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.max_tool_atoms_per_moment" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.atom_max_chars" and coerced < 0:

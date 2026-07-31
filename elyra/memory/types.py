@@ -39,13 +39,28 @@ ATOM_KINDS: frozenset[str] = frozenset(
     }
 )
 
-PeriodScale = Literal["15m", "1h", "6h", "1d", "1w", "1m"]
+PeriodScale = Literal["15m", "1h", "6h", "1d", "1w", "1m", "1y"]
 
-PERIOD_SCALES: frozenset[str] = frozenset(
-    {"15m", "1h", "6h", "1d", "1w", "1m"}
+# Write-era ladder (new summaries): 1h → 1d → 1w → 1m → 1y.
+PERIOD_SCALES_WRITE: frozenset[str] = frozenset(
+    {"1h", "1d", "1w", "1m", "1y"}
+)
+PERIOD_SCALE_ORDER_WRITE: tuple[PeriodScale, ...] = (
+    "1h",
+    "1d",
+    "1w",
+    "1m",
+    "1y",
 )
 
-# Scale order fine → coarse (ladder child preference).
+# Legacy scales: read / optional repair only (no new writes by default).
+PERIOD_SCALES_LEGACY: frozenset[str] = frozenset({"15m", "6h"})
+
+PERIOD_SCALES_ALL: frozenset[str] = PERIOD_SCALES_WRITE | PERIOD_SCALES_LEGACY
+# PERIOD_SCALES remains ALL for window_bounds / read validation.
+PERIOD_SCALES: frozenset[str] = PERIOD_SCALES_ALL
+
+# Scale order fine → coarse (read/legacy-aware; includes 1y).
 PERIOD_SCALE_ORDER: tuple[PeriodScale, ...] = (
     "15m",
     "1h",
@@ -53,6 +68,7 @@ PERIOD_SCALE_ORDER: tuple[PeriodScale, ...] = (
     "1d",
     "1w",
     "1m",
+    "1y",
 )
 
 # KD8: skipped = empty content / encoder permanently unavailable for atom.
@@ -104,10 +120,9 @@ def parse_iso_z(value: datetime | str) -> datetime:
 def stable_summary_id(scale: PeriodScale | str, window_start: datetime | str) -> str:
     """Deterministic summary atom id for ``(scale, window_start)``.
 
-    **Sole normative source** for summary atom ids (ladder PR must call this,
-    not re-hash with raw ``datetime.isoformat()``). Key material is
-    ``f\"{scale}|{to_iso_z(window_start)}\"`` — always UTC with ``Z`` suffix
-    so ``…Z`` and ``…+00:00`` callers produce the same id.
+    **Sole normative source** for tip identity of 1h (and legacy) summaries.
+    Key material is ``f\"{scale}|{to_iso_z(window_start)}\"`` — always UTC
+    with ``Z`` suffix so ``…Z`` and ``…+00:00`` callers produce the same id.
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
@@ -116,18 +131,37 @@ def stable_summary_id(scale: PeriodScale | str, window_start: datetime | str) ->
     return "as_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
 
 
+def versioned_summary_id(
+    scale: PeriodScale | str,
+    window_start: datetime | str,
+    version: int,
+) -> str:
+    """Deterministic versioned summary atom id (coarser cascade archaeology).
+
+    PR-A scaffolds the helper; PR-B switches coarser puts onto versioned ids.
+    """
+    if scale not in PERIOD_SCALES:
+        raise ValueError(f"invalid period scale: {scale!r}")
+    if int(version) < 1:
+        raise ValueError(f"version must be >= 1, got {version!r}")
+    start = parse_iso_z(window_start)
+    key = f"{scale}|{to_iso_z(start)}|v{int(version)}"
+    return "as_" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
+
+
 def window_bounds(
     scale: PeriodScale | str, t: datetime | str
 ) -> tuple[datetime, datetime]:
     """Return half-open ``[start, end)`` UTC window containing ``t`` for ``scale``.
 
-    Grids (KD13):
+    Grids (KD13 + 1y):
     - 15m: floor to 15-min UTC
     - 1h: floor hour
     - 6h: floor to 00, 06, 12, 18 UTC
     - 1d: UTC midnight → next
     - 1w: Monday 00:00 UTC → +7d
     - 1m: first of month → first of next
+    - 1y: Jan 1 UTC → next year
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
@@ -152,12 +186,15 @@ def window_bounds(
         # Monday = 0 in weekday().
         start = dt.replace(hour=0, minute=0) - timedelta(days=dt.weekday())
         end = start + timedelta(days=7)
-    else:  # 1m
+    elif scale == "1m":
         start = dt.replace(day=1, hour=0, minute=0)
         if start.month == 12:
             end = start.replace(year=start.year + 1, month=1)
         else:
             end = start.replace(month=start.month + 1)
+    else:  # 1y
+        start = dt.replace(month=1, day=1, hour=0, minute=0)
+        end = start.replace(year=start.year + 1)
 
     return start, end
 
@@ -341,7 +378,11 @@ __all__ = [
     "EMBEDDING_STATUSES",
     "EmbeddingStatus",
     "PERIOD_SCALES",
+    "PERIOD_SCALES_ALL",
+    "PERIOD_SCALES_LEGACY",
+    "PERIOD_SCALES_WRITE",
     "PERIOD_SCALE_ORDER",
+    "PERIOD_SCALE_ORDER_WRITE",
     "PeriodScale",
     "SCHEMA_VERSION",
     "atom_from_dict",
@@ -354,5 +395,6 @@ __all__ = [
     "to_iso_z",
     "utc_now_iso",
     "validate_atom",
+    "versioned_summary_id",
     "window_bounds",
 ]

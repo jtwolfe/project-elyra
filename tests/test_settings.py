@@ -77,7 +77,13 @@ def test_default_settings_match_design():
     assert s.memory.episodic_fraction == 0.20
     assert s.memory.episodic_horizon_hours == 24.0
     assert s.memory.ladder_enabled is True
-    assert s.memory.ladder_max_ms_per_tick == 50
+    assert s.memory.ladder_max_ms_per_tick == 200
+    assert s.memory.summary_mode == "template"
+    assert s.memory.ladder_write_legacy_scales is False
+    assert s.memory.ladder_hourly_max_ms == 12000
+    assert s.memory.ladder_catchup_max_hours == 24
+    assert s.memory.ladder_llm_max_calls_per_tick == 3
+    assert s.memory.ladder_llm_max_calls_per_hour == 40
     assert s.memory.link_across_moments is True
     assert s.memory.max_tool_atoms_per_moment == 48
     # Phase 2 semantic/embed knobs default off (no behaviour change).
@@ -336,6 +342,28 @@ def test_invalid_memory_horizon_and_ladder_ms_raise(tmp_path):
     )
     with pytest.raises(ValueError, match="memory.max_tool_atoms_per_moment"):
         load_settings(tmp_path)
+
+
+def test_invalid_memory_summary_mode_and_ladder_knobs_raise(tmp_path):
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsummary_mode = \"magic\"\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.summary_mode"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nladder_hourly_max_ms = -1\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="memory.ladder_hourly_max_ms"):
+        load_settings(tmp_path)
+    (tmp_path / "elyra.toml").write_text(
+        "[memory]\nsummary_mode = \"llm\"\nladder_catchup_max_hours = 12\n",
+        encoding="utf-8",
+    )
+    s = load_settings(tmp_path)
+    assert s.memory.summary_mode == "llm"
+    assert s.memory.ladder_catchup_max_hours == 12
 
 
 def test_memory_phase2_semantic_toml_and_defaults(tmp_path):

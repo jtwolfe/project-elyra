@@ -1,10 +1,9 @@
-"""Period summary ladder — template-first (Phase 1).
+"""Period summary ladder — template + optional LLM, hourly cascade.
 
-Scope: UTC grid windows, template render, stable-id replace, budgeted
-``refresh_due`` for idle ticks. Child-summary preference for coarser scales.
-In scope: no LLM; deterministic highlight ranking; ladder/state.json when store
-exposes ``memory_dir``.
-Out of scope: presence worker hook (PR5), meal composition, promote.
+Scope: UTC grid windows, template render, stable-id replace, source packs,
+budgeted ``tick`` / ``refresh_due`` for idle, cascade via write parent map.
+In scope: SummaryLlm protocol consumer (no presence / ChatClient import).
+Out of scope: meal pack policy (PR-D), version archaeology puts (PR-B), edges.
 """
 
 from __future__ import annotations
@@ -12,20 +11,24 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
-from elyra.memory.config import LADDER_DIRNAME, LADDER_STATE
+from elyra.memory.config import LADDER_DIRNAME, LADDER_STATE, MemorySettings
+from elyra.memory.ladder_llm import SummaryLlm, SummaryLlmError
 from elyra.memory.store import MemoryStore
 from elyra.memory.temporal import (
     child_scale,
     list_range,
+    parent_scale_write,
     windows_in_horizon,
 )
 from elyra.memory.types import (
-    PERIOD_SCALE_ORDER,
+    PERIOD_SCALE_ORDER_WRITE,
     PERIOD_SCALES,
+    PERIOD_SCALES_LEGACY,
+    PERIOD_SCALES_WRITE,
     Atom,
     PeriodScale,
     parse_iso_z,
@@ -44,16 +47,25 @@ _MAX_HIGHLIGHTS: dict[str, int] = {
     "1d": 20,
     "1w": 20,
     "1m": 20,
+    "1y": 20,
 }
 
-_MAX_CHILD_IDS = 64
+# Raise 64 → 96 so a full day of 1h children fits (KD design).
+_MAX_CHILD_IDS = 96
+_MAX_SOURCE_ATOM_IDS = 48
+_MAX_POINTER_IDS = 24
 _HIGHLIGHT_TRUNCATE = 160
+_PACK_LINE_TRUNCATE = 200
 _DEFAULT_RANGE_LIMIT = 5000
+_MAX_MOMENT_BLOCKS = 40
+_MAX_ATOMS_PER_MOMENT = 8
+_MIN_GAP_MINUTES = 5
+_CHILD_BLURB_CHARS = 800
 
 # Kinds excluded when collecting raw experience for a window.
 _RAW_EXCLUDE_KINDS = frozenset({"summary", "parcel", "moment_meta"})
 
-# Default lookback window counts per scale for refresh_due.
+# Default lookback window counts per scale for refresh_due (write scales).
 _DEFAULT_N_WINDOWS: dict[str, int] = {
     "15m": 8,
     "1h": 6,
@@ -61,7 +73,41 @@ _DEFAULT_N_WINDOWS: dict[str, int] = {
     "1d": 3,
     "1w": 3,
     "1m": 2,
+    "1y": 2,
 }
+
+# Soft LLM token ceilings (draft / final). Soft targets, not hard char counters.
+_LLM_MAX_TOKENS_DRAFT: dict[str, int] = {
+    "1h": 800,
+    "1d": 2200,
+    "1w": 2800,
+    "1m": 3400,
+    "1y": 4500,
+    "15m": 600,
+    "6h": 1200,
+}
+_LLM_MAX_TOKENS_FINAL: dict[str, int] = {
+    "1h": 600,
+    "1d": 1800,
+    "1w": 2500,
+    "1m": 3000,
+    "1y": 4000,
+    "15m": 500,
+    "6h": 1000,
+}
+# Approx char budget for skip-pass-B heuristic (~4 chars/token soft).
+_SOFT_CHAR_BUDGET: dict[str, int] = {
+    "1h": 2400,
+    "1d": 7200,
+    "1w": 10000,
+    "1m": 12000,
+    "1y": 16000,
+    "15m": 2000,
+    "6h": 4000,
+}
+
+# Always two-pass for coarser than 1h.
+_ALWAYS_TWO_PASS = frozenset({"1d", "1w", "1m", "1y"})
 
 
 def max_highlights(scale: PeriodScale | str) -> int:
@@ -127,6 +173,24 @@ def _goal_ids_from_atoms(atoms: Sequence[Atom]) -> list[str]:
     return seen
 
 
+def _task_ids_from_atoms(atoms: Sequence[Atom]) -> list[str]:
+    seen: list[str] = []
+    found: set[str] = set()
+    for atom in atoms:
+        meta = atom.meta or {}
+        for key in ("task_id", "task_ids"):
+            val = meta.get(key)
+            if isinstance(val, str) and val and val not in found:
+                found.add(val)
+                seen.append(val)
+            elif isinstance(val, (list, tuple)):
+                for t in val:
+                    if isinstance(t, str) and t and t not in found:
+                        found.add(t)
+                        seen.append(t)
+    return seen
+
+
 def _why_now_open_thread(atoms: Sequence[Atom]) -> str | None:
     """Last non-empty why_now in chronological order, if any."""
     last: str | None = None
@@ -155,6 +219,26 @@ def select_highlights(
     return ranked[:cap]
 
 
+def _scale_writable(
+    scale: PeriodScale | str,
+    *,
+    settings: MemorySettings | None = None,
+    allow_legacy: bool | None = None,
+) -> bool:
+    """True when the scale may receive a new write under settings."""
+    if scale not in PERIOD_SCALES:
+        return False
+    if scale in PERIOD_SCALES_WRITE:
+        return True
+    if scale in PERIOD_SCALES_LEGACY:
+        if allow_legacy is not None:
+            return bool(allow_legacy)
+        if settings is not None:
+            return bool(getattr(settings, "ladder_write_legacy_scales", False))
+        return False
+    return False
+
+
 def collect_window_sources(
     store: MemoryStore,
     scale: PeriodScale | str,
@@ -170,6 +254,8 @@ def collect_window_sources(
     child scale exists and any child summaries overlap the window. Falls back
     to raw (non-summary) atoms when children are missing.
 
+    Write map: child of ``1h`` is ``None`` (raw only); child of ``1d`` is ``1h``.
+
     Returns ``(sources, from_children, child_scale_used)``.
     """
     if scale not in PERIOD_SCALES:
@@ -184,10 +270,10 @@ def collect_window_sources(
             overlapping=(w_start, w_end),
             limit=limit,
         )
-        # Only those fully or partially inside; list_summaries already overlaps.
         if children:
             children = sorted(
-                children, key=lambda a: (to_iso_z(a.window_start or a.t_start), a.atom_id)
+                children,
+                key=lambda a: (to_iso_z(a.window_start or a.t_start), a.atom_id),
             )
             return children, True, child
 
@@ -198,13 +284,289 @@ def collect_window_sources(
         limit=limit,
     )
     sources = [a for a in raw if a.kind not in _RAW_EXCLUDE_KINDS]
-    # Also drop any summary of this same scale (self).
     sources = [
         a
         for a in sources
         if not (a.kind == "summary" and a.scale == scale)
     ]
     return sources, False, child
+
+
+def moment_blocks_for_window(
+    store: MemoryStore,
+    w_start: datetime | str,
+    w_end: datetime | str,
+    *,
+    limit: int = _DEFAULT_RANGE_LIMIT,
+    max_moments: int = _MAX_MOMENT_BLOCKS,
+    max_atoms_per_moment: int = _MAX_ATOMS_PER_MOMENT,
+) -> list[dict[str, Any]]:
+    """Group raw experience atoms by ``moment_id`` into ordered moment blocks.
+
+    Each block: ``moment_id``, ``t0``, ``t1``, ``why_now``, ``n_atoms``, ``lines``.
+    """
+    w_s = parse_iso_z(w_start)
+    w_e = parse_iso_z(w_end)
+    raw = list_range(store, w_s, w_e, limit=limit)
+    atoms = [a for a in raw if a.kind not in _RAW_EXCLUDE_KINDS]
+    by_moment: dict[str, list[Atom]] = {}
+    orphan: list[Atom] = []
+    for a in atoms:
+        mid = a.moment_id
+        if isinstance(mid, str) and mid:
+            by_moment.setdefault(mid, []).append(a)
+        else:
+            orphan.append(a)
+
+    blocks: list[dict[str, Any]] = []
+    for mid, group in by_moment.items():
+        group_sorted = sorted(group, key=lambda a: (to_iso_z(a.t_start), a.atom_id))
+        t0 = group_sorted[0].t_start
+        t1 = group_sorted[-1].t_end or group_sorted[-1].t_start
+        why = _why_now_open_thread(group_sorted)
+        ranked = sorted(group_sorted, key=_highlight_rank)[:max_atoms_per_moment]
+        lines = [
+            f"{a.kind}: {_truncate(a.content_text or '', _PACK_LINE_TRUNCATE)}"
+            for a in ranked
+        ]
+        blocks.append(
+            {
+                "moment_id": mid,
+                "t0": to_iso_z(t0),
+                "t1": to_iso_z(t1),
+                "why_now": why,
+                "n_atoms": len(group_sorted),
+                "lines": lines,
+            }
+        )
+    blocks.sort(key=lambda b: b["t0"])
+    if orphan:
+        ranked_o = sorted(orphan, key=_highlight_rank)[:max_atoms_per_moment]
+        blocks.append(
+            {
+                "moment_id": None,
+                "t0": to_iso_z(ranked_o[0].t_start) if ranked_o else to_iso_z(w_s),
+                "t1": to_iso_z(ranked_o[-1].t_start) if ranked_o else to_iso_z(w_e),
+                "why_now": None,
+                "n_atoms": len(orphan),
+                "lines": [
+                    f"{a.kind}: {_truncate(a.content_text or '', _PACK_LINE_TRUNCATE)}"
+                    for a in ranked_o
+                ],
+            }
+        )
+    return blocks[:max_moments]
+
+
+def gap_spans(
+    window_start: datetime | str,
+    window_end: datetime | str,
+    moment_intervals: Sequence[tuple[datetime | str, datetime | str]],
+    *,
+    min_gap: timedelta | None = None,
+) -> list[tuple[datetime, datetime]]:
+    """Half-open empty ranges with no moments; emit gaps ≥ min threshold.
+
+    ``moment_intervals`` are half-open ``[t0, t1)`` coverage spans. Overlapping
+    / adjacent intervals are merged before gap extraction.
+    """
+    w_s = parse_iso_z(window_start)
+    w_e = parse_iso_z(window_end)
+    if w_e <= w_s:
+        return []
+    threshold = min_gap if min_gap is not None else timedelta(minutes=_MIN_GAP_MINUTES)
+
+    spans: list[tuple[datetime, datetime]] = []
+    for raw0, raw1 in moment_intervals:
+        t0 = parse_iso_z(raw0)
+        t1 = parse_iso_z(raw1)
+        if t1 <= t0:
+            t1 = t0 + timedelta(seconds=1)
+        # Clip to window.
+        t0 = max(t0, w_s)
+        t1 = min(t1, w_e)
+        if t1 > t0:
+            spans.append((t0, t1))
+    if not spans:
+        gap = (w_s, w_e)
+        return [gap] if (w_e - w_s) >= threshold else []
+
+    spans.sort(key=lambda p: p[0])
+    merged: list[tuple[datetime, datetime]] = [spans[0]]
+    for s, e in spans[1:]:
+        ms, me = merged[-1]
+        if s <= me:
+            merged[-1] = (ms, max(me, e))
+        else:
+            merged.append((s, e))
+
+    gaps: list[tuple[datetime, datetime]] = []
+    cursor = w_s
+    for s, e in merged:
+        if s > cursor and (s - cursor) >= threshold:
+            gaps.append((cursor, s))
+        cursor = max(cursor, e)
+    if w_e > cursor and (w_e - cursor) >= threshold:
+        gaps.append((cursor, w_e))
+    return gaps
+
+
+def build_source_pack(
+    scale: PeriodScale | str,
+    window_start: datetime | str,
+    window_end: datetime | str,
+    sources: Sequence[Atom],
+    *,
+    identity_names: Mapping[str, str] | None = None,
+    from_children: bool = False,
+    store: MemoryStore | None = None,
+) -> str:
+    """Render structured source pack text for LLM / template diagnostics.
+
+    For raw (1h) sources, groups by moment and includes gap spans. For child
+    tips, lists child blurbs and missing slots when possible.
+    """
+    if scale not in PERIOD_SCALES:
+        raise ValueError(f"invalid period scale: {scale!r}")
+    ws = to_iso_z(window_start)
+    we = to_iso_z(window_end)
+    w_s = parse_iso_z(window_start)
+    w_e = parse_iso_z(window_end)
+    names = dict(identity_names or {})
+    self_name = names.get("self") or names.get("display_name") or "Elyra"
+    user_name = names.get("user") or names.get("user_display_name") or "user"
+
+    lines = [
+        f"[window {scale} | {ws} → {we}]",
+        f"[identity] self={self_name}; user={user_name} (soft names only)",
+    ]
+
+    if from_children:
+        child = child_scale(scale)
+        lines.append(f"[child tips scale={child}]")
+        if sources:
+            for a in sources:
+                blurb = _truncate(a.content_text or "", _CHILD_BLURB_CHARS)
+                tip_ws = a.window_start or a.t_start
+                lines.append(f"- {tip_ws} {a.atom_id}: {blurb}")
+        else:
+            lines.append("- (none)")
+        # Note missing child windows when store available.
+        if store is not None and child is not None:
+            child_windows = list(
+                _iter_child_windows(child, w_s, w_e)
+            )
+            present_starts = {
+                to_iso_z(parse_iso_z(a.window_start or a.t_start))
+                for a in sources
+                if a.window_start or a.t_start
+            }
+            missing = [
+                to_iso_z(cw)
+                for cw, _ in child_windows
+                if to_iso_z(cw) not in present_starts and cw + timedelta(microseconds=1) < w_e
+            ]
+            if missing:
+                lines.append("[missing child windows]")
+                for m in missing[:48]:
+                    lines.append(f"- {m}")
+        return "\n".join(lines)
+
+    # Raw experience pack with moments + gaps.
+    lines.append("[moments]")
+    blocks: list[dict[str, Any]]
+    if store is not None:
+        blocks = moment_blocks_for_window(store, w_s, w_e)
+    else:
+        blocks = _moment_blocks_from_sources(sources)
+
+    if blocks:
+        for b in blocks:
+            mid = b.get("moment_id") or "—"
+            why = b.get("why_now") or "—"
+            lines.append(
+                f"- {mid} {b['t0']}–{b['t1']} why_now={why} n_atoms={b['n_atoms']}"
+            )
+            for ln in b.get("lines") or []:
+                lines.append(f"  - {ln}")
+    else:
+        lines.append("- (none)")
+
+    intervals: list[tuple[datetime | str, datetime | str]] = [
+        (b["t0"], b["t1"]) for b in blocks if b.get("t0") and b.get("t1")
+    ]
+    gaps = gap_spans(w_s, w_e, intervals)
+    lines.append("[gaps]")
+    if gaps:
+        for g0, g1 in gaps:
+            mins = int((g1 - g0).total_seconds() // 60)
+            lines.append(
+                f"- no moments from {to_iso_z(g0)} to {to_iso_z(g1)} (~{mins}m)"
+            )
+    else:
+        lines.append("- (none above threshold)")
+
+    highlights = select_highlights(sources, scale=scale)
+    lines.append("[highlights ranked]")
+    if highlights:
+        for h in highlights:
+            lines.append(
+                f"- {to_iso_z(h.t_start)} {h.kind}: "
+                f"{_truncate(h.content_text or '', _PACK_LINE_TRUNCATE)}"
+            )
+    else:
+        lines.append("- (none)")
+
+    return "\n".join(lines)
+
+
+def _moment_blocks_from_sources(sources: Sequence[Atom]) -> list[dict[str, Any]]:
+    by_moment: dict[str, list[Atom]] = {}
+    for a in sources:
+        mid = a.moment_id if isinstance(a.moment_id, str) and a.moment_id else "_orphan"
+        by_moment.setdefault(mid, []).append(a)
+    blocks: list[dict[str, Any]] = []
+    for mid, group in by_moment.items():
+        group_sorted = sorted(group, key=lambda a: (to_iso_z(a.t_start), a.atom_id))
+        ranked = sorted(group_sorted, key=_highlight_rank)[:_MAX_ATOMS_PER_MOMENT]
+        blocks.append(
+            {
+                "moment_id": None if mid == "_orphan" else mid,
+                "t0": to_iso_z(group_sorted[0].t_start),
+                "t1": to_iso_z(group_sorted[-1].t_end or group_sorted[-1].t_start),
+                "why_now": _why_now_open_thread(group_sorted),
+                "n_atoms": len(group_sorted),
+                "lines": [
+                    f"{a.kind}: {_truncate(a.content_text or '', _PACK_LINE_TRUNCATE)}"
+                    for a in ranked
+                ],
+            }
+        )
+    blocks.sort(key=lambda b: b["t0"])
+    return blocks[:_MAX_MOMENT_BLOCKS]
+
+
+def _iter_child_windows(
+    child_scale_name: str,
+    w_start: datetime,
+    w_end: datetime,
+) -> list[tuple[datetime, datetime]]:
+    """Grid child windows whose start is in ``[w_start, w_end)``."""
+    out: list[tuple[datetime, datetime]] = []
+    cursor = w_start
+    # Safety cap for year-of-months etc.
+    for _ in range(400):
+        if cursor >= w_end:
+            break
+        cs, ce = window_bounds(child_scale_name, cursor)
+        if cs >= w_end:
+            break
+        if cs >= w_start:
+            out.append((cs, ce))
+        if ce <= cursor:
+            break
+        cursor = ce
+    return out
 
 
 def render_template_summary(
@@ -235,7 +597,6 @@ def render_template_summary(
 
     goals = _goal_ids_from_atoms(sources)
     if goals:
-        # Short list — cap display length.
         shown = goals[:8]
         goals_text = ", ".join(shown)
         if len(goals) > 8:
@@ -269,6 +630,138 @@ def render_template_summary(
     return "\n".join(lines)
 
 
+def _count_stats(sources: Sequence[Atom]) -> dict[str, int]:
+    return {
+        "n_atoms": len(sources),
+        "n_moments": len(
+            {
+                a.moment_id
+                for a in sources
+                if isinstance(a.moment_id, str) and a.moment_id
+            }
+        ),
+        "n_speak": sum(1 for a in sources if a.kind == "speak"),
+        "n_tool": sum(1 for a in sources if a.kind == "tool"),
+    }
+
+
+def _build_honesty_meta(
+    *,
+    sources: Sequence[Atom],
+    from_children: bool,
+    child: PeriodScale | None,
+    summary_mode_requested: str,
+    source: str,
+    llm_passes: int = 0,
+    llm_error: str | None = None,
+    llm_model: str | None = None,
+    draft_chars: int | None = None,
+    version: int = 1,
+    supersedes_atom_id: str | None = None,
+) -> dict[str, Any]:
+    stats = _count_stats(sources)
+    child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
+    source_ids: list[str] = []
+    if not from_children:
+        ranked = sorted(sources, key=_highlight_rank)
+        source_ids = [a.atom_id for a in ranked[:_MAX_SOURCE_ATOM_IDS]]
+    goals = _goal_ids_from_atoms(sources)[:_MAX_POINTER_IDS]
+    tasks = _task_ids_from_atoms(sources)[:_MAX_POINTER_IDS]
+    pointer_atoms = [a.atom_id for a in select_highlights(sources, scale="1h", limit=12)]
+    meta: dict[str, Any] = {
+        "source": source,
+        "summary_mode_requested": summary_mode_requested,
+        "from_children": from_children,
+        "child_scale": child,
+        "child_atom_ids": child_ids,
+        "source_atom_ids": source_ids,
+        "n_atoms": stats["n_atoms"],
+        "n_moments": stats["n_moments"],
+        "n_speak": stats["n_speak"],
+        "n_tool": stats["n_tool"],
+        "pointer_atom_ids": pointer_atoms[:_MAX_POINTER_IDS],
+        "pointer_goal_ids": goals,
+        "pointer_task_ids": tasks,
+        "version": version,
+        "supersedes_atom_id": supersedes_atom_id,
+        "previous_version_id": supersedes_atom_id,
+        "llm_model": llm_model,
+        "llm_passes": llm_passes,
+        "llm_error": llm_error,
+        "draft_chars": draft_chars,
+        "generated_at": to_iso_z(datetime.now(UTC)),
+    }
+    return meta
+
+
+def _llm_generate_body(
+    *,
+    scale: str,
+    window_start: datetime,
+    window_end: datetime,
+    sources: Sequence[Atom],
+    from_children: bool,
+    llm: SummaryLlm,
+    identity_names: Mapping[str, str] | None,
+    store: MemoryStore | None,
+) -> tuple[str, int, int | None, str | None]:
+    """Two-pass LLM generation. Returns (body, passes, draft_chars, error).
+
+    On failure raises SummaryLlmError (caller falls back to template).
+    """
+    pack = build_source_pack(
+        scale,
+        window_start,
+        window_end,
+        sources,
+        identity_names=identity_names,
+        from_children=from_children,
+        store=store,
+    )
+    draft_tokens = _LLM_MAX_TOKENS_DRAFT.get(scale, 800)
+    final_tokens = _LLM_MAX_TOKENS_FINAL.get(scale, 600)
+    soft_chars = _SOFT_CHAR_BUDGET.get(scale, 2400)
+
+    system = (
+        "You write honest period memory narratives for an AI instance. "
+        "Ground every claim in the source pack. Note idle/gap spans; do not "
+        "invent work. Prefer under-claim. Soft-merge continuous tool chains "
+        "into one beat when natural. Use soft self/other names from the pack. "
+        "You may mention important a_/g_/t_ ids in prose."
+    )
+    user_a = (
+        f"Write a draft narrative for scale={scale} window "
+        f"{to_iso_z(window_start)} → {to_iso_z(window_end)}.\n\n"
+        f"{pack}"
+    )
+    draft = llm.complete(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_a},
+        ],
+        max_tokens=draft_tokens,
+    )
+    draft_chars = len(draft)
+    need_b = scale in _ALWAYS_TWO_PASS or draft_chars > soft_chars
+    if not need_b:
+        return draft.strip(), 1, draft_chars, None
+
+    user_b = (
+        f"Reduce the draft to the final stored body for scale={scale}. "
+        f"Keep honesty about gaps; soft target ~{final_tokens} tokens; "
+        f"hard cap well under 8000 characters. Preserve key pointers.\n\n"
+        f"DRAFT:\n{draft}"
+    )
+    final = llm.complete(
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_b},
+        ],
+        max_tokens=final_tokens,
+    )
+    return final.strip(), 2, draft_chars, None
+
+
 def build_summary_atom(
     store: MemoryStore,
     scale: PeriodScale | str,
@@ -276,13 +769,25 @@ def build_summary_atom(
     window_end: datetime | str | None = None,
     *,
     prefer_children: bool = True,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
+    allow_legacy: bool | None = None,
+    version: int = 1,
+    supersedes_atom_id: str | None = None,
 ) -> Atom:
-    """Build (do not store) a template summary atom for the window.
+    """Build (do not store) a summary atom for the window.
 
-    Uses ``stable_summary_id`` so replace-in-place overwrites the same id.
+    Uses ``stable_summary_id`` so replace-in-place overwrites the same id
+    (PR-A; PR-B switches coarser scales to versioned ids).
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
+    if not _scale_writable(scale, settings=settings, allow_legacy=allow_legacy):
+        raise ValueError(
+            f"scale {scale!r} is not writable "
+            f"(legacy writes disabled; set ladder_write_legacy_scales=true)"
+        )
     w_start = parse_iso_z(window_start)
     if window_end is None:
         _, w_end = window_bounds(scale, w_start)
@@ -296,32 +801,91 @@ def build_summary_atom(
         w_end,
         prefer_children=prefer_children,
     )
-    highlights = select_highlights(sources, scale=scale)
-    body = render_template_summary(
-        scale=scale,
-        window_start=w_start,
-        window_end=w_end,
-        sources=sources,
-        highlights=highlights,
-    )
-    child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
+    mode = "template"
+    if settings is not None:
+        mode = str(getattr(settings, "summary_mode", "template") or "template").lower()
+    summary_mode_requested = mode if mode in ("template", "llm") else "template"
+
+    body: str
+    source_tag = "template"
+    llm_passes = 0
+    llm_error: str | None = None
+    draft_chars: int | None = None
+
+    if summary_mode_requested == "llm" and llm is not None:
+        try:
+            body, llm_passes, draft_chars, llm_error = _llm_generate_body(
+                scale=str(scale),
+                window_start=w_start,
+                window_end=w_end,
+                sources=sources,
+                from_children=from_children,
+                llm=llm,
+                identity_names=identity_names,
+                store=store,
+            )
+            if not body.strip():
+                raise SummaryLlmError("empty_body")
+            source_tag = "llm"
+        except SummaryLlmError as exc:
+            _LOG.warning(
+                "ladder LLM failed scale=%s window=%s: %s; template fallback",
+                scale,
+                to_iso_z(w_start),
+                exc,
+            )
+            llm_error = str(exc)[:200]
+            highlights = select_highlights(sources, scale=scale)
+            body = render_template_summary(
+                scale=scale,
+                window_start=w_start,
+                window_end=w_end,
+                sources=sources,
+                highlights=highlights,
+            )
+            source_tag = "llm_fallback_template"
+            llm_passes = 0
+        except Exception as exc:  # noqa: BLE001 — never kill presence
+            _LOG.warning(
+                "ladder LLM unexpected error scale=%s: %s; template fallback",
+                scale,
+                exc,
+            )
+            llm_error = f"unexpected: {exc}"[:200]
+            highlights = select_highlights(sources, scale=scale)
+            body = render_template_summary(
+                scale=scale,
+                window_start=w_start,
+                window_end=w_end,
+                sources=sources,
+                highlights=highlights,
+            )
+            source_tag = "llm_fallback_template"
+            llm_passes = 0
+    else:
+        highlights = select_highlights(sources, scale=scale)
+        body = render_template_summary(
+            scale=scale,
+            window_start=w_start,
+            window_end=w_end,
+            sources=sources,
+            highlights=highlights,
+        )
+        source_tag = "template"
+
     atom_id = stable_summary_id(scale, w_start)
-    meta: dict[str, Any] = {
-        "child_atom_ids": child_ids,
-        "n_atoms": len(sources),
-        "n_moments": len(
-            {
-                a.moment_id
-                for a in sources
-                if isinstance(a.moment_id, str) and a.moment_id
-            }
-        ),
-        "n_speak": sum(1 for a in sources if a.kind == "speak"),
-        "n_tool": sum(1 for a in sources if a.kind == "tool"),
-        "source": "template",
-        "from_children": from_children,
-        "child_scale": child,
-    }
+    meta = _build_honesty_meta(
+        sources=sources,
+        from_children=from_children,
+        child=child,
+        summary_mode_requested=summary_mode_requested,
+        source=source_tag,
+        llm_passes=llm_passes,
+        llm_error=llm_error,
+        draft_chars=draft_chars,
+        version=version,
+        supersedes_atom_id=supersedes_atom_id,
+    )
     return Atom(
         atom_id=atom_id,
         t_start=to_iso_z(w_start),
@@ -334,9 +898,6 @@ def build_summary_atom(
         content_text=body,
         content_ref="inline",
         meta=meta,
-        # PR2: summaries stay "none". Defer pending-when-semantic until a
-        # later PR (ladder not in PR2 encode enqueue scope; hooks would
-        # only fire for pending). Experience atoms are enqueued via promote.
         embedding_status="none",
     )
 
@@ -348,14 +909,21 @@ def refresh_window(
     *,
     prefer_children: bool = True,
     skip_empty: bool = True,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
+    allow_legacy: bool | None = None,
 ) -> Atom | None:
     """Build and ``put_atom`` the summary for the ``scale`` window containing ``t``.
 
-    Returns the stored atom, or ``None`` when ``skip_empty`` and no sources.
-    Replace-stable: same ``(scale, window_start)`` always uses ``stable_summary_id``.
+    Returns the stored atom, or ``None`` when ``skip_empty`` and no sources,
+    or when the scale is not writable under settings.
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
+    if not _scale_writable(scale, settings=settings, allow_legacy=allow_legacy):
+        _LOG.debug("ladder refresh skipped non-writable scale=%s", scale)
+        return None
     w_start, w_end = window_bounds(scale, t)
     sources, _, _ = collect_window_sources(
         store, scale, w_start, w_end, prefer_children=prefer_children
@@ -368,9 +936,11 @@ def refresh_window(
         w_start,
         w_end,
         prefer_children=prefer_children,
+        settings=settings,
+        llm=llm,
+        identity_names=identity_names,
+        allow_legacy=allow_legacy,
     )
-    # Append-only JSONL: skip put when body unchanged so idle ticks don't
-    # rewrite the same stable summary id thousands of times (file bloat).
     existing = store.get_atom(atom.atom_id)
     if existing is not None and (existing.content_text or "") == (
         atom.content_text or ""
@@ -386,30 +956,45 @@ def _state_path_for_store(store: MemoryStore) -> Path | None:
     return Path(memory_dir) / LADDER_DIRNAME / LADDER_STATE
 
 
+def _default_ladder_state() -> dict[str, Any]:
+    return {
+        "round_robin_idx": 0,
+        "last_refresh": {},
+        "last_hourly_process": None,
+        "last_closed_1h_processed": None,
+        "dirty_1h_windows": [],
+        "catchup_cursor": None,
+        "llm_calls_hour": {"hour": None, "count": 0},
+        "schema_version": 2,
+    }
+
+
 def load_ladder_state(
     store: MemoryStore | None = None,
     *,
     path: Path | None = None,
 ) -> dict[str, Any]:
-    """Load ladder/state.json (or empty default)."""
+    """Load ladder/state.json (or empty default, schema_version 2)."""
     state_path = path or (_state_path_for_store(store) if store else None)
+    default = _default_ladder_state()
     if state_path is None or not state_path.is_file():
-        return {
-            "round_robin_idx": 0,
-            "last_refresh": {},
-        }
+        return dict(default)
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         _LOG.warning("ladder state load failed: %s", exc)
-        return {
-            "round_robin_idx": 0,
-            "last_refresh": {},
-        }
+        return dict(default)
     if not isinstance(data, dict):
-        return {"round_robin_idx": 0, "last_refresh": {}}
-    data.setdefault("round_robin_idx", 0)
-    data.setdefault("last_refresh", {})
+        return dict(default)
+    for key, val in default.items():
+        data.setdefault(key, val if not isinstance(val, (dict, list)) else type(val)())
+    if not isinstance(data.get("last_refresh"), dict):
+        data["last_refresh"] = {}
+    if not isinstance(data.get("dirty_1h_windows"), list):
+        data["dirty_1h_windows"] = []
+    if not isinstance(data.get("llm_calls_hour"), dict):
+        data["llm_calls_hour"] = {"hour": None, "count": 0}
+    data["schema_version"] = 2
     return data
 
 
@@ -426,13 +1011,42 @@ def save_ladder_state(
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = state_path.with_suffix(".tmp")
+        payload = dict(state)
+        payload["schema_version"] = 2
         tmp.write_text(
-            json.dumps(dict(state), indent=2, sort_keys=True) + "\n",
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         tmp.replace(state_path)
     except OSError as exc:
         _LOG.warning("ladder state save failed: %s", exc)
+
+
+def mark_dirty_1h(
+    store: MemoryStore | None = None,
+    t: datetime | str | None = None,
+    *,
+    state: MutableMapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mark the 1h window containing ``t`` dirty (moment finalize — no LLM).
+
+    Does not generate summaries; idle ``tick`` will process dirty hours.
+    """
+    now_dt = parse_iso_z(t) if t is not None else datetime.now(UTC)
+    w_start, _ = window_bounds("1h", now_dt)
+    key = to_iso_z(w_start)
+    owned = state is None
+    if state is None:
+        state = load_ladder_state(store)
+    dirty = state.setdefault("dirty_1h_windows", [])
+    if not isinstance(dirty, list):
+        dirty = []
+        state["dirty_1h_windows"] = dirty
+    if key not in dirty:
+        dirty.append(key)
+    if owned:
+        save_ladder_state(state, store)
+    return {"dirty_1h": key, "dirty_count": len(dirty)}
 
 
 def _windows_needing_refresh(
@@ -459,28 +1073,36 @@ def refresh_due(
     store: MemoryStore,
     now: datetime | str | None = None,
     *,
-    max_ms: int = 50,
+    max_ms: int = 200,
     scales: Sequence[PeriodScale | str] | None = None,
     state: MutableMapping[str, Any] | None = None,
     prefer_children: bool = True,
     n_windows: int | None = None,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Refresh due period summaries under a wall-clock budget (idle use).
+    """Refresh due period summaries under a wall-clock budget (idle nibble).
 
-    Normative idle behaviour (presence wiring is a later PR):
-
-    - At most **one scale** per call (round-robin over ``scales``).
+    - At most **one scale** per call (round-robin over write scales by default).
     - Stop before starting another window once ``max_ms`` has elapsed.
-    - Template-only — **never** calls an LLM.
     - ``max_ms <= 0`` advances round-robin but refreshes nothing.
-
-    Returns a small result dict: scale, refreshed count, window keys, elapsed_ms.
     """
     now_dt = parse_iso_z(now) if now is not None else datetime.now(UTC)
 
-    scale_list: list[str] = (
-        list(scales) if scales is not None else list(PERIOD_SCALE_ORDER)
-    )
+    if scales is not None:
+        scale_list: list[str] = list(scales)
+    else:
+        # Nibble over WRITE scales only when legacy writes are off.
+        write_legacy = bool(
+            settings is not None
+            and getattr(settings, "ladder_write_legacy_scales", False)
+        )
+        scale_list = (
+            list(PERIOD_SCALE_ORDER_WRITE)
+            if not write_legacy
+            else list(PERIOD_SCALE_ORDER_WRITE)  # still write-order; legacy separate
+        )
     if not scale_list:
         return {
             "scale": None,
@@ -497,7 +1119,6 @@ def refresh_due(
 
     idx = int(state.get("round_robin_idx") or 0) % len(scale_list)
     scale = scale_list[idx]
-    # Advance round-robin for next tick regardless of work done.
     state["round_robin_idx"] = (idx + 1) % len(scale_list)
 
     t0 = time.monotonic()
@@ -521,8 +1142,14 @@ def refresh_due(
         store, scale, now_dt, n_windows=n_windows
     )
     budget = float(max_ms) if max_ms is not None else float("inf")
+    # Nibble is template-oriented; do not spend LLM budget here unless mode=llm
+    # and caller injected llm (still respect skip for hop-path safety).
+    nibble_llm = llm if (
+        settings is not None
+        and str(getattr(settings, "summary_mode", "template")).lower() == "llm"
+    ) else None
 
-    for w_start, w_end in due:
+    for w_start, _w_end in due:
         elapsed = (time.monotonic() - t0) * 1000.0
         if elapsed >= budget:
             break
@@ -533,6 +1160,9 @@ def refresh_due(
                 w_start,
                 prefer_children=prefer_children,
                 skip_empty=True,
+                settings=settings,
+                llm=nibble_llm,
+                identity_names=identity_names,
             )
         except Exception:  # noqa: BLE001 — idle path must never raise
             _LOG.exception(
@@ -565,14 +1195,424 @@ def refresh_due(
     }
 
 
+def _llm_calls_remaining(
+    state: MutableMapping[str, Any],
+    now: datetime,
+    *,
+    settings: MemorySettings,
+) -> int:
+    """Return remaining LLM calls allowed this UTC hour / tick pacing."""
+    max_hour = int(getattr(settings, "ladder_llm_max_calls_per_hour", 40) or 40)
+    bucket = state.setdefault("llm_calls_hour", {"hour": None, "count": 0})
+    if not isinstance(bucket, dict):
+        bucket = {"hour": None, "count": 0}
+        state["llm_calls_hour"] = bucket
+    hour_key = to_iso_z(now.replace(minute=0, second=0, microsecond=0))
+    if bucket.get("hour") != hour_key:
+        bucket["hour"] = hour_key
+        bucket["count"] = 0
+    used = int(bucket.get("count") or 0)
+    return max(0, max_hour - used)
+
+
+def _record_llm_calls(state: MutableMapping[str, Any], n: int, now: datetime) -> None:
+    if n <= 0:
+        return
+    bucket = state.setdefault("llm_calls_hour", {"hour": None, "count": 0})
+    if not isinstance(bucket, dict):
+        bucket = {"hour": None, "count": 0}
+        state["llm_calls_hour"] = bucket
+    hour_key = to_iso_z(now.replace(minute=0, second=0, microsecond=0))
+    if bucket.get("hour") != hour_key:
+        bucket["hour"] = hour_key
+        bucket["count"] = 0
+    bucket["count"] = int(bucket.get("count") or 0) + int(n)
+
+
+def cascade_from_hour(
+    store: MemoryStore,
+    hour_start: datetime | str,
+    *,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
+    max_ms: float | None = None,
+    t0: float | None = None,
+    llm_calls_left: int | None = None,
+    state: MutableMapping[str, Any] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Recompute coarser tips for the parent chain of ``hour_start``.
+
+    Walks write parent map only: 1d → 1w → 1m → 1y. Stops on budget / LLM cap.
+    """
+    h_start = parse_iso_z(hour_start)
+    settings = settings or MemorySettings()
+    start_mono = t0 if t0 is not None else time.monotonic()
+    budget = float(max_ms) if max_ms is not None else float(
+        getattr(settings, "ladder_hourly_max_ms", 12000) or 12000
+    )
+    remaining_calls = (
+        llm_calls_left
+        if llm_calls_left is not None
+        else int(getattr(settings, "ladder_llm_max_calls_per_tick", 3) or 3)
+    )
+    now_dt = now or datetime.now(UTC)
+    refreshed: list[str] = []
+    stopped_reason: str | None = None
+    s: str | None = "1h"
+    while s is not None:
+        try:
+            p = parent_scale_write(s)
+        except ValueError:
+            break
+        if p is None:
+            break
+        elapsed = (time.monotonic() - start_mono) * 1000.0
+        if elapsed >= budget:
+            stopped_reason = "budget"
+            break
+        # Soft instance-age: always allow 1d; coarser allowed when settings ok.
+        # PR-E hardens thresholds; PR-A generates when children exist.
+        w_start, w_end = window_bounds(p, h_start)
+        skip_empty = bool(getattr(settings, "ladder_skip_empty", True))
+        sources, _, _ = collect_window_sources(
+            store, p, w_start, w_end, prefer_children=True
+        )
+        if skip_empty and not sources:
+            s = p
+            continue
+        use_llm = (
+            llm
+            if str(getattr(settings, "summary_mode", "template")).lower() == "llm"
+            and remaining_calls > 0
+            else None
+        )
+        try:
+            atom = refresh_window(
+                store,
+                p,
+                w_start,
+                prefer_children=True,
+                skip_empty=skip_empty,
+                settings=settings,
+                llm=use_llm,
+                identity_names=identity_names,
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("cascade refresh failed scale=%s", p)
+            s = p
+            continue
+        if atom is not None:
+            refreshed.append(f"{p}:{to_iso_z(w_start)}")
+            if use_llm is not None and (atom.meta or {}).get("source") == "llm":
+                passes = int((atom.meta or {}).get("llm_passes") or 1)
+                remaining_calls = max(0, remaining_calls - max(1, passes))
+                if state is not None:
+                    _record_llm_calls(state, max(1, passes), now_dt)
+            elif use_llm is not None and (atom.meta or {}).get("source") == "llm_fallback_template":
+                # Failed after partial work; still count conservatively.
+                if state is not None:
+                    _record_llm_calls(state, 1, now_dt)
+                remaining_calls = max(0, remaining_calls - 1)
+        s = p
+        if remaining_calls <= 0 and str(
+            getattr(settings, "summary_mode", "template")
+        ).lower() == "llm":
+            # Continue cascade with template only.
+            llm = None
+
+    return {
+        "hour_start": to_iso_z(h_start),
+        "refreshed": refreshed,
+        "llm_calls_left": remaining_calls,
+        "stopped_reason": stopped_reason,
+        "elapsed_ms": (time.monotonic() - start_mono) * 1000.0,
+    }
+
+
+def process_closed_hours(
+    store: MemoryStore,
+    now: datetime | str | None = None,
+    *,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
+    state: MutableMapping[str, Any] | None = None,
+    max_ms: int | None = None,
+) -> dict[str, Any]:
+    """Close due 1h windows oldest-first, cascade parents, respect budgets."""
+    settings = settings or MemorySettings()
+    now_dt = parse_iso_z(now) if now is not None else datetime.now(UTC)
+    owned_state = state is None
+    if state is None:
+        state = load_ladder_state(store)
+
+    budget = float(
+        max_ms
+        if max_ms is not None
+        else getattr(settings, "ladder_hourly_max_ms", 12000) or 12000
+    )
+    catchup_max = int(getattr(settings, "ladder_catchup_max_hours", 24) or 24)
+    max_calls_tick = int(getattr(settings, "ladder_llm_max_calls_per_tick", 3) or 3)
+    skip_empty = bool(getattr(settings, "ladder_skip_empty", True))
+    mode = str(getattr(settings, "summary_mode", "template") or "template").lower()
+
+    t0 = time.monotonic()
+    hour_remaining = _llm_calls_remaining(state, now_dt, settings=settings)
+    remaining_calls = min(max_calls_tick, hour_remaining) if mode == "llm" else 0
+
+    # Candidate closed hours: horizon catchup + dirty set.
+    candidates = windows_in_horizon("1h", now_dt, n_windows=max(catchup_max + 1, 2))
+    closed: list[datetime] = []
+    for w_s, w_e in candidates:
+        if w_e <= now_dt:
+            closed.append(w_s)
+
+    dirty_raw = state.get("dirty_1h_windows") or []
+    dirty_set: set[str] = set()
+    if isinstance(dirty_raw, list):
+        for d in dirty_raw:
+            if isinstance(d, str) and d:
+                dirty_set.add(d)
+                try:
+                    closed.append(parse_iso_z(d))
+                except (TypeError, ValueError):
+                    pass
+
+    # Catchup cursor: only process hours at/after cursor when set.
+    cursor_raw = state.get("catchup_cursor")
+    cursor_dt: datetime | None = None
+    if isinstance(cursor_raw, str) and cursor_raw:
+        try:
+            cursor_dt = parse_iso_z(cursor_raw)
+        except (TypeError, ValueError):
+            cursor_dt = None
+
+    # Unique, oldest-first.
+    uniq: dict[str, datetime] = {}
+    for c in closed:
+        uniq[to_iso_z(c)] = c
+    ordered = sorted(uniq.values(), key=lambda d: d)
+    if cursor_dt is not None:
+        ordered = [d for d in ordered if d >= cursor_dt]
+
+    processed: list[str] = []
+    cascaded: list[str] = []
+    stopped_reason: str | None = None
+
+    for hour_start in ordered[:catchup_max]:
+        elapsed = (time.monotonic() - t0) * 1000.0
+        if elapsed >= budget:
+            stopped_reason = "budget"
+            break
+
+        w_start, w_end = window_bounds("1h", hour_start)
+        # Skip open hour (not closed).
+        if w_end > now_dt:
+            continue
+
+        sources, _, _ = collect_window_sources(
+            store, "1h", w_start, w_end, prefer_children=False
+        )
+        tip_id = stable_summary_id("1h", w_start)
+        existing = store.get_atom(tip_id)
+        key = to_iso_z(w_start)
+        is_dirty = key in dirty_set
+        tip_empty = existing is not None and not (existing.content_text or "").strip()
+        needs = existing is None or is_dirty or tip_empty
+        if not needs:
+            dirty_set.discard(key)
+            continue
+        if skip_empty and not sources and existing is None:
+            dirty_set.discard(key)
+            continue
+
+        use_llm = llm if (mode == "llm" and remaining_calls > 0) else None
+        try:
+            atom = refresh_window(
+                store,
+                "1h",
+                w_start,
+                prefer_children=False,
+                skip_empty=skip_empty,
+                settings=settings,
+                llm=use_llm,
+                identity_names=identity_names,
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("1h refresh failed window=%s", to_iso_z(w_start))
+            continue
+
+        if atom is not None:
+            processed.append(to_iso_z(w_start))
+            if use_llm is not None:
+                src = (atom.meta or {}).get("source")
+                passes = int((atom.meta or {}).get("llm_passes") or 0)
+                if src == "llm" and passes > 0:
+                    remaining_calls = max(0, remaining_calls - passes)
+                    _record_llm_calls(state, passes, now_dt)
+                elif src == "llm_fallback_template":
+                    remaining_calls = max(0, remaining_calls - 1)
+                    _record_llm_calls(state, 1, now_dt)
+
+        dirty_set.discard(to_iso_z(w_start))
+        state["last_closed_1h_processed"] = to_iso_z(w_start)
+
+        # Cascade parents for this hour before next hour (budget permitting).
+        cas = cascade_from_hour(
+            store,
+            w_start,
+            settings=settings,
+            llm=llm if remaining_calls > 0 else None,
+            identity_names=identity_names,
+            max_ms=budget,
+            t0=t0,
+            llm_calls_left=remaining_calls,
+            state=state,
+            now=now_dt,
+        )
+        remaining_calls = int(cas.get("llm_calls_left") or remaining_calls)
+        cascaded.extend(cas.get("refreshed") or [])
+        if cas.get("stopped_reason") == "budget":
+            stopped_reason = "budget"
+            # Keep catchup_cursor at this hour so we continue later.
+            state["catchup_cursor"] = to_iso_z(w_start)
+            break
+    else:
+        # Completed slice without mid-break: advance cursor past last processed.
+        if processed:
+            last_p = parse_iso_z(processed[-1])
+            state["catchup_cursor"] = to_iso_z(last_p + timedelta(hours=1))
+        stopped_reason = stopped_reason or None
+
+    state["dirty_1h_windows"] = sorted(dirty_set)
+    state["last_hourly_process"] = to_iso_z(now_dt)
+
+    if owned_state:
+        save_ladder_state(state, store)
+
+    return {
+        "processed_1h": processed,
+        "cascaded": cascaded,
+        "elapsed_ms": (time.monotonic() - t0) * 1000.0,
+        "stopped_reason": stopped_reason,
+        "llm_calls_left": remaining_calls,
+    }
+
+
+def _hourly_due(state: Mapping[str, Any], now: datetime) -> bool:
+    """True when we should run the hourly process path this tick."""
+    dirty = state.get("dirty_1h_windows") or []
+    if isinstance(dirty, list) and dirty:
+        return True
+    last = state.get("last_hourly_process")
+    if not last:
+        return True
+    try:
+        last_dt = parse_iso_z(last)
+    except (TypeError, ValueError):
+        return True
+    # Crossed an hour boundary since last process.
+    last_hour = last_dt.replace(minute=0, second=0, microsecond=0)
+    now_hour = now.replace(minute=0, second=0, microsecond=0)
+    if now_hour > last_hour:
+        return True
+    # Catch-up still behind.
+    cursor = state.get("catchup_cursor")
+    if isinstance(cursor, str) and cursor:
+        try:
+            c = parse_iso_z(cursor)
+            cur_closed_end, _ = window_bounds("1h", now)
+            if c < cur_closed_end:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def tick(
+    store: MemoryStore,
+    now: datetime | str | None = None,
+    *,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
+    max_ms: int | None = None,
+    state: MutableMapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Idle entry: hourly process when due, else nibble over write scales."""
+    settings = settings or MemorySettings()
+    now_dt = parse_iso_z(now) if now is not None else datetime.now(UTC)
+    owned_state = state is None
+    if state is None:
+        state = load_ladder_state(store)
+
+    if not bool(getattr(settings, "ladder_enabled", True)):
+        return {"path": "disabled", "elapsed_ms": 0.0}
+
+    if _hourly_due(state, now_dt):
+        hourly_ms = (
+            max_ms
+            if max_ms is not None
+            else int(getattr(settings, "ladder_hourly_max_ms", 12000) or 12000)
+        )
+        result = process_closed_hours(
+            store,
+            now_dt,
+            settings=settings,
+            llm=llm,
+            identity_names=identity_names,
+            state=state,
+            max_ms=hourly_ms,
+        )
+        result["path"] = "hourly"
+        if owned_state:
+            save_ladder_state(state, store)
+        return result
+
+    nibble_ms = (
+        max_ms
+        if max_ms is not None
+        else int(getattr(settings, "ladder_max_ms_per_tick", 200) or 200)
+    )
+    # Nibble: template-first; pass llm only when summary_mode=llm.
+    use_llm = (
+        llm
+        if str(getattr(settings, "summary_mode", "template")).lower() == "llm"
+        else None
+    )
+    result = refresh_due(
+        store,
+        now_dt,
+        max_ms=nibble_ms,
+        scales=list(PERIOD_SCALE_ORDER_WRITE),
+        state=state,
+        settings=settings,
+        llm=use_llm,
+        identity_names=identity_names,
+    )
+    result["path"] = "nibble"
+    if owned_state:
+        save_ladder_state(state, store)
+    return result
+
+
 __all__ = [
+    "build_source_pack",
     "build_summary_atom",
+    "cascade_from_hour",
     "collect_window_sources",
+    "gap_spans",
     "load_ladder_state",
+    "mark_dirty_1h",
     "max_highlights",
+    "moment_blocks_for_window",
+    "process_closed_hours",
     "refresh_due",
     "refresh_window",
     "render_template_summary",
     "save_ladder_state",
     "select_highlights",
+    "tick",
 ]

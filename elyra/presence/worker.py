@@ -1575,19 +1575,41 @@ class PresenceWorker:
             _LOG.exception("record last meal snapshot failed")
 
     def _idle_memory_ladder(self) -> None:
-        """Budgeted period-summary refresh outside the state lock (idle only)."""
+        """Budgeted ladder tick outside the state lock (idle only; never hop)."""
         if not self._memory_ladder_active():
             return
         store = self._memory
         if store is None:
             return
         try:
-            from elyra.memory.ladder import refresh_due
+            from elyra.memory.ladder import tick
+            from elyra.memory.ladder_llm import ChatClientSummaryLlm
 
-            max_ms = int(self.settings.memory.ladder_max_ms_per_tick)
-            refresh_due(store, max_ms=max_ms)
+            mem_cfg = self.settings.memory
+            llm = None
+            mode = str(getattr(mem_cfg, "summary_mode", "template") or "template").lower()
+            if mode == "llm" and self.client is not None:
+                llm = ChatClientSummaryLlm(self.client)
+            identity_names: dict[str, str] | None = None
+            try:
+                # Soft display names for source packs (best-effort).
+                id_store = getattr(self, "_identity", None) or getattr(
+                    self, "identity", None
+                )
+                if id_store is not None and hasattr(id_store, "display_name"):
+                    identity_names = {
+                        "self": str(id_store.display_name() or "Elyra"),
+                    }
+            except Exception:  # noqa: BLE001
+                identity_names = None
+            tick(
+                store,
+                settings=mem_cfg,
+                llm=llm,
+                identity_names=identity_names,
+            )
         except Exception:  # noqa: BLE001
-            _LOG.exception("memory ladder refresh_due failed")
+            _LOG.exception("memory ladder tick failed")
         self._maybe_compact_memory_store()
 
     def _idle_memory_encode(self) -> None:
@@ -1825,18 +1847,22 @@ class PresenceWorker:
             _LOG.exception("memory idle index optimize failed")
 
     def _finalize_memory_ladder_15m(self) -> None:
-        """Refresh the 15m window containing now after moment close (budgeted)."""
+        """Mark current 1h dirty after moment close (no LLM on hop path).
+
+        Retains the historical method name for call-site compatibility; body
+        only dirty-marks so idle ``tick`` can process the hour later.
+        """
         if not self._memory_ladder_active():
             return
         store = self._memory
         if store is None:
             return
         try:
-            from elyra.memory.ladder import refresh_window
+            from elyra.memory.ladder import mark_dirty_1h
 
-            refresh_window(store, "15m", datetime.now(UTC))
+            mark_dirty_1h(store, datetime.now(UTC))
         except Exception:  # noqa: BLE001
-            _LOG.exception("memory ladder 15m finalize refresh failed")
+            _LOG.exception("memory ladder dirty-mark finalize failed")
         self._maybe_compact_memory_store()
 
     def _maybe_compact_memory_store(self) -> None:
@@ -2288,8 +2314,8 @@ class PresenceWorker:
             # Phase 2a: moment end clears active + sticky last_session/keep.
             self._close_traversal_for_moment(moment_id)
 
-        # After close (outside long critical sections): refresh 15m window for
-        # the just-ended moment when atom writes or meal are active.
+        # After close (outside long critical sections): dirty-mark current 1h
+        # for the just-ended moment (no LLM on hop path — KD20).
         self._finalize_memory_ladder_15m()
 
     def _maybe_enqueue_moment_continue_unlocked(

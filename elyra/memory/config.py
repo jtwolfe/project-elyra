@@ -123,7 +123,17 @@ class MemorySettings:
     episodic_fraction: float = 0.20
     episodic_horizon_hours: float = 24.0
     ladder_enabled: bool = True  # runs if write_atoms or enabled
-    ladder_max_ms_per_tick: int = 50
+    ladder_max_ms_per_tick: int = 200  # nibble / repair (template)
+    # --- Episodic ladder LLM + hourly schedule (#92 PR-A) ---
+    summary_mode: str = "template"  # template | llm (CI default hermetic)
+    ladder_write_legacy_scales: bool = False  # reject new 15m/6h writes
+    ladder_hourly_max_ms: int = 12000  # hourly + cascade wall-clock
+    ladder_catchup_max_hours: int = 24  # closed 1h per hourly tick
+    ladder_llm_max_calls_per_tick: int = 3
+    ladder_llm_max_calls_per_hour: int = 40
+    ladder_skip_empty: bool = True  # skip put when window has no sources
+    ladder_recent_1h_meal: int = 6  # meal band (PR-D consumes)
+    ladder_source_edge_k: int = 24  # write cap for source edges (PR-C)
     regather_every_n_hops: int = 0  # 0 = off
     atom_max_chars: int = 8000
     compact_max_tokens: int = 400
