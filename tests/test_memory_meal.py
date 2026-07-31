@@ -29,6 +29,7 @@ from elyra.memory.types import (
     new_atom_id,
     stable_summary_id,
     to_iso_z,
+    versioned_summary_id,
     window_bounds,
 )
 
@@ -242,7 +243,7 @@ def test_select_episodic_excludes_open_moment(store):
 
 
 def test_select_episodic_shrink_order_tool_before_summary(store):
-    """Over-budget shrink: raw tool/model (3a) before finer summaries (3c)."""
+    """Over-budget shrink: raw tool/model (3a) before summaries (3c)."""
     now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
     # Large tool bodies to force pressure.
     big = "T" * 400  # 100 tokens each line roughly with overhead
@@ -256,39 +257,188 @@ def test_select_episodic_shrink_order_tool_before_summary(store):
                 meta={"ok": True},
             )
         )
-    # Finer summary present
-    _put_summary(store, "15m", now, "S" * 200)
+    # Write-era tips: 1h present so legacy 15m is not soft-fallback packed.
+    _put_summary(store, "1h", now, "S" * 200)
     _put_summary(store, "1d", now, "day keep me")
 
     # Cap small enough that tools must drop before day summary.
     items = select_episodic(store, now, "m_open", episodic_cap_tokens=120)
     labels = [i.label for i in items]
     text = " ".join(i.content for i in items)
-    # Day summary is last-resort protected relative to 15m; tools drop first.
+    # Day summary is last-resort protected relative to 1h band; tools drop first.
     assert any("summary 1d" in l for l in labels) or "day keep me" in text
     # Tools should be gone or heavily reduced under tight cap.
     tool_mentions = text.count("tool")
     assert tool_mentions < 6
 
 
-def test_select_episodic_shrink_finer_summary_before_coarser(store):
-    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
-    # Oversized summaries at multiple scales
-    _put_summary(store, "15m", now, "F" * 800)  # ~200 tok
-    _put_summary(store, "1h", now, "H" * 800)
-    _put_summary(store, "1d", now, "D" * 800)
+def test_select_episodic_shrink_oldest_1h_before_1d(store):
+    """Under pressure drop oldest closed 1h before the current 1d tip."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    # Closed hours (large) + open hour + day tip.
+    for i in range(1, 5):
+        _put_summary(
+            store,
+            "1h",
+            now - timedelta(hours=i),
+            f"closed-{i}-" + ("H" * 600),
+        )
+    _put_summary(store, "1h", now, "open-" + ("H" * 600))
+    _put_summary(store, "1d", now, "DAY-KEEP-" + ("D" * 200))
 
-    items = select_episodic(store, now, "m_open", episodic_cap_tokens=250)
+    # Cap forces some 1h drops while still allowing the day tip.
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=500)
     labels = [i.label for i in items]
-    # Under pressure drop 15m before 1d (3c); 1h/1d protected until last resort.
-    if any("15m" in l for l in labels) and any("1d" in l for l in labels):
-        # If both fit, fine; otherwise 15m should not be sole survivor over 1d.
-        pass
-    # With 250 tok, at most one ~200-tok body + label fits fully.
-    assert len(items) <= 2
-    # Prefer coarser remaining if something dropped.
-    if len(items) == 1:
-        assert "15m" not in items[0].label or "1d" in items[0].label or "1h" in items[0].label
+    bodies = " ".join(i.content for i in items)
+    assert any("summary 1d" in l for l in labels) or "DAY-KEEP" in bodies
+    # Oldest closed hour should drop before 1d is sacrificed.
+    assert "closed-4-" not in bodies or "DAY-KEEP" in bodies
+    if "DAY-KEEP" in bodies:
+        # Prefer that oldest closed is gone when day survived under pressure.
+        one_h = [i for i in items if (i.meta or {}).get("scale") == "1h"]
+        if len(one_h) < 5:
+            assert "closed-4-" not in bodies
+
+
+def test_select_episodic_pack_order_write_era_omits_legacy_when_1h(store):
+    """Pack order is 1y…1h; 15m/6h omitted once a write-era 1h tip exists."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    _put_summary(store, "1y", now, "year tip")
+    _put_summary(store, "1m", now, "month tip")
+    _put_summary(store, "1w", now, "week tip")
+    _put_summary(store, "1d", now, "day tip")
+    _put_summary(store, "1h", now, "hour open")
+    _put_summary(store, "6h", now, "legacy 6h")
+    _put_summary(store, "15m", now, "legacy 15m")
+
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=50_000)
+    scales = [
+        (i.meta or {}).get("scale")
+        for i in items
+        if i.label.startswith("episodic/summary")
+    ]
+    assert "15m" not in scales
+    assert "6h" not in scales
+    # Coarse first among write-era scales that were packed.
+    write_ranks = {"1y": 0, "1m": 1, "1w": 2, "1d": 3, "1h": 4}
+    packed_write = [s for s in scales if s in write_ranks]
+    ranks = [write_ranks[s] for s in packed_write]
+    assert ranks == sorted(ranks)
+    bodies = " ".join(i.content for i in items)
+    assert "day tip" in bodies
+    assert "hour open" in bodies
+    assert "legacy 6h" not in bodies
+    assert "legacy 15m" not in bodies
+
+
+def test_select_episodic_coarser_tip_only_not_previous_window(store):
+    """≥1d scales pack current open-window tip only (not previous window)."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    _put_summary(store, "1d", now, "today tip")
+    yesterday = now - timedelta(days=1)
+    _put_summary(store, "1d", yesterday, "yesterday archive")
+    _put_summary(store, "1w", now, "this week tip")
+    last_week = now - timedelta(days=7)
+    _put_summary(store, "1w", last_week, "last week archive")
+
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=50_000)
+    bodies = " ".join(i.content for i in items)
+    assert "today tip" in bodies
+    assert "yesterday archive" not in bodies
+    assert "this week tip" in bodies
+    assert "last week archive" not in bodies
+    day_items = [
+        i for i in items if (i.meta or {}).get("scale") == "1d"
+    ]
+    assert len(day_items) == 1
+
+
+def test_select_episodic_recent_1h_band(store):
+    """1h band: last N closed hours + current open hour tip."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    for h in range(0, 13):
+        t = datetime(2026, 7, 28, h, 15, tzinfo=UTC)
+        _put_summary(store, "1h", t, f"hour-{h:02d}")
+
+    items = select_episodic(
+        store,
+        now,
+        "m_open",
+        episodic_cap_tokens=50_000,
+        settings=MemorySettings(ladder_recent_1h_meal=6),
+    )
+    bodies = " ".join(i.content for i in items)
+    # Open hour 12 + closed 11..6 inclusive.
+    for h in (12, 11, 10, 9, 8, 7, 6):
+        assert f"hour-{h:02d}" in bodies, f"expected hour-{h:02d} in band"
+    # Older than the band of 6 closed hours.
+    for h in (5, 4, 0):
+        assert f"hour-{h:02d}" not in bodies, f"hour-{h:02d} outside band"
+
+
+def test_select_episodic_no_version_archive_leak(store):
+    """Only the current tip per coarser window; supersedes versions stay out."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    start, end = window_bounds("1d", now)
+    v1 = Atom(
+        atom_id=versioned_summary_id("1d", start, 1),
+        t_start=to_iso_z(start),
+        kind="summary",
+        content_text="OLD VERSION BODY archive",
+        content_ref="inline",
+        scale="1d",
+        window_start=to_iso_z(start),
+        window_end=to_iso_z(end),
+        moment_id=None,
+        meta={"source": "template", "version": 1},
+    )
+    v2 = Atom(
+        atom_id=versioned_summary_id("1d", start, 2),
+        t_start=to_iso_z(start),
+        kind="summary",
+        content_text="LATEST DAY TIP only",
+        content_ref="inline",
+        scale="1d",
+        window_start=to_iso_z(start),
+        window_end=to_iso_z(end),
+        moment_id=None,
+        meta={
+            "source": "template",
+            "version": 2,
+            "supersedes_atom_id": v1.atom_id,
+        },
+    )
+    store.put_atom(v1)
+    store.put_atom(v2)
+    # Previous-day tip must not be pulled under tip-only policy.
+    _put_summary(store, "1d", now - timedelta(days=1), "YESTERDAY ARCHIVE")
+    # Confirm both version atoms still exist in the store.
+    assert store.get_atom(v1.atom_id) is not None
+    assert store.get_atom(v2.atom_id) is not None
+
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=50_000)
+    bodies = " ".join(i.content for i in items)
+    day_items = [
+        i for i in items if (i.meta or {}).get("scale") == "1d"
+    ]
+    assert len(day_items) == 1
+    assert "LATEST DAY TIP only" in bodies
+    assert "OLD VERSION BODY" not in bodies
+    assert "YESTERDAY ARCHIVE" not in bodies
+
+
+def test_select_episodic_legacy_fallback_when_no_1h(store):
+    """Soft-fallback packs legacy 15m/6h only when no write-era 1h tip exists."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    _put_summary(store, "1d", now, "day tip")
+    _put_summary(store, "6h", now, "legacy six")
+    _put_summary(store, "15m", now, "legacy fifteen")
+
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=50_000)
+    bodies = " ".join(i.content for i in items)
+    assert "day tip" in bodies
+    assert "legacy six" in bodies
+    assert "legacy fifteen" in bodies
 
 
 # ---------------------------------------------------------------------------
