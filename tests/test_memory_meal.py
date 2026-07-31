@@ -11,6 +11,8 @@ from elyra.config import resolve_paths
 from elyra.memory.config import MemorySettings
 from elyra.memory.meal import (
     MealPackage,
+    _shrink_episodic,
+    _summary_meal_item,
     compose_meal,
     compose_outer_messages,
     format_atom_line,
@@ -87,6 +89,23 @@ def _put_summary(store, scale: str, t: datetime, text: str) -> Atom:
         meta={"source": "template"},
     )
     return store.put_atom(atom)
+
+
+def _summary_atom(scale: str, t: datetime, text: str) -> Atom:
+    """Build a summary Atom (not put) for hard-shrink unit tests."""
+    start, end = window_bounds(scale, t)
+    return Atom(
+        atom_id=stable_summary_id(scale, start),
+        t_start=to_iso_z(start),
+        kind="summary",
+        content_text=text,
+        content_ref="inline",
+        scale=scale,
+        window_start=to_iso_z(start),
+        window_end=to_iso_z(end),
+        moment_id=None,
+        meta={"source": "template"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,32 +291,117 @@ def test_select_episodic_shrink_order_tool_before_summary(store):
     assert tool_mentions < 6
 
 
-def test_select_episodic_shrink_oldest_1h_before_1d(store):
-    """Under pressure drop oldest closed 1h before the current 1d tip."""
+def test_shrink_episodic_hard_drops_oldest_closed_1h_before_1d():
+    """Hard 3c path: oldest closed 1h dropped first; 1d tip remains."""
     now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
-    # Closed hours (large) + open hour + day tip.
+    atoms = []
+    # Four closed hours + open + day — all pre-packed into items.
     for i in range(1, 5):
-        _put_summary(
-            store,
-            "1h",
-            now - timedelta(hours=i),
-            f"closed-{i}-" + ("H" * 600),
+        atoms.append(
+            _summary_atom(
+                "1h",
+                now - timedelta(hours=i),
+                f"closed-{i}-" + ("H" * 400),
+            )
         )
-    _put_summary(store, "1h", now, "open-" + ("H" * 600))
-    _put_summary(store, "1d", now, "DAY-KEEP-" + ("D" * 200))
+    atoms.append(_summary_atom("1h", now, "open-" + ("H" * 400)))
+    atoms.append(_summary_atom("1d", now, "DAY-KEEP-" + ("D" * 200)))
+    items = [_summary_meal_item(a) for a in atoms]
+    used = sum(i.token_estimate for i in items)
+    # Cap under full packed cost but enough for day + a few recent 1h.
+    cap = max(items[-1].token_estimate + 50, used // 2)
+    assert used > cap  # force hard shrink
 
-    # Cap forces some 1h drops while still allowing the day tip.
-    items = select_episodic(store, now, "m_open", episodic_cap_tokens=500)
-    labels = [i.label for i in items]
-    bodies = " ".join(i.content for i in items)
-    assert any("summary 1d" in l for l in labels) or "DAY-KEEP" in bodies
-    # Oldest closed hour should drop before 1d is sacrificed.
-    assert "closed-4-" not in bodies or "DAY-KEEP" in bodies
-    if "DAY-KEEP" in bodies:
-        # Prefer that oldest closed is gone when day survived under pressure.
-        one_h = [i for i in items if (i.meta or {}).get("scale") == "1h"]
-        if len(one_h) < 5:
-            assert "closed-4-" not in bodies
+    out = _shrink_episodic(items, summary_atoms=atoms, cap=cap, now=now)
+    bodies = " ".join(i.content for i in out)
+    scales = [(i.meta or {}).get("scale") for i in out]
+    assert "1d" in scales
+    assert "DAY-KEEP" in bodies
+    # Oldest closed must be gone; more-recent closed and/or open may remain.
+    assert "closed-4-" not in bodies
+    # At least one more-recent 1h or open should survive while day is kept
+    # (cap is large enough that day is not last-resort-dropped alone).
+    remaining_1h = [i for i in out if (i.meta or {}).get("scale") == "1h"]
+    assert sum(i.token_estimate for i in out) <= cap
+    # Unconditional: day present, oldest closed absent, total under cap.
+    assert any((i.meta or {}).get("scale") == "1d" for i in out)
+    # Prefer that we still have some recency texture when budget allows.
+    if remaining_1h:
+        remaining_ws = sorted(
+            (i.meta or {}).get("window_start") or "" for i in remaining_1h
+        )
+        # No remaining 1h should be older than a dropped closed-4 (all newer).
+        closed4_ws = to_iso_z(window_bounds("1h", now - timedelta(hours=4))[0])
+        assert all(ws >= closed4_ws for ws in remaining_ws)
+
+
+def test_shrink_episodic_hard_drops_coarser_before_1d():
+    """Hard 3c path: drop 1w→1m→1y before last-resort 1d tip."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    atoms = [
+        _summary_atom("1d", now, "DAY-" + ("D" * 200)),
+        _summary_atom("1w", now, "WEEK-" + ("W" * 200)),
+        _summary_atom("1m", now, "MONTH-" + ("M" * 200)),
+        _summary_atom("1y", now, "YEAR-" + ("Y" * 200)),
+    ]
+    items = [_summary_meal_item(a) for a in atoms]
+    used = sum(i.token_estimate for i in items)
+    day_cost = items[0].token_estimate
+    # Cap fits day only — all coarser non-1d must drop first; 1d survives.
+    cap = day_cost + 10
+    assert used > cap
+
+    out = _shrink_episodic(items, summary_atoms=atoms, cap=cap, now=now)
+    bodies = " ".join(i.content for i in out)
+    scales = [(i.meta or {}).get("scale") for i in out]
+    assert scales == ["1d"]
+    assert "DAY-" in bodies
+    assert "WEEK-" not in bodies
+    assert "MONTH-" not in bodies
+    assert "YEAR-" not in bodies
+    assert sum(i.token_estimate for i in out) <= cap
+
+
+def test_shrink_episodic_hard_drop_order_1h_then_coarser_then_1d():
+    """Combined hard path: exhaust 1h band, then 1w/1m/1y, keep 1d longest."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    atoms = [
+        _summary_atom("1h", now - timedelta(hours=2), "closed-2-" + ("H" * 300)),
+        _summary_atom("1h", now - timedelta(hours=1), "closed-1-" + ("H" * 300)),
+        _summary_atom("1h", now, "open-" + ("H" * 300)),
+        _summary_atom("1w", now, "WEEK-" + ("W" * 200)),
+        _summary_atom("1m", now, "MONTH-" + ("M" * 200)),
+        _summary_atom("1y", now, "YEAR-" + ("Y" * 200)),
+        _summary_atom("1d", now, "DAY-" + ("D" * 200)),
+    ]
+    items = [_summary_meal_item(a) for a in atoms]
+    day_cost = next(
+        i.token_estimate for i in items if (i.meta or {}).get("scale") == "1d"
+    )
+    # Cap = day only → all 1h + coarser non-1d must go; 1d remains.
+    cap = day_cost + 5
+    out = _shrink_episodic(items, summary_atoms=atoms, cap=cap, now=now)
+    scales = [(i.meta or {}).get("scale") for i in out]
+    bodies = " ".join(i.content for i in out)
+    assert scales == ["1d"]
+    assert "DAY-" in bodies
+    assert "closed-2-" not in bodies
+    assert "closed-1-" not in bodies
+    assert "open-" not in bodies
+    assert "WEEK-" not in bodies
+    assert "MONTH-" not in bodies
+    assert "YEAR-" not in bodies
+
+    # Intermediate cap: enough for day + open 1h → oldest closed gone, day kept.
+    open_item = next(i for i in items if i.content.startswith("open-"))
+    mid_cap = day_cost + open_item.token_estimate + 20
+    out_mid = _shrink_episodic(items, summary_atoms=atoms, cap=mid_cap, now=now)
+    bodies_mid = " ".join(i.content for i in out_mid)
+    scales_mid = [(i.meta or {}).get("scale") for i in out_mid]
+    assert "1d" in scales_mid
+    assert "DAY-" in bodies_mid
+    assert "closed-2-" not in bodies_mid  # oldest closed first
+    assert sum(i.token_estimate for i in out_mid) <= mid_cap
 
 
 def test_select_episodic_pack_order_write_era_omits_legacy_when_1h(store):
@@ -439,6 +543,35 @@ def test_select_episodic_legacy_fallback_when_no_1h(store):
     assert "day tip" in bodies
     assert "legacy six" in bodies
     assert "legacy fifteen" in bodies
+
+
+def test_select_episodic_no_legacy_when_1h_exists_but_soft_skipped(store):
+    """Legacy gate is store existence, not soft-pack admit of 1h (Issue 1).
+
+    Medium 1d + large open 1h + small legacy: soft budget packs 1d, may skip
+    1h body, but must still refuse 15m/6h because a write-era 1h tip exists.
+    """
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    _put_summary(store, "1d", now, "DAY-" + ("D" * 120))
+    _put_summary(store, "1h", now, "HOUR-" + ("H" * 800))
+    _put_summary(store, "6h", now, "LEGACY6-small")
+    _put_summary(store, "15m", now, "LEGACY15-small")
+
+    # Cap ~200: summary share ~140 packs day; large 1h soft-skipped.
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=200)
+    bodies = " ".join(i.content for i in items)
+    scales = [
+        (i.meta or {}).get("scale")
+        for i in items
+        if i.label.startswith("episodic/summary")
+    ]
+    assert "6h" not in scales
+    assert "15m" not in scales
+    assert "LEGACY6-small" not in bodies
+    assert "LEGACY15-small" not in bodies
+    # Day tip still present (coarser packed first).
+    assert "1d" in scales
+    assert "DAY-" in bodies
 
 
 # ---------------------------------------------------------------------------

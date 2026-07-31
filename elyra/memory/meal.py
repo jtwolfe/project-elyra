@@ -301,7 +301,12 @@ def _try_pack_summary(
     summary_budget: int,
     cap: int,
 ) -> int:
-    """Append one summary atom if budget allows; return updated used tokens."""
+    """Append one summary atom if budget allows; return updated used tokens.
+
+    Soft summary-budget skips (here) and hard ``_shrink_episodic`` (after raw
+    fill) cooperate: pack order prefers open/recent 1h so soft pressure drops
+    oldest first; 3c recency drops apply when packed items + raw exceed cap.
+    """
     if atom.atom_id in seen:
         return used
     item = _summary_meal_item(atom)
@@ -373,19 +378,21 @@ def select_episodic(
     summary_atoms: list[Atom] = []
     summary_budget = int(cap * EPISODIC_SUMMARY_SHARE)
     used = 0
-    packed_1h = False
+    # Gate legacy fallback on *existence* of a write-era 1h tip in the recent
+    # band (store/list), not on whether soft budget admitted one.
+    band_1h_candidates: list[Atom] = []
 
     # --- 1. SUMMARY PASS (write-era coarse → fine; tip-only + recent 1h) ---
     for scale in _SUMMARY_PACK_ORDER:
         if scale == "1h":
             candidates = _load_1h_recent_band(store, now_dt, recent_1h)
+            band_1h_candidates = candidates
         else:
             # Coarser ≥1d: current open window tip only (not previous window).
             cur_start, cur_end = window_bounds(scale, now_dt)
             tip = _load_window_summary(store, scale, cur_start, cur_end)
             candidates = [tip] if tip is not None else []
         for atom in candidates:
-            before = used
             used = _try_pack_summary(
                 atom,
                 seen=seen,
@@ -395,11 +402,9 @@ def select_episodic(
                 summary_budget=summary_budget,
                 cap=cap,
             )
-            if scale == "1h" and used > before:
-                packed_1h = True
 
-    # Soft fallback: legacy 15m/6h only when no write-era 1h tip was packed.
-    if not packed_1h:
+    # Soft fallback: legacy 15m/6h only when no write-era 1h tip exists.
+    if not band_1h_candidates:
         for scale in _LEGACY_SUMMARY_FALLBACK_ORDER:
             cur_start, cur_end = window_bounds(scale, now_dt)
             tip = _load_window_summary(store, scale, cur_start, cur_end)
