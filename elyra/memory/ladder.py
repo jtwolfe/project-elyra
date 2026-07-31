@@ -135,6 +135,20 @@ _AGE_UNLOCK_1W = timedelta(days=7)
 _AGE_UNLOCK_1M = timedelta(days=28)
 _AGE_UNLOCK_1Y = timedelta(days=365)
 
+# Cumulative write-source tallies for dogfood status (design §10).
+_WRITE_SOURCE_KEYS = ("llm", "template", "llm_fallback_template")
+
+
+def _int_setting(settings: Any, name: str, default: int) -> int:
+    """Read an int knob; **0 is valid** (do not coerce via ``x or default``)."""
+    raw = getattr(settings, name, default) if settings is not None else default
+    if raw is None:
+        return int(default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+
 
 def allowed_scales(
     instance_created_at: datetime | str | None,
@@ -245,25 +259,22 @@ def ladder_status_snapshot(
     block: dict[str, Any] = {
         "enabled": bool(getattr(settings, "ladder_enabled", True)),
         "summary_mode": str(getattr(settings, "summary_mode", "template") or "template"),
-        "ladder_hourly_max_ms": int(
-            getattr(settings, "ladder_hourly_max_ms", 12000) or 12000
+        "ladder_hourly_max_ms": _int_setting(settings, "ladder_hourly_max_ms", 12000),
+        "ladder_catchup_max_hours": _int_setting(
+            settings, "ladder_catchup_max_hours", 24
         ),
-        "ladder_catchup_max_hours": int(
-            getattr(settings, "ladder_catchup_max_hours", 24) or 24
+        "ladder_llm_max_calls_per_tick": _int_setting(
+            settings, "ladder_llm_max_calls_per_tick", 3
         ),
-        "ladder_llm_max_calls_per_tick": int(
-            getattr(settings, "ladder_llm_max_calls_per_tick", 3) or 3
+        "ladder_llm_max_calls_per_hour": _int_setting(
+            settings, "ladder_llm_max_calls_per_hour", 40
         ),
-        "ladder_llm_max_calls_per_hour": int(
-            getattr(settings, "ladder_llm_max_calls_per_hour", 40) or 40
-        ),
-        "ladder_max_ms_per_tick": int(
-            getattr(settings, "ladder_max_ms_per_tick", 200) or 200
-        ),
+        "ladder_max_ms_per_tick": _int_setting(settings, "ladder_max_ms_per_tick", 200),
         "last_hourly_process": None,
         "last_closed_1h_processed": None,
         "catchup_cursor": None,
         "llm_calls_hour": {"hour": None, "count": 0},
+        "write_source_counts": {k: 0 for k in _WRITE_SOURCE_KEYS},
         "dirty_1h_count": 0,
         "cascade_pending_count": 0,
         "allowed_scales": ["1h", "1d"],
@@ -283,6 +294,11 @@ def ladder_status_snapshot(
             block["llm_calls_hour"] = {
                 "hour": bucket.get("hour"),
                 "count": int(bucket.get("count") or 0),
+            }
+        src_counts = st.get("write_source_counts")
+        if isinstance(src_counts, dict):
+            block["write_source_counts"] = {
+                k: int(src_counts.get(k) or 0) for k in _WRITE_SOURCE_KEYS
             }
         dirty = st.get("dirty_1h_windows") or []
         if isinstance(dirty, list):
@@ -1312,6 +1328,8 @@ def _default_ladder_state() -> dict[str, Any]:
         # cursor >= current open hour start.
         "catchup_cursor": None,
         "llm_calls_hour": {"hour": None, "count": 0},
+        # Cumulative puts by meta.source (design §10 llm vs template / fallback).
+        "write_source_counts": {k: 0 for k in _WRITE_SOURCE_KEYS},
         "schema_version": 2,
     }
 
@@ -1343,6 +1361,11 @@ def load_ladder_state(
         data["cascade_pending_1h"] = []
     if not isinstance(data.get("llm_calls_hour"), dict):
         data["llm_calls_hour"] = {"hour": None, "count": 0}
+    if not isinstance(data.get("write_source_counts"), dict):
+        data["write_source_counts"] = {k: 0 for k in _WRITE_SOURCE_KEYS}
+    else:
+        for k in _WRITE_SOURCE_KEYS:
+            data["write_source_counts"].setdefault(k, 0)
     data["schema_version"] = 2
     return data
 
@@ -1548,8 +1571,11 @@ def _llm_calls_remaining(
     *,
     settings: MemorySettings,
 ) -> int:
-    """Return remaining LLM calls allowed this UTC hour / tick pacing."""
-    max_hour = int(getattr(settings, "ladder_llm_max_calls_per_hour", 40) or 40)
+    """Return remaining LLM calls allowed this UTC hour / tick pacing.
+
+    ``ladder_llm_max_calls_per_hour=0`` is a valid hard-off (no LLM this hour).
+    """
+    max_hour = _int_setting(settings, "ladder_llm_max_calls_per_hour", 40)
     bucket = state.setdefault("llm_calls_hour", {"hour": None, "count": 0})
     if not isinstance(bucket, dict):
         bucket = {"hour": None, "count": 0}
@@ -1574,6 +1600,24 @@ def _record_llm_calls(state: MutableMapping[str, Any], n: int, now: datetime) ->
         bucket["hour"] = hour_key
         bucket["count"] = 0
     bucket["count"] = int(bucket.get("count") or 0) + int(n)
+
+
+def _record_write_source(
+    state: MutableMapping[str, Any] | None, atom: Atom | None
+) -> None:
+    """Increment cumulative put tallies by ``meta.source`` (status §10)."""
+    if state is None or atom is None:
+        return
+    src = str((atom.meta or {}).get("source") or "template")
+    if src not in _WRITE_SOURCE_KEYS:
+        src = "template"
+    counts = state.setdefault(
+        "write_source_counts", {k: 0 for k in _WRITE_SOURCE_KEYS}
+    )
+    if not isinstance(counts, dict):
+        counts = {k: 0 for k in _WRITE_SOURCE_KEYS}
+        state["write_source_counts"] = counts
+    counts[src] = int(counts.get(src) or 0) + 1
 
 
 def _count_llm_usage_from_atom(
@@ -1644,12 +1688,12 @@ def cascade_from_hour(
     settings = settings or MemorySettings()
     start_mono = t0 if t0 is not None else time.monotonic()
     budget = float(max_ms) if max_ms is not None else float(
-        getattr(settings, "ladder_hourly_max_ms", 12000) or 12000
+        _int_setting(settings, "ladder_hourly_max_ms", 12000)
     )
     remaining_calls = (
         llm_calls_left
         if llm_calls_left is not None
-        else int(getattr(settings, "ladder_llm_max_calls_per_tick", 3) or 3)
+        else _int_setting(settings, "ladder_llm_max_calls_per_tick", 3)
     )
     now_dt = now or datetime.now(UTC)
     refreshed: list[str] = []
@@ -1707,6 +1751,7 @@ def cascade_from_hour(
             # Only count real puts — hash-equal no-ops must not inflate metrics
             # or re-debit LLM pacing from the existing tip's meta.
             refreshed.append(f"{p}:{to_iso_z(w_start)}")
+            _record_write_source(state, atom)
             remaining_calls = _count_llm_usage_from_atom(
                 atom,
                 remaining_calls=remaining_calls,
@@ -1755,10 +1800,10 @@ def process_closed_hours(
     budget = float(
         max_ms
         if max_ms is not None
-        else getattr(settings, "ladder_hourly_max_ms", 12000) or 12000
+        else _int_setting(settings, "ladder_hourly_max_ms", 12000)
     )
-    catchup_max = int(getattr(settings, "ladder_catchup_max_hours", 24) or 24)
-    max_calls_tick = int(getattr(settings, "ladder_llm_max_calls_per_tick", 3) or 3)
+    catchup_max = _int_setting(settings, "ladder_catchup_max_hours", 24)
+    max_calls_tick = _int_setting(settings, "ladder_llm_max_calls_per_tick", 3)
     skip_empty = bool(getattr(settings, "ladder_skip_empty", True))
     mode = str(getattr(settings, "summary_mode", "template") or "template").lower()
 
@@ -1892,6 +1937,8 @@ def process_closed_hours(
             if atom is not None:
                 processed.append(key)
                 did_1h = True
+                if _refresh_wrote(existing, atom):
+                    _record_write_source(state, atom)
                 remaining_calls = _count_llm_usage_from_atom(
                     atom,
                     remaining_calls=remaining_calls,
@@ -1925,7 +1972,10 @@ def process_closed_hours(
                 state=state,
                 now=now_dt,
             )
-            remaining_calls = int(cas.get("llm_calls_left") or remaining_calls)
+            # None-aware: llm_calls_left=0 must not reinflate via ``0 or prev``.
+            left = cas.get("llm_calls_left")
+            if left is not None:
+                remaining_calls = int(left)
             cascaded.extend(cas.get("refreshed") or [])
             if cas.get("stopped_reason") == "budget":
                 # Issue 1: do not treat hour as done — keep cascade pending
@@ -2043,7 +2093,7 @@ def tick(
         hourly_ms = (
             max_ms
             if max_ms is not None
-            else int(getattr(settings, "ladder_hourly_max_ms", 12000) or 12000)
+            else _int_setting(settings, "ladder_hourly_max_ms", 12000)
         )
         result = process_closed_hours(
             store,
@@ -2062,7 +2112,7 @@ def tick(
     nibble_ms = (
         max_ms
         if max_ms is not None
-        else int(getattr(settings, "ladder_max_ms_per_tick", 200) or 200)
+        else _int_setting(settings, "ladder_max_ms_per_tick", 200)
     )
     # Nibble: template-first; pass llm only when summary_mode=llm.
     use_llm = (

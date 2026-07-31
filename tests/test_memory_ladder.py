@@ -1525,7 +1525,11 @@ def test_catchup_three_missing_hours_oldest_first(store):
 
 
 def test_llm_budget_exhaustion_template_fallback_no_crash(store):
-    """Meter / per-hour LLM budget exhaustion → template path; no crash."""
+    """Meter / per-hour LLM budget exhaustion → template path; no crash.
+
+    Exhaustion is via count >= max (honest bucket semantics), not max=0
+    mis-coerced by ``x or default``.
+    """
     for hour in (10, 11):
         store.put_atom(
             _atom(
@@ -1536,19 +1540,21 @@ def test_llm_budget_exhaustion_template_fallback_no_crash(store):
             )
         )
     now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    hour_key = to_iso_z(now.replace(minute=0, second=0, microsecond=0))
+    max_hour = 40
     llm = StubLlm(responses=["LLM body that should not be used"] * 20)
     settings = MemorySettings(
         summary_mode="llm",
         ladder_llm_max_calls_per_tick=3,
-        ladder_llm_max_calls_per_hour=0,  # exhausted immediately
+        ladder_llm_max_calls_per_hour=max_hour,
         ladder_catchup_max_hours=24,
         ladder_hourly_max_ms=60_000,
     )
     state: dict = {
         **load_ladder_state(store),
         "llm_calls_hour": {
-            "hour": to_iso_z(now.replace(minute=0, second=0, microsecond=0)),
-            "count": 99,
+            "hour": hour_key,
+            "count": max_hour,  # count >= max → remaining 0
         },
     }
     # Must not raise even with a failing / unused LLM.
@@ -1564,6 +1570,90 @@ def test_llm_budget_exhaustion_template_fallback_no_crash(store):
     )
     assert tip is not None
     assert (tip.meta or {}).get("source") in ("template", "llm_fallback_template")
+
+
+def test_llm_max_calls_per_hour_zero_is_hard_off(store):
+    """``ladder_llm_max_calls_per_hour=0`` is valid hard-off (not coerced to 40)."""
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="hour-work",
+            moment_id="m10",
+        )
+    )
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    llm = StubLlm(responses=["should-not-run"] * 5)
+    settings = MemorySettings(
+        summary_mode="llm",
+        ladder_llm_max_calls_per_hour=0,
+        ladder_llm_max_calls_per_tick=3,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = load_ladder_state(store)
+    result = process_closed_hours(
+        store, now, settings=settings, llm=llm, state=state
+    )
+    assert "2026-07-28T10:00:00Z" in result["processed_1h"]
+    assert llm.calls == []
+    tip = store.get_atom(
+        stable_summary_id("1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    )
+    assert tip is not None
+    assert (tip.meta or {}).get("source") == "template"
+
+
+def test_tick_budget_second_hour_template_only(store):
+    """llm_calls_left=0 must not reinflate; second hour in same tick is template."""
+    for hour in (10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:15:00Z",
+                kind="speak",
+                text=f"work-{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    # Two calls covers 1h + 1d cascade for hour 10; hour 11 must be template-only.
+    llm = StubLlm(
+        responses=[
+            "LLM-10-1h",
+            "LLM-10-1d",
+            "LLM-should-not-see-hour-11",
+            "LLM-should-not-see-cascade-11",
+        ]
+    )
+    settings = MemorySettings(
+        summary_mode="llm",
+        ladder_llm_max_calls_per_tick=2,
+        ladder_llm_max_calls_per_hour=40,
+        ladder_catchup_max_hours=24,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = load_ladder_state(store)
+    result = process_closed_hours(
+        store, now, settings=settings, llm=llm, state=state
+    )
+    assert result["processed_1h"] == [
+        "2026-07-28T10:00:00Z",
+        "2026-07-28T11:00:00Z",
+    ]
+    tip10 = store.get_atom(
+        stable_summary_id("1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    )
+    tip11 = store.get_atom(
+        stable_summary_id("1h", datetime(2026, 7, 28, 11, 0, tzinfo=UTC))
+    )
+    assert tip10 is not None and tip11 is not None
+    assert (tip10.meta or {}).get("source") == "llm"
+    assert "LLM-10-1h" in (tip10.content_text or "")
+    # Second hour after budget spent → template (or fallback if somehow called).
+    assert (tip11.meta or {}).get("source") in ("template", "llm_fallback_template")
+    assert "LLM-should-not-see" not in (tip11.content_text or "")
+    # At most the first hour's 1h + cascade (≤2) calls.
+    assert len(llm.calls) <= 2
+    assert result.get("llm_calls_left") == 0
 
 
 def test_llm_fail_mid_cascade_falls_back_without_crash(store):
@@ -1700,6 +1790,11 @@ def test_ladder_status_snapshot_exposes_knobs_and_state(store):
         "last_closed_1h_processed": "2026-07-28T11:00:00Z",
         "catchup_cursor": "2026-07-28T12:00:00Z",
         "llm_calls_hour": {"hour": "2026-07-28T12:00:00Z", "count": 4},
+        "write_source_counts": {
+            "llm": 2,
+            "template": 5,
+            "llm_fallback_template": 1,
+        },
         "dirty_1h_windows": ["2026-07-28T10:00:00Z"],
     }
     save_ladder_state(state, store)
@@ -1714,6 +1809,14 @@ def test_ladder_status_snapshot_exposes_knobs_and_state(store):
     assert snap["last_closed_1h_processed"] == "2026-07-28T11:00:00Z"
     assert snap["catchup_cursor"] == "2026-07-28T12:00:00Z"
     assert snap["llm_calls_hour"]["count"] == 4
+    assert snap["write_source_counts"]["llm"] == 2
+    assert snap["write_source_counts"]["template"] == 5
+    assert snap["write_source_counts"]["llm_fallback_template"] == 1
     assert snap["dirty_1h_count"] == 1
     assert "1h" in snap["allowed_scales"]
     assert "1d" in snap["allowed_scales"]
+    # Zero is a valid hard-off in status surface too.
+    zero_snap = ladder_status_snapshot(
+        store, MemorySettings(ladder_llm_max_calls_per_hour=0)
+    )
+    assert zero_snap["ladder_llm_max_calls_per_hour"] == 0
