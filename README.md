@@ -4,17 +4,63 @@
   <img src="ourlady.png" alt="Our Lady — Elyra" width="420" />
 </p>
 
-Communal digital teammate: always-on **presence**, **moments** (multi-hop **do-loops**), tools & skills, self ≠ user, goals, and a glass UI.
+**Project Elyra** is a multi-use, standalone AI system whose long-term goal is a **mnemonic substrate modeled on human memory**—so that an autonomous agent can sustain identity, motives, and learning over time in a way that could be described, anthropomorphically, as a path toward something like **consciousness**.
 
-**Stretch 1 is shipped** — full harness, not a one-shot chat scaffold.  
-**Current integration tip:** branch **`grok-improvement`** (Grok-by-default, sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, gold glass). **`main` may lag.**  
-Status snapshot: [docs/project-status-pass.md](docs/project-status-pass.md).
+That is the north star. It is not a claim of what the system already is.
 
-## Architecture (Stretch 1)
+---
+
+## Vision
+
+Human memory is not a warehouse of facts. It is **organized experience**: instances in time, woven by context, recency, association, and intentional keep. Elyra aims to build engineering analogs of that structure—atoms, moments, period narratives, edges, and labeled working context—so an always-on agent can:
+
+- Remember *what happened* with usable structure, not only the last chat window  
+- Hold a durable **self** distinct from **users**  
+- Pursue and revise **goals** across sessions  
+- Improve its own tools and skills under operator oversight  
+- Eventually support multi-party, multi-use deployment without collapsing into a single disposable chat thread  
+
+The product direction is a **presence process**: continuous life, interrupted by wakes, not a one-shot assistant.
+
+---
+
+## Where we are (honest)
+
+**Today, under real technical limits, Elyra is a chain-of-thought (CoT) engine attached to a mnemonic substrate.**
+
+The CoT (do-loop / moment harness) is mature enough for serious dogfood. The memory stack is past the “empty chat log” stage—durable atoms, labeled meals, glass-tail continuity, directed keep, and an episodic ladder—but it is still early relative to the full vision. Gaps remain in multi-user scale, fidelity of stored experience, and deep integration of learning with self-improvement. Those are active workstreams, not finished product claims.
+
+### What works now
+
+| Area | Status (high level) |
+|------|---------------------|
+| **Presence & moments** | Always-on worker, wake queue, multi-hop do-loops |
+| **Identity** | Novel **self / other** stores (draft → promote); multi-user prep |
+| **Goals & tasks** | Durable goal/task management separate from the wake queue |
+| **Skills & tools** | Catalog + on-demand skills; host tools + optional guest sandbox |
+| **Memory substrate** | Atoms, moments, context meal, glass-tail, keep, period ladder |
+| **Glass UI** | Local web UI: chat, status, memory, goals, identity, tools |
+| **Inference** | **Grok / xAI–focused** product path (usage meter, SuperGrok pacing) |
+
+### What remains (no deep dive)
+
+Long-horizon memory quality and policy, multi-party discourse, fuller edge fabric and traversal, safer autonomy boundaries, broader model backends, and the full self-improvement loop. Treat Stretch 1 as the **runtime harness**; Stretch 2+ as **memory and growth**—shipped pieces exist; the anthropomorphic vision is still ahead.
+
+---
+
+## Development posture
+
+Elyra is entering a phase where **development is dogfooded on the system itself**, with **[Grok Build](https://x.ai/)** as an integral engineering tool—not only as the chat model. Day-to-day work assumes an operator running a live instance, reading Context and Moments, and iterating against real continuity failures.
+
+**Present implementation focus:** Grok (xAI) as the primary LLM. Other providers may appear later; they are not the dogfood path today.
+
+---
+
+## Architecture (current harness)
 
 ```text
 elyra start (supervisor)
-  ├── LLM (xAI Grok default; local provider reserved / not implemented)
+  ├── LLM (xAI Grok product path; local provider reserved / not implemented)
   ├── HTTP API + glass UI  →  http://127.0.0.1:8787/
   └── PresenceWorker (single thread)
         wake queue + timers
@@ -23,9 +69,10 @@ elyra start (supervisor)
         open MOMENT  (= one do-loop)
           model ↔ tools until stop / wait
           skills load mid-loop; speak / wait / sandbox
+          memory meal rebuilds outer context when enabled
              │
              ▼
-        close moment · persist beats
+        close moment · persist beats / atoms
              │
              ▼
         next wake item
@@ -36,18 +83,21 @@ elyra start (supervisor)
 | **Presence** | Always-on host process; claims wakes, runs one moment at a time |
 | **Wake queue** | What starts the next do-loop (user, wait timeout, timer, task ready, …) |
 | **Moment** | One full do-loop until stop / wait — not a single tool hop |
-| **Do-loop** | Sliding context meal + model tool calls + results until stop |
-| **Tools / skills** | Callable actions + markdown playbooks (catalog in orient; body on demand) |
+| **Do-loop** | Context meal + model tool calls + results until stop |
+| **Tools / skills** | Callable actions + markdown playbooks |
 | **Goals / tasks** | Durable *what* (separate from the wake queue) |
 | **Self / users** | Durable *who* (separate stores; draft → promote) |
+| **Memory** | Atoms, ladder summaries, labeled meal (episodic / semantic / keep / glass-tail / temporal) |
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
-| **Glass UI** | Chat, wait choices, goals, moments, tools, identity, status |
+| **Glass UI** | Chat, wait choices, goals, moments, memory, tools, identity, status |
 
-Inference: product path is **xAI Grok** (usage meter + SuperGrok pacing + hard-stops; continuous default **OFF**). `provider=local` fails closed (`local_not_implemented`) until a future OpenAI-compat backend lands. Product meals default to **~250k** input tokens (~50% of model window; runtime `meal_budget_fraction`; Glass Status range, max **75%** unless `elyra start --max-meal-override PCT`); glass **Context** rail shows last meal vs **~500k** model window (`MODEL_CONTEXT_WINDOW_TOKENS`; `CONTEXT_WINDOW_TOKENS = 86000` remains legacy meal-math ceiling). See [docs/inference.md](docs/inference.md) and [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md).  
-Usage / SuperGrok operator notes + dogfood checklist: [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md).  
-[docs/inference.md](docs/inference.md) is a **historical freeze — do not follow for setup** (older local-server path removed).
+Inference notes, meal budget, and SuperGrok pacing: [docs/inference.md](docs/inference.md) (historical freeze for *setup*—use this README + current start path), [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md), [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md).
 
-**Status JSON (API/glass):** inference posture fields are `chat_ready` / `chat_error` / `chat_busy` / `chat_operation` (replacing former `llama_*` keys). Clean break — no dual-write.
+Memory philosophy reference: [docs/memory-atoms.pdf](docs/memory-atoms.pdf) (*What is wrong with my memory?*).
+
+**Status JSON:** `chat_ready` / `chat_error` / `chat_busy` / `chat_operation` (legacy `llama_*` keys removed).
+
+---
 
 ## Install
 
@@ -137,6 +187,8 @@ python -c "import playwright; print('browser extra OK')"    # after .[browser]
 
 Catalog, dogfood checklist, secrets/git notes: [docs/tools-and-skills.md](docs/tools-and-skills.md).
 
+---
+
 ## Run
 
 ```bash
@@ -163,7 +215,9 @@ Open **http://127.0.0.1:8787/**
 | `--api-host` / `--api-port` | Bind (default `127.0.0.1:8787`) |
 | `elyra auth login\|logout\|status` | Headless xAI OAuth (device-code); never prints tokens |
 
-Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 250000` as settings fallback; product meal size is runtime `meal_budget_fraction`, default 0.5 → 250k of 500k; slider max **75%** of model window unless raised). CLI: `elyra start --max-meal-override 100` raises the meal slider ceiling to 100% of the model window (persists `max_fraction` in `data/runtime/meal_budget.json`). Other CLI overrides win over toml.
+Optional knobs: `elyra.toml` under `ELYRA_HOME` (defaults include `loop.sliding_input_tokens = 250000` as settings fallback; product meal size is runtime `meal_budget_fraction`, default 0.5 → ~250k of ~500k model window; slider max **75%** of model window unless raised). CLI: `elyra start --max-meal-override 100` raises the meal slider ceiling to 100% of the model window (persists `max_fraction` in `data/runtime/meal_budget.json`). Other CLI overrides win over toml.
+
+---
 
 ## Testing
 
@@ -180,7 +234,7 @@ pytest -m llm
 
 ### Live qualitative stage gates
 
-Fixed scenarios + full product path (presence → moment → do-loop). Historical protocol: [docs/live-eval.md](docs/live-eval.md) (**historical freeze**). Harness is **fail-closed** (Gemma/llama path removed): [scripts/live_eval/README.md](scripts/live_eval/README.md). Hermetic scenario loader tests remain in `tests/test_live_eval_scenarios.py`.
+Fixed scenarios + full product path (presence → moment → do-loop). Historical protocol: [docs/live-eval.md](docs/live-eval.md) (**historical freeze**). Harness is **fail-closed** for removed local paths: [scripts/live_eval/README.md](scripts/live_eval/README.md). Hermetic scenario loader tests remain in `tests/test_live_eval_scenarios.py`.
 
 ```bash
 python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
@@ -189,29 +243,45 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 
 ### Stretch 1 done-when regression
 
-`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests and create-tool gate modules (`test_create_tool_gates`; historical PR13 surface). See [docs/stretch-1.md](docs/stretch-1.md) § Done when (all Stretch 1 criteria checked).
+`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests. See [docs/stretch-1.md](docs/stretch-1.md).
 
-Out of scope (Stretch 2+ / later phases): hypergraph memory, Lance graph, multi-sandbox, subagents, full per-user chat glass, Phase 1 `grok_build` self-improve instrument.
+---
 
 ## Documentation
 
 | Doc | Role |
 |-----|------|
-| [docs/project-status-pass.md](docs/project-status-pass.md) | **Where we are now** — shipped vs gaps, prep before Build/memory |
+| [docs/project-status-pass.md](docs/project-status-pass.md) | Status snapshot (may lag code—prefer recent issues/board) |
 | [docs/stretch-1.md](docs/stretch-1.md) | Runtime contract + done-when |
+| [docs/stretch-2/README.md](docs/stretch-2/README.md) | Memory / Stretch 2 index |
 | [docs/engineering-principles.md](docs/engineering-principles.md) | How we build |
 | [docs/overview.md](docs/overview.md) | Glossary |
-| [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote; work-origin USER |
-| [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, package VCS, search/browser/secrets/git·gh, dogfood checklist |
-| [docs/design-capability-growth-search-browse-vcs-secrets.md](docs/design-capability-growth-search-browse-vcs-secrets.md) | Capability growth product design |
-| [docs/design-capability-growth-implementation-plan.md](docs/design-capability-growth-implementation-plan.md) | Capability growth PR plan / execute contract |
-| [docs/inference.md](docs/inference.md) | **Historical freeze — do not follow for setup** (older local-server path removed) |
-| [docs/live-eval.md](docs/live-eval.md) | **Historical freeze** — live qualitative protocol |
-| [docs/design-remove-gemma-local-stub.md](docs/design-remove-gemma-local-stub.md) | Remove local-server path; stub `provider=local` |
-| [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration phases (refresh if status lags code) |
-| [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md) | Usage + SuperGrok pacing — operator notes + dogfood checklist |
+| [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote |
+| [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, search/browser/secrets/git·gh, dogfood checklist |
+| [docs/memory-atoms.pdf](docs/memory-atoms.pdf) | Memory philosophy (*What is wrong with my memory?*) |
+| [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration / dogfood phases |
 | [docs/README.md](docs/README.md) | Full index |
 
-## Branch tip
+---
 
-Work and dogfood on **`grok-improvement`**. Promote to **`main`** is a separate operator step after sign-off.
+## Sponsors
+
+If this work is useful to you, sponsorship helps keep autonomous-agent and memory research independent:
+
+<iframe src="https://github.com/sponsors/jtwolfe/button" title="Sponsor jtwolfe" height="32" width="114" style="border: 0; border-radius: 6px;"></iframe>
+
+[Sponsor @jtwolfe on GitHub](https://github.com/sponsors/jtwolfe)
+
+---
+
+## DANGER
+
+**THIS IS AN ANTHROPOMORPHIC MEMORY AND MOTIVE SYSTEM FOR AUTONOMOUS GOAL SETTING, LONG-TERM LEARNING, AND SELF-IMPROVEMENT.**
+
+Elyra is designed to retain experience, form durable motives, and act across time under operator configuration. It is **not** a sandboxed chat demo with built-in institutional guarantees.
+
+**ALL SAFEGUARDS MUST BE SET ON EXTERNAL SYSTEMS.**
+
+Do not rely on in-process prompts alone for safety, isolation, network policy, spend limits, or access control. Constrain the host, credentials, network, sandbox, and billing/usage caps **outside** the agent. Run only in environments you control. Assume the agent will try to complete goals you (or prior sessions) gave it.
+
+If you are not prepared to own those external controls, **do not run Elyra unattended**.
