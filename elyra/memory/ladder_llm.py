@@ -13,7 +13,15 @@ from elyra.llm.usage import UsageHardStopError
 
 
 class SummaryLlmError(Exception):
-    """Hard failure from a summary LLM call (adapter maps this to template)."""
+    """Hard failure from a summary LLM call (adapter maps this to template).
+
+    ``passes_attempted`` records how many ``complete()`` calls succeeded or
+    were in-flight before the failure so callers can count usage conservatively.
+    """
+
+    def __init__(self, message: str, *, passes_attempted: int = 0) -> None:
+        super().__init__(message)
+        self.passes_attempted = int(passes_attempted or 0)
 
 
 @runtime_checkable

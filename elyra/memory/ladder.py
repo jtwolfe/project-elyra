@@ -25,6 +25,7 @@ from elyra.memory.temporal import (
     windows_in_horizon,
 )
 from elyra.memory.types import (
+    PERIOD_SCALE_ORDER,
     PERIOD_SCALE_ORDER_WRITE,
     PERIOD_SCALES,
     PERIOD_SCALES_LEGACY,
@@ -704,10 +705,13 @@ def _llm_generate_body(
     llm: SummaryLlm,
     identity_names: Mapping[str, str] | None,
     store: MemoryStore | None,
+    max_passes: int = 2,
 ) -> tuple[str, int, int | None, str | None]:
     """Two-pass LLM generation. Returns (body, passes, draft_chars, error).
 
-    On failure raises SummaryLlmError (caller falls back to template).
+    On failure raises SummaryLlmError with ``passes_attempted`` set so callers
+    can count partial usage. When ``max_passes < 2``, pass B is skipped and the
+    draft is accepted as final (respects per-tick LLM call budget).
     """
     pack = build_source_pack(
         scale,
@@ -721,6 +725,7 @@ def _llm_generate_body(
     draft_tokens = _LLM_MAX_TOKENS_DRAFT.get(scale, 800)
     final_tokens = _LLM_MAX_TOKENS_FINAL.get(scale, 600)
     soft_chars = _SOFT_CHAR_BUDGET.get(scale, 2400)
+    passes_attempted = 0
 
     system = (
         "You write honest period memory narratives for an AI instance. "
@@ -734,16 +739,21 @@ def _llm_generate_body(
         f"{to_iso_z(window_start)} → {to_iso_z(window_end)}.\n\n"
         f"{pack}"
     )
-    draft = llm.complete(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_a},
-        ],
-        max_tokens=draft_tokens,
-    )
+    try:
+        draft = llm.complete(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_a},
+            ],
+            max_tokens=draft_tokens,
+        )
+    except SummaryLlmError as exc:
+        raise SummaryLlmError(str(exc), passes_attempted=0) from exc
+    passes_attempted = 1
     draft_chars = len(draft)
-    need_b = scale in _ALWAYS_TWO_PASS or draft_chars > soft_chars
-    if not need_b:
+    want_b = scale in _ALWAYS_TWO_PASS or draft_chars > soft_chars
+    # Honour remaining call budget: do not start pass B without a second slot.
+    if not want_b or int(max_passes) < 2:
         return draft.strip(), 1, draft_chars, None
 
     user_b = (
@@ -752,13 +762,18 @@ def _llm_generate_body(
         f"hard cap well under 8000 characters. Preserve key pointers.\n\n"
         f"DRAFT:\n{draft}"
     )
-    final = llm.complete(
-        [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_b},
-        ],
-        max_tokens=final_tokens,
-    )
+    try:
+        final = llm.complete(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_b},
+            ],
+            max_tokens=final_tokens,
+        )
+    except SummaryLlmError as exc:
+        raise SummaryLlmError(
+            str(exc), passes_attempted=passes_attempted
+        ) from exc
     return final.strip(), 2, draft_chars, None
 
 
@@ -775,6 +790,7 @@ def build_summary_atom(
     allow_legacy: bool | None = None,
     version: int = 1,
     supersedes_atom_id: str | None = None,
+    llm_max_passes: int = 2,
 ) -> Atom:
     """Build (do not store) a summary atom for the window.
 
@@ -813,6 +829,9 @@ def build_summary_atom(
     draft_chars: int | None = None
 
     if summary_mode_requested == "llm" and llm is not None:
+        # Cap passes by remaining call budget (Issue 5): always-two-pass scales
+        # accept draft-as-final when only one call remains.
+        max_passes = max(1, int(llm_max_passes or 1))
         try:
             body, llm_passes, draft_chars, llm_error = _llm_generate_body(
                 scale=str(scale),
@@ -823,9 +842,10 @@ def build_summary_atom(
                 llm=llm,
                 identity_names=identity_names,
                 store=store,
+                max_passes=max_passes,
             )
             if not body.strip():
-                raise SummaryLlmError("empty_body")
+                raise SummaryLlmError("empty_body", passes_attempted=llm_passes)
             source_tag = "llm"
         except SummaryLlmError as exc:
             _LOG.warning(
@@ -844,7 +864,8 @@ def build_summary_atom(
                 highlights=highlights,
             )
             source_tag = "llm_fallback_template"
-            llm_passes = 0
+            # Count partial complete() attempts so pacing stays honest.
+            llm_passes = int(getattr(exc, "passes_attempted", 0) or 0)
         except Exception as exc:  # noqa: BLE001 — never kill presence
             _LOG.warning(
                 "ladder LLM unexpected error scale=%s: %s; template fallback",
@@ -913,6 +934,7 @@ def refresh_window(
     llm: SummaryLlm | None = None,
     identity_names: Mapping[str, str] | None = None,
     allow_legacy: bool | None = None,
+    llm_max_passes: int = 2,
 ) -> Atom | None:
     """Build and ``put_atom`` the summary for the ``scale`` window containing ``t``.
 
@@ -940,6 +962,7 @@ def refresh_window(
         llm=llm,
         identity_names=identity_names,
         allow_legacy=allow_legacy,
+        llm_max_passes=llm_max_passes,
     )
     existing = store.get_atom(atom.atom_id)
     if existing is not None and (existing.content_text or "") == (
@@ -963,6 +986,10 @@ def _default_ladder_state() -> dict[str, Any]:
         "last_hourly_process": None,
         "last_closed_1h_processed": None,
         "dirty_1h_windows": [],
+        # Hours whose 1h tip landed but parent cascade did not finish (budget).
+        "cascade_pending_1h": [],
+        # Next 1h window_start to consider (inclusive). Catch-up is done when
+        # cursor >= current open hour start.
         "catchup_cursor": None,
         "llm_calls_hour": {"hour": None, "count": 0},
         "schema_version": 2,
@@ -992,6 +1019,8 @@ def load_ladder_state(
         data["last_refresh"] = {}
     if not isinstance(data.get("dirty_1h_windows"), list):
         data["dirty_1h_windows"] = []
+    if not isinstance(data.get("cascade_pending_1h"), list):
+        data["cascade_pending_1h"] = []
     if not isinstance(data.get("llm_calls_hour"), dict):
         data["llm_calls_hour"] = {"hour": None, "count": 0}
     data["schema_version"] = 2
@@ -1093,15 +1122,13 @@ def refresh_due(
     if scales is not None:
         scale_list: list[str] = list(scales)
     else:
-        # Nibble over WRITE scales only when legacy writes are off.
+        # WRITE scales by default; include legacy 15m/6h when repair writes on.
         write_legacy = bool(
             settings is not None
             and getattr(settings, "ladder_write_legacy_scales", False)
         )
         scale_list = (
-            list(PERIOD_SCALE_ORDER_WRITE)
-            if not write_legacy
-            else list(PERIOD_SCALE_ORDER_WRITE)  # still write-order; legacy separate
+            list(PERIOD_SCALE_ORDER) if write_legacy else list(PERIOD_SCALE_ORDER_WRITE)
         )
     if not scale_list:
         return {
@@ -1229,6 +1256,33 @@ def _record_llm_calls(state: MutableMapping[str, Any], n: int, now: datetime) ->
     bucket["count"] = int(bucket.get("count") or 0) + int(n)
 
 
+def _count_llm_usage_from_atom(
+    atom: Atom | None,
+    *,
+    remaining_calls: int,
+    state: MutableMapping[str, Any] | None,
+    now_dt: datetime,
+    used_llm: bool,
+) -> int:
+    """Debit remaining_calls from atom meta; return updated remaining."""
+    if atom is None or not used_llm:
+        return remaining_calls
+    src = (atom.meta or {}).get("source")
+    passes = int((atom.meta or {}).get("llm_passes") or 0)
+    if src == "llm" and passes > 0:
+        spent = max(1, passes)
+        remaining_calls = max(0, remaining_calls - spent)
+        if state is not None:
+            _record_llm_calls(state, spent, now_dt)
+    elif src == "llm_fallback_template":
+        # Count attempted completes even when body fell back to template.
+        spent = max(1, passes) if passes > 0 else 1
+        remaining_calls = max(0, remaining_calls - spent)
+        if state is not None:
+            _record_llm_calls(state, spent, now_dt)
+    return remaining_calls
+
+
 def cascade_from_hour(
     store: MemoryStore,
     hour_start: datetime | str,
@@ -1282,12 +1336,10 @@ def cascade_from_hour(
         if skip_empty and not sources:
             s = p
             continue
-        use_llm = (
-            llm
-            if str(getattr(settings, "summary_mode", "template")).lower() == "llm"
-            and remaining_calls > 0
-            else None
-        )
+        mode_llm = str(getattr(settings, "summary_mode", "template")).lower() == "llm"
+        use_llm = llm if (mode_llm and remaining_calls > 0) else None
+        # Issue 5: cap passes so a 2-pass scale cannot overrun remaining=1.
+        max_passes = min(2, remaining_calls) if use_llm is not None else 1
         try:
             atom = refresh_window(
                 store,
@@ -1298,6 +1350,7 @@ def cascade_from_hour(
                 settings=settings,
                 llm=use_llm,
                 identity_names=identity_names,
+                llm_max_passes=max_passes,
             )
         except Exception:  # noqa: BLE001
             _LOG.exception("cascade refresh failed scale=%s", p)
@@ -1305,20 +1358,15 @@ def cascade_from_hour(
             continue
         if atom is not None:
             refreshed.append(f"{p}:{to_iso_z(w_start)}")
-            if use_llm is not None and (atom.meta or {}).get("source") == "llm":
-                passes = int((atom.meta or {}).get("llm_passes") or 1)
-                remaining_calls = max(0, remaining_calls - max(1, passes))
-                if state is not None:
-                    _record_llm_calls(state, max(1, passes), now_dt)
-            elif use_llm is not None and (atom.meta or {}).get("source") == "llm_fallback_template":
-                # Failed after partial work; still count conservatively.
-                if state is not None:
-                    _record_llm_calls(state, 1, now_dt)
-                remaining_calls = max(0, remaining_calls - 1)
+            remaining_calls = _count_llm_usage_from_atom(
+                atom,
+                remaining_calls=remaining_calls,
+                state=state,
+                now_dt=now_dt,
+                used_llm=use_llm is not None,
+            )
         s = p
-        if remaining_calls <= 0 and str(
-            getattr(settings, "summary_mode", "template")
-        ).lower() == "llm":
+        if remaining_calls <= 0 and mode_llm:
             # Continue cascade with template only.
             llm = None
 
@@ -1328,6 +1376,7 @@ def cascade_from_hour(
         "llm_calls_left": remaining_calls,
         "stopped_reason": stopped_reason,
         "elapsed_ms": (time.monotonic() - start_mono) * 1000.0,
+        "complete": stopped_reason is None,
     }
 
 
@@ -1341,7 +1390,13 @@ def process_closed_hours(
     state: MutableMapping[str, Any] | None = None,
     max_ms: int | None = None,
 ) -> dict[str, Any]:
-    """Close due 1h windows oldest-first, cascade parents, respect budgets."""
+    """Close due 1h windows oldest-first, cascade parents, respect budgets.
+
+    ``catchup_cursor`` means the next 1h ``window_start`` to consider
+    (inclusive). On full-slice completion it advances past the last examined
+    closed hour (including empties). Incomplete cascade leaves the hour in
+    ``cascade_pending_1h`` so the next tick re-cascades without re-skipping.
+    """
     settings = settings or MemorySettings()
     now_dt = parse_iso_z(now) if now is not None else datetime.now(UTC)
     owned_state = state is None
@@ -1362,7 +1417,10 @@ def process_closed_hours(
     hour_remaining = _llm_calls_remaining(state, now_dt, settings=settings)
     remaining_calls = min(max_calls_tick, hour_remaining) if mode == "llm" else 0
 
-    # Candidate closed hours: horizon catchup + dirty set.
+    # Current open hour start — catch-up is done when cursor reaches this.
+    current_hour_start, _ = window_bounds("1h", now_dt)
+
+    # Candidate closed hours: horizon catchup + dirty + cascade_pending.
     candidates = windows_in_horizon("1h", now_dt, n_windows=max(catchup_max + 1, 2))
     closed: list[datetime] = []
     for w_s, w_e in candidates:
@@ -1375,6 +1433,17 @@ def process_closed_hours(
         for d in dirty_raw:
             if isinstance(d, str) and d:
                 dirty_set.add(d)
+                try:
+                    closed.append(parse_iso_z(d))
+                except (TypeError, ValueError):
+                    pass
+
+    pending_raw = state.get("cascade_pending_1h") or []
+    cascade_pending: set[str] = set()
+    if isinstance(pending_raw, list):
+        for d in pending_raw:
+            if isinstance(d, str) and d:
+                cascade_pending.add(d)
                 try:
                     closed.append(parse_iso_z(d))
                 except (TypeError, ValueError):
@@ -1395,16 +1464,24 @@ def process_closed_hours(
         uniq[to_iso_z(c)] = c
     ordered = sorted(uniq.values(), key=lambda d: d)
     if cursor_dt is not None:
-        ordered = [d for d in ordered if d >= cursor_dt]
+        # Always include cascade_pending / dirty even if before cursor so we
+        # can resume incomplete work after a budget stop.
+        forced = dirty_set | cascade_pending
+        ordered = [
+            d for d in ordered if d >= cursor_dt or to_iso_z(d) in forced
+        ]
 
     processed: list[str] = []
     cascaded: list[str] = []
+    examined: list[datetime] = []
     stopped_reason: str | None = None
+    budget_break_hour: datetime | None = None
 
     for hour_start in ordered[:catchup_max]:
         elapsed = (time.monotonic() - t0) * 1000.0
         if elapsed >= budget:
             stopped_reason = "budget"
+            budget_break_hour = hour_start
             break
 
         w_start, w_end = window_bounds("1h", hour_start)
@@ -1412,81 +1489,132 @@ def process_closed_hours(
         if w_end > now_dt:
             continue
 
+        examined.append(w_start)
+        key = to_iso_z(w_start)
         sources, _, _ = collect_window_sources(
             store, "1h", w_start, w_end, prefer_children=False
         )
         tip_id = stable_summary_id("1h", w_start)
         existing = store.get_atom(tip_id)
-        key = to_iso_z(w_start)
         is_dirty = key in dirty_set
+        is_cascade_pending = key in cascade_pending
         tip_empty = existing is not None and not (existing.content_text or "").strip()
-        needs = existing is None or is_dirty or tip_empty
-        if not needs:
-            dirty_set.discard(key)
+        needs_1h = existing is None or is_dirty or tip_empty
+
+        # Empty tip with no sources: keep dirty for retry; do not clear (Issue 8).
+        if tip_empty and not sources:
+            if not is_dirty:
+                dirty_set.add(key)
             continue
-        if skip_empty and not sources and existing is None:
+
+        # No tip, no sources, skip_empty → resolved empty; advance past.
+        if skip_empty and not sources and existing is None and not is_cascade_pending:
+            dirty_set.discard(key)
+            cascade_pending.discard(key)
+            continue
+
+        # Tip exists, clean, cascade done → nothing to do; still examined.
+        if not needs_1h and not is_cascade_pending:
             dirty_set.discard(key)
             continue
 
-        use_llm = llm if (mode == "llm" and remaining_calls > 0) else None
-        try:
-            atom = refresh_window(
+        did_1h = False
+        if needs_1h:
+            use_llm = llm if (mode == "llm" and remaining_calls > 0) else None
+            max_passes = min(2, remaining_calls) if use_llm is not None else 1
+            try:
+                atom = refresh_window(
+                    store,
+                    "1h",
+                    w_start,
+                    prefer_children=False,
+                    skip_empty=skip_empty,
+                    settings=settings,
+                    llm=use_llm,
+                    identity_names=identity_names,
+                    llm_max_passes=max_passes,
+                )
+            except Exception:  # noqa: BLE001
+                _LOG.exception("1h refresh failed window=%s", to_iso_z(w_start))
+                # Keep dirty so we retry later.
+                dirty_set.add(key)
+                continue
+
+            if atom is not None:
+                processed.append(key)
+                did_1h = True
+                remaining_calls = _count_llm_usage_from_atom(
+                    atom,
+                    remaining_calls=remaining_calls,
+                    state=state,
+                    now_dt=now_dt,
+                    used_llm=use_llm is not None,
+                )
+            elif skip_empty and not sources:
+                # refresh returned None (empty); leave dirty if tip_empty else resolve.
+                dirty_set.discard(key)
+                cascade_pending.discard(key)
+                continue
+            else:
+                # Unexpected None with sources — keep dirty for retry.
+                dirty_set.add(key)
+                continue
+
+            state["last_closed_1h_processed"] = key
+
+        # Cascade when we just wrote 1h OR cascade was left incomplete.
+        if did_1h or is_cascade_pending:
+            cas = cascade_from_hour(
                 store,
-                "1h",
                 w_start,
-                prefer_children=False,
-                skip_empty=skip_empty,
                 settings=settings,
-                llm=use_llm,
+                llm=llm if remaining_calls > 0 else None,
                 identity_names=identity_names,
+                max_ms=budget,
+                t0=t0,
+                llm_calls_left=remaining_calls,
+                state=state,
+                now=now_dt,
             )
-        except Exception:  # noqa: BLE001
-            _LOG.exception("1h refresh failed window=%s", to_iso_z(w_start))
-            continue
-
-        if atom is not None:
-            processed.append(to_iso_z(w_start))
-            if use_llm is not None:
-                src = (atom.meta or {}).get("source")
-                passes = int((atom.meta or {}).get("llm_passes") or 0)
-                if src == "llm" and passes > 0:
-                    remaining_calls = max(0, remaining_calls - passes)
-                    _record_llm_calls(state, passes, now_dt)
-                elif src == "llm_fallback_template":
-                    remaining_calls = max(0, remaining_calls - 1)
-                    _record_llm_calls(state, 1, now_dt)
-
-        dirty_set.discard(to_iso_z(w_start))
-        state["last_closed_1h_processed"] = to_iso_z(w_start)
-
-        # Cascade parents for this hour before next hour (budget permitting).
-        cas = cascade_from_hour(
-            store,
-            w_start,
-            settings=settings,
-            llm=llm if remaining_calls > 0 else None,
-            identity_names=identity_names,
-            max_ms=budget,
-            t0=t0,
-            llm_calls_left=remaining_calls,
-            state=state,
-            now=now_dt,
-        )
-        remaining_calls = int(cas.get("llm_calls_left") or remaining_calls)
-        cascaded.extend(cas.get("refreshed") or [])
-        if cas.get("stopped_reason") == "budget":
-            stopped_reason = "budget"
-            # Keep catchup_cursor at this hour so we continue later.
-            state["catchup_cursor"] = to_iso_z(w_start)
-            break
+            remaining_calls = int(cas.get("llm_calls_left") or remaining_calls)
+            cascaded.extend(cas.get("refreshed") or [])
+            if cas.get("stopped_reason") == "budget":
+                # Issue 1: do not treat hour as done — keep cascade pending
+                # and cursor on this hour so next tick resumes parents.
+                stopped_reason = "budget"
+                budget_break_hour = w_start
+                cascade_pending.add(key)
+                # Keep dirty if 1h was just (re)built so needs path stays live
+                # for older code paths; cascade_pending is the primary signal.
+                state["catchup_cursor"] = key
+                break
+            # Cascade finished cleanly.
+            cascade_pending.discard(key)
+            dirty_set.discard(key)
+        else:
+            dirty_set.discard(key)
     else:
-        # Completed slice without mid-break: advance cursor past last processed.
-        if processed:
-            last_p = parse_iso_z(processed[-1])
-            state["catchup_cursor"] = to_iso_z(last_p + timedelta(hours=1))
+        # for-else: completed slice without mid-break.
         stopped_reason = stopped_reason or None
 
+    # Cursor advancement (Issues 2–3).
+    # - Budget break: already set to the incomplete hour above.
+    # - Full completion: advance past last *examined* closed hour (incl. empties),
+    #   or to current open hour start when the slice is fully resolved.
+    if budget_break_hour is not None:
+        state["catchup_cursor"] = to_iso_z(budget_break_hour)
+    elif examined:
+        next_cursor = examined[-1] + timedelta(hours=1)
+        # Cap at current open hour — no point parking beyond live frontier.
+        if next_cursor > current_hour_start:
+            next_cursor = current_hour_start
+        state["catchup_cursor"] = to_iso_z(next_cursor)
+    else:
+        # No closed hours in range (or all filtered): catch-up complete for now.
+        state["catchup_cursor"] = to_iso_z(current_hour_start)
+
     state["dirty_1h_windows"] = sorted(dirty_set)
+    state["cascade_pending_1h"] = sorted(cascade_pending)
     state["last_hourly_process"] = to_iso_z(now_dt)
 
     if owned_state:
@@ -1498,13 +1626,22 @@ def process_closed_hours(
         "elapsed_ms": (time.monotonic() - t0) * 1000.0,
         "stopped_reason": stopped_reason,
         "llm_calls_left": remaining_calls,
+        "examined_1h": [to_iso_z(e) for e in examined],
     }
 
 
 def _hourly_due(state: Mapping[str, Any], now: datetime) -> bool:
-    """True when we should run the hourly process path this tick."""
+    """True when we should run the hourly process path this tick.
+
+    Catch-up is behind only when ``catchup_cursor`` (next hour start to
+    consider) is strictly before the current open hour start, or when dirty /
+    cascade_pending work remains.
+    """
     dirty = state.get("dirty_1h_windows") or []
     if isinstance(dirty, list) and dirty:
+        return True
+    pending = state.get("cascade_pending_1h") or []
+    if isinstance(pending, list) and pending:
         return True
     last = state.get("last_hourly_process")
     if not last:
@@ -1518,13 +1655,14 @@ def _hourly_due(state: Mapping[str, Any], now: datetime) -> bool:
     now_hour = now.replace(minute=0, second=0, microsecond=0)
     if now_hour > last_hour:
         return True
-    # Catch-up still behind.
+    # Catch-up still behind: cursor is next hour start to consider.
     cursor = state.get("catchup_cursor")
     if isinstance(cursor, str) and cursor:
         try:
             c = parse_iso_z(cursor)
-            cur_closed_end, _ = window_bounds("1h", now)
-            if c < cur_closed_end:
+            # current_hour_start = start of the open hour containing now.
+            current_hour_start, _ = window_bounds("1h", now)
+            if c < current_hour_start:
                 return True
         except (TypeError, ValueError):
             pass

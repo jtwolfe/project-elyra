@@ -728,51 +728,6 @@ def test_hourly_process_closed_hours_and_cascade(store):
     assert len(tips_1h) >= 2
 
 
-def test_hourly_budget_stops_mid_cascade(store):
-    store.put_atom(
-        _atom(
-            t="2026-07-28T10:15:00Z",
-            kind="speak",
-            text="work",
-            moment_id="m1",
-        )
-    )
-    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
-    settings = MemorySettings(
-        summary_mode="template",
-        ladder_hourly_max_ms=1,  # tiny wall budget
-        ladder_catchup_max_hours=24,
-    )
-    state: dict = {
-        **load_ladder_state(store),
-        "dirty_1h_windows": ["2026-07-28T10:00:00Z", "2026-07-28T11:00:00Z"],
-    }
-
-    import elyra.memory.ladder as ladder_mod
-
-    clock = {"t": 0.0}
-
-    def mono() -> float:
-        return clock["t"]
-
-    original_refresh = ladder_mod.refresh_window
-
-    def slow_refresh(*args, **kwargs):
-        clock["t"] += 0.050  # 50ms per refresh
-        return original_refresh(*args, **kwargs)
-
-    with mock.patch.object(ladder_mod.time, "monotonic", side_effect=mono):
-        with mock.patch.object(
-            ladder_mod, "refresh_window", side_effect=slow_refresh
-        ):
-            result = process_closed_hours(
-                store, now, settings=settings, state=state, max_ms=1
-            )
-
-    # With 1ms budget and 50ms per refresh, at most one window starts.
-    assert result["stopped_reason"] == "budget" or len(result["processed_1h"]) <= 1
-
-
 def test_cascade_from_hour_uses_write_parent_map(store):
     store.put_atom(
         _atom(
@@ -813,8 +768,9 @@ def test_tick_hourly_vs_nibble(store):
 
     # After hourly, with last_hourly_process recent and no dirty → nibble.
     state["dirty_1h_windows"] = []
+    state["cascade_pending_1h"] = []
     state["last_hourly_process"] = to_iso_z(now)
-    state["catchup_cursor"] = to_iso_z(now)
+    state["catchup_cursor"] = to_iso_z(window_bounds("1h", now)[0])
     r2 = tick(store, now + timedelta(minutes=5), settings=settings, state=state)
     assert r2["path"] == "nibble"
 
@@ -826,3 +782,225 @@ def test_no_hop_path_llm_on_finalize(store):
     mark_dirty_1h(store, datetime(2026, 7, 28, 12, 30, tzinfo=UTC))
     assert llm.calls == []
     assert store.list_summaries("1h") == []
+
+
+def test_cascade_resume_after_budget_stop(store):
+    """Issue 1: incomplete cascade resumes on later tick → 1d tip lands."""
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="work-hour",
+            moment_id="m1",
+        )
+    )
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    settings = MemorySettings(
+        summary_mode="template",
+        ladder_catchup_max_hours=24,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = {
+        **load_ladder_state(store),
+        "dirty_1h_windows": ["2026-07-28T10:00:00Z"],
+    }
+
+    import elyra.memory.ladder as ladder_mod
+
+    clock = {"t": 0.0}
+    original_refresh = ladder_mod.refresh_window
+    call_n = {"n": 0}
+
+    def gated_refresh(st, scale, t, **kwargs):
+        # First call (1h) cheap; cascade parent hits budget immediately.
+        call_n["n"] += 1
+        if scale != "1h":
+            clock["t"] += 10.0  # 10s → exceeds 1ms budget on cascade entry check
+            # Still raise budget via elapsed before work by not calling if already over.
+        atom = original_refresh(st, scale, t, **kwargs)
+        if scale == "1h":
+            clock["t"] += 0.0005
+        return atom
+
+    with mock.patch.object(ladder_mod.time, "monotonic", side_effect=lambda: clock["t"]):
+        with mock.patch.object(
+            ladder_mod, "refresh_window", side_effect=gated_refresh
+        ):
+            r1 = process_closed_hours(
+                store, now, settings=settings, state=state, max_ms=1
+            )
+
+    # 1h should land; cascade should stop on budget before/while parent.
+    assert "2026-07-28T10:00:00Z" in r1["processed_1h"]
+    assert r1["stopped_reason"] == "budget" or state.get("cascade_pending_1h")
+    assert store.get_atom(stable_summary_id("1h", "2026-07-28T10:00:00Z")) is not None
+    # Either cascade pending or 1d missing — second tick must create 1d.
+    day_id = stable_summary_id("1d", "2026-07-28T00:00:00Z")
+    # Force cascade pending if race left 1d already (slow path still ok).
+    if store.get_atom(day_id) is None:
+        assert "2026-07-28T10:00:00Z" in (state.get("cascade_pending_1h") or []) or (
+            state.get("catchup_cursor") == "2026-07-28T10:00:00Z"
+        )
+
+    # Resume with generous budget — coarser tip must appear.
+    r2 = process_closed_hours(
+        store, now, settings=settings, state=state, max_ms=60_000
+    )
+    assert store.get_atom(day_id) is not None
+    assert "2026-07-28T10:00:00Z" not in (state.get("cascade_pending_1h") or [])
+    assert r2["stopped_reason"] != "budget" or store.get_atom(day_id) is not None
+
+
+def test_catchup_cursor_advances_past_empty_hours(store):
+    """Issue 2: sparse content advances cursor; subsequent same-hour ticks nibble."""
+    # Only 10:00 has content; 11:00 empty; now is 12:05.
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="only-ten",
+            moment_id="m10",
+        )
+    )
+    now = datetime(2026, 7, 28, 12, 5, tzinfo=UTC)
+    settings = MemorySettings(
+        summary_mode="template",
+        ladder_catchup_max_hours=24,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = load_ladder_state(store)
+    r1 = process_closed_hours(store, now, settings=settings, state=state)
+    assert "2026-07-28T10:00:00Z" in r1["processed_1h"]
+    # Cursor must reach current open hour start so catch-up is not perpetually behind.
+    open_start = to_iso_z(window_bounds("1h", now)[0])
+    assert state["catchup_cursor"] == open_start
+    assert state.get("cascade_pending_1h") in (None, [],)
+
+    # Same-hour follow-up ticks must take nibble path, not hourly forever.
+    for _ in range(5):
+        r = tick(store, now + timedelta(minutes=1), settings=settings, state=state)
+        assert r["path"] == "nibble", r
+
+
+def test_processed_1h_oldest_first(store):
+    """Mixed dirty + missing tips process oldest-first."""
+    for hour in (11, 9, 10):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:20:00Z",
+                kind="speak",
+                text=f"h{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    settings = MemorySettings(
+        summary_mode="template",
+        ladder_catchup_max_hours=24,
+        ladder_hourly_max_ms=60_000,
+    )
+    state: dict = {
+        **load_ladder_state(store),
+        "dirty_1h_windows": ["2026-07-28T11:00:00Z", "2026-07-28T09:00:00Z"],
+    }
+    result = process_closed_hours(store, now, settings=settings, state=state)
+    processed = result["processed_1h"]
+    assert processed == sorted(processed)
+    assert processed[0] == "2026-07-28T09:00:00Z"
+
+
+def test_empty_horizon_does_not_spin_hourly(store):
+    """Issue 2/3 zero-state: all-empty closed horizon leaves hourly idle next tick."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    settings = MemorySettings(summary_mode="template", ladder_hourly_max_ms=30_000)
+    state: dict = load_ladder_state(store)
+    r1 = tick(store, now, settings=settings, state=state)
+    assert r1["path"] == "hourly"
+    open_start = to_iso_z(window_bounds("1h", now)[0])
+    assert state["catchup_cursor"] == open_start
+    # No dirty, no pending, cursor at open hour → nibble.
+    r2 = tick(store, now + timedelta(minutes=2), settings=settings, state=state)
+    assert r2["path"] == "nibble"
+    r3 = tick(store, now + timedelta(minutes=3), settings=settings, state=state)
+    assert r3["path"] == "nibble"
+
+
+def test_llm_partial_pass_counted_on_fallback(store):
+    """Issue 4: pass-A ok + pass-B fail still records llm_passes >= 1."""
+
+    class FailOnSecond:
+        def __init__(self) -> None:
+            self.n = 0
+
+        def complete(self, messages, *, max_tokens: int) -> str:
+            self.n += 1
+            if self.n == 1:
+                return "DRAFT " + ("x" * 50)
+            raise SummaryLlmError("pass_b_boom")
+
+    # Seed 1h tips so 1d has children (always two-pass).
+    for hour in (10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:05:00Z",
+                kind="speak",
+                text=f"h{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+        refresh_window(store, "1h", datetime(2026, 7, 28, hour, 0, tzinfo=UTC))
+
+    llm = FailOnSecond()
+    settings = MemorySettings(summary_mode="llm")
+    atom = build_summary_atom(
+        store,
+        "1d",
+        datetime(2026, 7, 28, 0, 0, tzinfo=UTC),
+        settings=settings,
+        llm=llm,
+    )
+    assert atom.meta["source"] == "llm_fallback_template"
+    assert int(atom.meta.get("llm_passes") or 0) >= 1
+    assert llm.n == 2
+
+
+def test_llm_max_passes_one_skips_pass_b(store):
+    """Issue 5: remaining budget of 1 → draft accepted, only one complete()."""
+    for hour in (10, 11):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:05:00Z",
+                kind="speak",
+                text=f"h{hour}",
+                moment_id=f"m{hour}",
+            )
+        )
+        refresh_window(store, "1h", datetime(2026, 7, 28, hour, 0, tzinfo=UTC))
+
+    llm = StubLlm(responses=["single-pass draft only"])
+    settings = MemorySettings(summary_mode="llm")
+    atom = build_summary_atom(
+        store,
+        "1d",
+        datetime(2026, 7, 28, 0, 0, tzinfo=UTC),
+        settings=settings,
+        llm=llm,
+        llm_max_passes=1,
+    )
+    assert atom.content_text == "single-pass draft only"
+    assert atom.meta["llm_passes"] == 1
+    assert len(llm.calls) == 1
+
+
+def test_refresh_due_includes_legacy_when_flag_on(store):
+    """Issue 6: ladder_write_legacy_scales=true nibble visits 15m/6h."""
+    store.put_atom(
+        _atom(t="2026-07-28T12:05:00Z", kind="speak", text="x", moment_id="m1")
+    )
+    settings = MemorySettings(ladder_write_legacy_scales=True, summary_mode="template")
+    state: dict = {"round_robin_idx": 0, "last_refresh": {}}
+    now = datetime(2026, 7, 28, 12, 10, tzinfo=UTC)
+    # PERIOD_SCALE_ORDER starts with 15m when legacy included.
+    r = refresh_due(store, now, max_ms=5000, state=state, settings=settings)
+    assert r["scale"] == "15m"
+    assert r["refreshed"] >= 1
