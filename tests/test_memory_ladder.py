@@ -14,6 +14,7 @@ from elyra.memory.ladder import (
     build_source_pack,
     build_summary_atom,
     cascade_from_hour,
+    child_content_hash,
     collect_window_sources,
     gap_spans,
     load_ladder_state,
@@ -24,8 +25,10 @@ from elyra.memory.ladder import (
     refresh_due,
     refresh_window,
     render_template_summary,
+    resolve_tip,
     select_highlights,
     tick,
+    uses_versioned_ids,
 )
 from elyra.memory.ladder_llm import (
     ChatClientSummaryLlm,
@@ -37,6 +40,7 @@ from elyra.memory.types import (
     new_atom_id,
     stable_summary_id,
     to_iso_z,
+    versioned_summary_id,
     window_bounds,
 )
 from elyra.llm.usage import UsageHardStopError
@@ -834,10 +838,11 @@ def test_cascade_resume_after_budget_stop(store):
     assert "2026-07-28T10:00:00Z" in r1["processed_1h"]
     assert r1["stopped_reason"] == "budget" or state.get("cascade_pending_1h")
     assert store.get_atom(stable_summary_id("1h", "2026-07-28T10:00:00Z")) is not None
-    # Either cascade pending or 1d missing — second tick must create 1d.
-    day_id = stable_summary_id("1d", "2026-07-28T00:00:00Z")
+    # Tip identity via ladder index (KD-TIP), not stable_summary_id for 1d.
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+    day_tip = resolve_tip(store, "1d", day_start)
     # Force cascade pending if race left 1d already (slow path still ok).
-    if store.get_atom(day_id) is None:
+    if day_tip is None:
         assert "2026-07-28T10:00:00Z" in (state.get("cascade_pending_1h") or []) or (
             state.get("catchup_cursor") == "2026-07-28T10:00:00Z"
         )
@@ -846,9 +851,10 @@ def test_cascade_resume_after_budget_stop(store):
     r2 = process_closed_hours(
         store, now, settings=settings, state=state, max_ms=60_000
     )
-    assert store.get_atom(day_id) is not None
+    day_tip = resolve_tip(store, "1d", day_start)
+    assert day_tip is not None
     assert "2026-07-28T10:00:00Z" not in (state.get("cascade_pending_1h") or [])
-    assert r2["stopped_reason"] != "budget" or store.get_atom(day_id) is not None
+    assert r2["stopped_reason"] != "budget" or day_tip is not None
 
 
 def test_catchup_cursor_advances_past_empty_hours(store):
@@ -1005,3 +1011,196 @@ def test_refresh_due_includes_legacy_when_flag_on(store):
     r = refresh_due(store, now, max_ms=5000, state=state, settings=settings)
     assert r["scale"] == "15m"
     assert r["refreshed"] >= 1
+
+
+# ── PR-B: version archaeology (coarser heads) ─────────────────────────────
+
+
+def test_uses_versioned_ids_coarser_only():
+    assert uses_versioned_ids("1d")
+    assert uses_versioned_ids("1w")
+    assert uses_versioned_ids("1m")
+    assert uses_versioned_ids("1y")
+    assert not uses_versioned_ids("1h")
+    assert not uses_versioned_ids("15m")
+    assert not uses_versioned_ids("6h")
+
+
+def test_two_cascades_two_version_atoms_one_tip(store):
+    """Two cascades → two 1d atom ids; ladder index holds one tip (KD-TIP)."""
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+
+    # First hour → cascade creates 1d v1.
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="hour-ten",
+            moment_id="m10",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    r1 = cascade_from_hour(
+        store,
+        datetime(2026, 7, 28, 10, 0, tzinfo=UTC),
+        settings=MemorySettings(summary_mode="template"),
+    )
+    assert any(c.startswith("1d:") for c in r1["refreshed"])
+    tip1 = resolve_tip(store, "1d", day_start)
+    assert tip1 is not None
+    assert tip1.meta.get("version") == 1
+    assert tip1.meta.get("supersedes_atom_id") is None
+    assert tip1.atom_id == versioned_summary_id("1d", day_start, 1)
+    v1_id = tip1.atom_id
+    v1_body = tip1.content_text
+
+    # Second hour → cascade creates 1d v2; tip moves; v1 immutable.
+    store.put_atom(
+        _atom(
+            t="2026-07-28T11:20:00Z",
+            kind="observation",
+            text="hour-eleven",
+            moment_id="m11",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 11, 0, tzinfo=UTC))
+    r2 = cascade_from_hour(
+        store,
+        datetime(2026, 7, 28, 11, 0, tzinfo=UTC),
+        settings=MemorySettings(summary_mode="template"),
+    )
+    assert any(c.startswith("1d:") for c in r2["refreshed"])
+    tip2 = resolve_tip(store, "1d", day_start)
+    assert tip2 is not None
+    assert tip2.atom_id != v1_id
+    assert tip2.meta.get("version") == 2
+    assert tip2.meta.get("supersedes_atom_id") == v1_id
+    assert tip2.meta.get("previous_version_id") == v1_id
+    assert tip2.atom_id == versioned_summary_id("1d", day_start, 2)
+
+    # Ladder index: one tip only.
+    tips = store.list_summaries("1d", tips_only=True)
+    day_tips = [
+        a
+        for a in tips
+        if a.window_start and to_iso_z(a.window_start) == to_iso_z(day_start)
+    ]
+    assert len(day_tips) == 1
+    assert day_tips[0].atom_id == tip2.atom_id
+
+    # Previous version row left immutable.
+    old = store.get_atom(v1_id)
+    assert old is not None
+    assert old.content_text == v1_body
+    assert old.meta.get("version") == 1
+    assert old.meta.get("supersedes_atom_id") is None
+
+
+def test_skip_version_when_child_content_hash_equal(store):
+    """Re-cascade with unchanged children must not mint a new version."""
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+    store.put_atom(
+        _atom(
+            t="2026-07-28T10:15:00Z",
+            kind="speak",
+            text="stable-hour",
+            moment_id="m10",
+        )
+    )
+    refresh_window(store, "1h", datetime(2026, 7, 28, 10, 0, tzinfo=UTC))
+    cascade_from_hour(
+        store,
+        datetime(2026, 7, 28, 10, 0, tzinfo=UTC),
+        settings=MemorySettings(summary_mode="template"),
+    )
+    tip1 = resolve_tip(store, "1d", day_start)
+    assert tip1 is not None
+    assert tip1.meta.get("child_content_hash")
+    lines_before = store.atoms_path.read_text(encoding="utf-8").count("\n")
+
+    # Same children → skip (hash equal).
+    again = refresh_window(store, "1d", day_start)
+    assert again is not None
+    assert again.atom_id == tip1.atom_id
+    assert again.meta.get("version") == 1
+    lines_after = store.atoms_path.read_text(encoding="utf-8").count("\n")
+    assert lines_after == lines_before
+
+    # Direct hash helper is stable.
+    sources, _, _ = collect_window_sources(
+        store, "1d", day_start, day_start + timedelta(days=1)
+    )
+    assert child_content_hash(sources) == tip1.meta["child_content_hash"]
+
+
+def test_list_summaries_tips_only_default_and_scan(store):
+    """tips_only=True (default) via index; tips_only=False O(n) version scan."""
+    day_start = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+    for hour, text in ((10, "a"), (11, "b")):
+        store.put_atom(
+            _atom(
+                t=f"2026-07-28T{hour:02d}:15:00Z",
+                kind="speak",
+                text=text,
+                moment_id=f"m{hour}",
+            )
+        )
+        refresh_window(store, "1h", datetime(2026, 7, 28, hour, 0, tzinfo=UTC))
+        cascade_from_hour(
+            store,
+            datetime(2026, 7, 28, hour, 0, tzinfo=UTC),
+            settings=MemorySettings(summary_mode="template"),
+        )
+
+    tip = resolve_tip(store, "1d", day_start)
+    assert tip is not None
+    assert tip.meta.get("version") == 2
+
+    # Default = tips only (index).
+    tips = store.list_summaries("1d")
+    day_tips = [
+        a
+        for a in tips
+        if a.window_start and to_iso_z(a.window_start) == to_iso_z(day_start)
+    ]
+    assert len(day_tips) == 1
+    assert day_tips[0].atom_id == tip.atom_id
+
+    # Full version chain via scan.
+    versions = store.list_summaries(
+        "1d",
+        overlapping=(day_start, day_start + timedelta(days=1)),
+        tips_only=False,
+    )
+    assert len(versions) == 2
+    assert [int((v.meta or {}).get("version") or 0) for v in versions] == [1, 2]
+    assert versions[0].atom_id == versioned_summary_id("1d", day_start, 1)
+    assert versions[1].atom_id == versioned_summary_id("1d", day_start, 2)
+    assert versions[1].meta.get("supersedes_atom_id") == versions[0].atom_id
+
+
+def test_1h_still_tip_replace_stable_id(store):
+    """1h remains stable_summary_id tip-replace (no version fan-out)."""
+    t = datetime(2026, 7, 28, 12, 5, tzinfo=UTC)
+    start, _ = window_bounds("1h", t)
+    store.put_atom(
+        _atom(t="2026-07-28T12:05:00Z", kind="speak", text="v1", moment_id="m1")
+    )
+    a1 = refresh_window(store, "1h", t)
+    store.put_atom(
+        _atom(t="2026-07-28T12:20:00Z", kind="speak", text="v2", moment_id="m1")
+    )
+    a2 = refresh_window(store, "1h", t)
+    assert a1 is not None and a2 is not None
+    assert a1.atom_id == a2.atom_id == stable_summary_id("1h", start)
+    assert a1.meta.get("version") == 1
+    assert a2.meta.get("version") == 1
+    # Only one tip (and one atom id) for the hour.
+    tips = store.list_summaries("1h", overlapping=(start, start + timedelta(hours=1)))
+    assert len(tips) == 1
+    versions = store.list_summaries(
+        "1h",
+        overlapping=(start, start + timedelta(hours=1)),
+        tips_only=False,
+    )
+    assert len(versions) == 1

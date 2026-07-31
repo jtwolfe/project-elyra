@@ -1,13 +1,14 @@
 """Period summary ladder — template + optional LLM, hourly cascade.
 
-Scope: UTC grid windows, template render, stable-id replace, source packs,
-budgeted ``tick`` / ``refresh_due`` for idle, cascade via write parent map.
-In scope: SummaryLlm protocol consumer (no presence / ChatClient import).
-Out of scope: meal pack policy (PR-D), version archaeology puts (PR-B), edges.
+Scope: UTC grid windows, template render, versioned coarser tips (KD-TIP),
+source packs, budgeted ``tick`` / ``refresh_due`` for idle, cascade via write
+parent map. In scope: SummaryLlm protocol consumer (no presence / ChatClient).
+Out of scope: meal pack policy (PR-D), summary edge fabric (PR-C).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -35,6 +36,7 @@ from elyra.memory.types import (
     parse_iso_z,
     stable_summary_id,
     to_iso_z,
+    versioned_summary_id,
     window_bounds,
 )
 
@@ -109,6 +111,10 @@ _SOFT_CHAR_BUDGET: dict[str, int] = {
 
 # Always two-pass for coarser than 1h.
 _ALWAYS_TWO_PASS = frozenset({"1d", "1w", "1m", "1y"})
+
+# Coarser write scales get a new version atom per cascade (immutable old + tip).
+# 1h / legacy use stable_summary_id tip-replace (no version fan-out by default).
+_VERSIONED_SCALES = frozenset({"1d", "1w", "1m", "1y"})
 
 
 def max_highlights(scale: PeriodScale | str) -> int:
@@ -646,6 +652,51 @@ def _count_stats(sources: Sequence[Atom]) -> dict[str, int]:
     }
 
 
+def uses_versioned_ids(scale: PeriodScale | str) -> bool:
+    """True when coarser cascade writes a new version atom (not tip-replace)."""
+    return str(scale) in _VERSIONED_SCALES
+
+
+def child_content_hash(sources: Sequence[Atom]) -> str:
+    """Stable hash of child tip set for skip-unchanged cascade.
+
+    Material is ``atom_id`` + short body digest per source in source order.
+    """
+    parts: list[str] = []
+    for a in sources:
+        body = a.content_text or ""
+        digest = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+        parts.append(a.atom_id)
+        parts.append(digest)
+    material = "|".join(parts)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def resolve_tip(
+    store: MemoryStore,
+    scale: PeriodScale | str,
+    window_start: datetime | str,
+    window_end: datetime | str | None = None,
+) -> Atom | None:
+    """Return the ladder-index tip for ``(scale, window_start)`` if any (KD-TIP)."""
+    w_start = parse_iso_z(window_start)
+    if window_end is None:
+        _, w_end = window_bounds(scale, w_start)
+    else:
+        w_end = parse_iso_z(window_end)
+    tips = store.list_summaries(
+        scale,  # type: ignore[arg-type]
+        overlapping=(w_start, w_end),
+        limit=32,
+        tips_only=True,
+    )
+    target = to_iso_z(w_start)
+    for tip in tips:
+        if tip.window_start and to_iso_z(tip.window_start) == target:
+            return tip
+    return None
+
+
 def _build_honesty_meta(
     *,
     sources: Sequence[Atom],
@@ -659,6 +710,7 @@ def _build_honesty_meta(
     draft_chars: int | None = None,
     version: int = 1,
     supersedes_atom_id: str | None = None,
+    child_content_hash_value: str | None = None,
 ) -> dict[str, Any]:
     stats = _count_stats(sources)
     child_ids = [a.atom_id for a in sources[:_MAX_CHILD_IDS]]
@@ -669,6 +721,9 @@ def _build_honesty_meta(
     goals = _goal_ids_from_atoms(sources)[:_MAX_POINTER_IDS]
     tasks = _task_ids_from_atoms(sources)[:_MAX_POINTER_IDS]
     pointer_atoms = [a.atom_id for a in select_highlights(sources, scale="1h", limit=12)]
+    cch = child_content_hash_value
+    if cch is None:
+        cch = child_content_hash(sources)
     meta: dict[str, Any] = {
         "source": source,
         "summary_mode_requested": summary_mode_requested,
@@ -683,9 +738,10 @@ def _build_honesty_meta(
         "pointer_atom_ids": pointer_atoms[:_MAX_POINTER_IDS],
         "pointer_goal_ids": goals,
         "pointer_task_ids": tasks,
-        "version": version,
+        "version": int(version),
         "supersedes_atom_id": supersedes_atom_id,
         "previous_version_id": supersedes_atom_id,
+        "child_content_hash": cch,
         "llm_model": llm_model,
         "llm_passes": llm_passes,
         "llm_error": llm_error,
@@ -792,12 +848,13 @@ def build_summary_atom(
     allow_legacy: bool | None = None,
     version: int = 1,
     supersedes_atom_id: str | None = None,
+    child_content_hash_value: str | None = None,
     llm_max_passes: int = 2,
 ) -> Atom:
     """Build (do not store) a summary atom for the window.
 
-    Uses ``stable_summary_id`` so replace-in-place overwrites the same id
-    (PR-A; PR-B switches coarser scales to versioned ids).
+    * ``1h`` / legacy: ``stable_summary_id`` (tip-replace).
+    * Coarser write scales: ``versioned_summary_id(scale, start, version)``.
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
@@ -829,6 +886,9 @@ def build_summary_atom(
     llm_passes = 0
     llm_error: str | None = None
     draft_chars: int | None = None
+    cch = child_content_hash_value
+    if cch is None:
+        cch = child_content_hash(sources)
 
     if summary_mode_requested == "llm" and llm is not None:
         # Cap passes by remaining call budget (Issue 5): always-two-pass scales
@@ -896,7 +956,11 @@ def build_summary_atom(
         )
         source_tag = "template"
 
-    atom_id = stable_summary_id(scale, w_start)
+    ver = max(1, int(version))
+    if uses_versioned_ids(scale):
+        atom_id = versioned_summary_id(scale, w_start, ver)
+    else:
+        atom_id = stable_summary_id(scale, w_start)
     meta = _build_honesty_meta(
         sources=sources,
         from_children=from_children,
@@ -906,8 +970,9 @@ def build_summary_atom(
         llm_passes=llm_passes,
         llm_error=llm_error,
         draft_chars=draft_chars,
-        version=version,
+        version=ver,
         supersedes_atom_id=supersedes_atom_id,
+        child_content_hash_value=cch,
     )
     return Atom(
         atom_id=atom_id,
@@ -940,8 +1005,12 @@ def refresh_window(
 ) -> Atom | None:
     """Build and ``put_atom`` the summary for the ``scale`` window containing ``t``.
 
-    Returns the stored atom, or ``None`` when ``skip_empty`` and no sources,
-    or when the scale is not writable under settings.
+    * Coarser scales: immutable old + new version atom; tip pointer moves via
+      ladder index on put. Skip when ``child_content_hash`` matches tip.
+    * ``1h`` / legacy: tip-replace with ``stable_summary_id``; skip when body
+      unchanged.
+
+    Returns the stored (or existing tip) atom, or ``None`` when empty/non-writable.
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
@@ -954,6 +1023,28 @@ def refresh_window(
     )
     if skip_empty and not sources:
         return None
+
+    tip = resolve_tip(store, scale, w_start, w_end)
+    cch = child_content_hash(sources)
+    version = 1
+    supersedes: str | None = None
+
+    if uses_versioned_ids(scale):
+        if tip is not None:
+            prev_hash = (tip.meta or {}).get("child_content_hash")
+            if prev_hash and prev_hash == cch:
+                return tip
+            prev_ver = int((tip.meta or {}).get("version") or 1)
+            version = prev_ver + 1
+            supersedes = tip.atom_id
+    else:
+        # 1h / legacy tip-replace: skip when body would be identical.
+        # Pre-check only via existing stable id when present.
+        if tip is not None:
+            prev_hash = (tip.meta or {}).get("child_content_hash")
+            if prev_hash and prev_hash == cch:
+                return tip
+
     atom = build_summary_atom(
         store,
         scale,
@@ -964,8 +1055,20 @@ def refresh_window(
         llm=llm,
         identity_names=identity_names,
         allow_legacy=allow_legacy,
+        version=version,
+        supersedes_atom_id=supersedes,
+        child_content_hash_value=cch,
         llm_max_passes=llm_max_passes,
     )
+
+    if uses_versioned_ids(scale):
+        # Never rewrite previous version rows; put new id only. Tip moves on put.
+        if tip is not None and (tip.content_text or "") == (atom.content_text or ""):
+            # Body identical even if hash missing on older tip — avoid noise.
+            return tip
+        return store.put_atom(atom)
+
+    # Tip-replace path (1h / legacy): same stable id.
     existing = store.get_atom(atom.atom_id)
     if existing is not None and (existing.content_text or "") == (
         atom.content_text or ""
@@ -1743,6 +1846,7 @@ __all__ = [
     "build_source_pack",
     "build_summary_atom",
     "cascade_from_hour",
+    "child_content_hash",
     "collect_window_sources",
     "gap_spans",
     "load_ladder_state",
@@ -1753,7 +1857,9 @@ __all__ = [
     "refresh_due",
     "refresh_window",
     "render_template_summary",
+    "resolve_tip",
     "save_ladder_state",
     "select_highlights",
     "tick",
+    "uses_versioned_ids",
 ]

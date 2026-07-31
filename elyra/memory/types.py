@@ -138,7 +138,9 @@ def versioned_summary_id(
 ) -> str:
     """Deterministic versioned summary atom id (coarser cascade archaeology).
 
-    PR-A scaffolds the helper; PR-B switches coarser puts onto versioned ids.
+    Used for ``1d`` / ``1w`` / ``1m`` / ``1y`` — one new atom id per cascade
+    version. Ladder index tip is independent of this id (KD-TIP).
+    Key material: ``f\"{scale}|{to_iso_z(window_start)}|v{version}\"``.
     """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")

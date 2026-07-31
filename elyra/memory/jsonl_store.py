@@ -508,31 +508,59 @@ class JsonlMemoryStore:
         *,
         overlapping: tuple[datetime | str, datetime | str] | None = None,
         limit: int = 50,
+        tips_only: bool = True,
     ) -> list[Atom]:
+        """List period summaries; default tips via ladder index (KD-TIP).
+
+        ``tips_only=False`` scans all summary atoms for ``scale`` (and optional
+        window overlap), sorted by ``meta.version`` ascending then atom_id.
+        """
         with self._lock:
             self._check_open()
+            o_start = o_end = None
+            if overlapping is not None:
+                o_start = to_iso_z(overlapping[0])
+                o_end = to_iso_z(overlapping[1])
+
+            def _overlaps(atom: Atom) -> bool:
+                if o_start is None or o_end is None:
+                    return True
+                ws = to_iso_z(atom.window_start) if atom.window_start else ""
+                we = to_iso_z(atom.window_end) if atom.window_end else ""
+                return bool(ws < o_end and we > o_start)
+
             out: list[Atom] = []
-            for (sc, _ws), aid in self._ladder.items():
-                if sc != scale:
-                    continue
-                atom = self._by_id.get(aid)
-                if atom is None:
-                    continue
-                if overlapping is not None:
-                    o_start = to_iso_z(overlapping[0])
-                    o_end = to_iso_z(overlapping[1])
-                    # Overlap if window_start < o_end and window_end > o_start
-                    ws = to_iso_z(atom.window_start) if atom.window_start else ""
-                    we = to_iso_z(atom.window_end) if atom.window_end else ""
-                    if not (ws < o_end and we > o_start):
+            if tips_only:
+                for (sc, _ws), aid in self._ladder.items():
+                    if sc != scale:
                         continue
-                out.append(atom)
-            out.sort(
-                key=lambda a: (
-                    to_iso_z(a.window_start) if a.window_start else "",
-                    a.atom_id,
+                    atom = self._by_id.get(aid)
+                    if atom is None:
+                        continue
+                    if not _overlaps(atom):
+                        continue
+                    out.append(atom)
+                out.sort(
+                    key=lambda a: (
+                        to_iso_z(a.window_start) if a.window_start else "",
+                        a.atom_id,
+                    )
                 )
-            )
+            else:
+                # O(n) version archaeology — no secondary version index (#92).
+                for atom in self._by_id.values():
+                    if atom.kind != "summary" or atom.scale != scale:
+                        continue
+                    if not _overlaps(atom):
+                        continue
+                    out.append(atom)
+                out.sort(
+                    key=lambda a: (
+                        to_iso_z(a.window_start) if a.window_start else "",
+                        int((a.meta or {}).get("version") or 0),
+                        a.atom_id,
+                    )
+                )
             return out[: max(0, int(limit))]
 
     def moment_tail(self, moment_id: str) -> Atom | None:
