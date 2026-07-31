@@ -389,6 +389,13 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.ladder_recent_1h_meal" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_rebuild_max_hours" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_rebuild_max_ms" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_rebuild_max_llm_calls" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        # ladder_age_gates_enabled is bool — no extra validation
         if path == "memory.ladder_source_edge_k":
             if coerced < 0 or coerced > LADDER_SOURCE_EDGE_K_MAX:
                 raise ValueError(

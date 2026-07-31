@@ -130,12 +130,19 @@ class MemorySettings:
     # --- Episodic ladder LLM + hourly schedule (#92 PR-A) ---
     summary_mode: str = "template"  # template | llm (CI default hermetic)
     ladder_write_legacy_scales: bool = False  # reject new 15m/6h writes
+    # When True, soft age/tip gates unlock 1w/1m/1y gradually. Default False:
+    # all write scales (1h→1y) are always allowed for cascade + status.
+    ladder_age_gates_enabled: bool = False
     ladder_hourly_max_ms: int = 12000  # hourly + cascade wall-clock
     ladder_catchup_max_hours: int = 24  # closed 1h per hourly tick
     ladder_llm_max_calls_per_tick: int = 3
     ladder_llm_max_calls_per_hour: int = 40
     ladder_skip_empty: bool = True  # skip put when window has no sources
     ladder_recent_1h_meal: int = 6  # meal band (PR-D consumes)
+    # Operator rebuild (Context button): closed hours to force-refresh + cascade.
+    ladder_rebuild_max_hours: int = 48
+    ladder_rebuild_max_ms: int = 120_000
+    ladder_rebuild_max_llm_calls: int = 80
     # Write cap for source edges (PR-C); settings reject outside [0, MAX].
     ladder_source_edge_k: int = LADDER_SOURCE_EDGE_K_DEFAULT
     # GraphView summary fabric expand depth (PR-C). lite = default; deep stub #103.

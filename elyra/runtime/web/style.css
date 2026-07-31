@@ -3022,10 +3022,28 @@ body {
   margin: 0.15rem 0 0.45rem;
 }
 
-/* Channel status notes on Memory → Context (semantic + directed_keep).
+/* Channel status notes on Memory → Context (semantic + directed_keep + ladder).
    Shared chrome: title case head, state badge, muted meta body, left accent. */
 .memory-semantic-note {
   border-left: 3px solid var(--border);
+}
+.memory-ladder-note {
+  margin-top: 0.35rem;
+  margin-bottom: 0.55rem;
+}
+/* Wider label column when ladder rows are present (Memory → Context flags). */
+#memory-context-flags .status-row {
+  grid-template-columns: 8.5rem 1fr;
+}
+.memory-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 0.75rem;
+  margin: 0.15rem 0 0.55rem;
+}
+.memory-context-actions #memory-ladder-rebuild-status {
+  font-size: 0.82rem;
 }
 .memory-semantic-note-deduped {
   border-left-color: var(--warn, #c9a227);

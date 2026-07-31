@@ -43,7 +43,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
-| `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — PR-A–E stack on `feature/92` (pending operator dogfood sign-off) |
+| `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (closed) | **Fixed** on main — LLM period ladder + meal tip policy; dogfood OK on feature/92 |
 | `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (closed) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
 
 ---
@@ -997,20 +997,20 @@ Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), meas
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **In Progress** (PR-A–E product stack on `feature/92`; **not Fixed** until operator dogfood sign-off) |
+| **Status** | **Fixed** on `main` (2026-07-31) — LLM period ladder + meal tip policy; dogfood OK |
 | **Issue** | [#92](https://github.com/jtwolfe/project-elyra/issues/92) |
-| **Severity now** | Med |
-| **Severity later** | High if episodic meal stays unreadable template highlights |
+| **Severity now** | — (closed) |
+| **Severity later** | — |
 | **Area** | `elyra/memory/ladder.py`, summary atom bodies; residual of closed [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
-| **Design home** | [stretch-2/design-episodic-summary-ladder-llm.md](stretch-2/design-episodic-summary-ladder-llm.md) (#92 product design on `feature/92`)
+| **Design home** | [stretch-2/design-episodic-summary-ladder-llm.md](stretch-2/design-episodic-summary-ladder-llm.md) |
 
 ### Goal
 
 Replace (or supplement) template-first period summaries with **budgeted LLM narratives** of each ladder window’s content; keep template fallback.
 
-### Progress
+### Resolution
 
-Product stack (KD-BR, cut from `feature/92`): PR-A ladder LLM schedule → PR-B version tips → PR-C summary edges → PR-D meal tip pack → PR-E tests + status observability. Merge into `feature/92` then dogfood before marking **Fixed**.
+Shipped on `feature/92` then merged to `main`: write scales `1h→1y`, hourly cascade, versioned coarser tips, summary edges lite, meal tip-only + recent 1h band, LLM `summary_mode`, Context ladder status + rebuild button, meal packs non-template tips only, age gates off by default. Follow-ons: #106 taxonomy, #107 atom truncation eval.
 
 ---
 

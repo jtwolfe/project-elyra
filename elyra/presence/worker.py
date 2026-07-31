@@ -1628,6 +1628,57 @@ class PresenceWorker:
             _LOG.exception("memory ladder tick failed")
         self._maybe_compact_memory_store()
 
+    def rebuild_episodic_summaries(
+        self,
+        *,
+        max_hours: int | None = None,
+        max_ms: int | None = None,
+        max_llm_calls: int | None = None,
+    ) -> dict[str, Any]:
+        """Operator force-rebuild of recent 1h tips + coarser cascade (Glass).
+
+        Outside the state lock. Uses ChatClient ladder adapter when
+        ``summary_mode=llm``. Returns rebuild status dict for the API.
+        """
+        store = self._ensure_memory_store()
+        if store is None:
+            return {"ok": False, "error": "store_unavailable"}
+        if not self._memory_ladder_active():
+            return {"ok": False, "error": "ladder_disabled"}
+        try:
+            from elyra.memory.ladder import rebuild_episodic_summaries
+            from elyra.memory.ladder_llm import ChatClientSummaryLlm
+
+            mem_cfg = self.settings.memory
+            llm = None
+            mode = str(getattr(mem_cfg, "summary_mode", "template") or "template").lower()
+            if mode == "llm" and self.client is not None:
+                llm = ChatClientSummaryLlm(self.client)
+            identity_names: dict[str, str] | None = None
+            try:
+                id_store = getattr(self, "_identity", None) or getattr(
+                    self, "identity", None
+                )
+                if id_store is not None and hasattr(id_store, "display_name"):
+                    identity_names = {
+                        "self": str(id_store.display_name() or "Elyra"),
+                    }
+            except Exception:  # noqa: BLE001
+                identity_names = None
+            result = rebuild_episodic_summaries(
+                store,
+                settings=mem_cfg,
+                llm=llm,
+                identity_names=identity_names,
+                max_hours=max_hours,
+                max_ms=float(max_ms) if max_ms is not None else None,
+                max_llm_calls=max_llm_calls,
+            )
+            return result if isinstance(result, dict) else {"ok": True, "result": result}
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("rebuild_episodic_summaries failed")
+            return {"ok": False, "error": str(exc) or type(exc).__name__}
+
     def _idle_memory_encode(self) -> None:
         """Idle-only corpus encode: pending scan + queue drain (KD2 / KD16).
 

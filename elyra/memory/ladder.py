@@ -155,13 +155,25 @@ def allowed_scales(
     now: datetime | str,
     *,
     tip_counts: Mapping[str, int] | None = None,
+    settings: MemorySettings | None = None,
+    age_gates_enabled: bool | None = None,
 ) -> list[str]:
-    """Write scales allowed for this instance age / provisional tip counts.
+    """Write scales allowed for cascade / nibble / status.
 
-    Always returns ``1h`` and ``1d``. Coarser scales unlock by soft age
-    thresholds (7d / 28d / 365d) **or** enough child-scale tips (provisional
-    ``LADDER_ENOUGH_*`` constants).
+    Default (``ladder_age_gates_enabled=false``): all of
+    ``PERIOD_SCALE_ORDER_WRITE`` (``1h→1d→1w→1m→1y``).
+
+    When age gates are on: always ``1h``/``1d``; coarser unlock by soft age
+    (7d / 28d / 365d) **or** enough child-scale tips (``LADDER_ENOUGH_*``).
     """
+    gates = age_gates_enabled
+    if gates is None and settings is not None:
+        gates = bool(getattr(settings, "ladder_age_gates_enabled", False))
+    if gates is None:
+        gates = False
+    if not gates:
+        return list(PERIOD_SCALE_ORDER_WRITE)
+
     now_dt = parse_iso_z(now) if not isinstance(now, datetime) else now
     if now_dt.tzinfo is None:
         now_dt = now_dt.replace(tzinfo=UTC)
@@ -194,6 +206,8 @@ def scale_allowed_for_instance_age(
     now: datetime | str,
     *,
     tip_counts: Mapping[str, int] | None = None,
+    settings: MemorySettings | None = None,
+    age_gates_enabled: bool | None = None,
 ) -> bool:
     """True when ``scale`` is in :func:`allowed_scales` for this instance."""
     s = str(scale)
@@ -201,7 +215,11 @@ def scale_allowed_for_instance_age(
         # Legacy repair is not age-gated; write path still controlled by settings.
         return True
     return s in allowed_scales(
-        instance_created_at, now, tip_counts=tip_counts
+        instance_created_at,
+        now,
+        tip_counts=tip_counts,
+        settings=settings,
+        age_gates_enabled=age_gates_enabled,
     )
 
 
@@ -306,18 +324,27 @@ def ladder_status_snapshot(
         pending = st.get("cascade_pending_1h") or []
         if isinstance(pending, list):
             block["cascade_pending_count"] = len(pending)
+    gates = bool(getattr(settings, "ladder_age_gates_enabled", False))
+    block["age_gates_enabled"] = gates
     if store is not None:
         try:
             created = read_instance_created_at(store)
             tips = count_tip_summaries(store)
             block["tip_counts"] = tips
             block["allowed_scales"] = allowed_scales(
-                created, datetime.now(UTC), tip_counts=tips
+                created,
+                datetime.now(UTC),
+                tip_counts=tips,
+                settings=settings,
             )
             if created is not None:
                 block["instance_created_at"] = to_iso_z(created)
         except Exception:  # noqa: BLE001
             pass
+    else:
+        block["allowed_scales"] = allowed_scales(
+            None, datetime.now(UTC), tip_counts={}, settings=settings
+        )
     return block
 
 
@@ -1231,13 +1258,15 @@ def refresh_window(
     identity_names: Mapping[str, str] | None = None,
     allow_legacy: bool | None = None,
     llm_max_passes: int = 2,
+    force: bool = False,
 ) -> Atom | None:
     """Build and ``put_atom`` the summary for the ``scale`` window containing ``t``.
 
     * Coarser scales: immutable old + new version atom; tip pointer moves via
-      ladder index on put. Skip when ``child_content_hash`` matches tip.
+      ladder index on put. Skip when ``child_content_hash`` matches tip
+      (unless ``force``).
     * ``1h`` / legacy: tip-replace with ``stable_summary_id``; skip when body
-      unchanged.
+      unchanged (unless ``force``).
 
     Returns the stored (or existing tip) atom, or ``None`` when empty/non-writable.
     """
@@ -1261,15 +1290,15 @@ def refresh_window(
     if uses_versioned_ids(scale):
         if tip is not None:
             prev_hash = (tip.meta or {}).get("child_content_hash")
-            # Hash-equal → skip build/LLM and do not mint a version.
-            if prev_hash and prev_hash == cch:
+            # Hash-equal → skip build/LLM and do not mint a version (unless force).
+            if not force and prev_hash and prev_hash == cch:
                 return tip
             prev_ver = int((tip.meta or {}).get("version") or 1)
             version = prev_ver + 1
             supersedes = tip.atom_id
     else:
         # 1h / legacy tip-replace: skip only when body *and* hash match tip.
-        if tip is not None:
+        if tip is not None and not force:
             prev_hash = (tip.meta or {}).get("child_content_hash")
             if prev_hash and prev_hash == cch:
                 return tip
@@ -1299,7 +1328,7 @@ def refresh_window(
 
     # Tip-replace path (1h / legacy): same stable id.
     existing = store.get_atom(atom.atom_id)
-    if existing is not None:
+    if existing is not None and not force:
         same_body = (existing.content_text or "") == (atom.content_text or "")
         same_hash = (existing.meta or {}).get("child_content_hash") == cch
         if same_body and same_hash:
@@ -1679,6 +1708,7 @@ def cascade_from_hour(
     llm_calls_left: int | None = None,
     state: MutableMapping[str, Any] | None = None,
     now: datetime | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Recompute coarser tips for the parent chain of ``hour_start``.
 
@@ -1711,10 +1741,14 @@ def cascade_from_hour(
         if elapsed >= budget:
             stopped_reason = "budget"
             break
-        # Instance-age / enough-tips gate (design §9): stop cascade; coarser gated too.
+        # Instance-age / enough-tips gate (optional; default off): stop cascade.
         tip_counts = count_tip_summaries(store)
         if not scale_allowed_for_instance_age(
-            p, instance_created, now_dt, tip_counts=tip_counts
+            p,
+            instance_created,
+            now_dt,
+            tip_counts=tip_counts,
+            settings=settings,
         ):
             stopped_reason = "instance_age"
             break
@@ -1742,6 +1776,7 @@ def cascade_from_hour(
                 llm=use_llm,
                 identity_names=identity_names,
                 llm_max_passes=max_passes,
+                force=force,
             )
         except Exception:  # noqa: BLE001
             _LOG.exception("cascade refresh failed scale=%s", p)
@@ -2127,7 +2162,9 @@ def tick(
     else:
         tips = count_tip_summaries(store)
         created = read_instance_created_at(store)
-        allowed = set(allowed_scales(created, now_dt, tip_counts=tips))
+        allowed = set(
+            allowed_scales(created, now_dt, tip_counts=tips, settings=settings)
+        )
         nibble_scales = [s for s in PERIOD_SCALE_ORDER_WRITE if s in allowed]
         if not nibble_scales:
             nibble_scales = ["1h", "1d"]
@@ -2145,6 +2182,216 @@ def tick(
     if owned_state:
         save_ladder_state(state, store)
     return result
+
+
+def rebuild_episodic_summaries(
+    store: MemoryStore,
+    *,
+    settings: MemorySettings | None = None,
+    llm: SummaryLlm | None = None,
+    identity_names: Mapping[str, str] | None = None,
+    now: datetime | str | None = None,
+    max_hours: int | None = None,
+    max_ms: float | None = None,
+    max_llm_calls: int | None = None,
+) -> dict[str, Any]:
+    """Operator force-rebuild: rewrite recent closed 1h tips + cascade coarser.
+
+    Intended for Glass **Rebuild episodic summaries** (confirm in UI). Uses
+    ``force=True`` so template tips re-generate under current ``summary_mode``
+    even when child hashes match. Does not rewrite historical version archives
+    beyond moving tips for windows it touches.
+
+    Returns a status dict: hours attempted, refreshed keys, llm usage, stops.
+    """
+    settings = settings or MemorySettings()
+    now_dt = parse_iso_z(now) if now is not None else datetime.now(UTC)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=UTC)
+    hours_n = (
+        int(max_hours)
+        if max_hours is not None
+        else _int_setting(settings, "ladder_rebuild_max_hours", 48)
+    )
+    hours_n = max(1, min(hours_n, 168))
+    budget_ms = (
+        float(max_ms)
+        if max_ms is not None
+        else float(_int_setting(settings, "ladder_rebuild_max_ms", 120_000))
+    )
+    remaining_calls = (
+        int(max_llm_calls)
+        if max_llm_calls is not None
+        else _int_setting(settings, "ladder_rebuild_max_llm_calls", 80)
+    )
+    remaining_calls = max(0, remaining_calls)
+    t0 = time.monotonic()
+    state = load_ladder_state(store)
+    mode = str(getattr(settings, "summary_mode", "template") or "template").lower()
+    use_llm_global = llm if mode == "llm" else None
+    skip_empty = bool(getattr(settings, "ladder_skip_empty", True))
+
+    cur_start, _ = window_bounds("1h", now_dt)
+    # Oldest closed hour first so cascade builds day/week coherently.
+    closed_starts: list[datetime] = []
+    for i in range(1, hours_n + 1):
+        t = cur_start - timedelta(hours=i)
+        ws, _we = window_bounds("1h", t)
+        closed_starts.append(ws)
+    closed_starts = sorted(set(closed_starts), key=lambda d: to_iso_z(d))
+
+    refreshed_1h: list[str] = []
+    skipped_empty: list[str] = []
+    cascade_notes: list[str] = []
+    stopped_reason: str | None = None
+
+    for ws in closed_starts:
+        elapsed = (time.monotonic() - t0) * 1000.0
+        if elapsed >= budget_ms:
+            stopped_reason = "budget"
+            break
+        if mode == "llm" and use_llm_global is not None and remaining_calls <= 0:
+            stopped_reason = "llm_cap"
+            break
+        sources, _, _ = collect_window_sources(
+            store, "1h", ws, window_bounds("1h", ws)[1], prefer_children=False
+        )
+        if skip_empty and not sources:
+            # Still force-refresh if a tip exists (re-style template → llm).
+            tip = resolve_tip(store, "1h", ws)
+            if tip is None:
+                skipped_empty.append(to_iso_z(ws))
+                continue
+        use_llm = (
+            use_llm_global
+            if (use_llm_global is not None and remaining_calls > 0)
+            else None
+        )
+        max_passes = min(2, remaining_calls) if use_llm is not None else 1
+        tip_before = resolve_tip(store, "1h", ws)
+        try:
+            atom = refresh_window(
+                store,
+                "1h",
+                ws,
+                prefer_children=False,
+                skip_empty=False if tip_before is not None else skip_empty,
+                settings=settings,
+                llm=use_llm,
+                identity_names=identity_names,
+                llm_max_passes=max_passes,
+                force=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("rebuild 1h failed window=%s: %s", to_iso_z(ws), exc)
+            cascade_notes.append(f"1h_fail:{to_iso_z(ws)}:{exc}")
+            continue
+        if atom is None:
+            skipped_empty.append(to_iso_z(ws))
+            continue
+        refreshed_1h.append(to_iso_z(ws))
+        _record_write_source(state, atom)
+        remaining_calls = _count_llm_usage_from_atom(
+            atom,
+            remaining_calls=remaining_calls,
+            state=state,
+            now_dt=now_dt,
+            used_llm=use_llm is not None,
+        )
+        # Cascade coarser (force rewrite so 1d/1w/1m/1y leave template).
+        cas = cascade_from_hour(
+            store,
+            ws,
+            settings=settings,
+            llm=use_llm_global,
+            identity_names=identity_names,
+            max_ms=max(0.0, budget_ms - (time.monotonic() - t0) * 1000.0),
+            t0=t0,
+            llm_calls_left=remaining_calls,
+            state=state,
+            now=now_dt,
+            force=True,
+        )
+        remaining_calls = int(cas.get("llm_calls_left", remaining_calls) or 0)
+        for key in cas.get("refreshed") or []:
+            cascade_notes.append(str(key))
+        if cas.get("stopped_reason") in ("budget", "llm_cap"):
+            stopped_reason = cas.get("stopped_reason")
+            break
+
+    # Ensure current open coarser tips for "now" also force-refresh once
+    # (covers empty-hour spans that never cascaded).
+    for scale in PERIOD_SCALE_ORDER_WRITE:
+        if scale == "1h":
+            continue
+        if not scale_allowed_for_instance_age(
+            scale,
+            read_instance_created_at(store),
+            now_dt,
+            tip_counts=count_tip_summaries(store),
+            settings=settings,
+        ):
+            continue
+        elapsed = (time.monotonic() - t0) * 1000.0
+        if elapsed >= budget_ms:
+            stopped_reason = stopped_reason or "budget"
+            break
+        use_llm = (
+            use_llm_global
+            if (use_llm_global is not None and remaining_calls > 0)
+            else None
+        )
+        max_passes = min(2, remaining_calls) if use_llm is not None else 1
+        tip_before = resolve_tip(store, scale, now_dt)
+        try:
+            atom = refresh_window(
+                store,
+                scale,
+                now_dt,
+                prefer_children=True,
+                skip_empty=skip_empty,
+                settings=settings,
+                llm=use_llm,
+                identity_names=identity_names,
+                llm_max_passes=max_passes,
+                force=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            cascade_notes.append(f"{scale}_fail:{exc}")
+            continue
+        if atom is not None and _refresh_wrote(tip_before, atom):
+            cascade_notes.append(f"{scale}:{to_iso_z(atom.window_start or now_dt)}")
+            _record_write_source(state, atom)
+            remaining_calls = _count_llm_usage_from_atom(
+                atom,
+                remaining_calls=remaining_calls,
+                state=state,
+                now_dt=now_dt,
+                used_llm=use_llm is not None,
+            )
+
+    state["last_hourly_process"] = to_iso_z(now_dt)
+    if refreshed_1h:
+        state["last_closed_1h_processed"] = refreshed_1h[-1]
+    save_ladder_state(state, store)
+    return {
+        "ok": True,
+        "summary_mode": mode,
+        "hours_requested": hours_n,
+        "refreshed_1h": refreshed_1h,
+        "skipped_empty_1h": skipped_empty,
+        "cascade_refreshed": cascade_notes,
+        "stopped_reason": stopped_reason,
+        "llm_calls_remaining_budget": remaining_calls,
+        "write_source_counts": dict(state.get("write_source_counts") or {}),
+        "elapsed_ms": int((time.monotonic() - t0) * 1000),
+        "allowed_scales": allowed_scales(
+            read_instance_created_at(store),
+            now_dt,
+            tip_counts=count_tip_summaries(store),
+            settings=settings,
+        ),
+    }
 
 
 __all__ = [
@@ -2166,6 +2413,7 @@ __all__ = [
     "moment_blocks_for_window",
     "process_closed_hours",
     "read_instance_created_at",
+    "rebuild_episodic_summaries",
     "refresh_due",
     "refresh_window",
     "render_template_summary",

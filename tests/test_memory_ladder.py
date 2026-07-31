@@ -11,6 +11,7 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.memory.config import MemorySettings
 from elyra.memory.ladder import (
+    rebuild_episodic_summaries,
     LADDER_ENOUGH_1D_TIPS,
     LADDER_ENOUGH_1M_TIPS,
     LADDER_ENOUGH_1W_TIPS,
@@ -1419,36 +1420,54 @@ def test_legacy_stable_1d_superseded_by_versioned(store):
 # ── PR-E: catch-up, meter exhaustion, instance-age, status ─────────────────
 
 
+def test_allowed_scales_default_all_write_scales():
+    """Age gates off by default — all write scales always allowed."""
+    created = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+    young = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)
+    assert allowed_scales(created, young, tip_counts={}) == [
+        "1h",
+        "1d",
+        "1w",
+        "1m",
+        "1y",
+    ]
+    assert scale_allowed_for_instance_age("1y", created, young, tip_counts={}) is True
+
+
 def test_allowed_scales_age_and_enough_tips():
-    """Design §9: soft age thresholds + provisional enough-tips constants."""
+    """Design §9: soft age thresholds when ladder_age_gates_enabled=True."""
     assert LADDER_ENOUGH_1D_TIPS == 3
     assert LADDER_ENOUGH_1W_TIPS == 2
     assert LADDER_ENOUGH_1M_TIPS == 2
     created = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
     young = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)  # age 1.5d
-    assert allowed_scales(created, young, tip_counts={}) == ["1h", "1d"]
+    gates = {"age_gates_enabled": True}
+    assert allowed_scales(created, young, tip_counts={}, **gates) == ["1h", "1d"]
     # Enough 1d tips unlock 1w early.
     assert allowed_scales(
-        created, young, tip_counts={"1d": LADDER_ENOUGH_1D_TIPS}
+        created, young, tip_counts={"1d": LADDER_ENOUGH_1D_TIPS}, **gates
     ) == ["1h", "1d", "1w"]
     # Age ≥7d unlocks 1w without tip counts.
     weekish = created + timedelta(days=7)
-    assert "1w" in allowed_scales(created, weekish, tip_counts={})
-    assert "1m" not in allowed_scales(created, weekish, tip_counts={})
+    assert "1w" in allowed_scales(created, weekish, tip_counts={}, **gates)
+    assert "1m" not in allowed_scales(created, weekish, tip_counts={}, **gates)
     # Enough 1w tips unlock 1m early.
     assert "1m" in allowed_scales(
-        created, young, tip_counts={"1d": 3, "1w": LADDER_ENOUGH_1W_TIPS}
+        created,
+        young,
+        tip_counts={"1d": 3, "1w": LADDER_ENOUGH_1W_TIPS},
+        **gates,
     )
     # Age ≥28d unlocks 1m; ≥365d unlocks 1y.
     monthish = created + timedelta(days=28)
-    assert allowed_scales(created, monthish, tip_counts={}) == [
+    assert allowed_scales(created, monthish, tip_counts={}, **gates) == [
         "1h",
         "1d",
         "1w",
         "1m",
     ]
     yearish = created + timedelta(days=365)
-    assert allowed_scales(created, yearish, tip_counts={}) == [
+    assert allowed_scales(created, yearish, tip_counts={}, **gates) == [
         "1h",
         "1d",
         "1w",
@@ -1460,10 +1479,19 @@ def test_allowed_scales_age_and_enough_tips():
         created,
         young,
         tip_counts={"1d": 3, "1w": 2, "1m": LADDER_ENOUGH_1M_TIPS},
+        **gates,
     )
-    assert scale_allowed_for_instance_age("1w", created, young, tip_counts={}) is False
-    assert scale_allowed_for_instance_age(
-        "1w", created, young, tip_counts={"1d": 3}
+    assert (
+        scale_allowed_for_instance_age(
+            "1w", created, young, tip_counts={}, age_gates_enabled=True
+        )
+        is False
+    )
+    assert (
+        scale_allowed_for_instance_age(
+            "1w", created, young, tip_counts={"1d": 3}, age_gates_enabled=True
+        )
+        is True
     )
 
 
@@ -1720,7 +1748,9 @@ def test_cascade_gates_1w_when_young_instance(store, paths):
     result = cascade_from_hour(
         store,
         datetime(2026, 7, 28, 10, 0, tzinfo=UTC),
-        settings=MemorySettings(summary_mode="template"),
+        settings=MemorySettings(
+            summary_mode="template", ladder_age_gates_enabled=True
+        ),
         now=now,
     )
     assert any(c.startswith("1d:") for c in result["refreshed"])
@@ -1820,3 +1850,44 @@ def test_ladder_status_snapshot_exposes_knobs_and_state(store):
         store, MemorySettings(ladder_llm_max_calls_per_hour=0)
     )
     assert zero_snap["ladder_llm_max_calls_per_hour"] == 0
+
+
+
+def test_rebuild_episodic_summaries_force_rewrites(store):
+    """Operator rebuild force=True rewrites template 1h tip under template mode."""
+    now = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
+    hour = datetime(2026, 7, 28, 10, 0, tzinfo=UTC)
+    store.put_atom(
+        _atom(t="2026-07-28T10:15:00Z", kind="speak", text="rebuild-me", moment_id="m10")
+    )
+    tip1 = refresh_window(
+        store,
+        "1h",
+        hour,
+        settings=MemorySettings(summary_mode="template"),
+    )
+    assert tip1 is not None
+    assert (tip1.meta or {}).get("source") == "template"
+    # Without force, hash-equal skips.
+    tip2 = refresh_window(
+        store,
+        "1h",
+        hour,
+        settings=MemorySettings(summary_mode="template"),
+        force=False,
+    )
+    assert tip2 is not None and tip2.atom_id == tip1.atom_id
+    result = rebuild_episodic_summaries(
+        store,
+        settings=MemorySettings(
+            summary_mode="template",
+            ladder_rebuild_max_hours=6,
+            ladder_rebuild_max_ms=60_000,
+            ladder_rebuild_max_llm_calls=10,
+        ),
+        now=now,
+        max_hours=6,
+    )
+    assert result.get("ok") is True
+    assert any(to_iso_z(hour) in x or x.startswith("2026-07-28T10") for x in (result.get("refreshed_1h") or []))
+    assert "1y" in (result.get("allowed_scales") or [])

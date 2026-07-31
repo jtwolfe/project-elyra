@@ -272,6 +272,17 @@
           </div>
           <div id="memory-tab-context" class="memory-tab-panel active" role="tabpanel">
             <div id="memory-context-flags" class="memory-flags status-fields">loading…</div>
+            <div class="memory-context-actions">
+              <button
+                type="button"
+                id="memory-ladder-rebuild-btn"
+                class="btn-secondary btn-sm"
+                title="Force-refresh recent 1h tips and cascade coarser scales under current summary_mode"
+              >
+                Rebuild episodic summaries
+              </button>
+              <span id="memory-ladder-rebuild-status" class="muted status-helper" hidden></span>
+            </div>
             <div id="memory-context-body" class="list-panel memory-context-body">loading…</div>
           </div>
           <div id="memory-tab-moments" class="memory-tab-panel" role="tabpanel" hidden>

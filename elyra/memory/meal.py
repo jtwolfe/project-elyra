@@ -291,6 +291,20 @@ def _summary_meal_item(atom: Atom) -> MealItem:
     )
 
 
+def _summary_source_ok_for_meal(atom: Atom) -> bool:
+    """True when this tip may appear in episodic meal summary packets.
+
+    Reject Phase-1 style ``meta.source == "template"`` so Context never shows
+    old inventory highlight sheets after LLM mode / rebuild. Allow ``llm`` and
+    ``llm_fallback_template`` (honest fallback after failed generation).
+    Missing source (legacy rows) is treated as template and skipped.
+    """
+    src = (atom.meta or {}).get("source")
+    if src is None or src == "" or src == "template":
+        return False
+    return True
+
+
 def _try_pack_summary(
     atom: Atom,
     *,
@@ -308,6 +322,8 @@ def _try_pack_summary(
     oldest first; 3c recency drops apply when packed items + raw exceed cap.
     """
     if atom.atom_id in seen:
+        return used
+    if not _summary_source_ok_for_meal(atom):
         return used
     item = _summary_meal_item(atom)
     if used + item.token_estimate > summary_budget and summary_items:

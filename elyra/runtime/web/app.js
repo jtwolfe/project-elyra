@@ -34,6 +34,8 @@ const momentDetail = $("#moment-detail");
 const memoryRefreshBtn = $("#memory-refresh-btn");
 const memoryContextFlags = $("#memory-context-flags");
 const memoryContextBody = $("#memory-context-body");
+const memoryLadderRebuildBtn = $("#memory-ladder-rebuild-btn");
+const memoryLadderRebuildStatus = $("#memory-ladder-rebuild-status");
 const memoryAtomsList = $("#memory-atoms-list");
 const memoryAtomDetail = $("#memory-atom-detail");
 const memoryAtomKind = $("#memory-atom-kind");
@@ -491,6 +493,34 @@ function formatMsgTime(iso) {
       hour: "2-digit",
       minute: "2-digit",
     });
+  } catch {
+    return String(iso);
+  }
+}
+
+/** Compact relative age for ladder/status (e.g. "3m ago", "2h ago"). */
+function formatRelativeAge(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const sec = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+    if (sec < 45) return "just now";
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+    return `${Math.round(sec / 86400)}d ago`;
+  } catch {
+    return String(iso);
+  }
+}
+
+/** Short UTC hour label from ISO window start. */
+function formatHourWindow(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    return d.toISOString().slice(0, 13).replace("T", " ") + "Z";
   } catch {
     return String(iso);
   }
@@ -3139,6 +3169,59 @@ function setMemoryTab(name) {
 /** Last flags fingerprint so soft Context tick does not wipe the flags strip. */
 let lastMemoryFlagsFp = null;
 
+/**
+ * Ladder / episodic-summary rows for Memory → Context flags strip.
+ * Data comes from memory.ladder (ladder_status_snapshot on the server).
+ */
+function ladderFlagRows(ladder) {
+  const L = ladder && typeof ladder === "object" ? ladder : null;
+  if (!L) {
+    return [["ladder", "—", null]];
+  }
+  const enabled = L.enabled !== false;
+  const mode = String(L.summary_mode || "template");
+  const src = L.write_source_counts || {};
+  const llmN = Number(src.llm || 0);
+  const tplN = Number(src.template || 0);
+  const fbN = Number(src.llm_fallback_template || 0);
+  const writes = `llm=${llmN} · tpl=${tplN}` + (fbN ? ` · fallback=${fbN}` : "");
+  const tips = L.tip_counts || {};
+  const tipBits = ["1h", "1d", "1w", "1m", "1y"]
+    .map((s) => (tips[s] != null ? `${s}=${tips[s]}` : null))
+    .filter(Boolean);
+  const tipStr = tipBits.length ? tipBits.join(" ") : "—";
+  const allowed = Array.isArray(L.allowed_scales)
+    ? L.allowed_scales.join(",")
+    : "—";
+  const dirty = Number(L.dirty_1h_count || 0);
+  const pending = Number(L.cascade_pending_count || 0);
+  const queueBits = [];
+  if (dirty > 0) queueBits.push(`dirty=${dirty}`);
+  if (pending > 0) queueBits.push(`cascade_pending=${pending}`);
+  const lastHourly = L.last_hourly_process;
+  const lastClosed = L.last_closed_1h_processed;
+  const hourlyVal = lastHourly
+    ? `${formatRelativeAge(lastHourly)} (${formatMsgTime(lastHourly)})`
+    : "never";
+  const closedVal = lastClosed
+    ? formatHourWindow(lastClosed)
+    : "—";
+  /** @type {Array<[string, string, boolean|null]>} */
+  const gates = L.age_gates_enabled === true;
+  const rows = [
+    ["ladder", enabled ? `on · ${mode}` : "off", enabled],
+    ["summaries", writes, mode === "llm" && llmN > 0 ? true : null],
+    ["last hourly", hourlyVal, lastHourly ? true : null],
+    ["last 1h closed", closedVal, null],
+    ["tips", tipStr, null],
+    ["scales ok", allowed + (gates ? " (gated)" : " (all)"), null],
+  ];
+  if (queueBits.length) {
+    rows.push(["ladder queue", queueBits.join(" · "), dirty + pending > 0 ? false : null]);
+  }
+  return rows;
+}
+
 function renderMemoryFlags(mem, opts = {}) {
   if (!memoryContextFlags) return;
   const force = Boolean(opts.force);
@@ -3150,6 +3233,7 @@ function renderMemoryFlags(mem, opts = {}) {
     ["store", m.ok ? "ok" : m.error || "down", m.ok === true],
     ["atoms", m.atom_count != null ? String(m.atom_count) : "—", null],
     ["open moment", m.active_moment_id || "—", null],
+    ...ladderFlagRows(m.ladder),
   ];
   const fp = stableFingerprint(rows);
   if (
@@ -3176,6 +3260,90 @@ function renderMemoryFlags(mem, opts = {}) {
     row.appendChild(val);
     memoryContextFlags.appendChild(row);
   }
+}
+
+/**
+ * Compact episodic-ladder status card under the meal package head.
+ * Complements the flags strip with a short prose line for scanability.
+ */
+function renderLadderStatusCard(mem) {
+  const L = mem && mem.ladder;
+  if (!L || typeof L !== "object") return null;
+  const card = document.createElement("div");
+  card.className =
+    "card memory-channel-card memory-semantic-note memory-ladder-note";
+  const mode = String(L.summary_mode || "template");
+  const enabled = L.enabled !== false;
+  const src = L.write_source_counts || {};
+  const llmN = Number(src.llm || 0);
+  const tplN = Number(src.template || 0);
+  const fbN = Number(src.llm_fallback_template || 0);
+  let stateClass = "memory-semantic-note-ok";
+  let badge = enabled ? mode : "off";
+  if (!enabled) stateClass = "memory-semantic-note-omit";
+  else if (mode === "llm" && llmN === 0 && tplN > 0)
+    stateClass = "memory-semantic-note-deduped"; // amber: mode llm but only templates so far
+  else if (mode === "llm" && llmN > 0) stateClass = "memory-semantic-note-ok";
+  card.classList.add(stateClass);
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  head.innerHTML = `<strong>Episodic ladder</strong><span class="badge">${escapeHtml(
+    badge
+  )}</span>`;
+  card.appendChild(head);
+
+  const lines = [];
+  if (!enabled) {
+    lines.push("Ladder idle (ladder_enabled=false). Period summaries not refreshing.");
+  } else {
+    const when = L.last_hourly_process
+      ? `Last hourly pass ${formatRelativeAge(L.last_hourly_process)} (${formatMsgTime(
+          L.last_hourly_process
+        )})`
+      : "No hourly pass recorded yet this process";
+    const closed = L.last_closed_1h_processed
+      ? `last closed 1h tip ${formatHourWindow(L.last_closed_1h_processed)}`
+      : "no closed 1h tip recorded";
+    lines.push(`${when}; ${closed}.`);
+    lines.push(
+      `Writes this run: llm=${llmN}, template=${tplN}` +
+        (fbN ? `, fallback=${fbN}` : "") +
+        (mode === "llm"
+          ? llmN > 0
+            ? " — LLM path active."
+            : " — mode=llm but no LLM bodies yet (waiting for closed hours / idle, or use Rebuild)."
+          : " — template mode (set summary_mode=llm for narratives).")
+    );
+    lines.push(
+      L.age_gates_enabled
+        ? "Age gates ON (coarser scales unlock gradually)."
+        : "Age gates OFF — all write scales 1h→1y allowed."
+    );
+    const tips = L.tip_counts || {};
+    const tipBits = ["1h", "1d", "1w", "1m", "1y"]
+      .filter((s) => tips[s] != null)
+      .map((s) => `${s}=${tips[s]}`);
+    if (tipBits.length) {
+      lines.push(
+        `Tips in store: ${tipBits.join(" · ")}. Allowed scales: ${(
+          L.allowed_scales || []
+        ).join(", ") || "—"}. Meal packs only non-template tips (llm / llm_fallback).`
+      );
+    }
+    const dirty = Number(L.dirty_1h_count || 0);
+    const pending = Number(L.cascade_pending_count || 0);
+    if (dirty || pending) {
+      lines.push(
+        `Queue: dirty_1h=${dirty}, cascade_pending=${pending} (work still due on idle ticks).`
+      );
+    }
+  }
+  const meta = document.createElement("p");
+  meta.className = "memory-semantic-meta";
+  meta.textContent = lines.join(" ");
+  card.appendChild(meta);
+  return card;
 }
 
 /**
@@ -3343,6 +3511,10 @@ function renderMemoryContext(data) {
   meta.textContent = bits.join(" · ");
   head.appendChild(meta);
   memoryContextBody.appendChild(head);
+
+  // Ladder / episodic summary refresh status (also mirrored in flags strip).
+  const ladderCard = renderLadderStatusCard(mem);
+  if (ladderCard) memoryContextBody.appendChild(ladderCard);
 
   // Fixed system/orient if present (same card chrome as meal channels).
   const fixed = meal.fixed || {};
@@ -3964,6 +4136,59 @@ async function refreshMemoryContext(opts = {}) {
   }
   memoryContextMealFp = fp;
   renderMemoryContext(data);
+}
+
+/**
+ * Operator rebuild: force-refresh recent 1h tips + cascade coarser scales.
+ * Requires confirm(); posts POST /api/memory/ladder/rebuild then refreshes Context.
+ */
+async function onMemoryLadderRebuildClick() {
+  if (!memoryLadderRebuildBtn) return;
+  const ok = window.confirm(
+    "Rebuild episodic summaries?\n\n" +
+      "This force-refreshes recent closed 1h tips and cascades 1d/1w/1m/1y under " +
+      "the current summary_mode (llm when enabled). Template tips in the meal will " +
+      "be replaced as windows recompute. May take up to ~2 minutes and use ladder LLM budget.\n\n" +
+      "Continue?"
+  );
+  if (!ok) return;
+  memoryLadderRebuildBtn.disabled = true;
+  if (memoryLadderRebuildStatus) {
+    memoryLadderRebuildStatus.hidden = false;
+    memoryLadderRebuildStatus.textContent = "Rebuilding…";
+  }
+  try {
+    const res = await fetchJson("/api/memory/ladder/rebuild", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!res || res.ok === false) {
+      const err = (res && (res.error || res.note)) || "rebuild failed";
+      if (memoryLadderRebuildStatus) {
+        memoryLadderRebuildStatus.textContent = `Failed: ${err}`;
+      }
+      return;
+    }
+    const n1h = Array.isArray(res.refreshed_1h) ? res.refreshed_1h.length : 0;
+    const nCas = Array.isArray(res.cascade_refreshed)
+      ? res.cascade_refreshed.length
+      : 0;
+    const stop = res.stopped_reason ? ` · stopped=${res.stopped_reason}` : "";
+    if (memoryLadderRebuildStatus) {
+      memoryLadderRebuildStatus.textContent = `Done: ${n1h}×1h, ${nCas} cascade notes · ${res.elapsed_ms || "?"}ms${stop}`;
+    }
+    // Force full Context repaint (meal + flags); compose=0 uses last hop meal —
+    // tips in store updated; next hop sees new meal. Soft-refresh flags now.
+    memoryContextMealFp = null;
+    await refreshMemoryContext({ force: true });
+  } catch (e) {
+    if (memoryLadderRebuildStatus) {
+      memoryLadderRebuildStatus.textContent = `Failed: ${e && e.message ? e.message : e}`;
+    }
+  } finally {
+    memoryLadderRebuildBtn.disabled = false;
+  }
 }
 
 function setAtomDetailOpen(on) {
@@ -5054,6 +5279,13 @@ async function refreshMemory(opts = {}) {
 if (memoryRefreshBtn) {
   memoryRefreshBtn.addEventListener("click", () => {
     refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
+  });
+}
+if (memoryLadderRebuildBtn) {
+  memoryLadderRebuildBtn.addEventListener("click", () => {
+    onMemoryLadderRebuildClick().catch((e) =>
+      panelLoadError("Memory ladder rebuild", e)
+    );
   });
 }
 document.querySelectorAll(".memory-tab").forEach((btn) => {

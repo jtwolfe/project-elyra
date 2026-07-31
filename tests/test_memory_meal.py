@@ -74,7 +74,10 @@ def _atom(
     )
 
 
-def _put_summary(store, scale: str, t: datetime, text: str) -> Atom:
+def _put_summary(
+    store, scale: str, t: datetime, text: str, *, source: str = "llm"
+) -> Atom:
+    """Put a summary tip. Default source=llm so meal pack accepts it."""
     start, end = window_bounds(scale, t)
     atom = Atom(
         atom_id=stable_summary_id(scale, start),
@@ -86,12 +89,14 @@ def _put_summary(store, scale: str, t: datetime, text: str) -> Atom:
         window_start=to_iso_z(start),
         window_end=to_iso_z(end),
         moment_id=None,
-        meta={"source": "template"},
+        meta={"source": source},
     )
     return store.put_atom(atom)
 
 
-def _summary_atom(scale: str, t: datetime, text: str) -> Atom:
+def _summary_atom(
+    scale: str, t: datetime, text: str, *, source: str = "llm"
+) -> Atom:
     """Build a summary Atom (not put) for hard-shrink unit tests."""
     start, end = window_bounds(scale, t)
     return Atom(
@@ -104,7 +109,7 @@ def _summary_atom(scale: str, t: datetime, text: str) -> Atom:
         window_start=to_iso_z(start),
         window_end=to_iso_z(end),
         moment_id=None,
-        meta={"source": "template"},
+        meta={"source": source},
     )
 
 
@@ -494,7 +499,7 @@ def test_select_episodic_no_version_archive_leak(store):
         window_start=to_iso_z(start),
         window_end=to_iso_z(end),
         moment_id=None,
-        meta={"source": "template", "version": 1},
+        meta={"source": "llm", "version": 1},
     )
     v2 = Atom(
         atom_id=versioned_summary_id("1d", start, 2),
@@ -507,7 +512,7 @@ def test_select_episodic_no_version_archive_leak(store):
         window_end=to_iso_z(end),
         moment_id=None,
         meta={
-            "source": "template",
+            "source": "llm",
             "version": 2,
             "supersedes_atom_id": v1.atom_id,
         },
@@ -853,3 +858,21 @@ def test_compose_meal_no_forbidden_words_in_module():
     text = src.read_text(encoding="utf-8").lower()
     for banned in (r"\bsimilar\b", r"\bembedding\b", r"\bnearest\b", r"\bann\b"):
         assert re.search(banned, text) is None, f"banned pattern {banned!r} in meal.py"
+
+
+def test_select_episodic_skips_template_source(store):
+    """Meal episodic summaries omit meta.source=template (old inventory)."""
+    now = datetime(2026, 7, 28, 12, 30, tzinfo=UTC)
+    _put_summary(store, "1d", now, "TEMPLATE DAY", source="template")
+    _put_summary(store, "1h", now, "LLM HOUR", source="llm")
+    items = select_episodic(store, now, "m_open", episodic_cap_tokens=50_000)
+    bodies = " ".join(i.content for i in items)
+    assert "LLM HOUR" in bodies
+    assert "TEMPLATE DAY" not in bodies
+    scales = [
+        (i.meta or {}).get("scale")
+        for i in items
+        if i.label.startswith("episodic/summary")
+    ]
+    assert "1d" not in scales
+    assert "1h" in scales
