@@ -9,13 +9,20 @@ from elyra.memory.weights import (
     BASE_SAME_MOMENT,
     BASE_SEMANTIC_HOP,
     BASE_SEQUENTIAL,
+    BASE_SUMMARY_CHILD,
+    BASE_SUMMARY_SOURCE,
+    BASE_SUPERSEDES,
     DEFAULT_MIN_EXPAND_WEIGHT,
     DEFAULT_TEMPORAL_HALF_LIFE_HOURS,
     EDGE_CHILD_OF,
+    EDGE_KINDS,
     EDGE_PARENT_OF,
     EDGE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP,
     EDGE_SEQUENTIAL,
+    EDGE_SUMMARY_CHILD,
+    EDGE_SUMMARY_SOURCE,
+    EDGE_SUPERSEDES,
     base_weight,
     clamp01,
     edge_weight,
@@ -42,7 +49,20 @@ def test_base_weights_match_design_table():
     assert base_weight(EDGE_CHILD_OF) == BASE_PARENT_CHILD == 0.90
     assert base_weight(EDGE_SAME_MOMENT) == BASE_SAME_MOMENT == 0.55
     assert base_weight(EDGE_SEMANTIC_HOP) == BASE_SEMANTIC_HOP == 0.70
+    assert base_weight(EDGE_SUMMARY_CHILD) == BASE_SUMMARY_CHILD == 0.88
+    assert base_weight(EDGE_SUMMARY_SOURCE) == BASE_SUMMARY_SOURCE == 0.75
+    assert base_weight(EDGE_SUPERSEDES) == BASE_SUPERSEDES == 0.95
     assert base_weight("unknown_kind") == 0.5
+
+
+def test_summary_edge_tokens_frozen_and_in_kinds():
+    """PR-C: frozen tokens for ladder fabric (#98 reuses summary_source)."""
+    assert EDGE_SUMMARY_CHILD == "summary_child"
+    assert EDGE_SUMMARY_SOURCE == "summary_source"
+    assert EDGE_SUPERSEDES == "supersedes"
+    assert EDGE_SUMMARY_CHILD in EDGE_KINDS
+    assert EDGE_SUMMARY_SOURCE in EDGE_KINDS
+    assert EDGE_SUPERSEDES in EDGE_KINDS
 
 
 def test_structural_bonus_v1_is_unity():
@@ -52,6 +72,9 @@ def test_structural_bonus_v1_is_unity():
         EDGE_CHILD_OF,
         EDGE_SAME_MOMENT,
         EDGE_SEMANTIC_HOP,
+        EDGE_SUMMARY_CHILD,
+        EDGE_SUMMARY_SOURCE,
+        EDGE_SUPERSEDES,
     ):
         assert structural_bonus(kind) == 1.0
 

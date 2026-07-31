@@ -463,6 +463,12 @@ def test_memory_status_block_default_flags(paths):
     # Store opens lazily on worker run / first write path, not on snapshot alone.
     assert snap["memory"]["store_open"] is False
     assert snap["memory"]["ok"] is False
+    # PR-E: ladder knobs always present for dogfood observability.
+    ladder = snap["memory"]["ladder"]
+    assert ladder["enabled"] is True
+    assert ladder["summary_mode"] in ("template", "llm")
+    assert "ladder_hourly_max_ms" in ladder
+    assert "llm_calls_hour" in ladder
 
 
 def test_compose_outer_no_full_glass_history(paths, media, mem_store):

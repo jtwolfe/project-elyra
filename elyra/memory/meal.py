@@ -29,7 +29,6 @@ from elyra.memory.tokens import (
     split_memory_budget_v4,
 )
 from elyra.memory.types import (
-    PERIOD_SCALE_ORDER,
     Atom,
     PeriodScale,
     parse_iso_z,
@@ -37,18 +36,24 @@ from elyra.memory.types import (
     window_bounds,
 )
 
-# Coarse → fine for summary packing (design select_episodic step 1).
+# Coarse → fine write-era pack order (design §7 / KD17 tip-only meal).
+# Omit 15m/6h unless no 1h tip exists and legacy atoms present (soft fallback).
 _SUMMARY_PACK_ORDER: tuple[PeriodScale, ...] = (
+    "1y",
     "1m",
     "1w",
     "1d",
-    "6h",
     "1h",
-    "15m",
 )
 
-# Fine → coarse drop order under pressure (step 3c).
-_SUMMARY_DROP_ORDER: tuple[PeriodScale, ...] = PERIOD_SCALE_ORDER  # 15m … 1m
+# Legacy soft-fallback scales (only when no write-era 1h tip packed).
+_LEGACY_SUMMARY_FALLBACK_ORDER: tuple[PeriodScale, ...] = ("6h", "15m")
+
+# Coarser tip drop order under pressure after 1h band (fine→coarse among
+# remaining; 1d tip protected until last resort — design §7).
+_COARSER_SUMMARY_DROP_ORDER: tuple[PeriodScale, ...] = ("1w", "1m", "1y")
+
+_DEFAULT_RECENT_1H_MEAL = 6
 
 _RAW_EXCLUDE_KINDS = frozenset({"summary", "parcel", "moment_meta"})
 _NON_SUMMARY_KINDS = (
@@ -208,7 +213,12 @@ def _load_window_summary(
     window_start: datetime,
     window_end: datetime,
 ) -> Atom | None:
-    """Return the summary atom for exactly this window if present."""
+    """Return the tip summary atom for exactly this window if present.
+
+    ``list_summaries`` walks the ladder index (one tip per scale+window);
+    never walks version archives. When multiple tips share a window key the
+    store index already points at the latest put.
+    """
     hits = store.list_summaries(
         scale,
         overlapping=(window_start, window_end),
@@ -221,23 +231,93 @@ def _load_window_summary(
     return None
 
 
+def _recent_1h_count(cfg: MemorySettings) -> int:
+    """Meal recent-1h band size (design: ladder_recent_1h_meal / episodic_recent_1h_count)."""
+    raw = getattr(cfg, "ladder_recent_1h_meal", None)
+    if raw is None:
+        raw = getattr(cfg, "episodic_recent_1h_count", None)
+    try:
+        n = int(raw) if raw is not None else _DEFAULT_RECENT_1H_MEAL
+    except (TypeError, ValueError):
+        n = _DEFAULT_RECENT_1H_MEAL
+    return max(0, n)
+
+
+def _load_1h_recent_band(
+    store: MemoryStore,
+    now_dt: datetime,
+    recent_count: int,
+) -> list[Atom]:
+    """Load current open-hour tip (if any) + last N closed 1h tips (newest first).
+
+    Pack order prefers open + recent closed so older closed hours lose first
+    under the soft summary budget (aligned with under-pressure drop order).
+    """
+    cur_start, cur_end = window_bounds("1h", now_dt)
+    out: list[Atom] = []
+    open_tip = _load_window_summary(store, "1h", cur_start, cur_end)
+    if open_tip is not None:
+        out.append(open_tip)
+    for i in range(1, max(0, int(recent_count)) + 1):
+        t = cur_start - timedelta(hours=i)
+        ws, we = window_bounds("1h", t)
+        tip = _load_window_summary(store, "1h", ws, we)
+        if tip is not None:
+            out.append(tip)
+    return out
+
+
 def _summary_meal_item(atom: Atom) -> MealItem:
     scale = atom.scale or "?"
     label = f"episodic/summary {scale}"
     body = atom.content_text or ""
+    meta: dict[str, Any] = {
+        "scale": scale,
+        "window_start": atom.window_start,
+        "window_end": atom.window_end,
+        "kind": "summary",
+    }
+    # Surface version for observability only; meal still packs tip-only.
+    ameta = atom.meta or {}
+    if "version" in ameta:
+        meta["version"] = ameta.get("version")
     return _item_from_parts(
         atom_id=atom.atom_id,
         channel="episodic",
         label=label,
         content=body,
         t_start=atom.t_start or atom.window_start,
-        meta={
-            "scale": scale,
-            "window_start": atom.window_start,
-            "window_end": atom.window_end,
-            "kind": "summary",
-        },
+        meta=meta,
     )
+
+
+def _try_pack_summary(
+    atom: Atom,
+    *,
+    seen: set[str],
+    summary_items: list[MealItem],
+    summary_atoms: list[Atom],
+    used: int,
+    summary_budget: int,
+    cap: int,
+) -> int:
+    """Append one summary atom if budget allows; return updated used tokens.
+
+    Soft summary-budget skips (here) and hard ``_shrink_episodic`` (after raw
+    fill) cooperate: pack order prefers open/recent 1h so soft pressure drops
+    oldest first; 3c recency drops apply when packed items + raw exceed cap.
+    """
+    if atom.atom_id in seen:
+        return used
+    item = _summary_meal_item(atom)
+    if used + item.token_estimate > summary_budget and summary_items:
+        return used
+    if used + item.token_estimate > cap and summary_items:
+        return used
+    seen.add(atom.atom_id)
+    summary_items.append(item)
+    summary_atoms.append(atom)
+    return used + item.token_estimate
 
 
 def _raw_prefer_key(atom: Atom) -> tuple[int, str, str]:
@@ -271,11 +351,13 @@ def select_episodic(
     horizon_hours: float | None = None,
     max_prior_moments: int = EPISODIC_MAX_PRIOR_MOMENTS,
 ) -> list[MealItem]:
-    """Deterministic broader-episodic selection (KD17).
+    """Deterministic broader-episodic selection (KD17 / design §7).
 
-    1. Summary pass (coarse first) up to ``episodic_cap * 0.7``
+    1. Summary pass (coarse first, tip-only + recent 1h band) up to
+       ``episodic_cap * 0.7``
     2. Raw fill of prior moments in the horizon (exclude open moment)
-    3. Under pressure: drop tool/model → excess speak/obs → finer summaries
+    3. Under pressure: drop tool/model → excess speak/obs → oldest 1h then
+       coarser tips (1d last-resort among coarses)
     """
     cfg = settings or MemorySettings()
     now_dt = parse_iso_z(now)
@@ -289,37 +371,54 @@ def select_episodic(
         else float(cfg.episodic_horizon_hours)
     )
     horizon_start = now_dt - timedelta(hours=h_hours)
+    recent_1h = _recent_1h_count(cfg)
 
     seen: set[str] = set()
     summary_items: list[MealItem] = []
     summary_atoms: list[Atom] = []
     summary_budget = int(cap * EPISODIC_SUMMARY_SHARE)
     used = 0
+    # Gate legacy fallback on *existence* of a write-era 1h tip in the recent
+    # band (store/list), not on whether soft budget admitted one.
+    band_1h_candidates: list[Atom] = []
 
-    # --- 1. SUMMARY PASS (coarse → fine; current + previous window) ---
+    # --- 1. SUMMARY PASS (write-era coarse → fine; tip-only + recent 1h) ---
     for scale in _SUMMARY_PACK_ORDER:
-        cur_start, cur_end = window_bounds(scale, now_dt)
-        prev_end = cur_start
-        prev_start, _ = window_bounds(
-            scale, cur_start - timedelta(microseconds=1)
-        )
-        candidates: list[Atom] = []
-        for ws, we in ((cur_start, cur_end), (prev_start, prev_end)):
-            atom = _load_window_summary(store, scale, ws, we)
-            if atom is not None:
-                candidates.append(atom)
+        if scale == "1h":
+            candidates = _load_1h_recent_band(store, now_dt, recent_1h)
+            band_1h_candidates = candidates
+        else:
+            # Coarser ≥1d: current open window tip only (not previous window).
+            cur_start, cur_end = window_bounds(scale, now_dt)
+            tip = _load_window_summary(store, scale, cur_start, cur_end)
+            candidates = [tip] if tip is not None else []
         for atom in candidates:
-            if atom.atom_id in seen:
+            used = _try_pack_summary(
+                atom,
+                seen=seen,
+                summary_items=summary_items,
+                summary_atoms=summary_atoms,
+                used=used,
+                summary_budget=summary_budget,
+                cap=cap,
+            )
+
+    # Soft fallback: legacy 15m/6h only when no write-era 1h tip exists.
+    if not band_1h_candidates:
+        for scale in _LEGACY_SUMMARY_FALLBACK_ORDER:
+            cur_start, cur_end = window_bounds(scale, now_dt)
+            tip = _load_window_summary(store, scale, cur_start, cur_end)
+            if tip is None:
                 continue
-            item = _summary_meal_item(atom)
-            if used + item.token_estimate > summary_budget and summary_items:
-                continue
-            if used + item.token_estimate > cap and summary_items:
-                continue
-            seen.add(atom.atom_id)
-            summary_items.append(item)
-            summary_atoms.append(atom)
-            used += item.token_estimate
+            used = _try_pack_summary(
+                tip,
+                seen=seen,
+                summary_items=summary_items,
+                summary_atoms=summary_atoms,
+                used=used,
+                summary_budget=summary_budget,
+                cap=cap,
+            )
 
     # --- 2. RAW FILL ---
     raw_atoms = store.list_range(
@@ -421,9 +520,27 @@ def select_episodic(
             items,
             summary_atoms=summary_atoms,
             cap=cap,
+            now=now_dt,
         )
 
     return items
+
+
+def _summary_window_start_key(item: MealItem) -> str:
+    """ISO window_start for ordering 1h band drops (ascending = oldest first)."""
+    meta = item.meta or {}
+    ws = meta.get("window_start")
+    if ws:
+        try:
+            return to_iso_z(ws)
+        except (TypeError, ValueError):
+            return str(ws)
+    if item.t_start:
+        try:
+            return to_iso_z(item.t_start)
+        except (TypeError, ValueError):
+            return str(item.t_start)
+    return ""
 
 
 def _shrink_episodic(
@@ -431,9 +548,22 @@ def _shrink_episodic(
     *,
     summary_atoms: Sequence[Atom],
     cap: int,
+    now: datetime | None = None,
 ) -> list[MealItem]:
-    """Drop order 3a → 3b → 3c until under cap."""
+    """Drop order 3a → 3b → recency-aware summary drops until under cap.
+
+    Summary pressure (design §7 PR-D):
+      1. Drop oldest closed 1h one at a time (keep ≥1 closed while under cap)
+      2. Drop last closed 1h if still over
+      3. Drop open-hour 1h tip
+      4. Drop coarser fine→coarse (1w→1m→1y; legacy 15m/6h early); protect 1d
+      5. Last resort: drop 1d tip (never pull version archives under pressure)
+    """
     items = list(items)
+    now_dt = parse_iso_z(now) if now is not None else None
+    open_1h_start = (
+        to_iso_z(window_bounds("1h", now_dt)[0]) if now_dt is not None else None
+    )
 
     def total(seq: Sequence[MealItem] | None = None) -> int:
         return sum(i.token_estimate for i in (seq if seq is not None else items))
@@ -449,9 +579,27 @@ def _shrink_episodic(
             item.atom_id or ""
         )
 
-    def is_last_resort_summary(item: MealItem) -> bool:
-        """Most recent 1h / 1d summaries protected until last resort."""
-        return summary_scale(item) in ("1h", "1d")
+    def is_1h(item: MealItem) -> bool:
+        return summary_scale(item) == "1h"
+
+    def is_open_1h(item: MealItem) -> bool:
+        if not is_1h(item):
+            return False
+        if open_1h_start is None:
+            # Without now, treat newest 1h as open (conservative).
+            return False
+        return _summary_window_start_key(item) == open_1h_start
+
+    def is_closed_1h(item: MealItem) -> bool:
+        return is_1h(item) and not is_open_1h(item)
+
+    def drop_item(target: MealItem) -> None:
+        nonlocal items
+        items = [i for i in items if i is not target]
+
+    def drop_scale(scale: str) -> None:
+        nonlocal items
+        items = [i for i in items if summary_scale(i) != scale]
 
     # 3a: drop raw tool/model atoms (oldest first)
     items = _drop_raw_kinds(
@@ -467,27 +615,64 @@ def _shrink_episodic(
     if total() <= cap:
         return items
 
-    # 3c: finer summaries first; keep 1h/1d until last resort
-    for scale in _SUMMARY_DROP_ORDER:
-        if total() <= cap:
+    # 3c: recency-aware 1h band — drop oldest closed one at a time, keep ≥1 closed
+    # until forced to zero.
+    while total() > cap:
+        closed = [i for i in items if is_closed_1h(i)]
+        if len(closed) <= 1:
             break
-        survivors: list[MealItem] = []
-        for item in items:
-            sc = summary_scale(item)
-            if sc == scale and not is_last_resort_summary(item):
-                # Drop this non-protected summary of this scale.
-                continue
-            survivors.append(item)
-        items = survivors
+        oldest = min(closed, key=_summary_window_start_key)
+        drop_item(oldest)
 
-    # Last resort: drop protected 1h then 1d (and any remaining summaries)
+    # Drop last closed 1h if still over.
     if total() > cap:
-        for scale in ("15m", "1h", "6h", "1d", "1w", "1m"):
+        closed = [i for i in items if is_closed_1h(i)]
+        if closed:
+            oldest = min(closed, key=_summary_window_start_key)
+            drop_item(oldest)
+
+    # Drop open-hour 1h tip if still over.
+    if total() > cap:
+        for item in list(items):
+            if is_open_1h(item) or (
+                open_1h_start is None and is_1h(item)
+            ):
+                drop_item(item)
+                if total() <= cap:
+                    break
+        # If now was unknown, open_1h was false for all; drop remaining 1h here.
+        if total() > cap and open_1h_start is None:
+            remaining_1h = [i for i in items if is_1h(i)]
+            for item in sorted(remaining_1h, key=_summary_window_start_key):
+                drop_item(item)
+                if total() <= cap:
+                    break
+
+    # Drop legacy soft-fallback tips before write-era coarser tips.
+    if total() > cap:
+        for scale in ("15m", "6h"):
             if total() <= cap:
                 break
-            items = [i for i in items if summary_scale(i) != scale]
+            drop_scale(scale)
 
-    # Still over: drop oldest prior-moment blocks, then any leftover summaries
+    # Coarser write-era tips: 1w then 1m then 1y (1d protected until last resort).
+    if total() > cap:
+        for scale in _COARSER_SUMMARY_DROP_ORDER:
+            if total() <= cap:
+                break
+            drop_scale(scale)
+
+    # Last resort among coarses: 1d tip.
+    if total() > cap:
+        drop_scale("1d")
+
+    # Any leftover summaries (e.g. unexpected scales) then prior-moment blocks.
+    if total() > cap:
+        for scale in ("1h", "1y", "1m", "1w", "1d", "6h", "15m"):
+            if total() <= cap:
+                break
+            drop_scale(scale)
+
     while total() > cap and items:
         raw_idxs = [
             idx
@@ -505,7 +690,11 @@ def _shrink_episodic(
         ]
         if not sum_idxs:
             break
-        del items[sum_idxs[-1]]
+        # Drop oldest summary leftover by window_start.
+        drop_idx = min(
+            sum_idxs, key=lambda idx: _summary_window_start_key(items[idx])
+        )
+        del items[drop_idx]
 
     return items
 
@@ -1087,8 +1276,8 @@ def select_semantic(
     exceeded the ceiling (search+pack still run). Under wait, mid-pack does
     not hard-timeout an empty pack after a good encode. Fail-fast paths
     (no_index / cold encoder / empty_seed) are unchanged. Encode lag: new
-    observations may still miss ANN until indexed — tip + keep carry
-    immediate recall; semantic is support only.
+    observations may still miss the vector index until encoded — tip + keep
+    carry immediate recall; semantic is support only.
 
     Empty-pack omit priority (KD-R6): timeout > encoder > no_index >
     empty_seed > min_score > deduped > no_hits. ``select_meta`` carries
@@ -1162,7 +1351,7 @@ def select_semantic(
     # Light encode-lag awareness: tip seed does not wait for reindex of new atoms.
     if seed_source in ("glass_tail", "mixed"):
         seed_meta["encode_lag_note"] = (
-            "new observations may lag ANN index; tip+keep carry immediate recall"
+            "new observations may lag vector index; tip+keep carry immediate recall"
         )
     if not seed.strip():
         return early(SEMANTIC_OMIT_EMPTY_SEED, meta=seed_meta)

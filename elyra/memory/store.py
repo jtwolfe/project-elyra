@@ -79,7 +79,16 @@ class MemoryStore(Protocol):
         *,
         overlapping: tuple[datetime | str, datetime | str] | None = None,
         limit: int = 50,
+        tips_only: bool = True,
     ) -> list[Atom]:
+        """List period summaries for ``scale``.
+
+        ``tips_only=True`` (default, KD-TIP): resolve via ladder index only —
+        one tip per ``(scale, window_start)``. ``tips_only=False``: O(n) scan
+        of summary atoms (version archaeology; no secondary index in #92).
+        Archaeology callers should pass ``overlapping=`` for a single window
+        and/or raise ``limit`` deliberately (default limit can truncate).
+        """
         ...
 
     def list_atoms(

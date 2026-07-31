@@ -43,7 +43,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
 | `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
-| `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — design on `feature/92` (LLM ladder; execute plan next) |
+| `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (open) | **In progress** — PR-A–E stack on `feature/92` (pending operator dogfood sign-off) |
 | `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (closed) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
 
 ---
@@ -997,7 +997,7 @@ Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), meas
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open — **In Progress** |
+| **Status** | Open — **In Progress** (PR-A–E product stack on `feature/92`; **not Fixed** until operator dogfood sign-off) |
 | **Issue** | [#92](https://github.com/jtwolfe/project-elyra/issues/92) |
 | **Severity now** | Med |
 | **Severity later** | High if episodic meal stays unreadable template highlights |
@@ -1007,6 +1007,10 @@ Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), meas
 ### Goal
 
 Replace (or supplement) template-first period summaries with **budgeted LLM narratives** of each ladder window’s content; keep template fallback.
+
+### Progress
+
+Product stack (KD-BR, cut from `feature/92`): PR-A ladder LLM schedule → PR-B version tips → PR-C summary edges → PR-D meal tip pack → PR-E tests + status observability. Merge into `feature/92` then dogfood before marking **Fixed**.
 
 ---
 
