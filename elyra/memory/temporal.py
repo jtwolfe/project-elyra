@@ -12,8 +12,9 @@ from typing import Iterator, Sequence
 
 from elyra.memory.store import MemoryStore
 from elyra.memory.types import (
-    PERIOD_SCALE_ORDER,
     PERIOD_SCALES,
+    PERIOD_SCALES_LEGACY,
+    PERIOD_SCALES_WRITE,
     Atom,
     AtomKind,
     PeriodScale,
@@ -21,33 +22,71 @@ from elyra.memory.types import (
     window_bounds,
 )
 
-# Fine → coarse; child of scale i is scale i-1.
-_CHILD_SCALE: dict[str, PeriodScale | None] = {
-    "15m": None,
-    "1h": "15m",
-    "6h": "1h",
-    "1d": "6h",
+# Write-era ladder structure (no 15m/6h parents on the write path).
+_CHILD_SCALE_WRITE: dict[str, PeriodScale | None] = {
+    "1h": None,  # raw atoms
+    "1d": "1h",
     "1w": "1d",
     "1m": "1w",
+    "1y": "1m",
+}
+_PARENT_SCALE_WRITE: dict[str, PeriodScale | None] = {
+    "1h": "1d",
+    "1d": "1w",
+    "1w": "1m",
+    "1m": "1y",
+    "1y": None,
+}
+
+# Legacy-only (read / optional repair when ladder_write_legacy_scales).
+_CHILD_SCALE_LEGACY: dict[str, PeriodScale | None] = {
+    "15m": None,
+    "6h": "1h",
+}
+_PARENT_SCALE_LEGACY: dict[str, PeriodScale | None] = {
+    "15m": "1h",
+    "6h": "1d",
 }
 
 
 def child_scale(scale: PeriodScale | str) -> PeriodScale | None:
-    """Return the finer child scale for ladder rollup, or None for 15m."""
+    """Return the finer child scale for ladder rollup, or None at base grain.
+
+    Write scales use the write map (``1h→None``, ``1d→1h``, …). Legacy
+    ``15m``/``6h`` use the legacy map. Never returns a 6h child for ``1d``.
+    """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
-    return _CHILD_SCALE[scale]
+    if scale in PERIOD_SCALES_WRITE:
+        return _CHILD_SCALE_WRITE[scale]
+    if scale in PERIOD_SCALES_LEGACY:
+        return _CHILD_SCALE_LEGACY[scale]
+    raise ValueError(f"invalid period scale: {scale!r}")
 
 
 def parent_scale(scale: PeriodScale | str) -> PeriodScale | None:
-    """Return the coarser parent scale, or None for 1m."""
+    """Return the coarser parent scale for cascade / rollup.
+
+    Write scales use the write parent map (``1h→1d``, never ``1h→6h``).
+    Legacy scales use the legacy map only.
+    """
     if scale not in PERIOD_SCALES:
         raise ValueError(f"invalid period scale: {scale!r}")
-    order = list(PERIOD_SCALE_ORDER)
-    idx = order.index(scale)  # type: ignore[arg-type]
-    if idx + 1 >= len(order):
-        return None
-    return order[idx + 1]
+    if scale in PERIOD_SCALES_WRITE:
+        return _PARENT_SCALE_WRITE[scale]
+    if scale in PERIOD_SCALES_LEGACY:
+        return _PARENT_SCALE_LEGACY[scale]
+    raise ValueError(f"invalid period scale: {scale!r}")
+
+
+def parent_scale_write(scale: PeriodScale | str) -> PeriodScale | None:
+    """Alias for cascade: write-order ancestors only (``1h→1d→…→1y``).
+
+    Raises on unknown / legacy scales so cascade never walks through 15m/6h.
+    """
+    if scale not in PERIOD_SCALES_WRITE:
+        raise ValueError(f"not a write period scale: {scale!r}")
+    return _PARENT_SCALE_WRITE[scale]
 
 
 def list_range(
@@ -195,6 +234,7 @@ __all__ = [
     "list_by_moment",
     "list_range",
     "parent_scale",
+    "parent_scale_write",
     "walk_backward",
     "walk_forward",
     "windows_in_horizon",

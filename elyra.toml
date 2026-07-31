@@ -6,6 +6,10 @@ backend = "lance"
 enabled = true
 write_atoms = true
 ladder_enabled = true
+# Dogfood: LLM period narratives (template remains fallback on hard-stop / errors)
+summary_mode = "llm"
+# Allow cascade for 1h→1y without waiting for instance-age unlocks
+ladder_age_gates_enabled = false
 
 # Phase 2a directed traversal dogfood (defaults off in code; operator on)
 directed_traversal_enabled = true

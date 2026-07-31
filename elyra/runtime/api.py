@@ -524,6 +524,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_memory_vectors_rebuild(body)
             return
 
+        if path == "/api/memory/ladder/rebuild":
+            self._post_memory_ladder_rebuild(body)
+            return
+
         if path == "/api/memory/graph/traverse":
             self._post_memory_graph_traverse(body)
             return
@@ -1104,6 +1108,71 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 },
             },
         )
+
+    def _post_memory_ladder_rebuild(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/ladder/rebuild — force-refresh episodic period tips.
+
+        Operator path for Glass Context **Rebuild episodic summaries**.
+        Optional body: ``max_hours``, ``max_ms``, ``max_llm_calls`` (ints).
+        """
+        flags = self._memory_flags_block()
+        payload = body if isinstance(body, dict) else {}
+
+        def _opt_int(key: str) -> int | None:
+            if key not in payload or payload.get(key) is None:
+                return None
+            try:
+                v = int(payload[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be an int") from None
+            if v < 0:
+                raise ValueError(f"{key} must be >= 0")
+            return v
+
+        try:
+            max_hours = _opt_int("max_hours")
+            max_ms = _opt_int("max_ms")
+            max_llm_calls = _opt_int("max_llm_calls")
+        except ValueError as exc:
+            self._json(
+                400,
+                {"ok": False, "error": str(exc), "memory": flags},
+            )
+            return
+
+        rebuild = getattr(self.worker, "rebuild_episodic_summaries", None)
+        if not callable(rebuild):
+            self._json(
+                501,
+                {
+                    "ok": False,
+                    "error": "rebuild_episodic_summaries not available",
+                    "memory": flags,
+                },
+            )
+            return
+        try:
+            result = rebuild(
+                max_hours=max_hours,
+                max_ms=max_ms,
+                max_llm_calls=max_llm_calls,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("POST /api/memory/ladder/rebuild failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "memory": self._memory_flags_block(),
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        result.setdefault("ok", True)
+        result["memory"] = self._memory_flags_block()
+        self._json(200, result)
 
     def _post_memory_vectors_rebuild(self, body: dict[str, Any]) -> None:
         """POST /api/memory/vectors/rebuild — rebuild ANN vector index.

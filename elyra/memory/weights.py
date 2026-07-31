@@ -20,6 +20,10 @@ EDGE_PARENT_OF = "parent_of"
 EDGE_CHILD_OF = "child_of"
 EDGE_SAME_MOMENT = "same_moment"
 EDGE_SEMANTIC_HOP = "semantic_hop"
+# Summary ladder fabric (PR-C / #92) — project from summary meta lists.
+EDGE_SUMMARY_CHILD = "summary_child"
+EDGE_SUMMARY_SOURCE = "summary_source"
+EDGE_SUPERSEDES = "supersedes"
 
 EDGE_KINDS: frozenset[str] = frozenset(
     {
@@ -28,6 +32,9 @@ EDGE_KINDS: frozenset[str] = frozenset(
         EDGE_CHILD_OF,
         EDGE_SAME_MOMENT,
         EDGE_SEMANTIC_HOP,
+        EDGE_SUMMARY_CHILD,
+        EDGE_SUMMARY_SOURCE,
+        EDGE_SUPERSEDES,
     }
 )
 
@@ -37,6 +44,9 @@ BASE_SEQUENTIAL = 0.85
 BASE_PARENT_CHILD = 0.90
 BASE_SAME_MOMENT = 0.55
 BASE_SEMANTIC_HOP = 0.70
+BASE_SUMMARY_CHILD = 0.88
+BASE_SUMMARY_SOURCE = 0.75
+BASE_SUPERSEDES = 0.95
 
 DEFAULT_TEMPORAL_HALF_LIFE_HOURS = 72.0
 DEFAULT_MIN_EXPAND_WEIGHT = 0.05
@@ -47,6 +57,9 @@ _BASE_BY_KIND: Mapping[str, float] = {
     EDGE_CHILD_OF: BASE_PARENT_CHILD,
     EDGE_SAME_MOMENT: BASE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP: BASE_SEMANTIC_HOP,
+    EDGE_SUMMARY_CHILD: BASE_SUMMARY_CHILD,
+    EDGE_SUMMARY_SOURCE: BASE_SUMMARY_SOURCE,
+    EDGE_SUPERSEDES: BASE_SUPERSEDES,
 }
 
 
@@ -186,6 +199,9 @@ __all__ = [
     "BASE_SAME_MOMENT",
     "BASE_SEMANTIC_HOP",
     "BASE_SEQUENTIAL",
+    "BASE_SUMMARY_CHILD",
+    "BASE_SUMMARY_SOURCE",
+    "BASE_SUPERSEDES",
     "DEFAULT_MIN_EXPAND_WEIGHT",
     "DEFAULT_TEMPORAL_HALF_LIFE_HOURS",
     "EDGE_CHILD_OF",
@@ -194,6 +210,9 @@ __all__ = [
     "EDGE_SAME_MOMENT",
     "EDGE_SEMANTIC_HOP",
     "EDGE_SEQUENTIAL",
+    "EDGE_SUMMARY_CHILD",
+    "EDGE_SUMMARY_SOURCE",
+    "EDGE_SUPERSEDES",
     "base_weight",
     "clamp01",
     "edge_weight",

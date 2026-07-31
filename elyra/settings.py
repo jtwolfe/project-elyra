@@ -22,6 +22,7 @@ from elyra.llm.constants import (
 )
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 from elyra.memory.config import (
+    LADDER_SOURCE_EDGE_K_MAX,
     MEMORY_ANN_SEARCH_BACKENDS,
     MEMORY_BACKENDS,
     MEMORY_EMBED_BACKENDS,
@@ -371,6 +372,43 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
         if path == "memory.ladder_max_ms_per_tick" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.summary_mode":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in ("template", "llm"):
+                raise ValueError(
+                    f"{path}: expected one of ['template', 'llm'], got {coerced!r}"
+                )
+        if path == "memory.ladder_hourly_max_ms" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_catchup_max_hours" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_llm_max_calls_per_tick" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_llm_max_calls_per_hour" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_recent_1h_meal" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_rebuild_max_hours" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_rebuild_max_ms" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        if path == "memory.ladder_rebuild_max_llm_calls" and coerced < 0:
+            raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
+        # ladder_age_gates_enabled is bool — no extra validation
+        if path == "memory.ladder_source_edge_k":
+            if coerced < 0 or coerced > LADDER_SOURCE_EDGE_K_MAX:
+                raise ValueError(
+                    f"{path}: expected int in [0, {LADDER_SOURCE_EDGE_K_MAX}], "
+                    f"got {coerced!r}"
+                )
+        if path == "memory.traverse_summary_expand":
+            if isinstance(coerced, str):
+                coerced = coerced.strip().lower()
+            if coerced not in ("lite", "deep"):
+                raise ValueError(
+                    f"{path}: expected one of ['lite', 'deep'], got {coerced!r}"
+                )
         if path == "memory.max_tool_atoms_per_moment" and coerced < 0:
             raise ValueError(f"{path}: expected int >= 0, got {coerced!r}")
         if path == "memory.atom_max_chars" and coerced < 0:

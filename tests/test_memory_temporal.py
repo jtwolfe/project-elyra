@@ -15,6 +15,7 @@ from elyra.memory.temporal import (
     iter_windows,
     list_range,
     parent_scale,
+    parent_scale_write,
     walk_backward,
     walk_forward,
     windows_in_horizon,
@@ -57,7 +58,7 @@ def _atom(
 
 
 def test_window_bounds_grids_via_types():
-    """Window bounds (reused from types) — 15m / 1h / 6h / 1d / 1w / 1m UTC."""
+    """Window bounds — 15m / 1h / 6h / 1d / 1w / 1m / 1y UTC."""
     t = datetime(2026, 7, 28, 14, 22, 5, tzinfo=UTC)
     assert window_bounds("15m", t) == (
         datetime(2026, 7, 28, 14, 15, tzinfo=UTC),
@@ -69,17 +70,40 @@ def test_window_bounds_grids_via_types():
     # Tuesday → week starts Monday 27th
     assert window_bounds("1w", t)[0] == datetime(2026, 7, 27, 0, 0, tzinfo=UTC)
     assert window_bounds("1m", t)[0] == datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+    assert window_bounds("1y", t) == (
+        datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+        datetime(2027, 1, 1, 0, 0, tzinfo=UTC),
+    )
 
 
-def test_child_and_parent_scale():
-    assert child_scale("15m") is None
-    assert child_scale("1h") == "15m"
-    assert child_scale("6h") == "1h"
-    assert child_scale("1d") == "6h"
+def test_child_and_parent_scale_write_map():
+    """Write map: 1h→None child, 1h→1d parent (never 6h)."""
+    assert child_scale("1h") is None
+    assert child_scale("1d") == "1h"
     assert child_scale("1w") == "1d"
     assert child_scale("1m") == "1w"
+    assert child_scale("1y") == "1m"
+
+    assert parent_scale("1h") == "1d"
+    assert parent_scale("1d") == "1w"
+    assert parent_scale("1w") == "1m"
+    assert parent_scale("1m") == "1y"
+    assert parent_scale("1y") is None
+
+    assert parent_scale_write("1h") == "1d"
+    assert parent_scale_write("1y") is None
+    with pytest.raises(ValueError):
+        parent_scale_write("15m")
+    with pytest.raises(ValueError):
+        parent_scale_write("6h")
+
+
+def test_child_and_parent_scale_legacy():
+    """Legacy 15m/6h maps for read/repair only."""
+    assert child_scale("15m") is None
+    assert child_scale("6h") == "1h"
     assert parent_scale("15m") == "1h"
-    assert parent_scale("1m") is None
+    assert parent_scale("6h") == "1d"
     with pytest.raises(ValueError):
         child_scale("2h")
 
@@ -118,6 +142,17 @@ def test_iter_windows_1d_and_1m():
         )
     )
     assert [m[0].month for m in months] == [6, 7]
+
+
+def test_iter_windows_1y():
+    wins = list(
+        iter_windows(
+            "1y",
+            datetime(2025, 6, 1, tzinfo=UTC),
+            datetime(2027, 3, 1, tzinfo=UTC),
+        )
+    )
+    assert [w[0].year for w in wins] == [2025, 2026, 2027]
 
 
 def test_windows_in_horizon_count():

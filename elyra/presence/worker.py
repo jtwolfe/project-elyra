@@ -1430,7 +1430,11 @@ class PresenceWorker:
         return bool(health.get("ok"))
 
     def _memory_status_block(self) -> dict[str, Any]:
-        """Lightweight memory health for ``/api/status`` (optional PR6)."""
+        """Lightweight memory health for ``/api/status`` (optional PR6).
+
+        Includes a compact ``ladder`` sub-block (knobs + last_hourly_process /
+        llm_calls) for dogfood observability (#92 design §10).
+        """
         mem_cfg = self.settings.memory
         block: dict[str, Any] = {
             "enabled": bool(mem_cfg.enabled),
@@ -1440,6 +1444,18 @@ class PresenceWorker:
             "ok": False,
             "has_last_meal": self._last_meal_snapshot is not None,
         }
+        # Ladder knobs always visible (even when store not yet open).
+        try:
+            from elyra.memory.ladder import ladder_status_snapshot
+
+            block["ladder"] = ladder_status_snapshot(self._memory, mem_cfg)
+        except Exception:  # noqa: BLE001 — status must never raise
+            block["ladder"] = {
+                "enabled": bool(getattr(mem_cfg, "ladder_enabled", True)),
+                "summary_mode": str(
+                    getattr(mem_cfg, "summary_mode", "template") or "template"
+                ),
+            }
         if self._memory is None:
             if self._memory_open_failed:
                 block["error"] = "open_failed"
@@ -1575,20 +1591,93 @@ class PresenceWorker:
             _LOG.exception("record last meal snapshot failed")
 
     def _idle_memory_ladder(self) -> None:
-        """Budgeted period-summary refresh outside the state lock (idle only)."""
+        """Budgeted ladder tick outside the state lock (idle only; never hop)."""
         if not self._memory_ladder_active():
             return
         store = self._memory
         if store is None:
             return
         try:
-            from elyra.memory.ladder import refresh_due
+            from elyra.memory.ladder import tick
+            from elyra.memory.ladder_llm import ChatClientSummaryLlm
 
-            max_ms = int(self.settings.memory.ladder_max_ms_per_tick)
-            refresh_due(store, max_ms=max_ms)
+            mem_cfg = self.settings.memory
+            llm = None
+            mode = str(getattr(mem_cfg, "summary_mode", "template") or "template").lower()
+            if mode == "llm" and self.client is not None:
+                llm = ChatClientSummaryLlm(self.client)
+            identity_names: dict[str, str] | None = None
+            try:
+                # Soft display names for source packs (best-effort).
+                id_store = getattr(self, "_identity", None) or getattr(
+                    self, "identity", None
+                )
+                if id_store is not None and hasattr(id_store, "display_name"):
+                    identity_names = {
+                        "self": str(id_store.display_name() or "Elyra"),
+                    }
+            except Exception:  # noqa: BLE001
+                identity_names = None
+            tick(
+                store,
+                settings=mem_cfg,
+                llm=llm,
+                identity_names=identity_names,
+            )
         except Exception:  # noqa: BLE001
-            _LOG.exception("memory ladder refresh_due failed")
+            _LOG.exception("memory ladder tick failed")
         self._maybe_compact_memory_store()
+
+    def rebuild_episodic_summaries(
+        self,
+        *,
+        max_hours: int | None = None,
+        max_ms: int | None = None,
+        max_llm_calls: int | None = None,
+    ) -> dict[str, Any]:
+        """Operator force-rebuild of recent 1h tips + coarser cascade (Glass).
+
+        Outside the state lock. Uses ChatClient ladder adapter when
+        ``summary_mode=llm``. Returns rebuild status dict for the API.
+        """
+        store = self._ensure_memory_store()
+        if store is None:
+            return {"ok": False, "error": "store_unavailable"}
+        if not self._memory_ladder_active():
+            return {"ok": False, "error": "ladder_disabled"}
+        try:
+            from elyra.memory.ladder import rebuild_episodic_summaries
+            from elyra.memory.ladder_llm import ChatClientSummaryLlm
+
+            mem_cfg = self.settings.memory
+            llm = None
+            mode = str(getattr(mem_cfg, "summary_mode", "template") or "template").lower()
+            if mode == "llm" and self.client is not None:
+                llm = ChatClientSummaryLlm(self.client)
+            identity_names: dict[str, str] | None = None
+            try:
+                id_store = getattr(self, "_identity", None) or getattr(
+                    self, "identity", None
+                )
+                if id_store is not None and hasattr(id_store, "display_name"):
+                    identity_names = {
+                        "self": str(id_store.display_name() or "Elyra"),
+                    }
+            except Exception:  # noqa: BLE001
+                identity_names = None
+            result = rebuild_episodic_summaries(
+                store,
+                settings=mem_cfg,
+                llm=llm,
+                identity_names=identity_names,
+                max_hours=max_hours,
+                max_ms=float(max_ms) if max_ms is not None else None,
+                max_llm_calls=max_llm_calls,
+            )
+            return result if isinstance(result, dict) else {"ok": True, "result": result}
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("rebuild_episodic_summaries failed")
+            return {"ok": False, "error": str(exc) or type(exc).__name__}
 
     def _idle_memory_encode(self) -> None:
         """Idle-only corpus encode: pending scan + queue drain (KD2 / KD16).
@@ -1825,18 +1914,22 @@ class PresenceWorker:
             _LOG.exception("memory idle index optimize failed")
 
     def _finalize_memory_ladder_15m(self) -> None:
-        """Refresh the 15m window containing now after moment close (budgeted)."""
+        """Mark current 1h dirty after moment close (no LLM on hop path).
+
+        Retains the historical method name for call-site compatibility; body
+        only dirty-marks so idle ``tick`` can process the hour later.
+        """
         if not self._memory_ladder_active():
             return
         store = self._memory
         if store is None:
             return
         try:
-            from elyra.memory.ladder import refresh_window
+            from elyra.memory.ladder import mark_dirty_1h
 
-            refresh_window(store, "15m", datetime.now(UTC))
+            mark_dirty_1h(store, datetime.now(UTC))
         except Exception:  # noqa: BLE001
-            _LOG.exception("memory ladder 15m finalize refresh failed")
+            _LOG.exception("memory ladder dirty-mark finalize failed")
         self._maybe_compact_memory_store()
 
     def _maybe_compact_memory_store(self) -> None:
@@ -2288,8 +2381,8 @@ class PresenceWorker:
             # Phase 2a: moment end clears active + sticky last_session/keep.
             self._close_traversal_for_moment(moment_id)
 
-        # After close (outside long critical sections): refresh 15m window for
-        # the just-ended moment when atom writes or meal are active.
+        # After close (outside long critical sections): dirty-mark current 1h
+        # for the just-ended moment (no LLM on hop path — KD20).
         self._finalize_memory_ladder_15m()
 
     def _maybe_enqueue_moment_continue_unlocked(
