@@ -797,8 +797,9 @@ Rules (mirror #93 product stack style):
 
 1. **Every product branch is created FROM `feature/92`** (or from the previous product tip after that tip is merged into `feature/92` when stacking unmerged).
 2. **Never** cut product work from bare `main`.
-3. Merge child → `feature/92`; dogfood on integration tip; merge `feature/92` → `main` only after dogfood OK.
-4. Land design file + BUG-meal-02 Design home pointer on `feature/92` first (design commit or PR-A).
+3. **`/execute-plan` must use `feature/92` as stack base**, not `main` (see PR Plan → Execute-plan overrides).
+4. Merge child → `feature/92`; dogfood on integration tip; merge `feature/92` → `main` only after dogfood OK.
+5. Land design file + BUG-meal-02 Design home pointer on `feature/92` first (design commit or PR-A).
 
 ### Steps
 
@@ -923,8 +924,22 @@ Rules (mirror #93 product stack style):
 
 ## PR Plan
 
-**Integration tip:** `feature/92`.  
+**Integration tip / stack base:** `feature/92` (not `main`).  
 **Process:** each PR is a **child product branch** cut **FROM `feature/92`** (KD-BR). Merge child → `feature/92`. Do **not** merge product branches to `main` until `feature/92` dogfood is OK.
+
+### Execute-plan overrides (KD-BR — mandatory)
+
+The default `/execute-plan` skill bases level-0 branches on `origin/main` and stacks PRs toward `main`. **For this plan, override that default:**
+
+| Step | Default skill behavior | **This plan** |
+|------|------------------------|---------------|
+| Level-0 branch create | `git branch <pr> origin/main` | `git branch <pr> origin/feature/92` (or local `feature/92` tip after `git fetch`) |
+| Dependent branch create | from dep `commit_sha` | unchanged (still from dep tip) |
+| Stack assembly bottom parent | `main` | **`feature/92`** — bottom of linearized stack is parented on `feature/92`; each PR above parents on the previous stack branch |
+| `gh pr create --base` | first PR → `main` | first PR → **`feature/92`**; rest → previous stack branch |
+| Merge target after dogfood | n/a | children → `feature/92` first; only then `feature/92` → `main` |
+
+Never cut any product branch for PR-A…E from bare `main`. Design commit already lives on `feature/92`.
 
 Order is dependency-respecting. Optional intra-PR-A split (not mandatory): **A0** types/temporal/write allowlist + template-only hourly schedule; **A1** LLM path + worker adapter — or keep one PR-A with **merge gate = template path green without live LLM**.
 
