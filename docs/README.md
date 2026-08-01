@@ -20,6 +20,8 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
 | 9 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phases (Phase 0–3); **refresh status if it lags code** |
 | 9a | [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | **Operator notes:** SuperGrok pool vs Elyra ledger, burst, override, dogfood checklist (full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md)) |
+| 9b | **[branch-law.md](branch-law.md)** | **Normative tip law** — `working` integration tip; promote → `main`; operating pin; tags; stale stacks |
+| 9c | [design-grok-build-tool.md](design-grok-build-tool.md) | Phase 1 `grok_build` host instrument design (tool not shipped yet; summary: [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md)) |
 | 10 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep (shipped on gi) |
 | 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
 | 12 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged sampling / hygiene (**superseded** by remove-gemma design; freeze body) |
@@ -34,7 +36,7 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 17b | [stretch-2/design-context-meal-composition.md](stretch-2/design-context-meal-composition.md) | Provisional labeled meal + slide-off |
 | 17c | [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (not goals) |
 
-**Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `grok-improvement`** over stale phase README status lines.  
+**Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `working`** (integration tip; see [branch-law.md](branch-law.md)) over stale phase README status lines. Historical branch `grok-improvement` is **superseded** as tip law.  
 **Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes — freeze bodies stay until a docs modernization pass rewrites them.  
 **Archive:** longer research notes under [archive/](archive/) (not freeze). Memory essay: [memory-atoms.pdf](memory-atoms.pdf).
 
@@ -101,4 +103,4 @@ Live protocol: [live-eval.md](live-eval.md). Ship knobs: [inference.md](inferenc
 
 ## Status
 
-**Stretch 1 complete** on the foundation path. Integration branch **`grok-improvement`** also carries Grok-by-default (Phase 0), sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, and gold glass — see [project-status-pass.md](project-status-pass.md). `main` may lag. **Stretch 2 memory** is in planning on **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).
+**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([branch-law.md](branch-law.md)); promote to **`main`** with full suite. Product work that lived on historical **`grok-improvement`** (Grok-by-default Phase 0, sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, gold glass) should land / restack onto **`working`** — see [project-status-pass.md](project-status-pass.md). **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).

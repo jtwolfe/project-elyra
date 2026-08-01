@@ -4,8 +4,10 @@
 |-------|--------|
 | **Created** | 2026-07-30 |
 | **Goal** | Orient **promotion to a durable v0.1 product cut** + instantiate a **long-term self-improvement gym** (process + GitHub Project), without pretending unfinished dogfood is done |
-| **Branch context** | Product work has lived on `grok-improvement` → `grok-improvement-memory` → `grok-improv-radeonvii`; tips and docs drift — sanitation is part of v0.1 |
+| **Branch context** | Product work has lived on `grok-improvement` → `grok-improvement-memory` → `grok-improv-radeonvii`; tips and docs drift — sanitation is part of v0.1. **Live tip law:** **`working`** (see [branch-law.md](../branch-law.md)). |
 | **Status** | Working discussion (not a freeze contract). When it conflicts with Stretch 1 runtime rules, [stretch-1.md](../stretch-1.md) wins |
+
+> **Tip supersession:** Normative integration tip is **`working`** (not sole day-to-day use of `main`, and not historical `grok-improvement`). Full tip / promote / pin / tag / stale-stack law: **[docs/branch-law.md](../branch-law.md)**. Multi-party process still lives in [development-governance.md](development-governance.md).
 
 This folder is the home for **promotion / v0.1** thinking: what we have, what remains, meal/context limits, and how to track everything that landed in ~1–2 weeks of dense build.
 
@@ -14,10 +16,11 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 | Doc | Role |
 |-----|------|
 | **This README** | Charter, roadmap reflection, GitHub Project, meal reconstruction & budgets |
-| **[development-governance.md](development-governance.md)** | Git model (main / operating pin / public tags), Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Jamie×Colin dual approaches, **naming** |
+| **[development-governance.md](development-governance.md)** | Git model, Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Jamie×Colin dual approaches, **naming** (tip law → [branch-law.md](../branch-law.md)) |
+| **[branch-law.md](../branch-law.md)** | **Normative** `working` / `main` / operating pin / tags / short-lived / Graphite default |
 | *(later)* | Exit criteria checklist, milestone seed issues, merge plan |
 
-Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md).
+Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md), [branch-law.md](../branch-law.md).
 
 **Programme name (working):** *Project Elyra — Autopoiesis Commons* (runtime stays “Elyra”; short label *Autopoiesis Commons* / *Elyra AC* — see [governance §6](development-governance.md#6-naming--project-identity)).
 

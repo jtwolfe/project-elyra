@@ -1,9 +1,10 @@
 # Summary: Elyra Grok Build instrument design
 
-**Output:** `/tmp/grok-1000/grok-design-doc-cf9024a3.md`  
+**Full design:** [design-grok-build-tool.md](design-grok-build-tool.md)  
 **Date:** 2026-08-01 (revised post-review + re-review cf9024a3)  
 **Branch context:** `feature/grok-build-tool` · Issue #109 · GI Phase 1  
-**Review:** `/tmp/grok-1000/grok-design-review-cf9024a3.md` — pass1 22/22 + re-review 7/7 addressed  
+**Tip law:** [branch-law.md](branch-law.md) (`working` integration tip)  
+
 
 ## What was produced
 

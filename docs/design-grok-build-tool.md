@@ -5,11 +5,11 @@
 | **Document** | Phase 1 `grok_build` host instrument — full mode surface |
 | **Author** | Design (Grok Build subagent) |
 | **Date** | 2026-08-01 |
-| **Status** | Draft (revised post-review) |
+| **Status** | **Approved for implementation** (landed PR0; revised post-review) |
 | **Product** | project-elyra |
 | **Tracks** | Issue #109; GI Phase 1 |
 | **Branch** | `feature/grok-build-tool` (off `main`; land stack into `working` once created, else `main`) |
-| **Related** | [engineering-principles.md](engineering-principles.md), [tools-and-skills.md](tools-and-skills.md), [design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md), [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md), [grok-improvement-plan/README.md](grok-improvement-plan/README.md), `elyra/secrets/inject.py`, `elyra/llm/xai_oauth.py` |
+| **Related** | [branch-law.md](branch-law.md), [engineering-principles.md](engineering-principles.md), [tools-and-skills.md](tools-and-skills.md), [design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md), [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md), [grok-improvement-plan/README.md](grok-improvement-plan/README.md), `elyra/secrets/inject.py`, `elyra/llm/xai_oauth.py` |
 | **Revised** | 2026-08-01 (review cf9024a3; re-review; shared WakeQueue mandatory) |
 | **Landing path (post-approval)** | `docs/design-grok-build-tool.md` |
 
