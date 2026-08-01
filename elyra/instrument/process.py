@@ -191,15 +191,96 @@ def run_grok(
 
 
 # Alias used by design text ("process.spawn" for async records pid — PR3).
-# PR2 exposes synchronous run only; spawn name kept as thin alias for callers.
+# Blocking wait path; prefer run_grok for clarity.
 spawn_and_wait = run_grok
+
+
+@dataclass(frozen=True)
+class SpawnedProcess:
+    """Handle for a non-blocking grok child (async jobs / reaper ownership)."""
+
+    pid: int
+    pgid: int | None
+    stdout_path: Path
+    stderr_path: Path
+
+
+def spawn_grok(
+    argv: Sequence[str],
+    *,
+    grok_home: Path | str,
+    cwd: Path | str | None = None,
+    stdout_path: Path | str,
+    stderr_path: Path | str,
+    env: Mapping[str, str] | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> SpawnedProcess:
+    """Spawn ``argv`` non-blocking; redirect stdout/stderr to files.
+
+    ``shell=False``, new session (process-group leader). Caller records pid/pgid
+    in job meta; reaper waits/finalizes. Does not inject OAuth tokens.
+    """
+    if not argv:
+        raise ValueError("argv must be non-empty")
+
+    child_env = build_child_env(
+        grok_home=grok_home,
+        base=env,
+        extra=extra_env,
+    )
+    workdir = str(cwd) if cwd is not None else None
+    out_p = Path(stdout_path)
+    err_p = Path(stderr_path)
+    out_p.parent.mkdir(parents=True, exist_ok=True)
+    err_p.parent.mkdir(parents=True, exist_ok=True)
+
+    # Open files owned by child; parent closes after Popen.
+    out_fh = open(out_p, "w", encoding="utf-8")  # noqa: SIM115
+    err_fh = open(err_p, "w", encoding="utf-8")  # noqa: SIM115
+    try:
+        proc = subprocess.Popen(
+            list(argv),
+            cwd=workdir,
+            env=child_env,
+            stdin=subprocess.DEVNULL,
+            stdout=out_fh,
+            stderr=err_fh,
+            text=True,
+            shell=False,
+            start_new_session=True,
+        )
+    finally:
+        # Child has its own FDs; close parent copies.
+        try:
+            out_fh.close()
+        except OSError:
+            pass
+        try:
+            err_fh.close()
+        except OSError:
+            pass
+
+    pid = proc.pid
+    try:
+        pgid: int | None = os.getpgid(pid)
+    except (ProcessLookupError, OSError):
+        pgid = pid
+
+    return SpawnedProcess(
+        pid=pid,
+        pgid=pgid,
+        stdout_path=out_p,
+        stderr_path=err_p,
+    )
 
 
 __all__ = [
     "DEFAULT_CAPTURE_MAX_CHARS",
     "ProcessResult",
+    "SpawnedProcess",
     "build_child_env",
     "run_grok",
     "spawn_and_wait",
+    "spawn_grok",
     "truncate_capture",
 ]

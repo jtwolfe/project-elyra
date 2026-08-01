@@ -1,0 +1,55 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "prompt",
+        "design",
+        "implement",
+        "execute_plan",
+        "deep_research",
+        "review"
+      ],
+      "description": "Instrument mode (required for spawn; optional when polling job_id)"
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Task text / research query / design or implement description"
+    },
+    "design_doc_path": {
+      "type": "string",
+      "description": "Required for execute_plan; jailed path to design doc"
+    },
+    "effort": {
+      "type": "integer",
+      "description": "implement 1-5 (skill flag inside -p only; never CLI --effort)"
+    },
+    "async": {
+      "type": "boolean",
+      "description": "Background job; default true when mode timeout > 15m; false for prompt"
+    },
+    "job_id": {
+      "type": "string",
+      "description": "Poll/fetch prior async job (poll-only when set)"
+    },
+    "base_branch": {
+      "type": "string",
+      "description": "execute_plan base branch preflight; default working"
+    },
+    "cwd": {
+      "type": "string",
+      "description": "Git repo / working directory (path-jailed under allowed roots)"
+    },
+    "target": {
+      "type": "string",
+      "description": "review: local | branch name | PR number/URL"
+    },
+    "max_turns": {
+      "type": "integer",
+      "description": "Optional grok --max-turns override"
+    }
+  },
+  "required": ["mode"],
+  "additionalProperties": false
+}
