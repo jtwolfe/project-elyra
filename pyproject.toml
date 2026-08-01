@@ -48,6 +48,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 markers = [
     "llm: optional live LLM (OpenAI-compat local/remote); skipped when unavailable",
+    "live_grok: optional live Grok Build dogfood; skipped unless ELYRA_LIVE_GROK=1",
     "microsandbox: optional live microsandbox smoke (needs KVM + elyra[sandbox])",
     "gpu: optional GPU / real Nemotron encode; skipped when torch/CUDA/model unavailable",
     "memory_embed: optional elyra[memory-embed] path (torch+transformers); may skip",
