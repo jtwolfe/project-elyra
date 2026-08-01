@@ -1,7 +1,7 @@
-"""Tests for github-workflow skill package (PR8).
+"""Tests for github-workflow skill package (PR8 + PR5 instrument rails).
 
 Hermetic only — package on disk, frontmatter, catalog discovery.
-No live git/gh / network.
+No live git/gh / network / grok_build subprocess.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from elyra.tools.builtin.skills_tools import load_skill
 
 SKILL_NAME = "github-workflow"
 
-# Body must teach the self-mod bridge contract (design §3.3 / PR8 acceptance).
+# Body must teach the self-mod bridge contract (design §3.3 / PR8 + PR5 rails).
 REQUIRED_BODY_NEEDLES = (
     "worktree",
     "Projects",
@@ -32,6 +32,16 @@ REQUIRED_BODY_NEEDLES = (
     "First tool call",
     "revert_tool",
     "git_worktree",
+    # PR5: mode / async / job_id / background wake / error_reason catalog
+    "job_id",
+    "background",
+    "error_reason",
+    "execute_plan",
+    "source=grok_build",
+    "auth_unavailable",
+    "base_branch_missing",
+    "mode_experimental",
+    "use_graphite",
 )
 
 
@@ -119,6 +129,12 @@ def test_github_workflow_body_contract(catalog: SkillCatalog) -> None:
     assert "confirm" in lower
     assert "revert_skill" in body or "revert_tool" in body
     assert "create_goal" in body or "create_task" in body or "get_task" in body
+    # PR5 async / poll manners.
+    assert "async" in lower
+    assert "instrument_job" in body  # taught as never invent
+    assert "no auto-merge" in lower or "auto-merge" in lower
+    # Modes table surface.
+    assert "design" in lower and "implement" in lower and "review" in lower
 
 
 def test_github_workflow_tip_is_working(catalog: SkillCatalog) -> None:
@@ -133,11 +149,42 @@ def test_github_workflow_tip_is_working(catalog: SkillCatalog) -> None:
     # Must not reintroduce superseded tip as the preferred base wording.
     assert "on top of `grok-improvement`" not in body
     assert "on top of **`grok-improvement`**" not in body
+    # Prefer multi-file implement/design/execute_plan via grok_build.
+    assert "implement" in body.lower()
+    assert "execute_plan" in body or "execute-plan" in body.lower()
+
+
+def test_github_workflow_async_and_error_reasons(catalog: SkillCatalog) -> None:
+    """PR5: job_id poll, background wake source=grok_build, soft-fail catalog."""
+    loaded = catalog.load(SKILL_NAME)
+    assert loaded is not None
+    body = loaded.body
+    lower = body.lower()
+    assert "job_id" in body
+    assert "source=grok_build" in body
+    assert "background" in lower
+    # Soft-fail error_reason list (design PR5 rails).
+    for reason in (
+        "auth_unavailable",
+        "auth_expired",
+        "base_branch_missing",
+        "missing_prompt",
+        "design_doc_missing",
+        "mode_experimental",
+        "mode_not_ready",
+        "usage_hard_stop",
+        "timeout",
+        "artifact_missing",
+        "grok_not_found",
+        "grok_skills_unavailable",
+    ):
+        assert reason in body, f"missing error_reason needle {reason!r}"
+    assert "needs_human" in body
 
 
 def test_catalog_lists_growth_judgment_skills(catalog: SkillCatalog) -> None:
-    """PR8 acceptance: catalog lists github-workflow + web-research (browse when PR6 present)."""
-    for name in ("github-workflow", "web-research"):
+    """PR8 + PR5: catalog lists github-workflow, web-research, self-improve."""
+    for name in ("github-workflow", "web-research", "self-improve"):
         assert catalog.has(name), f"expected catalog skill {name}"
         assert name in catalog.names()
 
@@ -153,6 +200,7 @@ def test_load_skill_tool_returns_github_workflow(
     body = result.payload["body"]
     assert "worktree" in body.lower()
     assert "First tool call" in body
+    assert "job_id" in body
 
 
 def test_system_prompt_mentions_github_workflow_and_families() -> None:
