@@ -5,7 +5,9 @@
 | **Created** | 2026-07-30 |
 | **Status** | Working guidance — **not gospel**, not a freeze contract |
 | **Sources** | Prior Grok Web discussion (repo/structure + Stage 0–3 ladder); current Project Elyra state on `grok-improv-radeonvii`; multi-party intent (Jamie, Colin, multiple PE instances); consciousness research briefs prepared for Colin (2026-07-29) |
-| **Related** | [README.md](README.md) (v0.1 promotion), [../engineering-principles.md](../engineering-principles.md), [../grok-improvement-plan/README.md](../grok-improvement-plan/README.md) |
+| **Related** | [README.md](README.md) (v0.1 promotion), [../engineering-principles.md](../engineering-principles.md), [../grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [../branch-law.md](../branch-law.md) |
+
+> **Supersession (2026-08-01):** Normative **integration tip** is now **`working`** (not `main` alone, and not historical `grok-improvement`). Full tip / promote / pin / tag / stale-stack law: **[docs/branch-law.md](../branch-law.md)**. Sections below that still describe `main` as the sole day-to-day integration base are historical Stage 1 guidance; prefer `working` → promote to `main` with full suite.
 
 This note **updates** earlier “enterprise self-mod git” advice for where Elyra is **now**, and for a future that is **not only self-improvement by one agent**, but a **small committee of humans + PE instances**.
 

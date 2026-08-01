@@ -34,7 +34,7 @@ Pick the first that applies:
 
 ## Hard rules
 
-1. **Never commit to `main`** without an explicit human request. Prefer feature / `execute-plan/<id>` / topic branches on top of `grok-improvement` tip when that is the house base.
+1. **Never commit to `main`** without an explicit human request. Prefer feature / `execute-plan/<id>` / topic branches on top of **`working`** (the house integration tip). Former GI branch `grok-improvement` is superseded by `working` (see `docs/branch-law.md`).
 2. **Never force-push `main`** (or force-like rewrite of protected defaults). No force-push helpers in v1 — treat force as human-only forever.
 3. Prefer **worktree tools** for isolation: `git_worktree_add` → work → `git_worktree_remove` (dirty remove needs `confirm: true`) / `git_worktree_prune`.
 4. Track multi-step work on **Projects** + ledger: `gh_project_list` / `gh_project_item_list` / `gh_project_item_add` / `gh_project_item_edit` / `gh_project_field_list` when available; soft-fail `auth_unavailable` without inventing success.

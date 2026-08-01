@@ -1,5 +1,7 @@
 # Grok Improvement Plan
 
+> **Integration tip migration (2026-08-01):** The house integration tip is now **`working`**, which **supersedes `grok-improvement`** as current tip law. Prefer feature / execute-plan branches and PR bases off **`working`**; promote `working` → `main` with full suite. Normative detail: **[docs/branch-law.md](../branch-law.md)**. Historical “Branch / Integration branch: `grok-improvement`” prose in this folder remains Phase 0 context only — do not treat it as the live base.
+
 This folder holds the design documentation for migrating Project Elyra from local Gemma (llama.cpp) onto xAI Grok models under a SuperGrok Heavy subscription, and for enabling safe self-improvement via Grok Build.
 
 ## Guiding principles
@@ -53,14 +55,16 @@ elyra start
 
 ## Branch
 
-**Integration branch:** `grok-improvement` (created from `main`).
+> **Superseded tip:** The live integration tip is **`working`** — see [docs/branch-law.md](../branch-law.md). Table below is **historical** Phase 0 / GI-era process.
+
+**Historical integration branch:** `grok-improvement` (created from `main`; **superseded by `working`**).
 
 | Rule | Detail |
 |------|--------|
-| Work branches | All Phase 0 / Stage B (and later plan) PR branches **sit on top of** `grok-improvement` |
-| PR base | Open PRs against **`grok-improvement`**, not `main` |
-| Push + merge | Push every work branch; **merge all of them down onto `grok-improvement`** when the work lands |
-| Promote to main | Separate operator step after success criteria — not automatic with individual PRs |
+| Work branches | *(historical)* Phase 0 / Stage B PR branches sat on top of `grok-improvement` — **now base on `working`** |
+| PR base | Open new PRs against **`working`**, not `main` (and not `grok-improvement`) |
+| Push + merge | Merge short-lived branches onto **`working`** when the work lands |
+| Promote to main | Promote **`working` → `main`** after full suite + noise cleanup — not automatic with individual PRs |
 
 Execution detail (Phase 0 PR stack): [phase-0-execution.md](phase-0-execution.md).  
 Stage B execution: [stage-b-mc.md](stage-b-mc.md).

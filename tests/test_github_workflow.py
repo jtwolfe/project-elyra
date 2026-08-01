@@ -121,6 +121,20 @@ def test_github_workflow_body_contract(catalog: SkillCatalog) -> None:
     assert "create_goal" in body or "create_task" in body or "get_task" in body
 
 
+def test_github_workflow_tip_is_working(catalog: SkillCatalog) -> None:
+    """PR0 tip law: integration tip is working (not grok-improvement as current base)."""
+    loaded = catalog.load(SKILL_NAME)
+    assert loaded is not None
+    body = loaded.body
+    assert "working" in body
+    # Current tip guidance must name working; historical supersession note may
+    # mention grok-improvement but must not teach it as the house base alone.
+    assert "on top of **`working`**" in body or "on top of `working`" in body
+    # Must not reintroduce superseded tip as the preferred base wording.
+    assert "on top of `grok-improvement`" not in body
+    assert "on top of **`grok-improvement`**" not in body
+
+
 def test_catalog_lists_growth_judgment_skills(catalog: SkillCatalog) -> None:
     """PR8 acceptance: catalog lists github-workflow + web-research (browse when PR6 present)."""
     for name in ("github-workflow", "web-research"):

@@ -355,7 +355,7 @@ Exact checklists live in `skills/bundled/review-identity/SKILL.md` and `skills/b
 | `browse` | `browser_*` | Re-snapshot after navigation; close sessions; unavailable → honest stop |
 | `github-workflow` | `git_*`, `gh_*`, package VCS | Prefer feature/execute-plan branches; never force-push main; worktrees; Projects; grant stops |
 
-Phase 1 `grok_build` tool is **not** in this surface — skills teach rails only.
+Phase 1 `grok_build` tool is **not** in this surface yet — skills teach rails only. The host instrument is **designed** in [design-grok-build-tool.md](design-grok-build-tool.md) (summary: [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md)); implementation and registration are forthcoming. Branch / tip law for stacks: [branch-law.md](branch-law.md) (`working` integration tip).
 
 ---
 
