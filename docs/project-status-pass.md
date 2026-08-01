@@ -270,3 +270,11 @@ That workflow should feel like a **skill + ledger pattern**, not a second mind. 
 | Next large work? | Grok Build and/or memory — after that conversation |
 
 Elyra is a **working teammate runtime on Grok**, with soft metacognition and a real identity package, on a branch ahead of `main`. Before wiring stronger self-coding and memory, we should tidy status docs and agree how the **base development workflow** sits next to **larger self-improvement** without inventing a second mind.
+
+## Grok Build instrument (2026-08-01)
+
+- Design: [design-grok-build-tool.md](design-grok-build-tool.md) (approved)
+- Branch law: [branch-law.md](branch-law.md) — integration tip **`working`**
+- Implementation stack: `feature/gb-3b3094ab-pr0`…`pr8` (execute-plan 3b3094ab)
+- Status: code landed on feature stack; dogfood D1–D13 operator-run before operating pin move
+- Operating pin: **not** auto-moved

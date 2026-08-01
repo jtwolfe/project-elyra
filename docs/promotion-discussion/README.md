@@ -424,3 +424,5 @@ Convert draft cards to Issues when work starts; keep the board as the gym surfac
 ---
 
 *Promotion discussion seed 2026-07-30. GitHub Project linked above.*
+
+**Grok Build Phase 1:** design + instrument stack on `feature/gb-3b3094ab-*`; tip law [branch-law.md](../branch-law.md).
