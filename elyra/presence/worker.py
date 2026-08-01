@@ -929,6 +929,11 @@ class PresenceWorker:
             return len(self._queue.pending())
 
     @property
+    def queue(self) -> WakeQueue:
+        """Shared wake queue (same instance supervisor injects into reaper)."""
+        return self._queue
+
+    @property
     def phase(self) -> str:
         with self._lock:
             return self._phase

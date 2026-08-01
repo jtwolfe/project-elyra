@@ -33,6 +33,7 @@ from elyra.llm.models import CURATED_XAI_MODELS, models_for_picker
 from elyra.llm.provider_prefs import provider_prefs_path
 from elyra.llm.queue import ChatRequestGate
 from elyra.llm.usage import UsageMeter
+from elyra.presence.queue import WakeQueue
 from elyra.presence.worker import PresenceWorker
 from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
@@ -83,6 +84,10 @@ class ElyraSupervisor:
         self._sandbox_warm_done: bool = False
         self._sandbox_stop = threading.Event()
         self._credits_poller: CreditsPoller | None = None
+        # Shared wake queue (worker + instrument reaper). One instance only.
+        self._wake_queue: WakeQueue | None = None
+        self._usage_meter: UsageMeter | None = None
+        self._instrument_reaper: Any = None
 
     def sandbox_status(self) -> dict[str, Any]:
         """Operator status block (also used by GET /api/status)."""
@@ -202,6 +207,12 @@ class ElyraSupervisor:
 
         # Always load meter (even when !credential_ok) so repair keeps windows.
         meter = UsageMeter.load(data_dir, cfg.usage)
+        self._usage_meter = meter
+
+        # One WakeQueue for the whole supervisor process (KD reaper / PR3).
+        # PresenceWorker + InstrumentReaper MUST share this object — a private
+        # second WakeQueue(paths) would drop completion wakes from the heap.
+        self._wake_queue = WakeQueue(self.paths)
 
         grok_auth_path: Path | None = None
         if cfg.grok_auth_path:
@@ -335,6 +346,7 @@ class ElyraSupervisor:
             client=chat_client,
             stop_event=self._stop,
             model_available=pr.can_open_model_moment,
+            queue=self._wake_queue,
         )
         pr.worker = self._worker
 
@@ -354,6 +366,9 @@ class ElyraSupervisor:
         # SuperGrok credits poller (daemon): after meter + provider runtime.
         # No-op when usage.enabled=false or credits_poll_enabled=false.
         self._start_credits_poller(meter=meter, pr=pr)
+
+        # Instrument reaper (async grok_build jobs): same shared WakeQueue + meter.
+        self._start_instrument_reaper(meter=meter)
 
         self._worker_thread = threading.Thread(
             target=self._worker.run,
@@ -378,6 +393,28 @@ class ElyraSupervisor:
                 pr.refresh_models()
             except Exception:  # noqa: BLE001
                 _LOG.debug("initial refresh_models failed", exc_info=True)
+
+    def _start_instrument_reaper(self, *, meter: UsageMeter) -> None:
+        """Start supervisor-owned InstrumentReaper on the shared WakeQueue."""
+        from elyra.instrument.jobs import ensure_grok_build_runtime
+        from elyra.instrument.reaper import InstrumentReaper
+
+        try:
+            ensure_grok_build_runtime(self.paths)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("ensure_grok_build_runtime failed: %s", exc)
+        if self._wake_queue is None:
+            # Should not happen — start() always builds the queue first.
+            self._wake_queue = WakeQueue(self.paths)
+        reaper = InstrumentReaper(
+            paths=self.paths,
+            wake_queue=self._wake_queue,
+            stop_event=self._stop,
+            meter=meter,
+        )
+        reaper.start()
+        self._instrument_reaper = reaper
+        _LOG.info("instrument reaper started (shared WakeQueue)")
 
     def _start_credits_poller(
         self,
@@ -465,6 +502,13 @@ class ElyraSupervisor:
             self._credits_poller = None
             if self.provider_runtime is not None:
                 self.provider_runtime.credits_poller = None
+        # 0a. Instrument reaper stop/join (before worker; leaves running jobs for next GC).
+        if self._instrument_reaper is not None:
+            try:
+                self._instrument_reaper.stop(join_timeout_s=5.0)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("instrument reaper stop failed: %s", exc)
+            self._instrument_reaper = None
         # 0b. OAuth keep-alive stop.
         if self.provider_runtime is not None:
             try:
