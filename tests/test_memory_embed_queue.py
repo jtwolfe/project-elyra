@@ -835,6 +835,7 @@ def test_worker_installs_hook_and_idle_drain(paths):
             semantic_enabled=True,
             embed_enabled=True,
             embed_backend="mock",
+            encode_worker_enabled=False,  # idle rollback path
             encode_max_items_per_tick=8,
             encode_max_ms_per_tick=2000,
         ),
@@ -971,6 +972,7 @@ def test_hook_skips_encode_ok_same_fingerprint(paths):
             semantic_enabled=True,
             embed_enabled=True,
             embed_backend="mock",
+            encode_worker_enabled=False,  # idle rollback path
         ),
     )
     worker = PresenceWorker(

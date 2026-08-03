@@ -174,6 +174,12 @@ class MemorySettings:
     encode_max_items_per_tick: int = 4
     encode_max_attempts: int = 3
     encode_queue_max: int = 1024
+    # Continuous encode worker (KD-E1 / KD-E6). false → owner=idle rollback only.
+    encode_worker_enabled: bool = True
+    encode_worker_poll_s: float = 0.35  # Event wait timeout between ticks
+    encode_worker_max_restarts: int = 3  # per-window thrash budget (not permanent give-up)
+    encode_worker_restart_window_s: float = 60.0
+    encode_worker_restart_backoff_max_s: float = 30.0
     encode_query_max_ms: int = 30  # sub-budget of semantic_select_max_ms
     semantic_select_max_ms: int = 50  # total encode+search+pack in rebuild_outer
     # Wait-for-select: when on, raise ceiling and keep slow encode results

@@ -275,10 +275,20 @@ class EncodeQueue:
         media_store: Any | None = None,
         max_attempts: int = 3,
         settings: Any | None = None,
+        gate: Any | None = None,
+        gate_bulk_timeout_s: float = 0.05,
     ) -> dict[str, int]:
         """Drain up to ``max_items`` within ``max_ms``. Never raises.
 
         Pops under the queue lock; encodes / store I/O run **outside** the lock.
+        When ``gate`` is provided, bulk acquire covers **encode forward only**;
+        upsert / status puts run outside the gate (KD-E3).
+
+        Retryable failures (pending, attempts < max) are **deferred**: recorded
+        during the tick and re-enqueued at lane tail **after** the drain call
+        finishes (KD-E15 — no same-tick re-drain thrash). A per-call ``seen``
+        set skips already-popped ids if re-enqueued mid-loop by bug.
+
         Status transitions:
         - empty / kind skip → ``skipped``
         - encode exception / invalid → ``failed`` (or stay pending while
@@ -287,7 +297,8 @@ class EncodeQueue:
         - encode ok without index → leave ``pending``; set meta.embed_encode_ok
           so we do not re-encode every tick (KD8 — no false ready)
 
-        Returns counters: ok, failed, skipped, remaining, dropped, processed.
+        Returns counters: ok, failed, skipped, remaining, dropped, processed,
+        yielded, requeued.
         """
         media_max_bytes = 8_000_000
         media_max_seconds: int | None = 30
@@ -313,6 +324,8 @@ class EncodeQueue:
             "remaining": 0,
             "dropped": 0,
             "processed": 0,
+            "yielded": 0,
+            "requeued": 0,
         }
         t0 = time.monotonic()
         max_ms = max(0, int(max_ms))
@@ -329,16 +342,36 @@ class EncodeQueue:
             embedder_ok = False
 
         processed = 0
+        seen: set[str] = set()
+        # Deferred re-enqueue after this drain call (retryable fails / yields).
+        deferred: list[tuple[str, EncodePriority]] = []
+
         while processed < max_items:
             if max_ms > 0 and (time.monotonic() - t0) * 1000.0 >= max_ms:
                 break
             # Membership pop under lock; encode outside lock.
-            atom_id = self.pop_next()
-            if atom_id is None:
+            item = self.pop_next_bulk()
+            if item is None:
                 break
+            atom_id, pri = item
+            if atom_id in seen:
+                # Belt-and-suspenders: already handled this tick — re-queue tail.
+                deferred.append((atom_id, pri))
+                continue
+            seen.add(atom_id)
             processed += 1
             stats["processed"] = processed
             try:
+                # Between atoms: yield if lookup is waiting (no new bulk forward).
+                if gate is not None:
+                    try:
+                        if bool(getattr(gate, "lookup_waiting", False)):
+                            deferred.append((atom_id, pri))
+                            stats["yielded"] = stats.get("yielded", 0) + 1
+                            break
+                    except Exception:  # noqa: BLE001
+                        pass
+
                 outcome = self._process_one(
                     store,
                     embedder,
@@ -350,12 +383,45 @@ class EncodeQueue:
                     media_max_bytes=media_max_bytes,
                     media_max_seconds=media_max_seconds,
                     single_modality_joint=single_modality_joint,
+                    gate=gate,
+                    gate_bulk_timeout_s=gate_bulk_timeout_s,
                 )
+                if outcome == "yielded":
+                    deferred.append((atom_id, pri))
+                    stats["yielded"] = stats.get("yielded", 0) + 1
+                    break
                 stats[outcome] = stats.get(outcome, 0) + 1
+                # Retryable fail: stay pending → defer re-enqueue until after tick.
+                if outcome == "failed":
+                    try:
+                        atom = store.get_atom(atom_id)
+                        if (
+                            atom is not None
+                            and (atom.embedding_status or "") == "pending"
+                        ):
+                            deferred.append((atom_id, pri))
+                    except Exception:  # noqa: BLE001
+                        deferred.append((atom_id, pri))
+                elif outcome == "skipped" and not embedder_ok:
+                    # Soft skip (no healthy encoder) — requeue for later tick.
+                    deferred.append((atom_id, pri))
             except Exception:  # noqa: BLE001 — isolate per item
                 _LOG.exception("encode drain item failed atom_id=%s", atom_id)
                 stats["failed"] = stats.get("failed", 0) + 1
+                deferred.append((atom_id, pri))
 
+        # Flush deferred re-enqueues after the drain tick (KD-E15).
+        requeued = 0
+        for aid, dpri in deferred:
+            try:
+                if self.enqueue(aid, priority=dpri, store=None):
+                    requeued += 1
+                elif self.contains(aid):
+                    # Already present (race) — count as retained.
+                    requeued += 1
+            except Exception:  # noqa: BLE001
+                _LOG.exception("deferred re-enqueue failed atom_id=%s", aid)
+        stats["requeued"] = requeued
         stats["remaining"] = self.qsize()
         stats["dropped"] = self.dropped_total()
         return stats
@@ -373,6 +439,8 @@ class EncodeQueue:
         media_max_bytes: int = 8_000_000,
         media_max_seconds: int | None = 30,
         single_modality_joint: bool = True,
+        gate: Any | None = None,
+        gate_bulk_timeout_s: float = 0.05,
     ) -> str:
         atom = store.get_atom(atom_id)
         if atom is None:
@@ -410,14 +478,35 @@ class EncodeQueue:
             # Permanent unavailability is operator-driven (embed_enabled off).
             return "skipped"
 
-        result = encode_atom(
-            embedder,
-            atom,
-            media_store=media_store,
-            media_max_bytes=media_max_bytes,
-            media_max_seconds=media_max_seconds,
-            single_modality_joint=single_modality_joint,
-        )
+        # Critical section = model forward only. Store I/O and upsert are
+        # outside the gate. Acquire just before encode_atom.
+        held = False
+        if gate is not None:
+            try:
+                held = bool(
+                    gate.acquire("bulk", timeout=float(gate_bulk_timeout_s))
+                )
+            except Exception:  # noqa: BLE001
+                _LOG.exception("embedder gate acquire failed atom_id=%s", atom_id)
+                held = False
+            if not held:
+                return "yielded"
+        try:
+            result = encode_atom(
+                embedder,
+                atom,
+                media_store=media_store,
+                media_max_bytes=media_max_bytes,
+                media_max_seconds=media_max_seconds,
+                single_modality_joint=single_modality_joint,
+            )
+        finally:
+            if held and gate is not None:
+                try:
+                    gate.release()
+                except Exception:  # noqa: BLE001
+                    pass
+
         attempts = int(meta.get(_META_ATTEMPTS) or 0) + 1
         updates: dict[str, Any] = {_META_ATTEMPTS: attempts}
 
@@ -444,14 +533,14 @@ class EncodeQueue:
                     store, atom, status="failed", meta_updates=updates
                 )
                 return "failed"
-            # Stay pending for retry via idle scan.
+            # Stay pending for deferred re-enqueue after this drain tick.
             updates.pop(_META_ENCODE_OK, None)
             _mark_atom_status(
                 store, atom, status="pending", meta_updates=updates
             )
             return "failed"
 
-        # Encode produced vectors.
+        # Encode produced vectors. Upsert / status outside the gate.
         emb = result.embeddings
         updates[_META_ENCODE_OK] = True
         updates[_META_CONTENT_FP] = fp
@@ -486,7 +575,7 @@ class EncodeQueue:
                 # Fall through: leave pending with encode_ok so we do not
                 # thrash re-encode; index can be retried in a later PR.
 
-        # PR2 production path: no durable vectors → stay pending (KD8).
+        # Production path without durable index → stay pending (KD8).
         _mark_atom_status(store, atom, status="pending", meta_updates=updates)
         return "ok"
 

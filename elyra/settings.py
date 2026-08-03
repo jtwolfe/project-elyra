@@ -475,11 +475,18 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             raise ValueError(f"{path}: expected float/int > 0, got {coerced!r}")
         if path == "memory.encode_queue_max" and coerced < 1:
             raise ValueError(f"{path}: expected int >= 1, got {coerced!r}")
+        if path == "memory.encode_worker_poll_s" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        if path == "memory.encode_worker_restart_window_s" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
+        if path == "memory.encode_worker_restart_backoff_max_s" and coerced <= 0:
+            raise ValueError(f"{path}: expected float > 0, got {coerced!r}")
         if path in (
             "memory.encode_max_ms_per_tick",
             "memory.encode_max_items_per_tick",
             "memory.encode_max_attempts",
             "memory.encode_query_max_ms",
+            "memory.encode_worker_max_restarts",
             "memory.semantic_select_max_ms",
             "memory.semantic_top_k",
             "memory.ann_recent_buffer_max",

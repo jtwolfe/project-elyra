@@ -516,8 +516,27 @@ class PresenceWorker:
         self._encode_queue: Any | None = None
         self._embedder: Any | None = None
         self._embedder_open_failed = False
+        self._embedder_open_lock = threading.Lock()
+        # absent | loading | warm | failed — consumers non-blocking while loading
+        self._embedder_state: str = "absent"
+        self._embedder_gate: Any | None = None  # EmbedderGate (lazy)
         self._embedding_index: Any | None = None
         self._embed_catchup_marked: int = 0  # process-life OQ4 none→pending count
+        # Continuous encode worker ownership (KD-E1 / KD-E7).
+        # encode_owner ∈ {none, idle, worker}
+        self._encode_owner: str = "none"
+        self._encode_worker: Any | None = None  # EncodeWorker
+        self._encode_wake = threading.Event()
+        self._encode_worker_restarts: int = 0
+        self._encode_worker_restart_times: list[float] = []
+        self._encode_worker_next_restart_at: float = 0.0
+        self._encode_worker_backoff_s: float = 0.5
+        self._encode_worker_restart_throttled: bool = False
+        self._gap_drain_active: bool = False
+        self._encode_drain_ok_total: int = 0
+        self._encode_drain_failed_total: int = 0
+        self._encode_last_drain_at: float | None = None
+        self._encode_last_drain_stats: dict[str, Any] | None = None
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
         # Phase 2a directed traversal (PR-A2): process-local session registry.
@@ -1207,11 +1226,16 @@ class PresenceWorker:
         try:
             self._startup_recover()
             self._ensure_memory_store()
+            # Continuous encode: start worker + set owner before first drain tick.
+            self._start_encode_worker_if_needed()
             self._started = True
             while not self._stop.is_set():
                 wake: WakeItem | None = None
                 moment_id: str | None = None
                 try:
+                    # Busy-safe death recovery: monitor every loop iteration
+                    # (not idle-only) — KD-E16.
+                    self._maybe_restart_encode_worker()
                     claimed = self._claim_and_open()
                     if claimed is None:
                         # Still fire due timers/waits while idle.
@@ -1219,8 +1243,10 @@ class PresenceWorker:
                             self._fire_due_unlocked()
                         # Ladder refresh OUTSIDE lock (PR5 normative placement).
                         self._idle_memory_ladder()
-                        # Corpus encode drain OUTSIDE lock (KD2 / KD16).
+                        # Corpus encode: idle only when owner=idle (rollback).
+                        # When owner=worker, no-op; gap drain covers dead-worker.
                         self._idle_memory_encode()
+                        self._gap_drain_if_needed()
                         # KD-R11: joint-copy repair continue (open/idle only).
                         self._idle_memory_joint_repair()
                         # ANN optimize OUTSIDE lock — never mid-hop (KD4).
@@ -1234,11 +1260,15 @@ class PresenceWorker:
                     self._finalize_moment(
                         wake, moment_id, result, skills_used=skills_used
                     )
+                    # Gap drain after finalize (busy path) when worker is dead.
+                    self._gap_drain_if_needed()
                 except Exception as exc:  # noqa: BLE001 — keep worker alive
                     _LOG.exception("presence worker iteration failed: %s", exc)
                     self._fail_in_flight(wake, moment_id, exc)
                     self._stop.wait(timeout=self._poll)
         finally:
+            # Encode teardown before browser close (join worker → close embedder).
+            self._shutdown_encode()
             # Close Playwright on the owner thread (sync API is not cross-thread).
             # Supervisor close_all is a safety net only after join.
             try:
@@ -1306,6 +1336,12 @@ class PresenceWorker:
             self._memory = open_memory_store(self.paths, mem_cfg)
             self._install_encode_hooks(self._memory, mem_cfg)
             self._ensure_embedding_index()
+            # Optional preload as loader (outside encode gate).
+            if (
+                bool(getattr(mem_cfg, "embed_preload", False))
+                and bool(getattr(mem_cfg, "embed_enabled", False))
+            ):
+                self._ensure_embedder(role="loader")
             return self._memory
         except Exception:  # noqa: BLE001 — store down must not kill presence
             self._memory_open_failed = True
@@ -1316,11 +1352,12 @@ class PresenceWorker:
     def _install_encode_hooks(self, store: Any, mem_cfg: Any) -> None:
         """Install store write hook + EncodeQueue (KD16). Best-effort."""
         try:
-            from elyra.memory.embed.queue import EncodeQueue
+            from elyra.memory.embed.queue import EncodePriority, EncodeQueue
 
             maxsize = int(getattr(mem_cfg, "encode_queue_max", 1024) or 1024)
             queue = EncodeQueue(maxsize=maxsize)
             self._encode_queue = queue
+            wake = self._encode_wake
 
             def _on_written(atom: Any) -> None:
                 # Hook must never raise to put_atom (store already guards).
@@ -1331,7 +1368,7 @@ class PresenceWorker:
                     # Only enqueue when drain can run; otherwise backlog
                     # overflows mark atoms skipped (semantic+embed-off must
                     # leave pending until embed is enabled — KD intent).
-                    # Idle pending scan fills the queue once embed turns on.
+                    # Pending scan fills the queue once embed turns on.
                     if not cfg.embed_enabled:
                         return
                     if getattr(atom, "embedding_status", None) != "pending":
@@ -1350,7 +1387,13 @@ class PresenceWorker:
                                 return
                         except Exception:  # noqa: BLE001
                             pass
-                    queue.enqueue(atom.atom_id, store=store)
+                    enqueued = queue.enqueue(
+                        atom.atom_id,
+                        store=store,
+                        priority=EncodePriority.ATOM_CREATE,
+                    )
+                    if enqueued:
+                        wake.set()
                 except Exception:  # noqa: BLE001
                     _LOG.exception(
                         "encode write hook failed atom_id=%s",
@@ -1363,25 +1406,79 @@ class PresenceWorker:
         except Exception:  # noqa: BLE001
             _LOG.exception("install encode hooks failed")
 
-    def _ensure_embedder(self) -> Any | None:
-        """Open embedder once when embed_enabled; never raise."""
+    def _get_embedder_gate(self) -> Any:
+        """Lazy EmbedderGate singleton for this presence worker."""
+        if self._embedder_gate is None:
+            from elyra.memory.embed.gate import EmbedderGate
+
+            self._embedder_gate = EmbedderGate()
+        return self._embedder_gate
+
+    def _ensure_embedder(self, *, role: str = "consumer") -> Any | None:
+        """Process-shared embedder access (KD-E13 / KD-E18).
+
+        consumer (default): non-blocking — return warm handle or None.
+          While loading / absent / failed → None (callers omit encoder).
+          Never waits on cold load; never calls open_encoder.
+        loader: may perform open_encoder **outside** the open lock; only
+          encode-worker tick / embed_preload use role=\"loader\".
+        """
         mem_cfg = self.settings.memory
         if not mem_cfg.embed_enabled:
             return None
-        if self._embedder is not None:
-            return self._embedder
-        if self._embedder_open_failed:
-            return None
+
+        with self._embedder_open_lock:
+            if self._embedder is not None and self._embedder_state == "warm":
+                return self._embedder
+            if self._embedder_open_failed or self._embedder_state == "failed":
+                return None
+            if role != "loader":
+                # consumer: never wait, never open
+                return None
+            if self._embedder_state == "loading":
+                # Another loader in flight — do not double-open.
+                return None
+            self._embedder_state = "loading"
+
+        # Cold load outside open lock and outside encode gate (~18s possible).
         try:
             from elyra.memory.embed.runtime import open_encoder
 
-            self._embedder = open_encoder(mem_cfg)
-            return self._embedder
+            emb = open_encoder(mem_cfg)
+            with self._embedder_open_lock:
+                self._embedder = emb
+                self._embedder_state = "warm"
+                self._embedder_open_failed = False
+                _LOG.info(
+                    "memory.embed.embedder_warm role=loader backend=%s",
+                    getattr(mem_cfg, "embed_backend", "?"),
+                )
+                return self._embedder
         except Exception:  # noqa: BLE001
-            self._embedder_open_failed = True
-            self._embedder = None
-            _LOG.exception("embedder open failed; encode drain disabled this run")
+            with self._embedder_open_lock:
+                self._embedder = None
+                self._embedder_state = "failed"
+                self._embedder_open_failed = True
+            _LOG.exception(
+                "embedder open failed; encode drain soft-disabled this run"
+            )
             return None
+
+    def _close_embedder(self) -> None:
+        """Close embedder once under open lock. Best-effort; never raises."""
+        emb = None
+        with self._embedder_open_lock:
+            emb = self._embedder
+            self._embedder = None
+            self._embedder_state = "absent"
+            # Keep open_failed sticky for this process life if it was set.
+        if emb is not None:
+            close = getattr(emb, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("embedder close failed")
 
     def _ensure_embedding_index(self) -> Any | None:
         """Open EmbeddingIndex once for the memory store (KD4 freshness).
@@ -1684,30 +1781,226 @@ class PresenceWorker:
             _LOG.exception("rebuild_episodic_summaries failed")
             return {"ok": False, "error": str(exc) or type(exc).__name__}
 
-    def _idle_memory_encode(self) -> None:
-        """Idle-only corpus encode: pending scan + queue drain (KD2 / KD16).
+    def _desired_encode_owner(self) -> str:
+        """Compute desired encode_owner from flags (none | idle | worker)."""
+        mem_cfg = self.settings.memory
+        if not mem_cfg.semantic_enabled or not mem_cfg.embed_enabled:
+            return "none"
+        if bool(getattr(mem_cfg, "encode_worker_enabled", True)):
+            return "worker"
+        return "idle"
 
-        Outside the state lock; never runs in-moment / hop path. Drain only
-        when ``embed_enabled``; hooks still enqueue when ``semantic_enabled``.
-        PR2 never marks ``ready`` without an index (leave pending).
+    def _start_encode_worker_if_needed(self) -> None:
+        """Start continuous EncodeWorker when flags allow. Soft-fail."""
+        try:
+            desired = self._desired_encode_owner()
+            self._encode_owner = desired
+            if desired != "worker":
+                return
+            w = self._encode_worker
+            if w is not None and getattr(w, "is_alive", lambda: False)():
+                return
+            from elyra.memory.embed.worker import EncodeWorker
+
+            mem_cfg = self.settings.memory
+            poll_s = float(getattr(mem_cfg, "encode_worker_poll_s", 0.35) or 0.35)
+            self._encode_worker = EncodeWorker(
+                poll_once=self._encode_poll_once,
+                poll_s=poll_s,
+                wake_event=self._encode_wake,
+            )
+            # Owner set BEFORE first drain tick (KD-E7).
+            self._encode_owner = "worker"
+            self._encode_worker.start()
+            _LOG.info(
+                "memory.embed.encode_owner=worker poll_s=%.3f",
+                poll_s,
+            )
+        except Exception:  # noqa: BLE001 — never kill presence
+            _LOG.exception("start encode worker failed")
+
+    def _stop_encode_worker(self, *, join_timeout_s: float = 2.0) -> None:
+        """Stop and join encode worker if running. Soft-fail."""
+        w = self._encode_worker
+        self._encode_worker = None
+        if w is None:
+            return
+        try:
+            stop = getattr(w, "stop", None)
+            if callable(stop):
+                stop(join_timeout_s=join_timeout_s)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("stop encode worker failed")
+
+    def _shutdown_encode(self) -> None:
+        """Teardown encode path in run() finally: stop worker → close embedder.
+
+        Order (KD-E13): signal + join encode worker, close embedder, owner=none.
+        """
+        try:
+            self._stop_encode_worker(join_timeout_s=2.0)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("shutdown encode worker failed")
+        try:
+            self._close_embedder()
+        except Exception:  # noqa: BLE001
+            _LOG.exception("shutdown embedder close failed")
+        self._encode_owner = "none"
+
+    def _maybe_restart_encode_worker(self) -> None:
+        """Restart dead encode worker with backoff (every presence loop).
+
+        Never permanently switches to idle while encode_worker_enabled remains
+        true (KD-E16). Soft-fail; never raises.
+        """
+        try:
+            desired = self._desired_encode_owner()
+            if desired != "worker":
+                # Flag flip: continuous off → stop worker, idle drain may run.
+                if self._encode_owner == "worker" and desired == "idle":
+                    self._stop_encode_worker()
+                    self._encode_owner = "idle"
+                elif desired == "none":
+                    if self._encode_owner == "worker":
+                        self._stop_encode_worker()
+                    self._encode_owner = "none"
+                else:
+                    self._encode_owner = desired
+                return
+
+            self._encode_owner = "worker"
+            w = self._encode_worker
+            if w is not None and getattr(w, "is_alive", lambda: False)():
+                self._encode_worker_restart_throttled = False
+                return
+
+            now = time.monotonic()
+            if now < float(self._encode_worker_next_restart_at or 0.0):
+                return
+
+            mem_cfg = self.settings.memory
+            window_s = float(
+                getattr(mem_cfg, "encode_worker_restart_window_s", 60.0) or 60.0
+            )
+            max_restarts = int(
+                getattr(mem_cfg, "encode_worker_max_restarts", 3) or 3
+            )
+            backoff_cap = float(
+                getattr(mem_cfg, "encode_worker_restart_backoff_max_s", 30.0)
+                or 30.0
+            )
+
+            # Prune restart times outside the thrash window.
+            cutoff = now - max(1.0, window_s)
+            self._encode_worker_restart_times = [
+                t for t in self._encode_worker_restart_times if t >= cutoff
+            ]
+            in_window = len(self._encode_worker_restart_times)
+            if in_window >= max(1, max_restarts):
+                self._encode_worker_restart_throttled = True
+                # Keep restarting with slower backoff — never permanent idle.
+                backoff = min(
+                    backoff_cap,
+                    max(self._encode_worker_backoff_s, 1.0) * 2.0,
+                )
+                self._encode_worker_backoff_s = backoff
+                self._encode_worker_next_restart_at = now + backoff
+                _LOG.error(
+                    "memory.embed.encode_worker_restart_throttled "
+                    "restarts_in_window=%d backoff_s=%.1f",
+                    in_window,
+                    backoff,
+                )
+                # Still attempt restart after recording throttle (below).
+
+            # Stop stale handle, start fresh.
+            self._stop_encode_worker()
+            self._start_encode_worker_if_needed()
+            self._encode_worker_restarts += 1
+            self._encode_worker_restart_times.append(now)
+            # Exponential backoff for next death (reset path on healthy ticks).
+            if not self._encode_worker_restart_throttled:
+                self._encode_worker_backoff_s = min(
+                    backoff_cap,
+                    max(0.5, self._encode_worker_backoff_s) * 2.0
+                    if self._encode_worker_restarts > 1
+                    else 0.5,
+                )
+            self._encode_worker_next_restart_at = (
+                now + float(self._encode_worker_backoff_s)
+            )
+            alive = (
+                self._encode_worker is not None
+                and getattr(self._encode_worker, "is_alive", lambda: False)()
+            )
+            if alive:
+                _LOG.info(
+                    "memory.embed.encode_worker_restart n=%d backoff_s=%.1f",
+                    self._encode_worker_restarts,
+                    self._encode_worker_backoff_s,
+                )
+                # Successful start: mild backoff reset toward base.
+                self._encode_worker_backoff_s = max(
+                    0.5, float(self._encode_worker_backoff_s) * 0.5
+                )
+                self._encode_worker_next_restart_at = 0.0
+        except Exception:  # noqa: BLE001
+            _LOG.exception("maybe restart encode worker failed")
+
+    def _gap_drain_if_needed(self) -> None:
+        """One budgeted drain while owner=worker but thread not alive.
+
+        Bridge during restart backoff (finalize_moment + idle path only).
+        Soft-fail; never raises.
+        """
+        try:
+            if self._encode_owner != "worker":
+                return
+            w = self._encode_worker
+            if w is not None and getattr(w, "is_alive", lambda: False)():
+                return
+            if self._gap_drain_active:
+                return
+            self._gap_drain_active = True
+            try:
+                stats = self._encode_poll_once()
+                if stats and int(stats.get("ok") or 0) > 0:
+                    _LOG.info(
+                        "memory.embed.gap_drain ok=%s remaining=%s "
+                        "reason=worker_gap",
+                        stats.get("ok"),
+                        stats.get("remaining"),
+                    )
+            finally:
+                self._gap_drain_active = False
+        except Exception:  # noqa: BLE001
+            self._gap_drain_active = False
+            _LOG.exception("gap drain failed")
+
+    def _encode_poll_once(self) -> dict[str, Any] | None:
+        """Shared catch-up + scan + budgeted drain (worker / idle / gap).
+
+        Never raises. Loader role may cold-open embedder on this call path.
         """
         mem_cfg = self.settings.memory
-        if not mem_cfg.semantic_enabled:
-            return
-        if not mem_cfg.embed_enabled:
-            return
+        if not mem_cfg.semantic_enabled or not mem_cfg.embed_enabled:
+            return None
+        # Worker tick only drains when owner=worker; idle path uses owner=idle.
+        # Gap drain also runs with owner=worker.
+        owner = self._encode_owner
+        if owner not in ("worker", "idle"):
+            return None
         store = self._memory
         if store is None:
             store = self._ensure_memory_store()
         if store is None:
-            return
+            return None
         queue = self._encode_queue
         if queue is None:
-            # Store opened before hooks existed or install failed — re-install.
             self._install_encode_hooks(store, mem_cfg)
             queue = self._encode_queue
         if queue is None:
-            return
+            return None
         try:
             from elyra.memory.embed.queue import (
                 catchup_none_atoms_for_encode,
@@ -1715,9 +2008,8 @@ class PresenceWorker:
             )
 
             max_items = max(1, int(mem_cfg.encode_max_items_per_tick or 4))
-            # OQ4: historical atoms written before semantic_on stay ``none``;
-            # flip a budgeted batch to pending so drain can fill vectors.
-            # Process-lifetime budget: stop once catchup_max marked this run.
+            # OQ4: historical none → pending under process-life budget.
+            # Continuous mode owns the single catch-up counter (KD-E7).
             catchup_budget = int(getattr(mem_cfg, "embed_catchup_max", 500) or 0)
             already = int(getattr(self, "_embed_catchup_marked", 0) or 0)
             if catchup_budget > 0 and already < catchup_budget:
@@ -1739,9 +2031,18 @@ class PresenceWorker:
                 queue,
                 limit=max_items * 4,
             )
-            embedder = self._ensure_embedder()
+            # Loader role: may cold-load on worker/gap/idle drain thread only.
+            embedder = self._ensure_embedder(role="loader")
             if embedder is None:
-                return
+                # Still loading / failed — soft skip this tick.
+                return {
+                    "ok": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "remaining": queue.qsize(),
+                    "processed": 0,
+                    "reason": "embedder_unavailable",
+                }
             media_store = None
             try:
                 from elyra.media.store import MediaStore
@@ -1750,7 +2051,8 @@ class PresenceWorker:
             except Exception:  # noqa: BLE001 — media optional for encode
                 _LOG.debug("MediaStore open for encode failed", exc_info=True)
             index = self._ensure_embedding_index()
-            queue.drain(
+            gate = self._get_embedder_gate()
+            stats = queue.drain(
                 store,
                 embedder,
                 index=index,
@@ -1758,8 +2060,47 @@ class PresenceWorker:
                 max_items=max_items,
                 max_attempts=int(mem_cfg.encode_max_attempts or 3),
                 media_store=media_store,
-                settings=mem_cfg,  # threads embed_media_max_bytes/seconds
+                settings=mem_cfg,
+                gate=gate,
             )
+            self._encode_last_drain_at = time.monotonic()
+            self._encode_last_drain_stats = dict(stats) if stats else None
+            self._encode_drain_ok_total += int((stats or {}).get("ok") or 0)
+            self._encode_drain_failed_total += int(
+                (stats or {}).get("failed") or 0
+            )
+            return stats if isinstance(stats, dict) else None
+        except Exception:  # noqa: BLE001 — never kill presence / worker
+            _LOG.exception("memory encode poll_once failed")
+            return None
+
+    def _idle_memory_encode(self) -> None:
+        """Legacy idle-only corpus drain when encode_owner=idle (rollback).
+
+        When encode_owner=worker (continuous mode, including restart gaps),
+        this is a no-op — the EncodeWorker (or gap drain) owns bulk drain.
+        Outside the state lock; never runs mid-hop. Soft-fail.
+        """
+        try:
+            # Keep owner in sync with flags (tests may not call start).
+            desired = self._desired_encode_owner()
+            if self._encode_owner == "none" and desired == "idle":
+                self._encode_owner = "idle"
+            if self._encode_owner == "worker":
+                return
+            if desired != "idle":
+                # Continuous intended but worker not started yet (unit tests
+                # that never call _start_encode_worker_if_needed): still no
+                # idle drain when flag is on — use _encode_poll_once / worker.
+                if desired == "worker":
+                    # For unit tests that only call _idle_memory_encode with
+                    # encode_worker_enabled default true: fall through only
+                    # when owner was never set to worker. Prefer explicit
+                    # owner=idle via encode_worker_enabled=false for idle path.
+                    return
+                return
+            self._encode_owner = "idle"
+            self._encode_poll_once()
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("memory idle encode drain failed")
 

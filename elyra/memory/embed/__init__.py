@@ -7,6 +7,7 @@ Core ``elyra.memory`` must not import torch; heavy deps live behind
 """
 
 from elyra.memory.embed.encode import content_fingerprint, encode_atom, is_embeddable
+from elyra.memory.embed.gate import EmbedderGate
 from elyra.memory.embed.mock import MOCK_MODEL_ID, MockEmbedder, mock_vector
 from elyra.memory.embed.queue import (
     EncodePriority,
@@ -14,6 +15,7 @@ from elyra.memory.embed.queue import (
     catchup_none_atoms_for_encode,
     scan_pending_into_queue,
 )
+from elyra.memory.embed.worker import EncodeWorker
 from elyra.memory.embed.runtime import (
     DEFAULT_NEMOTRON_MODEL_ID,
     Embedder,
@@ -48,9 +50,11 @@ __all__ = [
     "DeviceKind",
     "Embedder",
     "EmbeddingSet",
+    "EmbedderGate",
     "EncodePriority",
     "EncodeQueue",
     "EncodeResult",
+    "EncodeWorker",
     "MockEmbedder",
     "ModalityParts",
     "NemotronEmbedder",

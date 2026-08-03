@@ -112,6 +112,11 @@ def test_default_settings_match_design():
     assert s.memory.encode_max_ms_per_tick == 100
     assert s.memory.encode_max_items_per_tick == 4
     assert s.memory.encode_max_attempts == 3
+    assert s.memory.encode_worker_enabled is True
+    assert s.memory.encode_worker_poll_s == 0.35
+    assert s.memory.encode_worker_max_restarts == 3
+    assert s.memory.encode_worker_restart_window_s == 60.0
+    assert s.memory.encode_worker_restart_backoff_max_s == 30.0
     assert s.memory.ann_recent_buffer_max == 256
     assert s.memory.ann_full_search_below == 2000
     assert s.memory.ann_optimize_every_n_encodes == 64

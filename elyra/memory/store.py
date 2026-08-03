@@ -27,7 +27,11 @@ AtomWriteHook = Callable[[Atom], None]
 
 @runtime_checkable
 class MemoryStore(Protocol):
-    """Swappable atom persistence. Single-writer assumed (presence worker)."""
+    """Swappable atom persistence.
+
+    Single logical PE process; concurrent in-process readers/writers only under
+    store/index locks (presence + encode worker). No second OS process writer.
+    """
 
     def put_atom(self, atom: Atom, *, notify: bool = True) -> Atom:
         """Insert or replace by atom_id. Returns stored atom.
