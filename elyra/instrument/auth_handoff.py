@@ -117,6 +117,7 @@ def write_access_only_auth_json(
         raise ValueError("expires_at must be non-empty")
     created = (create_time or "").strip() or _utc_now_iso_z()
 
+    # Never include refresh_token (KD-F2 / KD-F4); omit the key entirely.
     entry = {
         "key": token,
         "auth_mode": "external",
@@ -133,20 +134,46 @@ def write_access_only_auth_json(
         "oidc_issuer": OIDC_ISSUER,
         "oidc_client_id": XAI_OAUTH_CLIENT_ID,
     }
-    # Explicitly never include refresh_token (KD-F2 / KD-F4).
-    assert "refresh_token" not in entry
 
     payload = {AUTH_JSON_SCOPE_KEY: entry}
     auth_path = home / "auth.json"
-    # Write then chmod 0600 (do not leave world-readable).
-    auth_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    body = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    # Create with mode 0600 from the start (do not rely on write_text + umask).
+    # Then chmod to clear residual umask quirks; fail-closed if still not 0600.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(auth_path), flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = -1  # ownership transferred to fh
+            fh.write(body)
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     try:
         os.chmod(auth_path, 0o600)
-    except OSError:
-        pass
+    except OSError as exc:
+        try:
+            auth_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise OSError(
+            f"failed to set auth.json mode 0600: {auth_path}"
+        ) from exc
+    if os.name == "posix":
+        mode = auth_path.stat().st_mode & 0o777
+        if mode != 0o600:
+            try:
+                auth_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise OSError(
+                f"auth.json mode {oct(mode)} is not 0o600 after write: {auth_path}"
+            )
     return auth_path
 
 

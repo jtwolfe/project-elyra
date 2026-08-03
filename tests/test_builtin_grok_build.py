@@ -231,6 +231,69 @@ def test_missing_oauth_fail_closed(
     assert result.error_reason == "auth_unavailable"
 
 
+def test_ensure_fresh_access_exception_fail_closed(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mint exception maps to auth_unavailable before create_job (no job left)."""
+    seen = _stub_ready(monkeypatch)
+
+    def _boom(_data_dir: Any, **_k: Any) -> FreshAccessResult:
+        seen["mint_calls"] += 1
+        raise RuntimeError("oauth store unreadable")
+
+    monkeypatch.setattr(gb_mod, "ensure_fresh_access", _boom)
+    result = grok_build(
+        {"mode": "prompt", "prompt": "hi", "cwd": str(repo)},
+        ctx,
+    )
+    assert not result.ok
+    assert result.error_reason == "auth_unavailable"
+    assert seen["mint_calls"] == 1
+    assert seen["seed_kwargs"] is None
+    # Mint is before create_job — no durable job/meta left behind.
+    runtime = Path(ctx.paths.data_dir) / "runtime" / "grok_build"
+    if runtime.is_dir():
+        assert list(runtime.iterdir()) == []
+
+
+def test_expires_at_fallback_when_store_omits_expiry(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§1.2: ok access without expires_at → expires_at_from_expires_in(3600)."""
+    import re
+
+    token = "tok-no-expiry-in-store"
+    seen = _stub_ready(monkeypatch, access=token, expires_at=None)
+
+    def fake_run(argv, **kw: Any) -> ProcessResult:
+        return ProcessResult(
+            exit_code=0,
+            stdout='{"text":"ok","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}',
+            stderr="",
+            timed_out=False,
+            pid=12,
+            pgid=12,
+        )
+
+    monkeypatch.setattr(gb_mod, "run_grok", fake_run)
+    result = grok_build(
+        {"mode": "prompt", "prompt": "hi", "cwd": str(repo), "async": False},
+        ctx,
+    )
+    assert result.ok, result
+    assert seen["mint_calls"] == 1
+    sk = seen["seed_kwargs"]
+    assert sk is not None
+    assert sk.get("access_token") == token
+    exp = sk.get("expires_at")
+    assert isinstance(exp, str) and exp
+    assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", exp)
+
+
 def test_single_mint_passes_token_and_expiry_to_seed(
     ctx: ToolContext,
     repo: Path,

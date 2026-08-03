@@ -188,6 +188,28 @@ def test_write_access_only_rejects_empty_expires(tmp_path: Path) -> None:
         )
 
 
+def test_write_access_only_created_with_0600_not_umask_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """auth.json must be 0600 even under a permissive umask (Issue 1 hardening)."""
+    home = tmp_path / "gh"
+    home.mkdir()
+    old_umask = os.umask(0o000)  # would yield 0o666 for write_text
+    try:
+        path = write_access_only_auth_json(
+            home,
+            access_token="umask-test-token",
+            expires_at="2026-08-03T06:42:10Z",
+            create_time="2026-08-03T01:42:10Z",
+        )
+    finally:
+        os.umask(old_umask)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    assert mode == 0o600
+    raw = path.read_text(encoding="utf-8")
+    assert '"refresh_token"' not in raw
+
+
 def test_seed_with_token_writes_auth_json(tmp_path: Path) -> None:
     real_bundled = _fake_bundled(tmp_path / "install")
     run_dir = tmp_path / "run"
