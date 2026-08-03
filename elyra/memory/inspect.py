@@ -462,13 +462,152 @@ def query_vector_for_atom(
     return None, "no_vector"
 
 
+def _empty_depth_by_priority() -> dict[str, int]:
+    """Zero queue depths for bulk lanes (glass / Vectors defaults)."""
+    return {"atom_create": 0, "catchup": 0}
+
+
+def _slim_last_drain_stats(raw: Any) -> dict[str, Any] | None:
+    """Keep only non-secret drain counters for health (ok/failed/processed/ms)."""
+    if not isinstance(raw, Mapping):
+        return None
+    out: dict[str, Any] = {
+        "ok": int(raw.get("ok") or 0),
+        "failed": int(raw.get("failed") or 0),
+        "processed": int(raw.get("processed") or 0),
+    }
+    if raw.get("ms") is not None:
+        try:
+            out["ms"] = int(raw.get("ms") or 0)
+        except (TypeError, ValueError):
+            out["ms"] = 0
+    if raw.get("skipped") is not None:
+        try:
+            out["skipped"] = int(raw.get("skipped") or 0)
+        except (TypeError, ValueError):
+            pass
+    if raw.get("remaining") is not None:
+        try:
+            out["remaining"] = int(raw.get("remaining") or 0)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def encode_worker_health_block(
+    presence: Any | None = None,
+    *,
+    settings: Any | None = None,
+) -> dict[str, Any]:
+    """JSON-ready continuous-encode worker + gate metrics (no secrets).
+
+    Reads process-local counters from a PresenceWorker-like object when provided.
+    Safe defaults when continuous encode is off or presence is unavailable.
+    Never includes atom content, atom_ids, or secrets.
+    """
+    cfg = settings
+    if cfg is None and presence is not None:
+        cfg = getattr(getattr(presence, "settings", None), "memory", None)
+    enabled = bool(getattr(cfg, "encode_worker_enabled", True)) if cfg else True
+    empty: dict[str, Any] = {
+        "enabled": enabled,
+        "owner": "none",
+        "alive": False,
+        "restarts": 0,
+        "restart_throttled": False,
+        "gap_drain_active": False,
+        "last_drain_at": None,
+        "last_drain_stats": None,
+        "drain_ok_total": 0,
+        "drain_failed_total": 0,
+        "gate_lookup_waits": 0,
+        "gate_lookup_wait_ms_last": 0,
+        "gate_bulk_yields": 0,
+        "embedder_state": "absent",
+    }
+    if presence is None:
+        return empty
+
+    try:
+        owner = str(getattr(presence, "_encode_owner", None) or "none")
+        if owner not in ("none", "idle", "worker"):
+            owner = "none"
+        worker = getattr(presence, "_encode_worker", None)
+        alive = False
+        if worker is not None:
+            try:
+                is_alive = getattr(worker, "is_alive", None)
+                alive = bool(is_alive()) if callable(is_alive) else False
+            except Exception:  # noqa: BLE001
+                alive = False
+
+        last_at = getattr(presence, "_encode_last_drain_at", None)
+        # Health expects wall-clock ISO; ignore monotonic floats from older runs.
+        if isinstance(last_at, str) and last_at.strip():
+            last_drain_at: str | None = last_at.strip()
+        else:
+            last_drain_at = None
+
+        gate = getattr(presence, "_embedder_gate", None)
+        gate_lookup_waits = 0
+        gate_lookup_wait_ms_last = 0
+        gate_bulk_yields = 0
+        if gate is not None:
+            try:
+                gate_lookup_waits = int(getattr(gate, "gate_lookup_waits", 0) or 0)
+            except (TypeError, ValueError):
+                gate_lookup_waits = 0
+            try:
+                gate_lookup_wait_ms_last = int(
+                    getattr(gate, "gate_lookup_wait_ms_last", 0) or 0
+                )
+            except (TypeError, ValueError):
+                gate_lookup_wait_ms_last = 0
+            try:
+                gate_bulk_yields = int(getattr(gate, "gate_bulk_yields", 0) or 0)
+            except (TypeError, ValueError):
+                gate_bulk_yields = 0
+
+        emb_state = str(getattr(presence, "_embedder_state", None) or "absent")
+        if emb_state not in ("absent", "loading", "warm", "failed"):
+            emb_state = "absent"
+
+        return {
+            "enabled": enabled,
+            "owner": owner,
+            "alive": alive,
+            "restarts": int(getattr(presence, "_encode_worker_restarts", 0) or 0),
+            "restart_throttled": bool(
+                getattr(presence, "_encode_worker_restart_throttled", False)
+            ),
+            "gap_drain_active": bool(getattr(presence, "_gap_drain_active", False)),
+            "last_drain_at": last_drain_at,
+            "last_drain_stats": _slim_last_drain_stats(
+                getattr(presence, "_encode_last_drain_stats", None)
+            ),
+            "drain_ok_total": int(
+                getattr(presence, "_encode_drain_ok_total", 0) or 0
+            ),
+            "drain_failed_total": int(
+                getattr(presence, "_encode_drain_failed_total", 0) or 0
+            ),
+            "gate_lookup_waits": gate_lookup_waits,
+            "gate_lookup_wait_ms_last": gate_lookup_wait_ms_last,
+            "gate_bulk_yields": gate_bulk_yields,
+            "embedder_state": emb_state,
+        }
+    except Exception:  # noqa: BLE001 — never break Vectors overview
+        return empty
+
+
 def encoder_health_block(
     *,
     settings: Any | None,
     embedder: Any | None,
     queue: Any | None,
+    presence: Any | None = None,
 ) -> dict[str, Any]:
-    """JSON-ready encoder + queue health for Vectors overview (no secrets)."""
+    """JSON-ready encoder + queue + encode-worker health for Vectors (no secrets)."""
     cfg = settings
     embed_enabled = bool(getattr(cfg, "embed_enabled", False)) if cfg else False
     semantic_enabled = bool(getattr(cfg, "semantic_enabled", False)) if cfg else False
@@ -487,10 +626,12 @@ def encoder_health_block(
         "dim": None,
         "loaded": embedder is not None,
         "queue_depth": 0,
+        "queue_depth_by_priority": _empty_depth_by_priority(),
         "queue_max": int(getattr(cfg, "encode_queue_max", 1024) or 1024)
         if cfg
         else 1024,
         "queue_dropped": 0,
+        "encode_worker": encode_worker_health_block(presence, settings=cfg),
         "error": None,
     }
     if queue is not None:
@@ -510,6 +651,28 @@ def encoder_health_block(
                 block["queue_max"] = int(mx)
         except Exception:  # noqa: BLE001
             pass
+        try:
+            depth_fn = getattr(queue, "depth_by_priority", None)
+            if callable(depth_fn):
+                raw_depths = depth_fn()
+                if isinstance(raw_depths, Mapping):
+                    depths = _empty_depth_by_priority()
+                    for key in depths:
+                        try:
+                            depths[key] = int(raw_depths.get(key) or 0)
+                        except (TypeError, ValueError):
+                            depths[key] = 0
+                    # Preserve any unexpected lane keys as ints (forward-compat).
+                    for key, val in raw_depths.items():
+                        sk = str(key)
+                        if sk not in depths:
+                            try:
+                                depths[sk] = int(val or 0)
+                            except (TypeError, ValueError):
+                                depths[sk] = 0
+                    block["queue_depth_by_priority"] = depths
+        except Exception:  # noqa: BLE001
+            block["queue_depth_by_priority"] = _empty_depth_by_priority()
 
     if embedder is None:
         if not embed_enabled:
@@ -858,6 +1021,7 @@ __all__ = [
     "atom_to_vector_row",
     "directed_traversal_flags",
     "edge_kind_legend",
+    "encode_worker_health_block",
     "encoder_health_block",
     "enrich_session_for_glass",
     "graph_edge_to_inspect",

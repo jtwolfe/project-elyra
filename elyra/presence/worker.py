@@ -2185,6 +2185,7 @@ class PresenceWorker:
                 _LOG.debug("MediaStore open for encode failed", exc_info=True)
             index = self._ensure_embedding_index()
             gate = self._get_embedder_gate()
+            drain_t0 = time.monotonic()
             stats = queue.drain(
                 store,
                 embedder,
@@ -2196,8 +2197,17 @@ class PresenceWorker:
                 settings=mem_cfg,
                 gate=gate,
             )
-            self._encode_last_drain_at = time.monotonic()
-            self._encode_last_drain_stats = dict(stats) if stats else None
+            drain_ms = int((time.monotonic() - drain_t0) * 1000.0)
+            # Wall-clock ISO for Vectors/inspect health (not monotonic).
+            from elyra.memory.types import utc_now_iso
+
+            self._encode_last_drain_at = utc_now_iso()
+            if isinstance(stats, dict):
+                stats = dict(stats)
+                stats.setdefault("ms", drain_ms)
+                self._encode_last_drain_stats = stats
+            else:
+                self._encode_last_drain_stats = None
             self._encode_drain_ok_total += int((stats or {}).get("ok") or 0)
             self._encode_drain_failed_total += int(
                 (stats or {}).get("failed") or 0
