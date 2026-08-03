@@ -62,16 +62,24 @@ def build_child_env(
     grok_home: Path | str,
     base: Mapping[str, str] | None = None,
     extra: Mapping[str, str] | None = None,
+    auth_provider_command: str | None = None,
+    data_dir: Path | str | None = None,
 ) -> dict[str, str]:
     """Build env for grok child: GROK_HOME + non-interactive defaults.
 
-    Does **not** inject XAI_API_KEY or OAuth tokens — auth is via live
-    auth_provider under the seeded home.
+    Sets ``GROK_AUTH_PROVIDER_COMMAND`` when provided (belt-and-suspenders with
+    config.toml; KD-F5). Optionally ``ELYRA_DATA_DIR``. Does **not** inject
+    ``XAI_API_KEY`` or OAuth tokens — cold-start is access-only auth.json;
+    mid-run mint is live auth_provider under the seeded home.
     """
     env: dict[str, str] = dict(base if base is not None else os.environ)
     env["GROK_HOME"] = str(Path(grok_home).resolve())
     for k, v in _DEFAULT_CHILD_ENV.items():
         env.setdefault(k, v)
+    if auth_provider_command:
+        env["GROK_AUTH_PROVIDER_COMMAND"] = str(auth_provider_command)
+    if data_dir is not None:
+        env.setdefault("ELYRA_DATA_DIR", str(Path(data_dir).resolve()))
     if extra:
         env.update({str(k): str(v) for k, v in extra.items()})
     return env
@@ -113,6 +121,8 @@ def run_grok(
     timeout_s: float,
     env: Mapping[str, str] | None = None,
     extra_env: Mapping[str, str] | None = None,
+    auth_provider_command: str | None = None,
+    data_dir: Path | str | None = None,
     capture_max_chars: int = DEFAULT_CAPTURE_MAX_CHARS,
     stdin_data: str | None = None,
 ) -> ProcessResult:
@@ -130,6 +140,8 @@ def run_grok(
         grok_home=grok_home,
         base=env,
         extra=extra_env,
+        auth_provider_command=auth_provider_command,
+        data_dir=data_dir,
     )
     workdir = str(cwd) if cwd is not None else None
     t0 = time.monotonic()
@@ -214,6 +226,8 @@ def spawn_grok(
     stderr_path: Path | str,
     env: Mapping[str, str] | None = None,
     extra_env: Mapping[str, str] | None = None,
+    auth_provider_command: str | None = None,
+    data_dir: Path | str | None = None,
 ) -> SpawnedProcess:
     """Spawn ``argv`` non-blocking; redirect stdout/stderr to files.
 
@@ -227,6 +241,8 @@ def spawn_grok(
         grok_home=grok_home,
         base=env,
         extra=extra_env,
+        auth_provider_command=auth_provider_command,
+        data_dir=data_dir,
     )
     workdir = str(cwd) if cwd is not None else None
     out_p = Path(stdout_path)

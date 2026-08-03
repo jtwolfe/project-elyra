@@ -1,16 +1,20 @@
-"""Seed isolated GROK_HOME for a grok_build run (KD5).
+"""Seed isolated GROK_HOME for a grok_build run (KD5 / KD-F2–F5, F12, F18).
 
 Scope: create ``run_dir/grok_home`` (0700); symlink real install ``bundled/``;
 write ``config.toml`` with live ``auth_provider_command`` using absolute
-``sys.executable``. Never write PE refresh_token into operator ``~/.grok/auth.json``.
-Out of scope: subprocess spawn, ensure_fresh_access, job reaper.
+``sys.executable``; write access-only ExternalBinary-shaped ``auth.json``
+(0600, no refresh_token). Never write PE refresh_token into operator
+``~/.grok/auth.json``. Out of scope: subprocess spawn, ensure_fresh_access
+(handler owns mint), job reaper.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from elyra.instrument.discover import (
@@ -18,9 +22,20 @@ from elyra.instrument.discover import (
     assert_skills_resolvable,
     find_real_bundled,
 )
+from elyra.llm.xai_oauth import XAI_OAUTH_CLIENT_ID
 
 # Module entry Grok invokes via auth_provider_command (shell -c string).
 AUTH_PROVIDER_MODULE = "elyra.instrument.auth_provider"
+
+# Grok AuthManager scope key for PE public OIDC client (lab-verified 0.2.118).
+AUTH_JSON_SCOPE_KEY = f"https://auth.x.ai::{XAI_OAUTH_CLIENT_ID}"
+
+# Synthetic PE instrument identity (KD-F12) — never clone operator profile.
+SYNTHETIC_USER_ID = "pe-instrument"
+SYNTHETIC_EMAIL = "instrument@elyra.local"
+SYNTHETIC_FIRST_NAME = "Elyra"
+SYNTHETIC_LAST_NAME = "Instrument"
+OIDC_ISSUER = "https://auth.x.ai"
 
 
 @dataclass(frozen=True)
@@ -33,6 +48,7 @@ class SeededHome:
     real_bundled: Path
     auth_provider_command: str
     data_dir: Path
+    auth_json_path: Path | None = None
 
 
 def build_auth_provider_command(
@@ -75,6 +91,65 @@ def write_config_toml(
     return config_path
 
 
+def _utc_now_iso_z() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_access_only_auth_json(
+    grok_home: Path | str,
+    *,
+    access_token: str,
+    expires_at: str,
+    create_time: str | None = None,
+) -> Path:
+    """Write ``grok_home/auth.json`` mode 0600 (ExternalBinary / external shape).
+
+    Never writes ``refresh_token``. Synthetic PE identity only (KD-F12).
+    ``expires_at`` / ``create_time`` use ``YYYY-MM-DDTHH:MM:SSZ`` (KD-F18).
+    """
+    home = Path(grok_home)
+    home.mkdir(parents=True, exist_ok=True)
+    token = (access_token or "").strip()
+    if not token:
+        raise ValueError("access_token must be non-empty")
+    exp = (expires_at or "").strip()
+    if not exp:
+        raise ValueError("expires_at must be non-empty")
+    created = (create_time or "").strip() or _utc_now_iso_z()
+
+    entry = {
+        "key": token,
+        "auth_mode": "external",
+        "create_time": created,
+        "expires_at": exp,
+        "user_id": SYNTHETIC_USER_ID,
+        "email": SYNTHETIC_EMAIL,
+        "first_name": SYNTHETIC_FIRST_NAME,
+        "last_name": SYNTHETIC_LAST_NAME,
+        "principal_type": "user",
+        "principal_id": SYNTHETIC_USER_ID,
+        "team_id": "",
+        "coding_data_retention_opt_out": True,
+        "oidc_issuer": OIDC_ISSUER,
+        "oidc_client_id": XAI_OAUTH_CLIENT_ID,
+    }
+    # Explicitly never include refresh_token (KD-F2 / KD-F4).
+    assert "refresh_token" not in entry
+
+    payload = {AUTH_JSON_SCOPE_KEY: entry}
+    auth_path = home / "auth.json"
+    # Write then chmod 0600 (do not leave world-readable).
+    auth_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(auth_path, 0o600)
+    except OSError:
+        pass
+    return auth_path
+
+
 def _chmod_0700(path: Path) -> None:
     try:
         os.chmod(path, 0o700)
@@ -104,6 +179,8 @@ def seed_isolated_home(
     run_dir: Path | str,
     *,
     data_dir: Path | str,
+    access_token: str | None = None,
+    expires_at: str | None = None,
     real_bundled: Path | str | None = None,
     grok_bin: Path | str | None = None,
     executable: str | None = None,
@@ -117,6 +194,11 @@ def seed_isolated_home(
         run_dir/grok_home/           # mode 0700
           bundled -> <real_install>/bundled
           config.toml                # auth_provider_command with abs sys.executable
+          auth.json                  # access-only ExternalBinary (when token given)
+
+    When ``access_token`` and ``expires_at`` are provided, writes access-only
+    ``auth.json`` (0600, no refresh_token). Handler owns mint (KD-F13); this
+    function does not call ``ensure_fresh_access``.
 
     Never writes PE OAuth refresh into operator ``~/.grok/auth.json``.
     """
@@ -148,6 +230,22 @@ def seed_isolated_home(
     cmd = build_auth_provider_command(data, executable=executable)
     config_path = write_config_toml(grok_home, auth_provider_command=cmd)
 
+    auth_json_path: Path | None = None
+    token = (access_token or "").strip() if access_token is not None else ""
+    exp = (expires_at or "").strip() if expires_at is not None else ""
+    if token and exp:
+        auth_json_path = write_access_only_auth_json(
+            grok_home,
+            access_token=token,
+            expires_at=exp,
+        )
+    elif token or exp:
+        # Partial credentials are a programmer error; refuse silent skip.
+        raise ValueError(
+            "seed_isolated_home requires both access_token and expires_at "
+            "when seeding auth.json (or neither for config-only)"
+        )
+
     # Law: never write PE refresh into operator ~/.grok/auth.json.
     # This function only touches run_dir/grok_home.
 
@@ -158,13 +256,19 @@ def seed_isolated_home(
         real_bundled=real,
         auth_provider_command=cmd,
         data_dir=data,
+        auth_json_path=auth_json_path,
     )
 
 
 __all__ = [
+    "AUTH_JSON_SCOPE_KEY",
     "AUTH_PROVIDER_MODULE",
+    "OIDC_ISSUER",
+    "SYNTHETIC_EMAIL",
+    "SYNTHETIC_USER_ID",
     "SeededHome",
     "build_auth_provider_command",
     "seed_isolated_home",
+    "write_access_only_auth_json",
     "write_config_toml",
 ]

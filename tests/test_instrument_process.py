@@ -56,6 +56,42 @@ def test_build_child_env_sets_grok_home(tmp_path: Path) -> None:
     assert "XAI_API_KEY" not in env or env.get("XAI_API_KEY") is None
 
 
+def test_build_child_env_sets_auth_provider_command_and_data_dir(
+    tmp_path: Path,
+) -> None:
+    """KD-F5: GROK_AUTH_PROVIDER_COMMAND + optional ELYRA_DATA_DIR; no XAI_API_KEY."""
+    home = tmp_path / "gh"
+    home.mkdir()
+    data = tmp_path / "data"
+    data.mkdir()
+    cmd = (
+        f"{sys.executable} -m elyra.instrument.auth_provider "
+        f"--data-dir {data.resolve()}"
+    )
+    env = build_child_env(
+        grok_home=home,
+        base={"PATH": "/bin"},
+        auth_provider_command=cmd,
+        data_dir=data,
+    )
+    assert env["GROK_HOME"] == str(home.resolve())
+    assert env["GROK_AUTH_PROVIDER_COMMAND"] == cmd
+    assert env["ELYRA_DATA_DIR"] == str(data.resolve())
+    assert env["CI"] == "1"
+    assert env["GROK_NO_BROWSER"] == "1"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    # Never primary-path XAI_API_KEY inject from OAuth.
+    assert "XAI_API_KEY" not in env
+
+
+def test_build_child_env_omits_provider_when_not_passed(tmp_path: Path) -> None:
+    home = tmp_path / "gh"
+    home.mkdir()
+    env = build_child_env(grok_home=home, base={"PATH": "/bin"})
+    assert "GROK_AUTH_PROVIDER_COMMAND" not in env
+    assert "ELYRA_DATA_DIR" not in env
+
+
 def test_run_grok_success_mocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

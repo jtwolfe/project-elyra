@@ -1,12 +1,13 @@
 """Host builtin: grok_build — thin broker for the Grok Build instrument.
 
-Scope: validate → auth preflight → path jail → seed GROK_HOME → sync run or
-async job spawn → ToolResult. Never assigns OAuth into secret_env.
+Scope: validate → single OAuth mint → path jail → seed GROK_HOME (auth.json) →
+sync run or async job spawn → ToolResult. Never assigns OAuth into secret_env.
 In scope: mode-conditional args, execute_plan base-branch preflight, poll job_id.
 Out of scope: reimplementing Grok skill loops; guest secret_env; god modules.
 
-Auth: resolve_access_token_for_tool fail-closed preflight only; live refresh is
-elyra.instrument.auth_provider under seeded GROK_HOME (not static token cat).
+Auth: ensure_fresh_access once (KD-F13); seed access-only ExternalBinary
+auth.json; mid-run mint via elyra.instrument.auth_provider. Never XAI_API_KEY
+from OAuth; never put access in meta.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ from elyra.instrument.result import (
 )
 from elyra.instrument.usage_bridge import meter_allows_call
 from elyra.instrument.validate import is_poll_only, validate_grok_build_args
-from elyra.secrets.inject import resolve_access_token_for_tool
+from elyra.llm.xai_oauth import ensure_fresh_access, expires_at_from_expires_in
 from elyra.settings import Settings, default_settings
 from elyra.tools.types import ToolContext, ToolResult
 from elyra.tools.vcs_jail import (
@@ -397,16 +398,36 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if err_reason is not None:
         return _err(err_reason, mode=mode)
 
-    # Auth preflight — fail-closed. NEVER assign into secret_env.
-    access = resolve_access_token_for_tool("grok_build", ctx.paths.data_dir)
-    if access is None:
+    # Single OAuth mint (KD-F13) — fail-closed before create_job when possible.
+    # NEVER assign into secret_env; NEVER put access in meta; NEVER XAI_API_KEY.
+    try:
+        fresh = ensure_fresh_access(Path(ctx.paths.data_dir))
+    except Exception as exc:  # noqa: BLE001 — treat mint failures as unavailable
+        _LOG.warning("grok_build ensure_fresh_access failed: %s", type(exc).__name__)
         return _err(
             "auth_unavailable",
             mode=mode,
             hint="xai_oauth login required (elyra auth login / Glass)",
         )
+    if not fresh.ok or not fresh.access_token:
+        return _err(
+            "auth_unavailable",
+            mode=mode,
+            hint="xai_oauth login required (elyra auth login / Glass)",
+        )
+    access_token = str(fresh.access_token).strip()
+    if not access_token:
+        return _err(
+            "auth_unavailable",
+            mode=mode,
+            hint="xai_oauth login required (elyra auth login / Glass)",
+        )
+    expires_at = fresh.expires_at
+    if not expires_at:
+        # Rare: store omitted expires_at but access ok — derive default window.
+        expires_at = expires_at_from_expires_in(3600)
     # Law: never put OAuth access into ctx.extras["secret_env"].
-    # (Do not assign; guest never merges secret_env; host uses auth_provider.)
+    # (Do not assign; guest never merges secret_env; host seeds auth.json + provider.)
 
     # Discover grok binary
     try:
@@ -444,12 +465,15 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     run_dir = run_dir_for(ctx.paths, job_id)
     artifacts_dir = run_dir / ARTIFACTS_DIR_NAME
 
-    # Seed isolated GROK_HOME
+    # Seed isolated GROK_HOME: skills + config + access-only auth.json (KD-F2).
+    # Pass the same mint into seed (async must not discard token before seed).
     try:
         seeded = seed_isolated_home(
             run_dir,
             data_dir=ctx.paths.data_dir,
             grok_bin=grok_bin,
+            access_token=access_token,
+            expires_at=expires_at,
         )
     except GrokSkillsUnavailableError as exc:
         shred_tokens(run_dir)
@@ -498,6 +522,11 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     except Exception:  # noqa: BLE001
         pass
 
+    # Child env: GROK_AUTH_PROVIDER_COMMAND + optional ELYRA_DATA_DIR (KD-F5).
+    # Never XAI_API_KEY from OAuth (KD-F4).
+    provider_cmd = seeded.auth_provider_command
+    data_dir = seeded.data_dir
+
     if use_async:
         # Non-blocking spawn; reaper owns wait/finalize.
         try:
@@ -507,6 +536,8 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 cwd=cwd,
                 stdout_path=run_dir / STDOUT_NAME,
                 stderr_path=run_dir / STDERR_NAME,
+                auth_provider_command=provider_cmd,
+                data_dir=data_dir,
             )
         except Exception as exc:  # noqa: BLE001
             shred_tokens(run_dir)
@@ -537,7 +568,7 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             exit_code=None,
             extra={"async": True, "pid": spawned.pid},
         )
-        # Do not put access token in result; shred optional cache only on finalize.
+        # Do not put access token in result/meta; shred on finalize only.
         return ToolResult(ok=True, payload=payload)
 
     # Sync path (prompt default or async=false)
@@ -547,6 +578,8 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             grok_home=seeded.grok_home,
             cwd=cwd,
             timeout_s=timeout_s,
+            auth_provider_command=provider_cmd,
+            data_dir=data_dir,
         )
     except Exception as exc:  # noqa: BLE001
         shred_tokens(run_dir)
@@ -575,7 +608,7 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         job_id=job_id,
         mode=mode,
         proc_result=proc_result,
-        access_token=access,
+        access_token=access_token,
     )
 
 

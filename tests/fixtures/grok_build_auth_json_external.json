@@ -1,0 +1,18 @@
+{
+  "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828": {
+    "key": "fake-access-token-for-hermetic-tests-only",
+    "auth_mode": "external",
+    "create_time": "2026-08-03T01:42:10Z",
+    "expires_at": "2026-08-03T06:42:10Z",
+    "user_id": "pe-instrument",
+    "email": "instrument@elyra.local",
+    "first_name": "Elyra",
+    "last_name": "Instrument",
+    "principal_type": "user",
+    "principal_id": "pe-instrument",
+    "team_id": "",
+    "coding_data_retention_opt_out": true,
+    "oidc_issuer": "https://auth.x.ai",
+    "oidc_client_id": "b1a00492-073a-47ea-816f-4c329264a828"
+  }
+}

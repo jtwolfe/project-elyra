@@ -1,7 +1,8 @@
-"""Tests for host builtin grok_build (PR4).
+"""Tests for host builtin grok_build (PR4 + PR-A auth mint/seed).
 
-Hermetic: mock OAuth, grok binary, seed, process. Covers secret_env law,
-validation paths, missing binary/oauth, execute_plan preflight.
+Hermetic: mock ensure_fresh_access, grok binary, seed, process. Covers
+secret_env law, single-mint wiring, validation, missing binary/oauth,
+execute_plan preflight.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from elyra.instrument.discover import GrokNotFoundError
 from elyra.instrument.jobs import load_job, run_dir_for
 from elyra.instrument.modes import DEEP_RESEARCH_EXPERIMENTAL
 from elyra.instrument.process import ProcessResult, SpawnedProcess
+from elyra.llm.xai_oauth import FreshAccessResult
 from elyra.settings import Settings, ToolsSettings
 from elyra.tools.builtin import grok_build as gb_mod
 from elyra.tools.builtin.grok_build import grok_build
@@ -75,14 +77,34 @@ def _seeded(run_dir: Path, data_dir: Path) -> SeededHome:
     (bundled / "skills" / "design").mkdir(parents=True, exist_ok=True)
     (bundled / "skills" / "implement").mkdir(parents=True, exist_ok=True)
     cfg = gh / "config.toml"
-    cfg.write_text('[auth]\nauth_provider_command = "/x/python -m elyra.instrument.auth_provider"\n')
+    provider = "/x/python -m elyra.instrument.auth_provider --data-dir /data"
+    cfg.write_text(f'[auth]\nauth_provider_command = "{provider}"\n')
     return SeededHome(
         grok_home=gh,
         config_path=cfg,
         bundled_link=bundled,
         real_bundled=bundled,
-        auth_provider_command="//x/python -m elyra.instrument.auth_provider",
+        auth_provider_command=provider,
         data_dir=data_dir,
+        auth_json_path=gh / "auth.json",
+    )
+
+
+def _fresh(
+    access: str | None = "test-access-token-xyz",
+    *,
+    ok: bool | None = None,
+    expires_at: str | None = "2026-08-03T06:42:10Z",
+) -> FreshAccessResult:
+    if ok is None:
+        ok = access is not None and bool(str(access).strip())
+    return FreshAccessResult(
+        ok=bool(ok),
+        access_token=access,
+        expires_at=expires_at if ok else None,
+        email="instrument@elyra.local" if ok else None,
+        detail=None if ok else "missing",
+        rotated=False,
     )
 
 
@@ -90,17 +112,24 @@ def _stub_ready(
     monkeypatch: pytest.MonkeyPatch,
     *,
     access: str | None = "test-access-token-xyz",
+    expires_at: str | None = "2026-08-03T06:42:10Z",
     grok_bin: Path | None = None,
     seed: bool = True,
 ) -> dict[str, Any]:
     """Wire mocks so spawn/run paths can proceed past preflight."""
-    seen: dict[str, Any] = {"access": access}
+    seen: dict[str, Any] = {
+        "access": access,
+        "expires_at": expires_at,
+        "mint_calls": 0,
+        "seed_kwargs": None,
+    }
 
-    monkeypatch.setattr(
-        gb_mod,
-        "resolve_access_token_for_tool",
-        lambda name, data_dir: access if name == "grok_build" else None,
-    )
+    def _ensure(data_dir: Any, **_k: Any) -> FreshAccessResult:
+        seen["mint_calls"] += 1
+        seen["mint_data_dir"] = data_dir
+        return _fresh(access, expires_at=expires_at)
+
+    monkeypatch.setattr(gb_mod, "ensure_fresh_access", _ensure)
 
     if grok_bin is None:
         grok_bin = Path("/usr/bin/fake-grok")
@@ -117,6 +146,7 @@ def _stub_ready(
         def _seed(run_dir: Path | str, **kw: Any) -> SeededHome:
             data_dir = Path(kw["data_dir"])
             seen["seed_run_dir"] = Path(run_dir)
+            seen["seed_kwargs"] = dict(kw)
             return _seeded(Path(run_dir), data_dir)
 
         monkeypatch.setattr(gb_mod, "seed_isolated_home", _seed)
@@ -201,6 +231,99 @@ def test_missing_oauth_fail_closed(
     assert result.error_reason == "auth_unavailable"
 
 
+def test_single_mint_passes_token_and_expiry_to_seed(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """KD-F13: one ensure_fresh_access; seed receives access_token + expires_at."""
+    token = "mint-access-token-single"
+    exp = "2026-09-01T12:00:00Z"
+    seen = _stub_ready(monkeypatch, access=token, expires_at=exp)
+
+    def fake_run(argv, **kw: Any) -> ProcessResult:
+        # Child env must carry provider command; never XAI_API_KEY from OAuth.
+        assert kw.get("auth_provider_command")
+        assert "XAI_API_KEY" not in (kw.get("extra_env") or {})
+        return ProcessResult(
+            exit_code=0,
+            stdout='{"text":"ok","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}',
+            stderr="",
+            timed_out=False,
+            pid=11,
+            pgid=11,
+        )
+
+    monkeypatch.setattr(gb_mod, "run_grok", fake_run)
+    result = grok_build(
+        {"mode": "prompt", "prompt": "hi", "cwd": str(repo), "async": False},
+        ctx,
+    )
+    assert result.ok, result
+    assert seen["mint_calls"] == 1
+    sk = seen["seed_kwargs"]
+    assert sk is not None
+    assert sk.get("access_token") == token
+    assert sk.get("expires_at") == exp
+    # Token must not appear in payload / meta.
+    blob = json.dumps(result.payload)
+    assert token not in blob
+    job_id = result.payload.get("job_id")
+    assert job_id
+    meta = load_job(ctx.paths, job_id)
+    assert meta is not None
+    meta_raw = (run_dir_for(ctx.paths, job_id) / "meta.json").read_text(encoding="utf-8")
+    assert token not in meta_raw
+
+
+def test_async_seed_receives_mint_before_discard(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async path must pass the same mint into seed (not drop after preflight)."""
+    token = "async-mint-token-zzz"
+    exp = "2026-10-01T00:00:00Z"
+    seen = _stub_ready(monkeypatch, access=token, expires_at=exp)
+    spawn_kw: dict[str, Any] = {}
+
+    def fake_spawn(argv, **kw: Any) -> SpawnedProcess:
+        spawn_kw.update(kw)
+        out = Path(kw["stdout_path"])
+        err = Path(kw["stderr_path"])
+        out.write_text("", encoding="utf-8")
+        err.write_text("", encoding="utf-8")
+        return SpawnedProcess(pid=777, pgid=777, stdout_path=out, stderr_path=err)
+
+    monkeypatch.setattr(gb_mod, "spawn_grok", fake_spawn)
+    result = grok_build(
+        {"mode": "design", "prompt": "design it", "cwd": str(repo)},
+        ctx,
+    )
+    assert result.ok
+    assert seen["mint_calls"] == 1
+    assert seen["seed_kwargs"]["access_token"] == token
+    assert seen["seed_kwargs"]["expires_at"] == exp
+    assert spawn_kw.get("auth_provider_command")
+    assert spawn_kw.get("data_dir") is not None
+    # No XAI_API_KEY inject path.
+    assert "XAI_API_KEY" not in str(spawn_kw.get("extra_env") or {})
+    assert token not in json.dumps(result.payload)
+
+
+def test_no_xai_api_key_from_oauth_in_handler_source() -> None:
+    """Static guard: primary path must not set XAI_API_KEY from OAuth access."""
+    src = Path(gb_mod.__file__).read_text(encoding="utf-8")
+    assert "ensure_fresh_access" in src
+    # Never assign XAI_API_KEY from OAuth on the primary path.
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        if "XAI_API_KEY" in stripped and "=" in stripped:
+            assert "never" in stripped.lower() or stripped.startswith("assert")
+
+
 def test_missing_grok_binary(
     ctx: ToolContext,
     repo: Path,
@@ -208,8 +331,8 @@ def test_missing_grok_binary(
 ) -> None:
     monkeypatch.setattr(
         gb_mod,
-        "resolve_access_token_for_tool",
-        lambda *_a, **_k: "tok",
+        "ensure_fresh_access",
+        lambda *_a, **_k: _fresh("tok"),
     )
 
     def _missing(**_k: Any) -> Path:
