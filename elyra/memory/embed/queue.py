@@ -194,14 +194,21 @@ class EncodeQueue:
                     self._lane[atom_id] = pri
                     changed = True
 
-        # Mark overflow outside lock (avoid lock order with store).
+        # Mark overflow + log outside lock (avoid lock order with store;
+        # keep critical-section short under overflow storms).
+        remaining = self.qsize()
         for old_id in dropped:
+            _LOG.warning(
+                "memory.embed.queue_dropped atom_id=%s remaining=%d",
+                old_id,
+                remaining,
+            )
             self._mark_overflow(store, old_id)
 
         return changed
 
     def _drop_oldest_locked(self) -> str | None:
-        """Drop oldest P2 then P1. Caller holds ``_lock``."""
+        """Drop oldest P2 then P1. Caller holds ``_lock``. No I/O or logging."""
         if self._p2:
             old = self._p2.popleft()
         elif self._p1:
@@ -211,15 +218,13 @@ class EncodeQueue:
         self._queued.discard(old)
         self._lane.pop(old, None)
         self._dropped_total += 1
-        _LOG.warning(
-            "memory.embed.queue_dropped atom_id=%s remaining=%d",
-            old,
-            len(self._queued),
-        )
         return old
 
     def _mark_overflow(self, store: Any | None, atom_id: str) -> None:
         if store is None:
+            return
+        # Re-enqueued after drop (race with scan/hook) — do not skip legitimate work.
+        if self.contains(atom_id):
             return
         try:
             atom = store.get_atom(atom_id)

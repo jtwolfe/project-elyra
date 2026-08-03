@@ -258,9 +258,20 @@ def test_concurrent_enqueue_and_drain(store):
 
 
 def test_concurrent_enqueue_pop_no_double_membership():
-    """Hammer enqueue + pop_next_bulk; each id leaves the queue at most once."""
+    """Hammer concurrent enqueue + pop_next_bulk; assert membership consistency.
+
+    Does **not** require exact-once pops for re-enqueued ids: if a consumer
+    pops between first enqueue and a promote/re-enqueue, a second pop of the
+    same id is valid queue behavior. Promote/dedupe exact-once is covered by
+    unit tests without concurrent pop of the same ids.
+    """
+    from collections import Counter
+
     q = EncodeQueue(maxsize=256)
     n = 200
+    expected = {f"id_{i}" for i in range(n)}
+    # Ids that get a second enqueue (promote/dedupe path) after first insert.
+    reenqueue_ids = {f"id_{i}" for i in range(n) if i % 5 == 0}
     popped: list[str] = []
     stop = Event()
 
@@ -274,7 +285,7 @@ def test_concurrent_enqueue_pop_no_double_membership():
                     else EncodePriority.CATCHUP
                 ),
             )
-            # Also re-enqueue some for promote / dedupe coverage.
+            # Promote/dedupe path — may race with pop (second pop is valid).
             if i % 5 == 0:
                 q.enqueue(f"id_{i}", priority=EncodePriority.ATOM_CREATE)
 
@@ -304,9 +315,20 @@ def test_concurrent_enqueue_pop_no_double_membership():
         popped.append(item[0])
 
     assert len(q) == 0
-    # Each id appears exactly once in pops (dedupe + promote never double-queue).
-    assert len(popped) == n
-    assert set(popped) == {f"id_{i}" for i in range(n)}
+    assert q.depth_by_priority() == {
+        EncodePriority.ATOM_CREATE.value: 0,
+        EncodePriority.CATCHUP.value: 0,
+    }
+    # No lost ids; no unknown ids.
+    counts = Counter(popped)
+    assert set(counts) == expected
+    for aid, c in counts.items():
+        if aid in reenqueue_ids:
+            # At most one extra membership after concurrent re-enqueue.
+            assert 1 <= c <= 2, f"{aid} popped {c} times"
+        else:
+            # Single enqueue only — must appear exactly once.
+            assert c == 1, f"{aid} popped {c} times"
 
 
 def test_drain_leaves_pending_without_index(store):
