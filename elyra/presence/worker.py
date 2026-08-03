@@ -519,7 +519,10 @@ class PresenceWorker:
         self._embedder_open_lock = threading.Lock()
         # absent | loading | warm | failed — consumers non-blocking while loading
         self._embedder_state: str = "absent"
-        self._embedder_gate: Any | None = None  # EmbedderGate (lazy)
+        # EmbedderGate: create-once at init (no lazy TOCTOU across threads).
+        from elyra.memory.embed.gate import EmbedderGate
+
+        self._embedder_gate: Any = EmbedderGate()
         self._embedding_index: Any | None = None
         self._embed_catchup_marked: int = 0  # process-life OQ4 none→pending count
         # Continuous encode worker ownership (KD-E1 / KD-E7).
@@ -527,6 +530,9 @@ class PresenceWorker:
         self._encode_owner: str = "none"
         self._encode_worker: Any | None = None  # EncodeWorker
         self._encode_wake = threading.Event()
+        # Generation bumped on stop/shutdown so late zombie ticks no-op.
+        self._encode_epoch: int = 0
+        self._encode_shutting_down: bool = False
         self._encode_worker_restarts: int = 0
         self._encode_worker_restart_times: list[float] = []
         self._encode_worker_next_restart_at: float = 0.0
@@ -1407,11 +1413,7 @@ class PresenceWorker:
             _LOG.exception("install encode hooks failed")
 
     def _get_embedder_gate(self) -> Any:
-        """Lazy EmbedderGate singleton for this presence worker."""
-        if self._embedder_gate is None:
-            from elyra.memory.embed.gate import EmbedderGate
-
-            self._embedder_gate = EmbedderGate()
+        """Process EmbedderGate (create-once in ``__init__``)."""
         return self._embedder_gate
 
     def _ensure_embedder(self, *, role: str = "consumer") -> Any | None:
@@ -1422,6 +1424,8 @@ class PresenceWorker:
           Never waits on cold load; never calls open_encoder.
         loader: may perform open_encoder **outside** the open lock; only
           encode-worker tick / embed_preload use role=\"loader\".
+        Publish after open only if still ``state==loading`` and not shutting
+        down — else close the orphan handle (no resurrection after close).
         """
         mem_cfg = self.settings.memory
         if not mem_cfg.embed_enabled:
@@ -1435,6 +1439,8 @@ class PresenceWorker:
             if role != "loader":
                 # consumer: never wait, never open
                 return None
+            if self._encode_shutting_down:
+                return None
             if self._embedder_state == "loading":
                 # Another loader in flight — do not double-open.
                 return None
@@ -1445,27 +1451,60 @@ class PresenceWorker:
             from elyra.memory.embed.runtime import open_encoder
 
             emb = open_encoder(mem_cfg)
+            orphan = None
             with self._embedder_open_lock:
-                self._embedder = emb
-                self._embedder_state = "warm"
-                self._embedder_open_failed = False
+                # Loader publish guard: only assign if still loading and not
+                # shut down / closed mid-load (prevents warm resurrection).
+                if (
+                    self._encode_shutting_down
+                    or self._embedder_state != "loading"
+                ):
+                    orphan = emb
+                    if self._embedder_state == "loading":
+                        self._embedder_state = "absent"
+                else:
+                    self._embedder = emb
+                    self._embedder_state = "warm"
+                    self._embedder_open_failed = False
+                    _LOG.info(
+                        "memory.embed.embedder_warm role=loader backend=%s",
+                        getattr(mem_cfg, "embed_backend", "?"),
+                    )
+                    return self._embedder
+            # Close orphan outside lock.
+            if orphan is not None:
+                try:
+                    close = getattr(orphan, "close", None)
+                    if callable(close):
+                        close()
+                except Exception:  # noqa: BLE001
+                    _LOG.debug(
+                        "orphan embedder close after aborted load failed",
+                        exc_info=True,
+                    )
                 _LOG.info(
-                    "memory.embed.embedder_warm role=loader backend=%s",
-                    getattr(mem_cfg, "embed_backend", "?"),
+                    "memory.embed.embedder_load_aborted "
+                    "(shutdown or state changed mid-load)"
                 )
-                return self._embedder
+            return None
         except Exception:  # noqa: BLE001
             with self._embedder_open_lock:
-                self._embedder = None
-                self._embedder_state = "failed"
-                self._embedder_open_failed = True
+                # Only sticky-fail if we still own the loading slot.
+                if self._embedder_state == "loading":
+                    self._embedder = None
+                    self._embedder_state = "failed"
+                    self._embedder_open_failed = True
             _LOG.exception(
                 "embedder open failed; encode drain soft-disabled this run"
             )
             return None
 
     def _close_embedder(self) -> None:
-        """Close embedder once under open lock. Best-effort; never raises."""
+        """Close embedder once under open lock. Best-effort; never raises.
+
+        Forces state away from ``loading``/``warm`` so a concurrent loader
+        publish is rejected (orphan closed by loader guard).
+        """
         emb = None
         with self._embedder_open_lock:
             emb = self._embedder
@@ -1793,52 +1832,86 @@ class PresenceWorker:
     def _start_encode_worker_if_needed(self) -> None:
         """Start continuous EncodeWorker when flags allow. Soft-fail."""
         try:
+            if self._encode_shutting_down:
+                return
             desired = self._desired_encode_owner()
             self._encode_owner = desired
             if desired != "worker":
                 return
             w = self._encode_worker
+            # Zombie or live handle: do not start a second thread.
             if w is not None and getattr(w, "is_alive", lambda: False)():
                 return
             from elyra.memory.embed.worker import EncodeWorker
 
             mem_cfg = self.settings.memory
             poll_s = float(getattr(mem_cfg, "encode_worker_poll_s", 0.35) or 0.35)
+            # Bind epoch so late ticks after stop no-op even if join timed out.
+            epoch = int(self._encode_epoch)
+
+            def _poll_bound() -> dict[str, Any] | None:
+                return self._encode_poll_once(epoch=epoch)
+
             self._encode_worker = EncodeWorker(
-                poll_once=self._encode_poll_once,
+                poll_once=_poll_bound,
                 poll_s=poll_s,
                 wake_event=self._encode_wake,
+                generation=epoch,
             )
             # Owner set BEFORE first drain tick (KD-E7).
             self._encode_owner = "worker"
             self._encode_worker.start()
             _LOG.info(
-                "memory.embed.encode_owner=worker poll_s=%.3f",
+                "memory.embed.encode_owner=worker poll_s=%.3f epoch=%d",
                 poll_s,
+                epoch,
             )
         except Exception:  # noqa: BLE001 — never kill presence
             _LOG.exception("start encode worker failed")
 
-    def _stop_encode_worker(self, *, join_timeout_s: float = 2.0) -> None:
-        """Stop and join encode worker if running. Soft-fail."""
+    def _stop_encode_worker(self, *, join_timeout_s: float = 2.0) -> bool:
+        """Stop and join encode worker if running. Soft-fail.
+
+        Bumps ``_encode_epoch`` so in-flight / zombie ticks no-op. Does **not**
+        drop the worker handle while the thread is still alive (join timeout
+        zombie) — ``is_alive()`` stays True so gap/restart cannot dual-drain.
+        Returns True if thread is dead (or was absent).
+        """
+        # Invalidate any in-flight poll_once bound to the prior epoch.
+        self._encode_epoch = int(self._encode_epoch) + 1
         w = self._encode_worker
-        self._encode_worker = None
         if w is None:
-            return
+            return True
+        dead = True
         try:
             stop = getattr(w, "stop", None)
             if callable(stop):
-                stop(join_timeout_s=join_timeout_s)
+                dead = bool(stop(join_timeout_s=join_timeout_s))
+            else:
+                dead = not getattr(w, "is_alive", lambda: False)()
         except Exception:  # noqa: BLE001
             _LOG.exception("stop encode worker failed")
+            dead = not getattr(w, "is_alive", lambda: False)()
+        if dead or not getattr(w, "is_alive", lambda: False)():
+            self._encode_worker = None
+            return True
+        # Zombie retained on self._encode_worker; is_alive True.
+        _LOG.warning(
+            "memory.embed.encode_worker_zombie retained epoch=%d",
+            self._encode_epoch,
+        )
+        return False
 
     def _shutdown_encode(self) -> None:
         """Teardown encode path in run() finally: stop worker → close embedder.
 
         Order (KD-E13): signal + join encode worker, close embedder, owner=none.
+        Longer join on shutdown; epoch + shutting_down block zombie publish.
         """
+        self._encode_shutting_down = True
         try:
-            self._stop_encode_worker(join_timeout_s=2.0)
+            # Prefer a longer join on process teardown (cold load can be ~18s).
+            self._stop_encode_worker(join_timeout_s=20.0)
         except Exception:  # noqa: BLE001
             _LOG.exception("shutdown encode worker failed")
         try:
@@ -1851,9 +1924,13 @@ class PresenceWorker:
         """Restart dead encode worker with backoff (every presence loop).
 
         Never permanently switches to idle while encode_worker_enabled remains
-        true (KD-E16). Soft-fail; never raises.
+        true (KD-E16). After max_restarts in the thrash window, applies backoff
+        and **returns without restarting** this iteration (gap drain covers
+        progress). Soft-fail; never raises.
         """
         try:
+            if self._encode_shutting_down:
+                return
             desired = self._desired_encode_owner()
             if desired != "worker":
                 # Flag flip: continuous off → stop worker, idle drain may run.
@@ -1870,9 +1947,15 @@ class PresenceWorker:
 
             self._encode_owner = "worker"
             w = self._encode_worker
+            # Live or zombie thread: do not start a second worker.
             if w is not None and getattr(w, "is_alive", lambda: False)():
+                # Healthy / still running — clear throttle flag only.
                 self._encode_worker_restart_throttled = False
                 return
+
+            # Drop dead handle if present (thread exited after join timeout).
+            if w is not None and not getattr(w, "is_alive", lambda: False)():
+                self._encode_worker = None
 
             now = time.monotonic()
             if now < float(self._encode_worker_next_restart_at or 0.0):
@@ -1897,37 +1980,43 @@ class PresenceWorker:
             ]
             in_window = len(self._encode_worker_restart_times)
             if in_window >= max(1, max_restarts):
+                # Thrash budget exhausted: delay; do NOT restart this iteration.
                 self._encode_worker_restart_throttled = True
-                # Keep restarting with slower backoff — never permanent idle.
                 backoff = min(
                     backoff_cap,
-                    max(self._encode_worker_backoff_s, 1.0) * 2.0,
+                    max(float(self._encode_worker_backoff_s), 1.0) * 2.0,
                 )
                 self._encode_worker_backoff_s = backoff
                 self._encode_worker_next_restart_at = now + backoff
                 _LOG.error(
                     "memory.embed.encode_worker_restart_throttled "
-                    "restarts_in_window=%d backoff_s=%.1f",
+                    "restarts_in_window=%d backoff_s=%.1f next_in=%.1f",
                     in_window,
                     backoff,
+                    backoff,
                 )
-                # Still attempt restart after recording throttle (below).
+                return
 
-            # Stop stale handle, start fresh.
+            # Stop any stale dead handle, start fresh under a new epoch.
             self._stop_encode_worker()
+            if self._encode_worker is not None and getattr(
+                self._encode_worker, "is_alive", lambda: False
+            )():
+                # Zombie still running — wait for it; do not dual-start.
+                return
             self._start_encode_worker_if_needed()
             self._encode_worker_restarts += 1
             self._encode_worker_restart_times.append(now)
-            # Exponential backoff for next death (reset path on healthy ticks).
-            if not self._encode_worker_restart_throttled:
-                self._encode_worker_backoff_s = min(
-                    backoff_cap,
-                    max(0.5, self._encode_worker_backoff_s) * 2.0
-                    if self._encode_worker_restarts > 1
-                    else 0.5,
-                )
-            self._encode_worker_next_restart_at = (
-                now + float(self._encode_worker_backoff_s)
+            # Exponential backoff for the *next* death-restart (keep after
+            # successful start so rapid die-loops are delayed).
+            self._encode_worker_backoff_s = min(
+                backoff_cap,
+                max(0.5, float(self._encode_worker_backoff_s)) * 2.0
+                if self._encode_worker_restarts > 1
+                else 0.5,
+            )
+            self._encode_worker_next_restart_at = now + float(
+                self._encode_worker_backoff_s
             )
             alive = (
                 self._encode_worker is not None
@@ -1935,15 +2024,14 @@ class PresenceWorker:
             )
             if alive:
                 _LOG.info(
-                    "memory.embed.encode_worker_restart n=%d backoff_s=%.1f",
+                    "memory.embed.encode_worker_restart n=%d backoff_s=%.1f "
+                    "next_restart_in=%.1f",
                     self._encode_worker_restarts,
                     self._encode_worker_backoff_s,
+                    self._encode_worker_backoff_s,
                 )
-                # Successful start: mild backoff reset toward base.
-                self._encode_worker_backoff_s = max(
-                    0.5, float(self._encode_worker_backoff_s) * 0.5
-                )
-                self._encode_worker_next_restart_at = 0.0
+                # Do NOT clear next_restart_at — respects throttle / rapid-death
+                # delay. Clears naturally when now >= next_restart_at.
         except Exception:  # noqa: BLE001
             _LOG.exception("maybe restart encode worker failed")
 
@@ -1951,10 +2039,13 @@ class PresenceWorker:
         """One budgeted drain while owner=worker but thread not alive.
 
         Bridge during restart backoff (finalize_moment + idle path only).
-        Soft-fail; never raises.
+        Never runs while a live or zombie worker thread still holds the handle
+        (``is_alive``). Soft-fail; never raises.
         """
         try:
             if self._encode_owner != "worker":
+                return
+            if self._encode_shutting_down:
                 return
             w = self._encode_worker
             if w is not None and getattr(w, "is_alive", lambda: False)():
@@ -1963,7 +2054,8 @@ class PresenceWorker:
                 return
             self._gap_drain_active = True
             try:
-                stats = self._encode_poll_once()
+                # Gap uses current epoch (intentional presence-thread drain).
+                stats = self._encode_poll_once(epoch=None)
                 if stats and int(stats.get("ok") or 0) > 0:
                     _LOG.info(
                         "memory.embed.gap_drain ok=%s remaining=%s "
@@ -1977,11 +2069,36 @@ class PresenceWorker:
             self._gap_drain_active = False
             _LOG.exception("gap drain failed")
 
-    def _encode_poll_once(self) -> dict[str, Any] | None:
+    def _encode_poll_once(
+        self, *, epoch: int | None = None
+    ) -> dict[str, Any] | None:
         """Shared catch-up + scan + budgeted drain (worker / idle / gap).
+
+        When ``epoch`` is set (worker-bound tick), no-op if the epoch is stale
+        (stop/shutdown bumped generation) or shutting down. Gap/idle pass
+        ``epoch=None`` for intentional presence-thread drains.
 
         Never raises. Loader role may cold-open embedder on this call path.
         """
+        # Stale worker generation → soft no-op (zombie after stop).
+        if epoch is not None and int(epoch) != int(self._encode_epoch):
+            return {
+                "ok": 0,
+                "failed": 0,
+                "skipped": 0,
+                "remaining": 0,
+                "processed": 0,
+                "reason": "stale_epoch",
+            }
+        if epoch is not None and self._encode_shutting_down:
+            return {
+                "ok": 0,
+                "failed": 0,
+                "skipped": 0,
+                "remaining": 0,
+                "processed": 0,
+                "reason": "shutting_down",
+            }
         mem_cfg = self.settings.memory
         if not mem_cfg.semantic_enabled or not mem_cfg.embed_enabled:
             return None
@@ -2026,6 +2143,14 @@ class PresenceWorker:
                     ),
                 )
                 self._embed_catchup_marked = already + int(n or 0)
+            # Re-check epoch after store I/O (stop may have raced).
+            if epoch is not None and int(epoch) != int(self._encode_epoch):
+                return {
+                    "ok": 0,
+                    "processed": 0,
+                    "remaining": queue.qsize(),
+                    "reason": "stale_epoch",
+                }
             scan_pending_into_queue(
                 store,
                 queue,
@@ -2042,6 +2167,14 @@ class PresenceWorker:
                     "remaining": queue.qsize(),
                     "processed": 0,
                     "reason": "embedder_unavailable",
+                }
+            # Epoch again after possible long cold load.
+            if epoch is not None and int(epoch) != int(self._encode_epoch):
+                return {
+                    "ok": 0,
+                    "processed": 0,
+                    "remaining": queue.qsize(),
+                    "reason": "stale_epoch",
                 }
             media_store = None
             try:

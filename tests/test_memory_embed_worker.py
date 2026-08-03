@@ -409,3 +409,202 @@ def test_write_hook_wakes_worker(paths):
     assert atom is not None
     assert worker._encode_wake.is_set()  # noqa: SLF001
     assert worker._encode_queue.contains(atom.atom_id)  # noqa: SLF001
+
+
+# ── Review fixes: zombie join, thrash backoff, gate singleton ───────────────
+
+
+def test_stop_join_timeout_retains_alive_handle():
+    """Issue 1: stop must not null thread while poll_once still running."""
+    entered = Event()
+    release = Event()
+    calls: list[str] = []
+
+    def slow_poll() -> dict[str, int]:
+        calls.append("enter")
+        entered.set()
+        release.wait(timeout=5.0)
+        calls.append("exit")
+        return {"ok": 0, "processed": 0, "remaining": 0}
+
+    w = EncodeWorker(poll_once=slow_poll, poll_s=0.5)
+    w.start()
+    assert entered.wait(timeout=2.0)
+    # Join timeout while still inside poll_once.
+    assert w.stop(join_timeout_s=0.15) is False
+    assert w.is_alive() is True
+    assert "enter" in calls
+    assert "exit" not in calls
+    release.set()
+    deadline = time.monotonic() + 2.0
+    while w.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not w.is_alive()
+    assert "exit" in calls
+
+
+def test_zombie_epoch_noop_and_no_gap_dual(paths):
+    """Issue 1: stop bumps epoch; zombie poll no-ops; gap waits until dead."""
+    settings = _sem_embed_settings()
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    worker._ensure_memory_store()  # noqa: SLF001
+
+    entered = Event()
+    release = Event()
+    poll_calls: list[str] = []
+
+    def slow_bound() -> dict[str, Any] | None:
+        # Capture epoch at call time via worker's bound path.
+        poll_calls.append("enter")
+        entered.set()
+        release.wait(timeout=5.0)
+        # After stop, epoch should make this a no-op if re-entered; this
+        # invocation may complete once if already past the epoch check.
+        return worker._encode_poll_once(epoch=epoch)  # noqa: SLF001
+
+    epoch = int(worker._encode_epoch)  # noqa: SLF001
+    from elyra.memory.embed.worker import EncodeWorker as EW
+
+    ew = EW(
+        poll_once=slow_bound,
+        poll_s=0.5,
+        wake_event=worker._encode_wake,  # noqa: SLF001
+        generation=epoch,
+    )
+    worker._encode_worker = ew  # noqa: SLF001
+    worker._encode_owner = "worker"  # noqa: SLF001
+    ew.start()
+    assert entered.wait(timeout=2.0)
+
+    dead = worker._stop_encode_worker(join_timeout_s=0.15)  # noqa: SLF001
+    assert dead is False
+    assert worker._encode_worker is not None  # noqa: SLF001 — zombie retained
+    assert worker._encode_worker.is_alive()  # noqa: SLF001
+    # Gap must not dual-drain while zombie is alive.
+    worker._gap_drain_if_needed()  # noqa: SLF001
+    assert worker._gap_drain_active is False  # noqa: SLF001
+
+    # Stale epoch tick is a soft no-op.
+    stale = worker._encode_poll_once(epoch=epoch)  # noqa: SLF001
+    assert stale is not None
+    assert stale.get("reason") == "stale_epoch"
+
+    release.set()
+    deadline = time.monotonic() + 2.0
+    while worker._encode_worker is not None and worker._encode_worker.is_alive():  # noqa: SLF001
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    # Once dead, restart monitor may clear handle; force gap path.
+    if worker._encode_worker is not None and not worker._encode_worker.is_alive():  # noqa: SLF001
+        worker._encode_worker = None  # noqa: SLF001
+    worker._encode_owner = "worker"  # noqa: SLF001
+    # Gap allowed when no live thread.
+    worker._gap_drain_if_needed()  # noqa: SLF001
+
+
+def test_loader_publish_aborted_on_close(paths, monkeypatch):
+    """Issue 1: mid-load close must not leave warm embedder resurrected."""
+    settings = _sem_embed_settings()
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    opened = Event()
+    release = Event()
+    closed: list[Any] = []
+
+    class SlowEmb:
+        def health(self):
+            return {"ok": True, "dim": 8, "model_id": "x", "backend": "mock"}
+
+        def close(self):
+            closed.append(self)
+
+    def slow_open(_cfg):
+        opened.set()
+        release.wait(timeout=5.0)
+        return SlowEmb()
+
+    monkeypatch.setattr(
+        "elyra.memory.embed.runtime.open_encoder",
+        slow_open,
+    )
+
+    result_box: list[Any] = []
+
+    def loader() -> None:
+        result_box.append(worker._ensure_embedder(role="loader"))  # noqa: SLF001
+
+    t = threading.Thread(target=loader, daemon=True)
+    t.start()
+    assert opened.wait(timeout=2.0)
+    # Close while loader is blocked in open_encoder.
+    worker._close_embedder()  # noqa: SLF001
+    worker._encode_shutting_down = True  # noqa: SLF001
+    release.set()
+    t.join(timeout=2.0)
+    assert result_box and result_box[0] is None
+    assert worker._embedder is None  # noqa: SLF001
+    assert worker._embedder_state == "absent"  # noqa: SLF001
+    assert closed  # orphan closed
+
+
+def test_restart_thrash_backoff_delays(paths):
+    """Issue 2: after max_restarts in window, next restart is delayed."""
+    settings = _sem_embed_settings(
+        encode_worker_max_restarts=2,
+        encode_worker_restart_window_s=60.0,
+        encode_worker_restart_backoff_max_s=30.0,
+    )
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    worker._ensure_memory_store()  # noqa: SLF001
+    worker._start_encode_worker_if_needed()  # noqa: SLF001
+    assert worker._encode_worker is not None  # noqa: SLF001
+
+    for _ in range(2):
+        worker._stop_encode_worker()  # noqa: SLF001
+        worker._encode_owner = "worker"  # noqa: SLF001
+        worker._encode_worker_next_restart_at = 0.0  # noqa: SLF001
+        worker._maybe_restart_encode_worker()  # noqa: SLF001
+        assert worker._encode_worker is not None  # noqa: SLF001
+        assert worker._encode_worker.is_alive()  # noqa: SLF001
+
+    assert worker._encode_worker_restarts == 2  # noqa: SLF001
+    # Third death inside window → throttled, no immediate restart.
+    worker._stop_encode_worker()  # noqa: SLF001
+    worker._encode_owner = "worker"  # noqa: SLF001
+    worker._encode_worker_next_restart_at = 0.0  # noqa: SLF001
+    worker._maybe_restart_encode_worker()  # noqa: SLF001
+    assert worker._encode_worker_restart_throttled is True  # noqa: SLF001
+    assert worker._encode_worker_next_restart_at > time.monotonic()  # noqa: SLF001
+    assert worker._encode_worker is None  # noqa: SLF001 — not restarted
+    assert worker._encode_owner == "worker"  # noqa: SLF001 — never idle
+    worker._shutdown_encode()  # noqa: SLF001
+
+
+def test_embedder_gate_is_singleton(paths):
+    """Issue 3: gate is create-once (no lazy TOCTOU)."""
+    settings = _sem_embed_settings()
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    g1 = worker._get_embedder_gate()  # noqa: SLF001
+    g2 = worker._get_embedder_gate()  # noqa: SLF001
+    assert g1 is g2
+    assert g1 is worker._embedder_gate  # noqa: SLF001
