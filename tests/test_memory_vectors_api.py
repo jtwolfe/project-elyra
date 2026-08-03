@@ -407,6 +407,7 @@ def test_neighbors_with_memory_index_and_mock(paths):
 
         emb = MockEmbedder()
         h.worker._embedder = emb  # noqa: SLF001
+        h.worker._embedder_state = "warm"  # noqa: SLF001 — consumer gated path
         index = MemoryEmbeddingIndex(store)
         h.worker._embedding_index = index  # noqa: SLF001
 
@@ -519,6 +520,7 @@ def test_neighbors_auto_resolves_text_only_corpus(paths):
         assert a1 and a2
         emb = MockEmbedder()
         h.worker._embedder = emb  # noqa: SLF001
+        h.worker._embedder_state = "warm"  # noqa: SLF001
         # Disable eager repair so joint stays empty for this fixture.
         index = MemoryEmbeddingIndex(store, joint_repair_max_per_open=0)
         h.worker._embedding_index = index  # noqa: SLF001
@@ -605,6 +607,7 @@ def test_neighbors_atom_id_no_encode_text_on_missing_channel(paths):
         assert seed and peer
         emb = MockEmbedder()
         h.worker._embedder = emb  # noqa: SLF001 — warm encoder must not change outcome
+        h.worker._embedder_state = "warm"  # noqa: SLF001
         index = MemoryEmbeddingIndex(store, joint_repair_max_per_open=0)
         h.worker._embedding_index = index  # noqa: SLF001
 

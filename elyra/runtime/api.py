@@ -1465,26 +1465,28 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         )
                         return
         else:
-            # Free-text query — encode_text then search resolved channel.
-            if embedder is None:
-                ensure_emb = getattr(self.worker, "_ensure_embedder", None)
-                if callable(ensure_emb):
-                    try:
-                        embedder = ensure_emb()
-                    except Exception:  # noqa: BLE001
-                        embedder = None
-            if embedder is None:
+            # Free-text query — gated consumer encode_text (KD-E5).
+            # Never open a second embedder on the API thread; never use raw
+            # _embedder from handles (lookup priority via GatedEmbedder).
+            gated: Any | None = None
+            ensure_emb = getattr(self.worker, "_ensure_embedder", None)
+            if callable(ensure_emb):
+                try:
+                    gated = ensure_emb()  # role=consumer → GatedEmbedder | None
+                except Exception:  # noqa: BLE001
+                    gated = None
+            if gated is None:
                 omit_reason = "encoder"
             else:
                 try:
                     emb_health = (
-                        embedder.health() if hasattr(embedder, "health") else {}
+                        gated.health() if hasattr(gated, "health") else {}
                     )
                     if isinstance(emb_health, dict) and emb_health.get("ok") is False:
                         omit_reason = "encoder"
                     else:
-                        query_vec = list(embedder.encode_text(str(query_text)))
-                except Exception:  # noqa: BLE001
+                        query_vec = list(gated.encode_text(str(query_text)))
+                except Exception:  # noqa: BLE001 — gate timeout / encode fail
                     omit_reason = "encode_failed"
 
         neighbors: list[dict[str, Any]] = []

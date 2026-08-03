@@ -1,18 +1,25 @@
-"""EmbedderGate — exclusive serialize + lookup-over-bulk priority.
+"""EmbedderGate + GatedEmbedder — serialize + lookup-over-bulk priority.
 
 Scope: one holder at a time for shared-process Embedder forwards.
 Lookup waiters block new bulk acquires between atoms (never mid-forward).
 Critical section = model forward only (not cold load, not store I/O).
-Out of scope: GatedEmbedder meal/graph/API proxy (PR3).
+
+``GatedEmbedder`` is the only public encode handle for meal / graph / API
+free-text: every ``encode_*`` acquires lookup priority. Bulk corpus drain
+uses ``acquire(\"bulk\")`` + the raw embedder via ``encode_atom`` separately.
 """
 
 from __future__ import annotations
 
 import threading
 import time
-from typing import Literal
+from typing import Any, Literal
 
 GateKind = Literal["bulk", "lookup"]
+
+
+class EmbedderGateTimeout(TimeoutError):
+    """Lookup (or bulk) gate acquire timed out — map to omit / encode_failed."""
 
 
 class EmbedderGate:
@@ -102,4 +109,117 @@ class EmbedderGate:
             self._cond.notify_all()
 
 
-__all__ = ["EmbedderGate", "GateKind"]
+class GatedEmbedder:
+    """Only process-facing encode handle for meal / graph / API free-text.
+
+    ``encode_text`` / image / audio / video / joint acquire the gate as
+    **lookup** (priority over bulk between atoms). The bulk encode worker
+    uses ``acquire(\"bulk\")`` + the raw embedder's ``encode_atom`` path
+    separately — never through this proxy.
+
+    ``health`` delegates without the gate (not a model forward).
+    ``close`` is a no-op: only the open owner closes the inner embedder.
+    """
+
+    def __init__(
+        self,
+        inner: Any,
+        gate: EmbedderGate,
+        *,
+        lookup_timeout_s: float | None = None,
+    ) -> None:
+        self._inner = inner
+        self._gate = gate
+        # None = wait until granted (bulk yields between atoms once waiting).
+        self._lookup_timeout_s = lookup_timeout_s
+
+    @property
+    def inner(self) -> Any:
+        """Raw embedder (loader / bulk / close owner only)."""
+        return self._inner
+
+    @property
+    def gate(self) -> EmbedderGate:
+        return self._gate
+
+    @property
+    def lookup_timeout_s(self) -> float | None:
+        return self._lookup_timeout_s
+
+    def with_lookup_timeout(self, timeout_s: float | None) -> GatedEmbedder:
+        """Return a handle with the same inner/gate but a different timeout."""
+        return GatedEmbedder(
+            self._inner,
+            self._gate,
+            lookup_timeout_s=timeout_s,
+        )
+
+    # ── pass-through metadata used by warm checks / health blocks ────────
+
+    @property
+    def dim(self) -> Any:
+        return getattr(self._inner, "dim", None)
+
+    @property
+    def model_id(self) -> Any:
+        return getattr(self._inner, "model_id", None)
+
+    @property
+    def is_loaded(self) -> bool:
+        if hasattr(self._inner, "is_loaded"):
+            return bool(getattr(self._inner, "is_loaded"))
+        return True
+
+    @property
+    def loaded(self) -> bool:
+        if hasattr(self._inner, "loaded"):
+            return bool(getattr(self._inner, "loaded"))
+        return True
+
+    def health(self) -> dict[str, Any]:
+        """Delegate health — not a model forward; no gate."""
+        h = self._inner.health()
+        return h if isinstance(h, dict) else {"ok": False, "error": "bad_health"}
+
+    def encode_text(self, text: str) -> list[float]:
+        return self._forward("encode_text", text)
+
+    def encode_image(self, path_or_bytes: bytes | str) -> list[float]:
+        return self._forward("encode_image", path_or_bytes)
+
+    def encode_audio(self, path_or_bytes: bytes | str) -> list[float]:
+        return self._forward("encode_audio", path_or_bytes)
+
+    def encode_video(self, path_or_bytes: bytes | str) -> list[float]:
+        return self._forward("encode_video", path_or_bytes)
+
+    def encode_joint(self, parts: Any) -> list[float]:
+        return self._forward("encode_joint", parts)
+
+    def encode_atom_inputs(self, *args: Any, **kwargs: Any) -> Any:
+        """Lookup-priority wrap (rare for consumers; bulk uses raw)."""
+        return self._forward("encode_atom_inputs", *args, **kwargs)
+
+    def close(self) -> None:
+        """No-op — only the open owner closes the inner embedder."""
+        return None
+
+    def _forward(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        timeout = self._lookup_timeout_s
+        if not self._gate.acquire("lookup", timeout=timeout):
+            raise EmbedderGateTimeout(
+                "embedder gate lookup acquire timed out"
+            )
+        try:
+            fn = getattr(self._inner, method)
+            return fn(*args, **kwargs)
+        finally:
+            self._gate.release()
+
+
+__all__ = [
+    "EmbedderGate",
+    "EmbedderGateTimeout",
+    "GateKind",
+    "GatedEmbedder",
+]

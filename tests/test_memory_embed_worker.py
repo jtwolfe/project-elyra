@@ -608,3 +608,228 @@ def test_embedder_gate_is_singleton(paths):
     g2 = worker._get_embedder_gate()  # noqa: SLF001
     assert g1 is g2
     assert g1 is worker._embedder_gate  # noqa: SLF001
+
+
+# ── GatedEmbedder / lookup priority (PR3) ───────────────────────────────────
+
+
+def test_consumer_ensure_returns_gated_embedder(paths):
+    """Consumer role wraps the warm raw embedder as GatedEmbedder."""
+    from elyra.memory.embed.gate import GatedEmbedder
+
+    settings = _sem_embed_settings()
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    raw = MockEmbedder()
+    worker._embedder = raw  # noqa: SLF001
+    worker._embedder_state = "warm"  # noqa: SLF001
+
+    consumer = worker._ensure_embedder(role="consumer")  # noqa: SLF001
+    assert isinstance(consumer, GatedEmbedder)
+    assert consumer.inner is raw
+    assert consumer.gate is worker._embedder_gate  # noqa: SLF001
+
+    loader = worker._ensure_embedder(role="loader")  # noqa: SLF001
+    assert loader is raw  # bulk path stays raw
+
+
+def test_gated_embedder_lookup_blocks_bulk():
+    """While GatedEmbedder holds lookup, bulk acquire yields."""
+    from elyra.memory.embed.gate import EmbedderGate, EmbedderGateTimeout, GatedEmbedder
+
+    gate = EmbedderGate()
+    inner = MockEmbedder()
+    gated = GatedEmbedder(inner, gate)
+
+    held = Event()
+    release = Event()
+    done = Event()
+
+    def _lookup() -> None:
+        # Hold the gate via a long-ish encode by wrapping encode_text path.
+        assert gate.acquire("lookup", timeout=1.0) is True
+        held.set()
+        assert release.wait(timeout=2.0)
+        gate.release()
+        done.set()
+
+    t = threading.Thread(target=_lookup, daemon=True)
+    t.start()
+    assert held.wait(timeout=1.0)
+
+    # Bulk must not start while lookup holds.
+    assert gate.acquire("bulk", timeout=0.05) is False
+    assert gate.gate_bulk_yields >= 1
+
+    # Gated encode_text waits / times out while lookup holds.
+    timed = GatedEmbedder(inner, gate, lookup_timeout_s=0.05)
+    try:
+        timed.encode_text("should time out")
+        raised = False
+    except EmbedderGateTimeout:
+        raised = True
+    assert raised is True
+
+    release.set()
+    assert done.wait(timeout=1.0)
+    # After release, gated encode works and returns a unit vector.
+    vec = gated.encode_text("hello after release")
+    assert isinstance(vec, list) and len(vec) > 0
+    t.join(timeout=1.0)
+
+
+def test_bulk_drain_yields_while_lookup_holds(paths):
+    """EncodeQueue drain with gate requeues when lookup is holding."""
+    from elyra.memory.embed.gate import GatedEmbedder
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    settings = _sem_embed_settings(
+        encode_worker_enabled=False,  # drain synchronously under gate
+        encode_max_items_per_tick=4,
+    )
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=Event(),
+        settings=settings,
+    )
+    store = worker._ensure_memory_store()  # noqa: SLF001
+    assert store is not None
+    worker._install_encode_hooks(store, settings.memory)  # noqa: SLF001
+    queue = worker._encode_queue  # noqa: SLF001
+    assert queue is not None
+
+    raw = MockEmbedder()
+    worker._embedder = raw  # noqa: SLF001
+    worker._embedder_state = "warm"  # noqa: SLF001
+    gate = worker._get_embedder_gate()  # noqa: SLF001
+    index = MemoryEmbeddingIndex(store)
+    worker._embedding_index = index  # noqa: SLF001
+
+    atom = _atom(text="bulk yield body long enough " * 4, status="pending")
+    store.put_atom(atom)
+    # Write hook may already enqueue; ensure membership either way.
+    queue.enqueue(atom.atom_id, priority=EncodePriority.ATOM_CREATE)
+    assert queue.contains(atom.atom_id)
+
+    # Hold lookup so bulk cannot acquire.
+    assert gate.acquire("lookup", timeout=1.0) is True
+    try:
+        stats = queue.drain(
+            store,
+            raw,
+            index=index,
+            max_ms=500,
+            max_items=4,
+            max_attempts=3,
+            settings=settings.memory,
+            gate=gate,
+            gate_bulk_timeout_s=0.05,
+        )
+        # Item should still be pending / requeued — not encoded.
+        assert int(stats.get("ok") or 0) == 0
+        assert int(stats.get("yielded") or 0) >= 1 or int(stats.get("requeued") or 0) >= 1
+        got = store.get_atom(atom.atom_id)
+        assert got is not None
+        assert got.embedding_status == "pending"
+        assert queue.contains(atom.atom_id) or queue.qsize() >= 1
+    finally:
+        gate.release()
+
+    # After lookup release, drain completes.
+    stats2 = queue.drain(
+        store,
+        raw,
+        index=index,
+        max_ms=2000,
+        max_items=4,
+        max_attempts=3,
+        settings=settings.memory,
+        gate=gate,
+    )
+    assert int(stats2.get("ok") or 0) >= 1
+    got2 = store.get_atom(atom.atom_id)
+    assert got2 is not None
+    assert got2.meta.get("embed_encode_ok") is True
+
+    # Consumer gated encode still works and shares the same gate.
+    gated = worker._ensure_embedder(role="consumer")  # noqa: SLF001
+    assert isinstance(gated, GatedEmbedder)
+    vec = gated.encode_text("meal seed after bulk")
+    assert vec
+
+
+def test_concurrent_lookup_and_bulk_serialize(paths):
+    """API-style gated free-text + bulk drain: exclusive + lookup priority."""
+    from elyra.memory.embed.gate import GatedEmbedder
+
+    gate = EmbedderGate()
+    inner = MockEmbedder()
+    gated = GatedEmbedder(inner, gate)
+    order: list[str] = []
+    lock = threading.Lock()
+    lookup_started = Event()
+    bulk_tried = Event()
+
+    def lookup_path() -> None:
+        # Simulate API free-text: acquire via GatedEmbedder.encode_text.
+        # Hold longer than bulk poll so bulk sees waiters.
+        class SlowInner:
+            def health(self):
+                return inner.health()
+
+            def encode_text(self, text: str):
+                with lock:
+                    order.append("lookup_enter")
+                lookup_started.set()
+                # Give bulk thread a chance to attempt acquire while we hold.
+                bulk_tried.wait(timeout=1.0)
+                time.sleep(0.05)
+                with lock:
+                    order.append("lookup_exit")
+                return list(inner.encode_text(text))
+
+        slow_gated = GatedEmbedder(SlowInner(), gate)
+        vec = slow_gated.encode_text("api free text query")
+        assert vec
+
+    def bulk_path() -> None:
+        # Wait until lookup has entered the critical section.
+        assert lookup_started.wait(timeout=1.0)
+        # Bulk must not acquire while lookup holds.
+        ok = gate.acquire("bulk", timeout=0.05)
+        bulk_tried.set()
+        with lock:
+            order.append("bulk_try")
+        assert ok is False
+        # After lookup finishes, bulk can acquire.
+        deadline = time.monotonic() + 1.0
+        acquired = False
+        while time.monotonic() < deadline:
+            if gate.acquire("bulk", timeout=0.05):
+                acquired = True
+                break
+        assert acquired is True
+        with lock:
+            order.append("bulk_enter")
+        time.sleep(0.02)
+        gate.release()
+        with lock:
+            order.append("bulk_exit")
+
+    t_lookup = threading.Thread(target=lookup_path, daemon=True)
+    t_bulk = threading.Thread(target=bulk_path, daemon=True)
+    t_lookup.start()
+    t_bulk.start()
+    t_lookup.join(timeout=2.0)
+    t_bulk.join(timeout=2.0)
+    with lock:
+        seq = list(order)
+    # Lookup fully exits before bulk enters the gate.
+    assert "lookup_enter" in seq and "lookup_exit" in seq
+    assert "bulk_enter" in seq
+    assert seq.index("lookup_exit") < seq.index("bulk_enter")

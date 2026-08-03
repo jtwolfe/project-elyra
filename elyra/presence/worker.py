@@ -1416,14 +1416,22 @@ class PresenceWorker:
         """Process EmbedderGate (create-once in ``__init__``)."""
         return self._embedder_gate
 
-    def _ensure_embedder(self, *, role: str = "consumer") -> Any | None:
-        """Process-shared embedder access (KD-E13 / KD-E18).
+    def _gated_embedder_handle(self, emb: Any) -> Any:
+        """Wrap raw warm embedder as GatedEmbedder for meal/graph/API."""
+        from elyra.memory.embed.gate import GatedEmbedder
 
-        consumer (default): non-blocking — return warm handle or None.
+        return GatedEmbedder(emb, self._embedder_gate)
+
+    def _ensure_embedder(self, *, role: str = "consumer") -> Any | None:
+        """Process-shared embedder access (KD-E13 / KD-E18 / KD-E5).
+
+        consumer (default): non-blocking — return warm **GatedEmbedder** or None.
           While loading / absent / failed → None (callers omit encoder).
           Never waits on cold load; never calls open_encoder.
+          Gated handle is the only public encode path for meal/graph/API.
         loader: may perform open_encoder **outside** the open lock; only
           encode-worker tick / embed_preload use role=\"loader\".
+          Returns the **raw** embedder (bulk uses gate around encode_atom).
         Publish after open only if still ``state==loading`` and not shutting
         down — else close the orphan handle (no resurrection after close).
         """
@@ -1433,7 +1441,9 @@ class PresenceWorker:
 
         with self._embedder_open_lock:
             if self._embedder is not None and self._embedder_state == "warm":
-                return self._embedder
+                if role == "loader":
+                    return self._embedder
+                return self._gated_embedder_handle(self._embedder)
             if self._embedder_open_failed or self._embedder_state == "failed":
                 return None
             if role != "loader":
@@ -1470,6 +1480,7 @@ class PresenceWorker:
                         "memory.embed.embedder_warm role=loader backend=%s",
                         getattr(mem_cfg, "embed_backend", "?"),
                     )
+                    # Loader returns raw for bulk encode_atom path.
                     return self._embedder
             # Close orphan outside lock.
             if orphan is not None:
@@ -1648,11 +1659,8 @@ class PresenceWorker:
             mem_cfg = self.settings.memory
             self._traversal.bind_settings(mem_cfg)
             index = self._ensure_embedding_index()
-            # Warm only: never call open_encoder solely for graph hops.
-            embedder = self._embedder
-            if embedder is None and mem_cfg.embed_enabled:
-                # Only reuse if already opened elsewhere; do not force load.
-                pass
+            # Consumer gated handle only (KD-E5); never cold-load for graph.
+            embedder = self._ensure_embedder(role="consumer")
             return GraphView(
                 store,
                 index=index,
@@ -2669,13 +2677,13 @@ class PresenceWorker:
                             semantic_wait_for_select=bool(sw.enabled),
                             semantic_wait_max_ms=int(sw.max_ms),
                         )
-                    # Semantic select: pass index (cheap open) + warm embedder
-                    # only (KD12 — no cold model load inside rebuild_outer).
+                    # Semantic select: index + gated consumer embedder only
+                    # (KD12 — no cold load; KD-E5 — lookup priority via gate).
                     meal_index = None
                     meal_embedder = None
                     if mem_cfg.semantic_enabled:
                         meal_index = self._ensure_embedding_index()
-                        meal_embedder = self._embedder
+                        meal_embedder = self._ensure_embedder(role="consumer")
                     # PR-A3 / KD-A16: directed_keep from last_confirmed_keep on
                     # next natural compose only (no soft re-outer on finish).
                     dk_ids, dk_summary = self._last_confirmed_keep_for_meal(
