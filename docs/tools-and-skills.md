@@ -355,7 +355,22 @@ Exact checklists live in `skills/bundled/review-identity/SKILL.md` and `skills/b
 | `browse` | `browser_*` | Re-snapshot after navigation; close sessions; unavailable → honest stop |
 | `github-workflow` | `git_*`, `gh_*`, package VCS | Prefer feature/execute-plan branches; never force-push main; worktrees; Projects; grant stops |
 
-Phase 1 `grok_build` tool is **not** in this surface yet — skills teach rails only. The host instrument is **designed** in [design-grok-build-tool.md](design-grok-build-tool.md) (summary: [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md)); implementation and registration are forthcoming. Branch / tip law for stacks: [branch-law.md](branch-law.md) (`working` integration tip).
+### Grok Build (`grok_build`)
+
+Phase 1 `grok_build` **is in the callable surface on the feature branch** (`feature/grok-build-tool` and stacked tips). Host builtin `elyra.tools.builtin.grok_build` + `elyra/instrument/*`; bundled package, `self-improve`, and extended `github-workflow` route async design / implement / review / execute_plan work through it.
+
+| Fact | Detail |
+|------|--------|
+| **Where** | Feature tip (`feature/grok-build-tool`), not house `working` / `main` until later product gate (PR8) |
+| **Modes** | `prompt` (sync), `design` / `implement` / `review` / `execute_plan` (async jobs + poll), `deep_research` (experimental — fail-closed `mode_experimental` until PR0a signs) |
+| **Auth** | PE `xai_oauth` access-only: seed isolated `GROK_HOME/auth.json` (ExternalBinary) + live `auth_provider_command` for mid-run mint. **Never** refresh_token into guest/operator auth material. Pin behavior against **Grok 0.2.118**. |
+| **Lifecycle** | Zombie-aware liveness + `waitpid` reaping; dead/unknown exit ⇒ failed (never false `completed`); auth death → `auth_unavailable` / `auth_expired`; async finalize redacts access |
+| **cwd** | Host-absolute path under the VCS jail (see TOOL.md / skills). Guest-relative paths fail `not_a_repo`. |
+| **Dogfood** | Operator checklist [grok-build-dogfood.md](grok-build-dogfood.md). **D1 required** on advanced feature tip before any PR8 discussion. **D3/D6** remain PR8 / H-spine gates (operator later). **D7** experimental. **No** dedicated smoke script — checklist only. |
+
+Design (Phase 1): [design-grok-build-tool.md](design-grok-build-tool.md) · summary [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md).  
+Post-dogfood functionalization (auth seed + zombie/finalize): [design-grok-build-functionalization.md](design-grok-build-functionalization.md).  
+Branch / tip law: [branch-law.md](branch-law.md) (`working` remains house integration tip for broader product land).
 
 ---
 

@@ -12,16 +12,21 @@ Enable skeletons (still no heavy Grok spend by default)::
 
 Default tests only exercise **discover** (``find_grok_binary`` / bundled seed)
 and pure **validate** dry-runs. Full mode spawns (prompt/design/… ) stay
-operator checklist work — see ``docs/grok-build-dogfood.md``.
+**operator checklist** work — see ``docs/grok-build-dogfood.md``.
+**No** dedicated smoke script; checklist only.
 
 Dogfood matrix D1–D13 (normative design table):
   docs/design-grok-build-tool.md § "Dogfood matrix / acceptance"
+Functionalization (auth seed + zombie/finalize, Grok 0.2.118):
+  docs/design-grok-build-functionalization.md
 
   D1  mode=prompt “summarize README” in repo
       → ok summary; no token leakage in result.json
-  D2  Missing OAuth
+      → **required green** on advanced feature/grok-build-tool tip
+        before any PR8 discussion (host-absolute cwd)
+  D2  Missing OAuth  (preferred with D1)
       → auth_unavailable; task can block honestly
-  D3  mode=design small fixture (async)  **gate before PR8**
+  D3  mode=design small fixture (async)  **gate before PR8** (operator later)
       → job_id → poll completed or needs_human; artifacts/design.md;
         presence worker not blocked for 90m
   D4  mode=implement effort=1 tiny change (async)
@@ -29,27 +34,30 @@ Dogfood matrix D1–D13 (normative design table):
   D5  mode=review --local (async)
       → artifacts/review.md; honest findings
   D6  mode=execute_plan mini design (1–2 PRs), plain-git  **gate before PR8**
+      (operator later after D1)
       → PE preflight working; meta argv has --no-graphite;
         stack base working (or documented residual); presence free during run
-  D7  mode=deep_research  **per spike doc (PR0a)**
+  D7  mode=deep_research  **experimental only** until PR0a signs
       → only after PR0a: strategy (1)/(2) green; or honest mode_experimental
         if not enabled. See docs/grok-build-headless-spike.md (PR0a) and
         design KD16 — do not claim completed from background-ack alone.
-  D8  Usage
+  D8  Usage  (preferred with D1)
       → headless-shaped usage recorded via adapter; hard-stop prevents launch
   D9  Skill routing
       → self-improve M → implement without execute_plan; async poll steps
   D10 Guest / secret_env law
       → no OAuth in secret_env; guest paths clean
-  D11 Skill seed
+  D11 Skill seed  (preferred with D1)
       → isolated GROK_HOME resolves design+implement (discover gate)
   D12 Mid-run auth
-      → multi-hour or forced GROK_AUTH_EXPIRED gets fresh access (mock/live)
-  D13 Reaper restart
-      → kill PE mid-job → on restart job interrupted, tokens shredded
+      → multi-hour or forced GROK_AUTH_EXPIRED gets fresh access (mock/live);
+        ExternalBinary seed + live provider refresh (no refresh_token seed)
+  D13 Reaper restart  (preferred with D1)
+      → kill PE mid-job → on restart job interrupted, tokens shredded;
+        auth-death must not stay running (zombie reap + honest finalize)
 
-Phase 1 callable surface: D1–D6 + D8–D13 green (D7 per spike).
-H-spine ready requires **D3 + D6** before PR8 merge.
+Phase 1 callable on feature tip; full matrix: D1–D6 + D8–D13 green (D7 per spike).
+H-spine / PR8 requires **D3 + D6** (after D1 green on advanced tip).
 """
 
 from __future__ import annotations
