@@ -111,7 +111,11 @@ def run_dir_for(paths: ElyraPaths, job_id: str) -> Path:
 
 
 def is_pid_alive(pid: int | None) -> bool:
-    """True if ``pid`` is a positive int and the process exists (signal 0)."""
+    """True only if process exists and is not a zombie.
+
+    ``os.kill(pid, 0)`` succeeds for zombies — insufficient alone (KD-F6).
+    Prefer ``/proc/<pid>/stat`` state on Linux; fall back to kill(0).
+    """
     if pid is None:
         return False
     try:
@@ -120,6 +124,19 @@ def is_pid_alive(pid: int | None) -> bool:
         return False
     if p <= 0:
         return False
+    # Prefer /proc state when available (Linux).
+    stat_path = f"/proc/{p}/stat"
+    try:
+        with open(stat_path, "r", encoding="utf-8") as fh:
+            raw = fh.read()
+        # Format: pid (comm) state ...  — state is first token after last ')'
+        state = raw.split(")", 1)[1].split()[0]
+        if state == "Z":
+            return False
+    except FileNotFoundError:
+        return False
+    except (OSError, IndexError, ValueError):
+        pass  # fall through to kill(0)
     try:
         os.kill(p, 0)
     except ProcessLookupError:
@@ -130,6 +147,40 @@ def is_pid_alive(pid: int | None) -> bool:
     except OSError:
         return False
     return True
+
+
+def reap_instrument_pid(pid: int | None) -> int | None:
+    """Best-effort waitpid(WNOHANG) for a grok_build child (KD-F6).
+
+    Targets the recorded **pid** (session leader from start_new_session=True),
+    not pgid. Returns:
+      - int exit_code if this process reaped the child
+      - None if still running, not our child (ECHILD), or pid invalid
+
+    Does not raise on ECHILD / ChildProcessError.
+    """
+    if pid is None:
+        return None
+    try:
+        p = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if p <= 0:
+        return None
+    try:
+        finished_pid, status = os.waitpid(p, os.WNOHANG)
+    except ChildProcessError:
+        return None  # not our child (e.g. PE restarted) — caller uses /proc
+    except OSError:
+        return None
+    if finished_pid == 0:
+        return None  # still running
+    # Decode wait status → exit code (normative)
+    if os.WIFEXITED(status):
+        return int(os.WEXITSTATUS(status))
+    if os.WIFSIGNALED(status):
+        return -int(os.WTERMSIG(status))
+    return -1
 
 
 def shred_path(path: Path | str) -> bool:
@@ -681,6 +732,7 @@ __all__ = [
     "load_result",
     "prune_old_runs",
     "read_log",
+    "reap_instrument_pid",
     "run_dir_for",
     "shred_path",
     "shred_tokens",

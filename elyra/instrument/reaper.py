@@ -42,6 +42,7 @@ from elyra.instrument.jobs import (
     load_job,
     load_result,
     read_log,
+    reap_instrument_pid,
     run_dir_for,
     shred_tokens,
     update_job_status,
@@ -158,6 +159,92 @@ def parse_headless_json(stdout: str) -> dict[str, Any] | None:
     return None
 
 
+def _map_auth_message(text: str) -> str | None:
+    """Map free-form / headless error text → auth error_reason, or None."""
+    low = (text or "").lower()
+    # Cold-start / sign-in phrases (live job message + stderr)
+    if "not signed in" in low or "device-code" in low or "device code" in low:
+        return "auth_unavailable"
+    if "no auth credentials" in low:
+        return "auth_unavailable"
+    if "auth" in low and any(
+        x in low for x in ("expired", "reauth", "unauthorized", "401")
+    ):
+        return "auth_expired" if "expired" in low else "auth_unavailable"
+    return None
+
+
+def _hint_for(reason: str) -> str:
+    if reason in ("auth_unavailable", "auth_expired"):
+        return "xai_oauth login required (elyra auth login / Glass)"
+    return ""
+
+
+def _error_shaped_stdout_slice(
+    stdout: str,
+    headless: dict[str, Any] | None,
+) -> str:
+    """Stdout material safe for secondary phrase match — not success body text.
+
+    If headless has a free-form success ``text`` field, exclude it. Prefer empty
+    string when stdout is only a success JSON object.
+    """
+    if isinstance(headless, dict) and "text" in headless and headless.get("type") != "error":
+        return ""  # success-shaped — do not phrase-scan authored content
+    # Non-JSON / bare Error: lines (some grok builds print plain stderr-like stdout)
+    head = (stdout or "")[:4000]
+    low = head.lower()
+    if head.lstrip().startswith("{") and '"type"' not in low[:80]:
+        # Likely success JSON without type=error — refuse full-body phrase scan
+        return ""
+    return head
+
+
+def classify_instrument_failure(
+    stdout: str,
+    stderr: str,
+    headless: dict[str, Any] | None,
+    *,
+    exit_code: int | None,
+) -> tuple[str, str] | None:
+    """Return (error_reason, hint) if logs show a clear instrument failure class.
+
+    Independent of harvest artifacts. Phrase match is gated — see KD-F8/F16.
+    """
+    # 1) PRIMARY — headless error object (live dogfood shape). Map message only.
+    if isinstance(headless, dict) and headless.get("type") == "error":
+        msg = str(headless.get("message") or "")
+        reason = _map_auth_message(msg) or "nonzero_exit"
+        return reason, _hint_for(reason)
+
+    # 2) SECONDARY — free-form phrases only when process failed / dead-default.
+    #    exit_code 0 or None-as-still-unknown-success-path: never phrase-match.
+    if exit_code in (0, None):
+        return None
+
+    # Prefer stderr (live job writes "Not signed in…" there). Do NOT scan success
+    # body text. Optionally allow a short head of stdout only if it is clearly
+    # error-shaped — never the free-form ``text`` field content alone.
+    for corpus in (stderr, _error_shaped_stdout_slice(stdout, headless)):
+        if not corpus:
+            continue
+        reason = _map_auth_message(corpus)
+        if reason:
+            return reason, _hint_for(reason)
+    return None
+
+
+def auth_known_values_for_finalize(paths: ElyraPaths) -> list[str] | None:
+    """Best-effort PE-store secrets for async finalize redaction (KD-F15)."""
+    try:
+        from elyra.llm.auth import auth_secret_values_for_redaction
+
+        vals = auth_secret_values_for_redaction(paths.data_dir)
+        return list(vals) if vals else None
+    except Exception:  # noqa: BLE001 — redaction best-effort
+        return None
+
+
 def finalize_job(
     paths: ElyraPaths,
     job_id: str,
@@ -170,6 +257,10 @@ def finalize_job(
     known_values: list[str] | None = None,
 ) -> tuple[JobMeta, dict[str, Any]]:
     """Harvest logs, write result.json, shred tokens, update meta.
+
+    Normative death-path order (KD-F8/F14/F16): classify auth/headless failure
+    **before** harvest-driven completed mapping; dead callers must pass a
+    concrete ``exit_code`` (never leave None → completed).
 
     Idempotent when result already exists and status is terminal.
     Returns (updated_meta, result_payload).
@@ -207,6 +298,11 @@ def finalize_job(
     if code is None and timed_out:
         code = -9
 
+    classify_hint: str | None = None
+    classified = classify_instrument_failure(
+        stdout, stderr, headless, exit_code=code
+    )
+
     if status_override is not None:
         status = status_override
     elif timed_out:
@@ -214,6 +310,11 @@ def finalize_job(
         error_reason = error_reason or "timeout"
     elif error_reason == "interrupted":
         status = JOB_STATUS_INTERRUPTED
+    elif classified is not None:
+        # KD-F8/F16: force failed + mapped reason; skip harvest completed path.
+        status = JOB_STATUS_FAILED
+        error_reason = classified[0]
+        classify_hint = classified[1] or None
     else:
         status = resolve_status_from_harvest(harvest, exit_code=code)
         if status == JOB_STATUS_FAILED and not error_reason:
@@ -221,25 +322,21 @@ def finalize_job(
         if status == JOB_STATUS_NEEDS_HUMAN:
             error_reason = None
 
-    # Auth-looking death (best-effort heuristics).
-    combined = f"{stdout}\n{stderr}".lower()
-    if status == JOB_STATUS_FAILED and error_reason in (None, "nonzero_exit"):
-        if "auth" in combined and (
-            "expired" in combined or "reauth" in combined or "unauthorized" in combined
-        ):
-            error_reason = (
-                "auth_expired" if "expired" in combined else "auth_unavailable"
-            )
-
     summary = ""
-    if headless and isinstance(headless.get("text"), str):
+    if (
+        headless
+        and isinstance(headless.get("text"), str)
+        and headless.get("type") != "error"
+    ):
         summary = headless["text"][:2000]
+    elif headless and headless.get("type") == "error":
+        summary = str(headless.get("message") or stdout or "")[:2000]
     elif stdout:
         summary = stdout[:2000]
     if harvest.get("needs_human") and not summary:
         summary = "needs_human"
 
-    # Redact summary/logs lightly via known_values if provided.
+    # Redact summary via known_values if provided (KD-F15).
     if known_values:
         from elyra.instrument.redact import redact_string
 
@@ -271,6 +368,7 @@ def finalize_job(
             summary=summary,
             run_id=meta.run_id or meta.job_id,
             job_id=meta.job_id,
+            hint=classify_hint,
             extra={
                 "status": status,
                 "exit_code": code,
@@ -281,6 +379,12 @@ def finalize_job(
         )
         result["status"] = status
         result["ok"] = False
+
+    # Full-payload redaction when known secrets provided (async path).
+    if known_values:
+        from elyra.instrument.redact import redact_result_payload
+
+        result = redact_result_payload(result, known_values)
 
     write_result(paths, job_id, result)
     updated = update_job_status(
@@ -405,10 +509,18 @@ class InstrumentReaper:
         return finalized
 
     def _handle_running(self, meta: JobMeta) -> bool:
-        """Return True if job was finalized this call."""
+        """Return True if job was finalized this call.
+
+        Flow (KD-F6/F14): wall timeout → kill; else reap_instrument_pid; if
+        exit known or not alive → finalize with concrete exit_code (or -1).
+        """
+        known = auth_known_values_for_finalize(self.paths)
+
         # Wall timeout: kill process group then finalize as timeout.
         if self._is_overdue(meta):
             _kill_pgid(meta.pgid, meta.pid)
+            # Best-effort reap after kill so zombie does not linger.
+            reaped = reap_instrument_pid(meta.pid)
             updated, _result = finalize_job(
                 self.paths,
                 meta.job_id,
@@ -416,16 +528,18 @@ class InstrumentReaper:
                 status_override=JOB_STATUS_FAILED,
                 error_reason="timeout",
                 timed_out=True,
-                exit_code=-9,
+                exit_code=reaped if reaped is not None else -9,
+                known_values=known,
             )
             self._enqueue_completion(updated, status=updated.status)
             return True
 
-        alive = is_pid_alive(meta.pid)
-        if alive:
+        # Reap first (supplies exit_code when we are parent); then liveness.
+        reaped = reap_instrument_pid(meta.pid)
+        if reaped is None and is_pid_alive(meta.pid):
             return False
 
-        # Dead pid (or never had one) — finalize.
+        # Dead pid / zombie / gone — finalize with concrete exit (KD-F14).
         # pid None with running: treat as incomplete until GC stale, but if
         # result already written (sync finalize race), just mark + wake.
         existing = load_result(self.paths, meta.job_id)
@@ -455,11 +569,28 @@ class InstrumentReaper:
             if not stdout.strip():
                 return False
 
+        # KD-F14: unknown exit on dead child is FAILURE (-1), never None→completed.
+        code = reaped if reaped is not None else -1
+        if reaped is None and meta.pid is not None:
+            logger.info(
+                "instrument zombie_or_gone pid=%s job_id=%s exit_code=-1",
+                meta.pid,
+                meta.job_id,
+            )
+        elif reaped is not None:
+            logger.info(
+                "instrument reaped pid=%s exit=%s job_id=%s",
+                meta.pid,
+                reaped,
+                meta.job_id,
+            )
+
         updated, _result = finalize_job(
             self.paths,
             meta.job_id,
             meter=self.meter,
-            exit_code=meta.exit_code,
+            exit_code=code,
+            known_values=known,
         )
         self._enqueue_completion(updated, status=updated.status)
         return True
@@ -506,7 +637,9 @@ __all__ = [
     "DEFAULT_JOIN_TIMEOUT_S",
     "DEFAULT_POLL_INTERVAL_S",
     "InstrumentReaper",
+    "auth_known_values_for_finalize",
     "build_completion_payload",
+    "classify_instrument_failure",
     "finalize_job",
     "parse_headless_json",
 ]

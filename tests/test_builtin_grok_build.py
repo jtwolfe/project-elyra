@@ -599,14 +599,21 @@ def test_poll_job_running(
     repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import os
+
     _stub_ready(monkeypatch)
+    # Use this process pid so is_pid_alive is True (fake dead pids would
+    # trigger poll opportunistic finalize).
+    live_pid = os.getpid()
 
     def fake_spawn(argv, **kw: Any) -> SpawnedProcess:
         out = Path(kw["stdout_path"])
         err = Path(kw["stderr_path"])
         out.write_text("", encoding="utf-8")
         err.write_text("", encoding="utf-8")
-        return SpawnedProcess(pid=888, pgid=888, stdout_path=out, stderr_path=err)
+        return SpawnedProcess(
+            pid=live_pid, pgid=live_pid, stdout_path=out, stderr_path=err
+        )
 
     monkeypatch.setattr(gb_mod, "spawn_grok", fake_spawn)
     spawned = grok_build(
@@ -625,6 +632,114 @@ def test_poll_job_not_found(ctx: ToolContext) -> None:
     result = grok_build({"mode": "prompt", "job_id": "does-not-exist-zzzz"}, ctx)
     assert not result.ok
     assert result.error_reason == "job_not_found"
+
+
+def test_poll_opportunistic_finalize_dead_pid(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Poll finalizes when meta is running but pid is dead (KD-F6/F14)."""
+    from elyra.instrument.jobs import (
+        JOB_STATUS_FAILED,
+        STDERR_NAME,
+        STDOUT_NAME,
+        create_job,
+        load_job,
+        load_result,
+    )
+
+    dead_pid = 2_000_000_701
+    meta = create_job(
+        ctx.paths,
+        mode="implement",
+        job_id="poll-dead1",
+        pid=dead_pid,
+        timeout_s=3600,
+    )
+    run_dir = run_dir_for(ctx.paths, meta.job_id)
+    (run_dir / STDOUT_NAME).write_text("", encoding="utf-8")
+    (run_dir / STDERR_NAME).write_text(
+        "Not signed in. Please authenticate.",
+        encoding="utf-8",
+    )
+    # Ensure status still running
+    assert load_job(ctx.paths, "poll-dead1").status == "running"
+
+    polled = grok_build({"mode": "implement", "job_id": "poll-dead1"}, ctx)
+    assert not polled.ok
+    assert polled.error_reason == "auth_unavailable"
+    assert polled.payload.get("status") == JOB_STATUS_FAILED
+    reloaded = load_job(ctx.paths, "poll-dead1")
+    assert reloaded is not None
+    assert reloaded.status == JOB_STATUS_FAILED
+    assert reloaded.exit_code == -1
+    assert load_result(ctx.paths, "poll-dead1") is not None
+
+
+def test_seed_failure_terminalizes_job(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seed failure after create_job leaves terminal failed job, not eternal running."""
+    from elyra.instrument.discover import GrokSkillsUnavailableError
+    from elyra.instrument.jobs import JOB_STATUS_FAILED, list_jobs, load_job, load_result
+
+    _stub_ready(monkeypatch, seed=False)
+
+    def boom_seed(*_a: Any, **_k: Any) -> Any:
+        raise GrokSkillsUnavailableError("no skills")
+
+    monkeypatch.setattr(gb_mod, "seed_isolated_home", boom_seed)
+    monkeypatch.setattr(gb_mod, "find_grok_binary", lambda **_k: Path("/usr/bin/fake-grok"))
+
+    result = grok_build(
+        {"mode": "design", "prompt": "x", "cwd": str(repo)},
+        ctx,
+    )
+    assert not result.ok
+    assert result.error_reason == "grok_skills_unavailable"
+    job_id = result.payload.get("job_id")
+    assert job_id
+    meta = load_job(ctx.paths, job_id)
+    assert meta is not None
+    assert meta.status == JOB_STATUS_FAILED
+    assert meta.error_reason == "grok_skills_unavailable"
+    res = load_result(ctx.paths, job_id)
+    assert res is not None
+    assert res.get("status") == JOB_STATUS_FAILED
+    # No eternally running jobs left from this attempt.
+    running = list_jobs(ctx.paths, status="running")
+    assert not any(j.job_id == job_id for j in running)
+
+
+def test_spawn_failure_terminalizes_job(
+    ctx: ToolContext,
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spawn failure after create_job marks job failed + result.json."""
+    from elyra.instrument.jobs import JOB_STATUS_FAILED, load_job, load_result
+
+    _stub_ready(monkeypatch)
+
+    def boom_spawn(*_a: Any, **_k: Any) -> Any:
+        raise OSError("spawn failed")
+
+    monkeypatch.setattr(gb_mod, "spawn_grok", boom_spawn)
+    result = grok_build(
+        {"mode": "design", "prompt": "x", "cwd": str(repo)},
+        ctx,
+    )
+    assert not result.ok
+    assert result.error_reason == "skill_failed"
+    job_id = result.payload.get("job_id")
+    assert job_id
+    meta = load_job(ctx.paths, job_id)
+    assert meta is not None
+    assert meta.status == JOB_STATUS_FAILED
+    assert load_result(ctx.paths, job_id) is not None
 
 
 def test_invalid_effort(

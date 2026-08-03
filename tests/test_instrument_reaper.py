@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import threading
 import time
@@ -18,6 +19,7 @@ from elyra.instrument.jobs import (
     JOB_STATUS_INTERRUPTED,
     JOB_STATUS_RUNNING,
     RESULT_NAME,
+    STDERR_NAME,
     STDOUT_NAME,
     create_job,
     load_job,
@@ -31,6 +33,7 @@ from elyra.instrument.reaper import (
     COMPLETION_WAKE_KIND,
     InstrumentReaper,
     build_completion_payload,
+    classify_instrument_failure,
     finalize_job,
     parse_headless_json,
 )
@@ -297,6 +300,174 @@ def test_parse_headless_json() -> None:
     assert parse_headless_json('{"text":"a"}') == {"text": "a"}
     assert parse_headless_json("noise\n{\"ok\": true}\n") == {"ok": True}
     assert parse_headless_json("") is None
+
+
+def test_classify_a_headless_error_auth_unavailable() -> None:
+    """(a) headless type=error Not signed in / device-code → auth_unavailable."""
+    headless = {
+        "type": "error",
+        "message": "Not signed in. Use device-code flow to authenticate.",
+    }
+    got = classify_instrument_failure(
+        '{"type":"error","message":"Not signed in. Use device-code flow."}',
+        "Not signed in. Use device-code flow.",
+        headless,
+        exit_code=-1,
+    )
+    assert got is not None
+    assert got[0] == "auth_unavailable"
+
+
+def test_classify_b_exit0_device_code_in_text_not_auth() -> None:
+    """(b) exit 0 + success text mentioning device-code → no classify match."""
+    headless = {"text": "The app uses device-code flow for OAuth login."}
+    got = classify_instrument_failure(
+        '{"text":"The app uses device-code flow for OAuth login."}',
+        "",
+        headless,
+        exit_code=0,
+    )
+    assert got is None
+
+
+def test_classify_c_stderr_not_signed_in() -> None:
+    """(c) exit 1 + stderr Not signed in → auth_unavailable."""
+    got = classify_instrument_failure(
+        "",
+        "Not signed in. Please authenticate.",
+        None,
+        exit_code=1,
+    )
+    assert got is not None
+    assert got[0] == "auth_unavailable"
+
+
+def test_finalize_a_dead_headless_error_auth(tmp_path: Path) -> None:
+    """(a) dead + implement + headless type=error → failed auth_unavailable."""
+    paths = _paths(tmp_path)
+    meta = create_job(paths, mode="implement", job_id="auth-a", pid=2_000_000_501)
+    run_dir = run_dir_for(paths, meta.job_id)
+    msg = "Not signed in. Visit https://x.ai/device-code"
+    (run_dir / STDOUT_NAME).write_text(
+        json.dumps({"type": "error", "message": msg}),
+        encoding="utf-8",
+    )
+    (run_dir / STDERR_NAME).write_text(msg, encoding="utf-8")
+
+    updated, result = finalize_job(paths, "auth-a", exit_code=-1)
+    assert updated.status == JOB_STATUS_FAILED
+    assert updated.error_reason == "auth_unavailable"
+    assert result.get("ok") is False
+    assert result.get("error_reason") == "auth_unavailable"
+    assert result.get("status") != JOB_STATUS_COMPLETED
+
+
+def test_finalize_b_exit0_device_code_text_completed(tmp_path: Path) -> None:
+    """(b) exit 0 + headless text with device-code → completed (D1 guard)."""
+    paths = _paths(tmp_path)
+    meta = create_job(paths, mode="prompt", job_id="auth-b", pid=None)
+    run_dir = run_dir_for(paths, meta.job_id)
+    (run_dir / STDOUT_NAME).write_text(
+        json.dumps(
+            {
+                "text": "Summary: design uses device-code flow in README.",
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / STDERR_NAME).write_text("", encoding="utf-8")
+
+    updated, result = finalize_job(paths, "auth-b", exit_code=0)
+    assert updated.status == JOB_STATUS_COMPLETED
+    assert result.get("ok") is True
+    assert result.get("error_reason") is None or result.get("error_reason") == ""
+    assert "device-code" in (result.get("summary") or "")
+
+
+def test_finalize_c_exit1_stderr_not_signed_in(tmp_path: Path) -> None:
+    """(c) exit 1 + stderr Not signed in → auth_unavailable."""
+    paths = _paths(tmp_path)
+    meta = create_job(paths, mode="implement", job_id="auth-c", pid=2_000_000_502)
+    run_dir = run_dir_for(paths, meta.job_id)
+    (run_dir / STDOUT_NAME).write_text("", encoding="utf-8")
+    (run_dir / STDERR_NAME).write_text(
+        "Error: Not signed in. Please log in.",
+        encoding="utf-8",
+    )
+
+    updated, result = finalize_job(paths, "auth-c", exit_code=1)
+    assert updated.status == JOB_STATUS_FAILED
+    assert updated.error_reason == "auth_unavailable"
+    assert result.get("error_reason") == "auth_unavailable"
+
+
+def test_finalize_dead_unknown_exit_failed_nonzero(tmp_path: Path) -> None:
+    """Dead + no auth match + exit -1 → failed + nonzero_exit."""
+    paths = _paths(tmp_path)
+    meta = create_job(paths, mode="prompt", job_id="dead-x", pid=2_000_000_503)
+    run_dir = run_dir_for(paths, meta.job_id)
+    (run_dir / STDOUT_NAME).write_text("boom\n", encoding="utf-8")
+    (run_dir / STDERR_NAME).write_text("segfault-ish\n", encoding="utf-8")
+
+    updated, result = finalize_job(paths, "dead-x", exit_code=-1)
+    assert updated.status == JOB_STATUS_FAILED
+    assert updated.error_reason == "nonzero_exit"
+    assert updated.exit_code == -1
+    assert result.get("ok") is False
+
+
+def test_finalize_async_redacts_planted_access(tmp_path: Path) -> None:
+    """Async finalize path redacts planted access string from result summary."""
+    paths = _paths(tmp_path)
+    secret = "planted-access-token-abc123XYZ"
+    meta = create_job(paths, mode="prompt", job_id="redact1", pid=None)
+    run_dir = run_dir_for(paths, meta.job_id)
+    (run_dir / STDOUT_NAME).write_text(
+        json.dumps({"text": f"token leaked: {secret}"}),
+        encoding="utf-8",
+    )
+    # Reaper/poll always pass known_values from PE store; here we plant call-local.
+    _updated, result = finalize_job(
+        paths, "redact1", exit_code=0, known_values=[secret]
+    )
+    summary = result.get("summary") or ""
+    assert secret not in summary
+    assert secret not in json.dumps(result)
+    from elyra.instrument.redact import PLACEHOLDER
+
+    assert PLACEHOLDER in summary
+
+
+def test_reaper_finalizes_dead_child_with_exit_minus_one(tmp_path: Path) -> None:
+    """poll_once finalizes unreaped dead child; writes result; one background wake."""
+    paths = _paths(tmp_path)
+    shared = WakeQueue(paths)
+    dead_pid = 2_000_000_600
+    create_job(
+        paths, mode="prompt", job_id="reap-dead", pid=dead_pid, timeout_s=3600
+    )
+    run_dir = run_dir_for(paths, "reap-dead")
+    (run_dir / STDOUT_NAME).write_text('{"text":"partial"}', encoding="utf-8")
+
+    reaper = InstrumentReaper(
+        paths=paths,
+        wake_queue=shared,
+        stop_event=threading.Event(),
+        poll_interval_s=0.05,
+    )
+    finalized = reaper.poll_once()
+    assert "reap-dead" in finalized
+    meta = load_job(paths, "reap-dead")
+    assert meta is not None
+    assert meta.status == JOB_STATUS_FAILED
+    assert meta.exit_code == -1
+    result = load_result(paths, "reap-dead")
+    assert result is not None
+    assert result.get("ok") is False
+    pending = shared.pending()
+    bg = [w for w in pending if w.kind == "background" and w.payload.get("job_id") == "reap-dead"]
+    assert len(bg) == 1
 
 
 def test_supervisor_wires_shared_queue(tmp_path: Path) -> None:

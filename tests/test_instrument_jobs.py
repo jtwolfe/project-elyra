@@ -29,6 +29,7 @@ from elyra.instrument.jobs import (
     list_jobs,
     load_job,
     load_result,
+    reap_instrument_pid,
     run_dir_for,
     shred_tokens,
     update_job,
@@ -218,3 +219,62 @@ def test_is_pid_alive_self() -> None:
     assert is_pid_alive(None) is False
     assert is_pid_alive(-1) is False
     assert is_pid_alive(0) is False
+
+
+def test_is_pid_alive_missing_pid() -> None:
+    dead_pid = 2_000_000_777
+    while is_pid_alive(dead_pid):
+        dead_pid += 1
+    assert is_pid_alive(dead_pid) is False
+
+
+def test_is_pid_alive_zombie_false(tmp_path: Path) -> None:
+    """Synthetic zombie: child exits, parent has not waitpid'd → state Z → dead."""
+    # Use os.fork for a true unreaped zombie under this process.
+    if not hasattr(os, "fork"):
+        pytest.skip("os.fork required for zombie synthesis")
+    child_pid = os.fork()
+    if child_pid == 0:
+        # Child: exit immediately.
+        os._exit(0)
+    # Parent: do NOT wait yet — child becomes zombie.
+    # Brief spin until /proc shows Z or gone.
+    deadline = time.time() + 2.0
+    saw_zombie = False
+    while time.time() < deadline:
+        try:
+            with open(f"/proc/{child_pid}/stat", encoding="utf-8") as fh:
+                raw = fh.read()
+            state = raw.split(")", 1)[1].split()[0]
+            if state == "Z":
+                saw_zombie = True
+                break
+        except (FileNotFoundError, OSError, IndexError):
+            break
+        time.sleep(0.01)
+    try:
+        if saw_zombie:
+            assert is_pid_alive(child_pid) is False
+        # Reap and assert exit code + /proc gone.
+        code = reap_instrument_pid(child_pid)
+        assert code == 0
+        # After reaping, /proc should be gone.
+        deadline = time.time() + 1.0
+        while time.time() < deadline and Path(f"/proc/{child_pid}").exists():
+            time.sleep(0.01)
+        assert not Path(f"/proc/{child_pid}").exists()
+        assert is_pid_alive(child_pid) is False
+    finally:
+        # Safety reap if test failed mid-way.
+        try:
+            os.waitpid(child_pid, os.WNOHANG)
+        except (ChildProcessError, OSError):
+            pass
+
+
+def test_reap_instrument_pid_invalid() -> None:
+    assert reap_instrument_pid(None) is None
+    assert reap_instrument_pid(-1) is None
+    assert reap_instrument_pid(0) is None
+    # Not our child / never existed → ECHILD or no-op → None
+    assert reap_instrument_pid(2_000_000_888) is None

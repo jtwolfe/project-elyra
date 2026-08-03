@@ -28,16 +28,21 @@ from elyra.instrument.discover import (
 )
 from elyra.instrument.jobs import (
     ARTIFACTS_DIR_NAME,
+    JOB_STATUS_FAILED,
     JOB_STATUS_RUNNING,
     RESULT_NAME,
     STDERR_NAME,
     STDOUT_NAME,
     create_job,
+    is_pid_alive,
     load_job,
     load_result,
+    reap_instrument_pid,
     run_dir_for,
     shred_tokens,
     update_job,
+    update_job_status,
+    write_result,
 )
 from elyra.instrument.modes import (
     DEEP_RESEARCH_EXPERIMENTAL,
@@ -49,9 +54,10 @@ from elyra.instrument.modes import (
 )
 from elyra.instrument.process import run_grok, spawn_grok
 from elyra.instrument.redact import merge_known_values, redact_result_payload
-from elyra.instrument.reaper import finalize_job
+from elyra.instrument.reaper import auth_known_values_for_finalize, finalize_job
 from elyra.instrument.result import (
     STATUS_COMPLETED,
+    STATUS_FAILED,
     STATUS_NEEDS_HUMAN,
     STATUS_RUNNING,
     make_error_payload,
@@ -198,6 +204,43 @@ def _base_branch_exists(repo: Path, branch: str) -> bool:
     return False
 
 
+def _terminalize_orphan(
+    ctx: ToolContext,
+    job_id: str,
+    *,
+    mode: Mode | str | None,
+    error_reason: str,
+    hint: str | None = None,
+) -> ToolResult:
+    """Mark a post-create_job failure terminal so it is not left running forever."""
+    run_dir = run_dir_for(ctx.paths, job_id)
+    try:
+        update_job_status(
+            ctx.paths,
+            job_id,
+            JOB_STATUS_FAILED,
+            error_reason=error_reason,
+        )
+    except FileNotFoundError:
+        pass
+    payload = make_error_payload(
+        error_reason,
+        mode=mode,
+        hint=hint,
+        job_id=job_id,
+        run_id=job_id,
+        extra={"status": STATUS_FAILED},
+    )
+    payload["status"] = STATUS_FAILED
+    payload["ok"] = False
+    try:
+        write_result(ctx.paths, job_id, payload)
+    except FileNotFoundError:
+        pass
+    shred_tokens(run_dir)
+    return ToolResult(ok=False, payload=payload, error_reason=error_reason)
+
+
 def _poll_job(job_id: str, ctx: ToolContext) -> ToolResult:
     meta = load_job(ctx.paths, job_id)
     if meta is None:
@@ -210,6 +253,39 @@ def _poll_job(job_id: str, ctx: ToolContext) -> ToolResult:
             ok = True
         err = None if ok else (result.get("error_reason") or meta.error_reason or "failed")
         return ToolResult(ok=ok, payload=dict(result), error_reason=err)
+
+    # Opportunistic finalize when meta says running but pid is dead/zombie (KD-F6/F14).
+    if meta.status == JOB_STATUS_RUNNING and meta.pid is not None:
+        reaped = reap_instrument_pid(meta.pid)
+        if reaped is not None or not is_pid_alive(meta.pid):
+            code = reaped if reaped is not None else -1
+            known = auth_known_values_for_finalize(ctx.paths)
+            try:
+                _meta, result = finalize_job(
+                    ctx.paths,
+                    job_id,
+                    meter=_meter_from_ctx(ctx),
+                    exit_code=code,
+                    known_values=known,
+                )
+            except Exception as exc:  # noqa: BLE001 — never crash the tool
+                _LOG.exception("grok_build poll finalize failed job_id=%s", job_id)
+                return _err(
+                    "skill_failed",
+                    mode=meta.mode,
+                    hint=f"finalize failed: {type(exc).__name__}",
+                    job_id=job_id,
+                )
+            ok = bool(result.get("ok")) and str(result.get("status")) in (
+                STATUS_COMPLETED,
+                STATUS_NEEDS_HUMAN,
+            )
+            if result.get("status") == STATUS_NEEDS_HUMAN:
+                ok = True
+            err = None if ok else (
+                result.get("error_reason") or _meta.error_reason or "failed"
+            )
+            return ToolResult(ok=ok, payload=dict(result), error_reason=err)
 
     # Still running / no result yet.
     payload = make_success_payload(
@@ -476,21 +552,21 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             expires_at=expires_at,
         )
     except GrokSkillsUnavailableError as exc:
-        shred_tokens(run_dir)
-        return _err(
-            "grok_skills_unavailable",
+        return _terminalize_orphan(
+            ctx,
+            job_id,
             mode=mode,
+            error_reason="grok_skills_unavailable",
             hint=str(exc),
-            job_id=job_id,
         )
     except Exception as exc:  # noqa: BLE001
-        shred_tokens(run_dir)
         _LOG.exception("grok_build seed_isolated_home failed")
-        return _err(
-            "grok_skills_unavailable",
+        return _terminalize_orphan(
+            ctx,
+            job_id,
             mode=mode,
+            error_reason="grok_skills_unavailable",
             hint=f"seed failed: {type(exc).__name__}",
-            job_id=job_id,
         )
 
     # Build argv (effort only inside -p body)
@@ -540,13 +616,13 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 data_dir=data_dir,
             )
         except Exception as exc:  # noqa: BLE001
-            shred_tokens(run_dir)
             _LOG.exception("grok_build spawn failed job_id=%s", job_id)
-            return _err(
-                "skill_failed",
+            return _terminalize_orphan(
+                ctx,
+                job_id,
                 mode=mode,
+                error_reason="skill_failed",
                 hint=f"spawn failed: {type(exc).__name__}",
-                job_id=job_id,
             )
         try:
             update_job(
@@ -582,13 +658,13 @@ def grok_build(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             data_dir=data_dir,
         )
     except Exception as exc:  # noqa: BLE001
-        shred_tokens(run_dir)
         _LOG.exception("grok_build run_grok failed job_id=%s", job_id)
-        return _err(
-            "skill_failed",
+        return _terminalize_orphan(
+            ctx,
+            job_id,
             mode=mode,
+            error_reason="skill_failed",
             hint=f"run failed: {type(exc).__name__}",
-            job_id=job_id,
         )
 
     try:
