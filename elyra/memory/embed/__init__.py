@@ -9,6 +9,7 @@ Core ``elyra.memory`` must not import torch; heavy deps live behind
 from elyra.memory.embed.encode import content_fingerprint, encode_atom, is_embeddable
 from elyra.memory.embed.mock import MOCK_MODEL_ID, MockEmbedder, mock_vector
 from elyra.memory.embed.queue import (
+    EncodePriority,
     EncodeQueue,
     catchup_none_atoms_for_encode,
     scan_pending_into_queue,
@@ -47,6 +48,7 @@ __all__ = [
     "DeviceKind",
     "Embedder",
     "EmbeddingSet",
+    "EncodePriority",
     "EncodeQueue",
     "EncodeResult",
     "MockEmbedder",

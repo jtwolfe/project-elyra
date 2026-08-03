@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from threading import Event
+from threading import Event, Thread
 from typing import Any
 
 import pytest
@@ -18,6 +18,7 @@ from elyra.memory.embed.encode import (
 )
 from elyra.memory.embed.mock import MockEmbedder
 from elyra.memory.embed.queue import (
+    EncodePriority,
     EncodeQueue,
     catchup_none_atoms_for_encode,
     scan_pending_into_queue,
@@ -72,6 +73,41 @@ def test_enqueue_dedupe():
     assert q.enqueue("a1") is False
     assert len(q) == 1
     assert q.contains("a1")
+    # Same priority re-enqueue is still a no-op.
+    assert q.enqueue("a1", priority=EncodePriority.CATCHUP) is False
+    assert q.depth_by_priority() == {
+        EncodePriority.ATOM_CREATE.value: 1,
+        EncodePriority.CATCHUP.value: 0,
+    }
+
+
+def test_enqueue_promote_catchup_to_atom_create():
+    """Already-queued P2 item is promoted to P1 on atom_create enqueue."""
+    q = EncodeQueue(maxsize=16)
+    assert q.enqueue("a1", priority=EncodePriority.CATCHUP) is True
+    assert q.depth_by_priority()[EncodePriority.CATCHUP.value] == 1
+    # Promote P2 → P1
+    assert q.enqueue("a1", priority=EncodePriority.ATOM_CREATE) is True
+    assert q.contains("a1")
+    assert len(q) == 1
+    depths = q.depth_by_priority()
+    assert depths[EncodePriority.ATOM_CREATE.value] == 1
+    assert depths[EncodePriority.CATCHUP.value] == 0
+    # Second promote / same-lane enqueue is no-op
+    assert q.enqueue("a1", priority=EncodePriority.ATOM_CREATE) is False
+    item = q.pop_next_bulk()
+    assert item == ("a1", EncodePriority.ATOM_CREATE)
+
+
+def test_pop_order_p1_before_p2():
+    q = EncodeQueue(maxsize=16)
+    q.enqueue("c1", priority=EncodePriority.CATCHUP)
+    q.enqueue("c2", priority=EncodePriority.CATCHUP)
+    q.enqueue("n1", priority=EncodePriority.ATOM_CREATE)
+    assert q.pop_next() == "n1"
+    assert q.pop_next_bulk() == ("c1", EncodePriority.CATCHUP)
+    assert q.pop_next() == "c2"
+    assert q.pop_next() is None
 
 
 def test_enqueue_drop_oldest_marks_skipped(store):
@@ -85,7 +121,7 @@ def test_enqueue_drop_oldest_marks_skipped(store):
 
     assert q.enqueue("a_old", store=store)
     assert q.enqueue("a_mid", store=store)
-    # Overflow: drop a_old → skipped
+    # Overflow (all P1): drop oldest P1 a_old → skipped
     assert q.enqueue("a_new", store=store)
     assert not q.contains("a_old")
     assert q.contains("a_mid")
@@ -98,6 +134,37 @@ def test_enqueue_drop_oldest_marks_skipped(store):
     assert old.meta.get("embed_error") == "queue_overflow"
 
 
+def test_overflow_drops_p2_before_p1(store):
+    """At capacity, oldest catchup is dropped before any atom_create."""
+    q = EncodeQueue(maxsize=2)
+    for aid, text in (
+        ("c_old", "catchup old"),
+        ("n1", "create 1"),
+        ("c_new", "catchup new"),
+    ):
+        store.put_atom(_atom(atom_id=aid, text=text, status="pending"))
+
+    assert q.enqueue("c_old", priority=EncodePriority.CATCHUP, store=store)
+    assert q.enqueue("n1", priority=EncodePriority.ATOM_CREATE, store=store)
+    # Full: P2 has c_old, P1 has n1. Enqueue another catchup → drop c_old (P2).
+    assert q.enqueue("c_new", priority=EncodePriority.CATCHUP, store=store)
+    assert not q.contains("c_old")
+    assert q.contains("n1")
+    assert q.contains("c_new")
+    assert q.dropped_total() == 1
+    dropped = store.get_atom("c_old")
+    assert dropped is not None
+    assert dropped.embedding_status == "skipped"
+    assert dropped.meta.get("embed_error") == "queue_overflow"
+    # n1 (P1) must survive; next overflow with only P1+P2 present drops P2 again.
+    store.put_atom(_atom(atom_id="n2", text="create 2", status="pending"))
+    assert q.enqueue("n2", priority=EncodePriority.ATOM_CREATE, store=store)
+    assert not q.contains("c_new")  # P2 dropped before n1
+    assert q.contains("n1")
+    assert q.contains("n2")
+    assert q.dropped_total() == 2
+
+
 def test_enqueue_drop_oldest_without_store():
     q = EncodeQueue(maxsize=1)
     assert q.enqueue("x")
@@ -105,6 +172,141 @@ def test_enqueue_drop_oldest_without_store():
     assert q.contains("y")
     assert not q.contains("x")
     assert q.dropped_total() == 1
+
+
+def test_concurrent_enqueue_and_drain(store):
+    """RLock correctness: concurrent enqueue + drain loses no double-membership."""
+    n = 80
+    ids = []
+    for i in range(n):
+        a = store.put_atom(
+            _atom(
+                text=f"concurrent {i}",
+                status="pending",
+                t_start=f"2026-07-28T10:{i % 60:02d}:00Z",
+                atom_id=f"conc_{i:04d}",
+            )
+        )
+        ids.append(a.atom_id)
+
+    q = EncodeQueue(maxsize=n + 8)
+    emb = MockEmbedder()
+    errors: list[BaseException] = []
+
+    def enqueuer(chunk: list[str], priority: EncodePriority) -> None:
+        try:
+            for aid in chunk:
+                q.enqueue(aid, priority=priority, store=store)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def drainer() -> int:
+        total = 0
+        try:
+            # Several short drains interleaved with enqueues.
+            for _ in range(20):
+                stats = q.drain(
+                    store, emb, index=None, max_ms=2000, max_items=8
+                )
+                total += stats["processed"]
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        return total
+
+    mid = n // 2
+    threads = [
+        Thread(
+            target=enqueuer,
+            args=(ids[:mid], EncodePriority.ATOM_CREATE),
+            name="enq-p1",
+        ),
+        Thread(
+            target=enqueuer,
+            args=(ids[mid:], EncodePriority.CATCHUP),
+            name="enq-p2",
+        ),
+        Thread(target=drainer, name="drain-a"),
+        Thread(target=drainer, name="drain-b"),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+        assert not t.is_alive(), f"thread hung: {t.name}"
+
+    assert not errors, f"worker errors: {errors}"
+    # Finish remaining items single-threaded.
+    while len(q) > 0:
+        stats = q.drain(store, emb, index=None, max_ms=5000, max_items=32)
+        if stats["processed"] == 0:
+            break
+
+    assert len(q) == 0
+    assert q.depth_by_priority() == {
+        EncodePriority.ATOM_CREATE.value: 0,
+        EncodePriority.CATCHUP.value: 0,
+    }
+    # Every atom was processed at least to encode_ok pending (no lost ids).
+    ok_count = 0
+    for aid in ids:
+        got = store.get_atom(aid)
+        assert got is not None
+        assert got.embedding_status in ("pending", "skipped", "failed", "ready")
+        if got.meta.get("embed_encode_ok"):
+            ok_count += 1
+    assert ok_count == n
+
+
+def test_concurrent_enqueue_pop_no_double_membership():
+    """Hammer enqueue + pop_next_bulk; each id leaves the queue at most once."""
+    q = EncodeQueue(maxsize=256)
+    n = 200
+    popped: list[str] = []
+    stop = Event()
+
+    def producer() -> None:
+        for i in range(n):
+            q.enqueue(
+                f"id_{i}",
+                priority=(
+                    EncodePriority.ATOM_CREATE
+                    if i % 3 == 0
+                    else EncodePriority.CATCHUP
+                ),
+            )
+            # Also re-enqueue some for promote / dedupe coverage.
+            if i % 5 == 0:
+                q.enqueue(f"id_{i}", priority=EncodePriority.ATOM_CREATE)
+
+    def consumer() -> None:
+        while not stop.is_set() or len(q) > 0:
+            item = q.pop_next_bulk()
+            if item is None:
+                if stop.is_set():
+                    break
+                continue
+            popped.append(item[0])
+
+    pt = Thread(target=producer)
+    ct = Thread(target=consumer)
+    ct.start()
+    pt.start()
+    pt.join(timeout=15)
+    stop.set()
+    ct.join(timeout=15)
+    assert not pt.is_alive() and not ct.is_alive()
+
+    # Drain any leftover single-threaded
+    while True:
+        item = q.pop_next_bulk()
+        if item is None:
+            break
+        popped.append(item[0])
+
+    assert len(q) == 0
+    # Each id appears exactly once in pops (dedupe + promote never double-queue).
+    assert len(popped) == n
+    assert set(popped) == {f"id_{i}" for i in range(n)}
 
 
 def test_drain_leaves_pending_without_index(store):
@@ -332,6 +534,11 @@ def test_scan_pending_into_queue(store):
     assert n == 2
     assert q.contains(p1.atom_id)
     assert q.contains(p2.atom_id)
+    # Scan always enqueues at catchup (P2) priority.
+    assert q.depth_by_priority() == {
+        EncodePriority.ATOM_CREATE.value: 0,
+        EncodePriority.CATCHUP.value: 2,
+    }
     # Second scan dedupes
     assert scan_pending_into_queue(store, q, limit=10) == 0
 

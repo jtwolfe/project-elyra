@@ -1,16 +1,19 @@
-"""In-process encode queue with backpressure (Phase 2 PR2 / KD22).
+"""In-process encode queue with priority lanes + backpressure.
 
-Scope: FIFO of atom_ids, dedupe, drop-oldest → skipped, idle drain.
+Scope: dual bulk lanes (P1 atom_create > P2 catchup), dedupe/promote,
+drop P2-then-P1 → skipped, budgeted drain. Thread-safe via RLock.
 In scope: enqueue/drain caps; status updates pending/failed/skipped only
 (no production ready without EmbeddingIndex — KD8 / PR3).
-Out of scope: Lance emb columns, ANN, meal query encode.
+Out of scope: Lance emb columns, ANN, meal query encode, EncodeWorker.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import deque
+from enum import Enum
 from typing import Any, Mapping, Protocol
 
 from elyra.memory.embed.encode import (
@@ -31,6 +34,13 @@ _META_ENCODED_AT = "embed_encoded_at"
 _META_CHANNELS = "embed_channels"
 
 _OVERFLOW_ERROR = "queue_overflow"
+
+
+class EncodePriority(str, Enum):
+    """Bulk encode queue lanes (lookup priority is gate-only, not a lane)."""
+
+    ATOM_CREATE = "atom_create"  # P1 — live creates; preferred bulk
+    CATCHUP = "catchup"  # P2 — historical scan / restart backlog
 
 
 class _EmbeddingIndexLike(Protocol):
@@ -70,19 +80,29 @@ def _mark_atom_status(
         return None
 
 
-class EncodeQueue:
-    """In-process FIFO of atom_ids; single-writer (presence worker).
+def _coerce_priority(priority: EncodePriority | str) -> EncodePriority:
+    if isinstance(priority, EncodePriority):
+        return priority
+    return EncodePriority(str(priority))
 
-    Backpressure (KD22):
-    - max distinct ids = ``maxsize`` (encode_queue_max)
-    - enqueue dedupe by atom_id
-    - at capacity: drop oldest → best-effort ``skipped`` + queue_overflow
+
+class EncodeQueue:
+    """Thread-safe dual-lane encode queue (P1 atom_create > P2 catchup).
+
+    Backpressure (KD22 refined):
+    - max distinct ids = ``maxsize`` across both lanes (encode_queue_max)
+    - enqueue dedupe by atom_id; promote catchup → atom_create
+    - at capacity: drop oldest P2 first, then oldest P1 → best-effort
+      ``skipped`` + queue_overflow
     """
 
     def __init__(self, maxsize: int = 1024) -> None:
         self._maxsize = max(1, int(maxsize))
-        self._fifo: deque[str] = deque()
+        self._lock = threading.RLock()
+        self._p1: deque[str] = deque()  # atom_create
+        self._p2: deque[str] = deque()  # catchup
         self._queued: set[str] = set()
+        self._lane: dict[str, EncodePriority] = {}
         self._dropped_total: int = 0
 
     @property
@@ -90,76 +110,154 @@ class EncodeQueue:
         return self._maxsize
 
     def __len__(self) -> int:
-        return len(self._fifo)
+        with self._lock:
+            return len(self._queued)
 
     def qsize(self) -> int:
-        return len(self._fifo)
+        with self._lock:
+            return len(self._queued)
 
     def contains(self, atom_id: str) -> bool:
-        return atom_id in self._queued
+        with self._lock:
+            return atom_id in self._queued
 
     def dropped_total(self) -> int:
-        return self._dropped_total
+        with self._lock:
+            return self._dropped_total
+
+    def depth_by_priority(self) -> dict[str, int]:
+        """Return current depth per bulk lane (for health / tests)."""
+        with self._lock:
+            return {
+                EncodePriority.ATOM_CREATE.value: len(self._p1),
+                EncodePriority.CATCHUP.value: len(self._p2),
+            }
 
     def clear(self) -> None:
-        self._fifo.clear()
-        self._queued.clear()
+        with self._lock:
+            self._p1.clear()
+            self._p2.clear()
+            self._queued.clear()
+            self._lane.clear()
 
-    def enqueue(self, atom_id: str, *, store: Any | None = None) -> bool:
-        """Enqueue ``atom_id`` (dedupe). Return True if newly queued.
+    def enqueue(
+        self,
+        atom_id: str,
+        *,
+        priority: EncodePriority | str = EncodePriority.ATOM_CREATE,
+        store: Any | None = None,
+    ) -> bool:
+        """Enqueue ``atom_id`` (dedupe / promote). Return True if new or promoted.
 
-        If at ``maxsize``, drop the oldest id first; best-effort mark it
+        Higher bulk priority wins: catchup → atom_create is a promote.
+        At capacity, drop oldest from P2 then P1; best-effort mark dropped
         ``skipped`` with ``meta.embed_error=queue_overflow`` when ``store``
-        is provided.
+        is provided (store I/O runs **outside** the queue lock).
         """
         if not atom_id:
             return False
-        if atom_id in self._queued:
-            return False
-        while len(self._fifo) >= self._maxsize:
-            self._drop_oldest(store=store)
-        self._fifo.append(atom_id)
-        self._queued.add(atom_id)
-        return True
+        pri = _coerce_priority(priority)
+        dropped: list[str] = []
+        changed = False
 
-    def _drop_oldest(self, *, store: Any | None) -> str | None:
-        if not self._fifo:
+        with self._lock:
+            if atom_id in self._queued:
+                current = self._lane.get(atom_id, EncodePriority.CATCHUP)
+                if (
+                    current == EncodePriority.CATCHUP
+                    and pri == EncodePriority.ATOM_CREATE
+                ):
+                    # Promote P2 → P1 (membership unchanged; lane changes).
+                    try:
+                        self._p2.remove(atom_id)
+                    except ValueError:
+                        pass
+                    self._p1.append(atom_id)
+                    self._lane[atom_id] = EncodePriority.ATOM_CREATE
+                    changed = True
+                # Already at same or higher priority → no-op.
+            else:
+                while len(self._queued) >= self._maxsize:
+                    old = self._drop_oldest_locked()
+                    if old is None:
+                        break
+                    dropped.append(old)
+                if len(self._queued) >= self._maxsize:
+                    # Could not free a slot (empty queue race); refuse enqueue.
+                    pass
+                else:
+                    if pri == EncodePriority.ATOM_CREATE:
+                        self._p1.append(atom_id)
+                    else:
+                        self._p2.append(atom_id)
+                    self._queued.add(atom_id)
+                    self._lane[atom_id] = pri
+                    changed = True
+
+        # Mark overflow outside lock (avoid lock order with store).
+        for old_id in dropped:
+            self._mark_overflow(store, old_id)
+
+        return changed
+
+    def _drop_oldest_locked(self) -> str | None:
+        """Drop oldest P2 then P1. Caller holds ``_lock``."""
+        if self._p2:
+            old = self._p2.popleft()
+        elif self._p1:
+            old = self._p1.popleft()
+        else:
             return None
-        old = self._fifo.popleft()
         self._queued.discard(old)
+        self._lane.pop(old, None)
         self._dropped_total += 1
         _LOG.warning(
             "memory.embed.queue_dropped atom_id=%s remaining=%d",
             old,
-            len(self._fifo),
+            len(self._queued),
         )
-        if store is not None:
-            try:
-                atom = store.get_atom(old)
-                if atom is not None and atom.embedding_status in (
-                    "pending",
-                    "none",
-                    "failed",
-                ):
-                    _mark_atom_status(
-                        store,
-                        atom,
-                        status="skipped",
-                        meta_updates={_META_ERROR: _OVERFLOW_ERROR},
-                    )
-            except Exception:  # noqa: BLE001
-                _LOG.exception(
-                    "queue overflow mark-skipped failed atom_id=%s", old
-                )
         return old
 
+    def _mark_overflow(self, store: Any | None, atom_id: str) -> None:
+        if store is None:
+            return
+        try:
+            atom = store.get_atom(atom_id)
+            if atom is not None and atom.embedding_status in (
+                "pending",
+                "none",
+                "failed",
+            ):
+                _mark_atom_status(
+                    store,
+                    atom,
+                    status="skipped",
+                    meta_updates={_META_ERROR: _OVERFLOW_ERROR},
+                )
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "queue overflow mark-skipped failed atom_id=%s", atom_id
+            )
+
     def pop_next(self) -> str | None:
-        """Pop next atom_id (for tests / custom drain)."""
-        if not self._fifo:
-            return None
-        aid = self._fifo.popleft()
-        self._queued.discard(aid)
-        return aid
+        """Pop next atom_id (P1 then P2). For tests / custom drain."""
+        item = self.pop_next_bulk()
+        return item[0] if item is not None else None
+
+    def pop_next_bulk(self) -> tuple[str, EncodePriority] | None:
+        """Pop next bulk item: P1 first, then P2. Under lock."""
+        with self._lock:
+            if self._p1:
+                aid = self._p1.popleft()
+                pri = EncodePriority.ATOM_CREATE
+            elif self._p2:
+                aid = self._p2.popleft()
+                pri = EncodePriority.CATCHUP
+            else:
+                return None
+            self._queued.discard(aid)
+            self._lane.pop(aid, None)
+            return (aid, pri)
 
     def drain(
         self,
@@ -175,7 +273,8 @@ class EncodeQueue:
     ) -> dict[str, int]:
         """Drain up to ``max_items`` within ``max_ms``. Never raises.
 
-        Status transitions in PR2:
+        Pops under the queue lock; encodes / store I/O run **outside** the lock.
+        Status transitions:
         - empty / kind skip → ``skipped``
         - encode exception / invalid → ``failed`` (or stay pending while
           attempts < max_attempts)
@@ -225,9 +324,10 @@ class EncodeQueue:
             embedder_ok = False
 
         processed = 0
-        while processed < max_items and self._fifo:
+        while processed < max_items:
             if max_ms > 0 and (time.monotonic() - t0) * 1000.0 >= max_ms:
                 break
+            # Membership pop under lock; encode outside lock.
             atom_id = self.pop_next()
             if atom_id is None:
                 break
@@ -251,8 +351,8 @@ class EncodeQueue:
                 _LOG.exception("encode drain item failed atom_id=%s", atom_id)
                 stats["failed"] = stats.get("failed", 0) + 1
 
-        stats["remaining"] = len(self._fifo)
-        stats["dropped"] = self._dropped_total
+        stats["remaining"] = self.qsize()
+        stats["dropped"] = self.dropped_total()
         return stats
 
     def _process_one(
@@ -395,9 +495,10 @@ def scan_pending_into_queue(
     """Backstop: enqueue atoms with embedding_status=pending (KD16).
 
     Includes **all** pending atoms (including ``embed_encode_ok``).
-    ``_process_one`` short-circuits re-encode when ``index is None`` and
-    encode_ok matches; when an index is present (PR3), those ids are
-    re-processed for upsert → ready. Skips ids already in the queue.
+    Enqueues at **catchup** priority (P2). ``_process_one`` short-circuits
+    re-encode when ``index is None`` and encode_ok matches; when an index is
+    present (PR3), those ids are re-processed for upsert → ready. Skips ids
+    already in the queue (except promote is N/A for catchup re-scan).
     Returns number newly enqueued. Never raises.
     """
     enqueued = 0
@@ -414,7 +515,11 @@ def scan_pending_into_queue(
         try:
             if queue.contains(atom.atom_id):
                 continue
-            if queue.enqueue(atom.atom_id, store=store):
+            if queue.enqueue(
+                atom.atom_id,
+                store=store,
+                priority=EncodePriority.CATCHUP,
+            ):
                 enqueued += 1
         except Exception:  # noqa: BLE001
             _LOG.exception(
@@ -500,6 +605,7 @@ def catchup_none_atoms_for_encode(
 
 
 __all__ = [
+    "EncodePriority",
     "EncodeQueue",
     "catchup_none_atoms_for_encode",
     "scan_pending_into_queue",
