@@ -96,6 +96,18 @@ wait_user.
 | `base_branch_missing` | `working` (or base_branch) not in repo |
 | `missing_repo` | no resolvable jailed cwd/repo — pass host-absolute cwd |
 | `path_jail` / `not_a_repo` / `invalid_path` | VCS path jail; guest-relative cwd is a common footgun |
+| `auth_unavailable` | OAuth missing / reauth |
+| `auth_expired` | mid-run / finalize auth death |
+| `grok_not_found` | host `grok` binary missing |
+| `grok_skills_unavailable` | seeded skills missing under GROK_HOME |
+| `mode_experimental` | deep_research not enabled |
+| `mode_not_ready` | long mode without jobs/reaper readiness |
+| `usage_hard_stop` | usage meter refuses call |
+| `timeout` | wall timeout / process group kill |
+| `nonzero_exit` / `skill_failed` | grok failed |
+| `artifact_missing` | design/review artifact not harvested |
+| `target_ambiguous` | bad review target |
+| `job_not_found` | unknown job_id on poll |
 
 ## cwd path-jail law (host-absolute)
 
@@ -112,18 +124,6 @@ Examples that work (shape, not literal):
 Guest `run` / sandbox FS paths and host instrument paths are different spaces.
 Resolve the host path from prior `git_*` evidence, worktree listing, or known
 sandbox host mapping **before** spawn. There is no silent guest→host rewrite.
-| `auth_unavailable` | OAuth missing / reauth |
-| `auth_expired` | mid-run / finalize auth death |
-| `grok_not_found` | host `grok` binary missing |
-| `grok_skills_unavailable` | seeded skills missing under GROK_HOME |
-| `mode_experimental` | deep_research not enabled |
-| `mode_not_ready` | long mode without jobs/reaper readiness |
-| `usage_hard_stop` | usage meter refuses call |
-| `timeout` | wall timeout / process group kill |
-| `nonzero_exit` / `skill_failed` | grok failed |
-| `artifact_missing` | design/review artifact not harvested |
-| `target_ambiguous` | bad review target |
-| `job_not_found` | unknown job_id on poll |
 
 Never invent success. Never put tokens in speak/ledger. Prefer skills
 `self-improve` / `github-workflow` for routing judgment.
