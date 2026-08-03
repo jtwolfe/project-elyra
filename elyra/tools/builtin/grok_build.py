@@ -112,6 +112,25 @@ def _want_async(mode: Mode, args: dict[str, Any]) -> bool:
     return defaults_async(mode)
 
 
+# Hint attached to path-jail / missing_repo failures (KD-F9). Guest-relative
+# paths (e.g. tmp/foo) resolve against project_root and fail closed — skills
+# must pass a host-absolute git repo under allowed_repo_roots. No silent
+# sandbox rewrite (optional resolve_instrument_cwd is deferred).
+_CWD_HOST_ABS_HINT = (
+    "cwd must be a host-absolute git repo under allowed_repo_roots. "
+    "Guest-relative paths (e.g. tmp/…) are not host paths; use "
+    "…/sandboxes/sandbox0/tmp/… or the PE project root clone."
+)
+
+
+def _cwd_jail_hint(exc: PathJailError) -> str:
+    """Prefer PathJailError detail when present; always teach host-absolute cwd."""
+    detail = str(exc).strip()
+    if detail and detail != exc.reason:
+        return f"{detail}. {_CWD_HOST_ABS_HINT}"
+    return _CWD_HOST_ABS_HINT
+
+
 def _resolve_cwd(
     args: dict[str, Any],
     ctx: ToolContext,
@@ -127,7 +146,7 @@ def _resolve_cwd(
                 ok=False,
                 payload=make_error_payload(
                     exc.reason,
-                    hint=str(exc),
+                    hint=_cwd_jail_hint(exc),
                     extra={"cwd": raw.strip()},
                 ),
                 error_reason=exc.reason,
@@ -137,7 +156,10 @@ def _resolve_cwd(
     try:
         root = project_root().resolve()
     except OSError:
-        return _err("missing_repo", hint="no cwd and project_root unresolvable")
+        return _err(
+            "missing_repo",
+            hint=f"no cwd and project_root unresolvable. {_CWD_HOST_ABS_HINT}",
+        )
     under = False
     for r in roots:
         try:
@@ -151,7 +173,7 @@ def _resolve_cwd(
         return root
     return _err(
         "missing_repo",
-        hint="pass cwd to a git repo under allowed_repo_roots",
+        hint=_CWD_HOST_ABS_HINT,
     )
 
 

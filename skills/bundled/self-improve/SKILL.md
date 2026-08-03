@@ -60,6 +60,21 @@ Rules:
 5. On `mode_experimental` / `mode_not_ready`: block honestly; do not free-text fake design or research.
 6. Prefer tool name **`grok_build`** with a `mode` argument. Never invent a second instrument or second OAuth path.
 
+## cwd law (host-absolute before spawn)
+
+`grok_build` is **host-jailed**. Before every spawn (not poll), pass **`cwd` as a
+host-absolute path** to a git repo under `allowed_repo_roots`:
+
+1. Prefer a path already proven by `git_status` / `git_worktree_list` / worktree
+   add (host absolute under the jail).
+2. For sandbox clones: map guest paths (`tmp/foo`) to the **host** sandbox root
+   (e.g. `…/sandboxes/sandbox0/tmp/foo`) — do **not** pass guest-relative
+   `tmp/foo` alone (fails `not_a_repo` / `path_jail` against project root).
+3. Guest `run` FS space ≠ host instrument path space. Never thrash re-spawns
+   with guest-relative cwd hoping the jail will rewrite it (it will not).
+4. On `path_jail` / `not_a_repo` / `missing_repo`: fix to a host-absolute jailed
+   git repo; do not invent success or escape the jail.
+
 ## L / M / H decision tree
 
 ### L — Low (well-specified, local, under ~2 files or pure ledger/sandbox)
@@ -110,6 +125,7 @@ Work item
 5. `auth_unavailable` / `auth_expired` → `speak` operator for PE `xai_oauth` login; **block** the instrument task. Do not invent a second auth.
 6. Prefer exact tool name `grok_build` and skill names `self-improve` / `github-workflow` (hyphenated).
 7. Path jail and secrets policy still apply — instruments do not bypass them.
+   **`cwd` for `grok_build` must be host-absolute** under allowed roots (see cwd law).
 8. On `usage_hard_stop` / `timeout`: ledger + optional speak; do not thrash re-spawns.
 
 ## Common soft-fail manners (`error_reason` / status)
@@ -124,6 +140,7 @@ Work item
 | `timeout` / `job_not_found` | Note failure; re-spawn only with clear reason |
 | `artifact_missing` | Do not claim design/review done |
 | `grok_not_found` / `grok_skills_unavailable` | Operator host install / seed issue |
+| `path_jail` / `not_a_repo` / `missing_repo` | Use **host-absolute** cwd under allowed roots; guest-relative `tmp/…` is wrong; no jail escape |
 | `status=needs_human` | `speak` open questions → `wait_user` (ok path, not hard error) |
 | Tool absent from schema | Ledger gap; PE tools + github-workflow only |
 

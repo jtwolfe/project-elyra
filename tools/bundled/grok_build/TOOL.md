@@ -25,7 +25,11 @@ auth provider. Guest runners **never** receive OAuth or this tool's secrets.
   for `prompt`. Pass `async=false` only for operator/debug on long modes.
 - **`job_id`**: poll a prior async job (poll-only when set)
 - **`base_branch`**: execute_plan preflight branch (default **`working`**)
-- **`cwd`**: git repo / cwd (path-jailed under allowed repo roots)
+- **`cwd`**: **host-absolute** path to a git repo under `allowed_repo_roots`
+  (typically PE `project_root` or a clone under
+  `…/sandboxes/sandbox0/tmp/…`). Guest-relative paths like `tmp/foo` are
+  **not** host paths — they resolve against project root and fail
+  `not_a_repo` / `path_jail`. Guest `run` FS space ≠ host instrument path space.
 - **`target`**: review target (`local` | branch | PR number/URL)
 - **`max_turns`**: optional grok `--max-turns`
 
@@ -90,8 +94,24 @@ wait_user.
 | `missing_design_doc_path` | execute_plan without path |
 | `design_doc_missing` | design doc path not a file |
 | `base_branch_missing` | `working` (or base_branch) not in repo |
-| `missing_repo` | no resolvable jailed cwd/repo |
-| `path_jail` / `not_a_repo` / `invalid_path` | VCS path jail |
+| `missing_repo` | no resolvable jailed cwd/repo — pass host-absolute cwd |
+| `path_jail` / `not_a_repo` / `invalid_path` | VCS path jail; guest-relative cwd is a common footgun |
+
+## cwd path-jail law (host-absolute)
+
+`grok_build` is **host-jailed**. `cwd` must be a **host-absolute** git repo under
+`allowed_repo_roots`. Do **not** pass guest-relative paths from sandbox tools
+(`tmp/repo`, `./oneuptime`) alone — those resolve against PE project root and
+typically return `not_a_repo` or `path_jail`.
+
+Examples that work (shape, not literal):
+
+- `/home/…/project-elyra` (PE project root when it is a git repo under roots)
+- `/home/…/sandboxes/sandbox0/tmp/oneuptime` (sandbox clone as seen on the **host**)
+
+Guest `run` / sandbox FS paths and host instrument paths are different spaces.
+Resolve the host path from prior `git_*` evidence, worktree listing, or known
+sandbox host mapping **before** spawn. There is no silent guest→host rewrite.
 | `auth_unavailable` | OAuth missing / reauth |
 | `auth_expired` | mid-run / finalize auth death |
 | `grok_not_found` | host `grok` binary missing |

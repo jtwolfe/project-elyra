@@ -47,7 +47,8 @@ Pick the first that applies:
 6. Prefer **`grok_build` when present** for multi-file **implement / design / execute_plan** (and related modes). Else `search_replace` + `run` (or create-tool path for new callables). Do not thrash host path fishing. Prefer tool name **`grok_build`** with modes — never invent a second instrument or second auth.
 7. **Grant stops** on high-impact / destructive actions: dirty worktree remove, package revert of high-impact tools, anything merge/force-like, identity-critical changes, execute_plan without human-approved design. Stop → `speak` / `wait_user` (or operator grant) — do not auto-confirm. **No auto-merge. No operating-pin move.**
 8. Path jail: stay inside allowed repo roots. Outside jail → honest refuse, not workarounds via `run`.
-9. Secrets: `gh_*` use injected token only; raw secrets never in speak, ledger notes, or free-text. Instrument auth is PE `xai_oauth` access-only — never embed tokens in prompts.
+9. **Host vs guest paths:** instruments (`grok_build`, host `git_*` with jailed `repo`/`cwd`) need **host-absolute** paths under allowed roots. Sandbox FS tools / guest `run` use **guest** paths. Do not mix blindly — guest-relative `tmp/foo` is not a valid `grok_build` `cwd` (use `…/sandboxes/sandbox0/tmp/foo` or another host-absolute clone).
+10. Secrets: `gh_*` use injected token only; raw secrets never in speak, ledger notes, or free-text. Instrument auth is PE `xai_oauth` access-only — never embed tokens in prompts.
 
 ## grok_build modes (when tool is present)
 
@@ -97,7 +98,7 @@ Single host tool **`grok_build`**. Call with `mode` (+ mode-conditional args). S
 | `grok_not_found` | Host `grok` CLI missing — operator install |
 | `grok_skills_unavailable` | Seeded GROK_HOME skills missing — operator/runtime |
 | `job_not_found` | Bad/stale `job_id` — re-check ledger / runtime |
-| `path_jail` / `missing_repo` | Fix cwd/repo; no jail escape |
+| `path_jail` / `not_a_repo` / `missing_repo` | Fix to **host-absolute** cwd/repo under allowed roots; guest-relative paths fail; no jail escape |
 | `auth_unavailable` on `gh_*` | Note missing `gh_token` / grants; do not invent issue/PR/project success |
 
 ## Process
@@ -115,7 +116,7 @@ Single host tool **`grok_build`**. Call with `mode` (+ mode-conditional args). S
 
 | Signal | Action |
 |--------|--------|
-| `path_jail` / refuse outside roots | Stop escape attempts; fix path or ask operator |
+| `path_jail` / `not_a_repo` / refuse outside roots | Stop escape attempts; use host-absolute path under roots or ask operator |
 | `auth_unavailable` on `gh_*` or instrument | Note missing token / OAuth; do not fake success |
 | Dirty worktree remove without `confirm` | Re-check; only confirm when intentional; grant stop if unsure |
 | Broken local tool/skill after promote | `get_*` + `list_versions` → `revert_*` with reason; do not rewrite bundled |
