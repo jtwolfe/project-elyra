@@ -191,6 +191,38 @@ def test_vectors_health_defaults(paths):
         assert "embed_enabled" in enc
         assert "queue_depth" in enc
         assert "semantic_enabled" in enc
+        # PR4: continuous-encode worker + gate + priority depths (no secrets).
+        assert "queue_depth_by_priority" in enc
+        assert isinstance(enc["queue_depth_by_priority"], dict)
+        assert "atom_create" in enc["queue_depth_by_priority"]
+        assert "catchup" in enc["queue_depth_by_priority"]
+        assert "encode_worker" in enc
+        ew = enc["encode_worker"]
+        assert isinstance(ew, dict)
+        for key in (
+            "enabled",
+            "owner",
+            "alive",
+            "restarts",
+            "restart_throttled",
+            "gap_drain_active",
+            "last_drain_at",
+            "last_drain_stats",
+            "drain_ok_total",
+            "drain_failed_total",
+            "gate_lookup_waits",
+            "gate_lookup_wait_ms_last",
+            "gate_bulk_yields",
+            "embedder_state",
+        ):
+            assert key in ew, f"missing encode_worker.{key}"
+        assert ew["owner"] in ("none", "idle", "worker")
+        assert ew["embedder_state"] in ("absent", "loading", "warm", "failed")
+        assert isinstance(ew["enabled"], bool)
+        assert isinstance(ew["alive"], bool)
+        assert isinstance(ew["restarts"], int)
+        assert isinstance(ew["drain_ok_total"], int)
+        assert isinstance(ew["gate_lookup_waits"], int)
         idx = body["index"]
         assert "vectors_ready" in idx
         assert "index_stale" in idx
@@ -208,6 +240,84 @@ def test_vectors_health_defaults(paths):
         # No raw vectors dumped.
         blob = json.dumps(body)
         assert "emb_joint" not in blob
+        assert "content_text" not in blob
+    finally:
+        h.close()
+
+
+def test_vectors_encode_worker_metrics_reflect_presence_state(paths):
+    """GET /api/memory/vectors surfaces process-local worker/gate counters."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+            encode_worker_enabled=True,
+        ),
+    )
+    try:
+        from elyra.memory.embed.gate import EmbedderGate
+        from elyra.memory.embed.queue import EncodePriority, EncodeQueue
+
+        # Simulate continuous-mode state without starting daemon threads.
+        h.worker._encode_owner = "worker"  # noqa: SLF001
+        h.worker._embedder_state = "warm"  # noqa: SLF001
+        h.worker._encode_drain_ok_total = 7  # noqa: SLF001
+        h.worker._encode_drain_failed_total = 1  # noqa: SLF001
+        h.worker._encode_worker_restarts = 2  # noqa: SLF001
+        h.worker._encode_worker_restart_throttled = False  # noqa: SLF001
+        h.worker._encode_last_drain_at = "2026-08-03T12:00:00Z"  # noqa: SLF001
+        h.worker._encode_last_drain_stats = {  # noqa: SLF001
+            "ok": 3,
+            "failed": 0,
+            "processed": 3,
+            "ms": 42,
+            "skipped": 0,
+            "remaining": 1,
+        }
+        gate = EmbedderGate()
+        gate.gate_lookup_waits = 4
+        gate.gate_lookup_wait_ms_last = 15
+        gate.gate_bulk_yields = 2
+        h.worker._embedder_gate = gate  # noqa: SLF001
+        q = EncodeQueue(maxsize=64)
+        q.enqueue("a" * 32, priority=EncodePriority.ATOM_CREATE)
+        q.enqueue("b" * 32, priority=EncodePriority.CATCHUP)
+        q.enqueue("c" * 32, priority=EncodePriority.CATCHUP)
+        h.worker._encode_queue = q  # noqa: SLF001
+        h.worker._embedder = MockEmbedder()  # noqa: SLF001
+
+        code, body = h.get("/api/memory/vectors")
+        assert code == 200, body
+        enc = body["encoder"]
+        assert enc["queue_depth"] == 3
+        assert enc["queue_depth_by_priority"]["atom_create"] == 1
+        assert enc["queue_depth_by_priority"]["catchup"] == 2
+        ew = enc["encode_worker"]
+        assert ew["enabled"] is True
+        assert ew["owner"] == "worker"
+        assert ew["alive"] is False  # no real EncodeWorker thread attached
+        assert ew["restarts"] == 2
+        assert ew["restart_throttled"] is False
+        assert ew["drain_ok_total"] == 7
+        assert ew["drain_failed_total"] == 1
+        assert ew["last_drain_at"] == "2026-08-03T12:00:00Z"
+        assert ew["last_drain_stats"]["ok"] == 3
+        assert ew["last_drain_stats"]["processed"] == 3
+        assert ew["last_drain_stats"]["ms"] == 42
+        assert ew["gate_lookup_waits"] == 4
+        assert ew["gate_lookup_wait_ms_last"] == 15
+        assert ew["gate_bulk_yields"] == 2
+        assert ew["embedder_state"] == "warm"
+        assert enc.get("ok") is True
+        # Still no secrets / raw vectors.
+        blob = json.dumps(body)
+        assert "emb_joint" not in blob
+        assert "api_key" not in blob.lower()
     finally:
         h.close()
 
@@ -715,6 +825,10 @@ def test_vectors_glass_static_wiring():
     assert "score_kind" in js
     # Honesty copy present in glass.
     assert "full scan still used" in html or "full scan still used" in js
+    # PR4: encode worker + gate metrics shown in Vectors health.
+    assert "encode_worker" in js
+    assert "gate_lookup_wait_ms_last" in js
+    assert "queue_depth_by_priority" in js
 
 
 def test_vectors_status_list_includes_ready_after_index(paths):

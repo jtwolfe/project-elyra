@@ -1089,8 +1089,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         flags = self._memory_flags_block()
         mem_cfg = getattr(getattr(self.worker, "settings", None), "memory", None)
         embedder, queue, index = self._vectors_worker_handles()
+        # presence= for continuous-encode worker + gate metrics (PR4; no secrets).
         encoder = encoder_health_block(
-            settings=mem_cfg, embedder=embedder, queue=queue
+            settings=mem_cfg,
+            embedder=embedder,
+            queue=queue,
+            presence=self.worker,
         )
         index_h = index_health_block(index)
         # Overview is always 200; ok when store flags ok (index may still be null).

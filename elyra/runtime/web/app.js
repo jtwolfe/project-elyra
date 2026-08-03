@@ -4439,9 +4439,58 @@ function renderVectorsHealth(data) {
     ["model", enc.model_id || "—", null],
     [
       "queue",
-      `${enc.queue_depth != null ? enc.queue_depth : 0}/${
-        enc.queue_max != null ? enc.queue_max : "—"
-      }${enc.queue_dropped ? ` · dropped=${enc.queue_dropped}` : ""}`,
+      (() => {
+        const depth = enc.queue_depth != null ? enc.queue_depth : 0;
+        const max = enc.queue_max != null ? enc.queue_max : "—";
+        const dropped = enc.queue_dropped ? ` · dropped=${enc.queue_dropped}` : "";
+        const byPri = enc.queue_depth_by_priority || {};
+        const p1 = byPri.atom_create != null ? Number(byPri.atom_create) || 0 : null;
+        const p2 = byPri.catchup != null ? Number(byPri.catchup) || 0 : null;
+        const lanes =
+          p1 != null || p2 != null
+            ? ` · p1=${p1 != null ? p1 : 0}/p2=${p2 != null ? p2 : 0}`
+            : "";
+        return `${depth}/${max}${dropped}${lanes}`;
+      })(),
+      null,
+    ],
+    [
+      "encode worker",
+      (() => {
+        const ew = enc.encode_worker || {};
+        if (ew.enabled === false) {
+          return `owner=${ew.owner || "idle"} · continuous=off`;
+        }
+        const bits = [
+          `owner=${ew.owner || "none"}`,
+          ew.alive ? "alive" : "dead",
+          ew.embedder_state ? `emb=${ew.embedder_state}` : null,
+          ew.drain_ok_total != null ? `ok_total=${ew.drain_ok_total}` : null,
+          ew.restarts ? `restarts=${ew.restarts}` : null,
+          ew.restart_throttled ? "throttled" : null,
+          ew.gap_drain_active ? "gap_drain" : null,
+          ew.last_drain_at ? `last=${ew.last_drain_at}` : null,
+        ].filter(Boolean);
+        return bits.join(" · ") || "—";
+      })(),
+      (() => {
+        const ew = enc.encode_worker || {};
+        if (ew.enabled === false) return null;
+        if (ew.owner === "worker" && ew.alive === false) return false;
+        if (ew.restart_throttled) return false;
+        return ew.alive === true ? true : null;
+      })(),
+    ],
+    [
+      "gate",
+      (() => {
+        const ew = enc.encode_worker || {};
+        const waits = ew.gate_lookup_waits != null ? ew.gate_lookup_waits : 0;
+        const waitMs =
+          ew.gate_lookup_wait_ms_last != null ? ew.gate_lookup_wait_ms_last : 0;
+        const yields = ew.gate_bulk_yields != null ? ew.gate_bulk_yields : 0;
+        return `lookup_waits=${waits} · wait_ms_last=${waitMs} · bulk_yields=${yields}`;
+      })(),
       null,
     ],
     [
