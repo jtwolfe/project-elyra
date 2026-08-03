@@ -1,17 +1,18 @@
 # Architecture — Phase 2 Semantic Memory
 
-**Status:** **Product-intent rectified (code)** — Phase 2 ship **PR1–PR9** (2026-07-28) + **rectification PR-R1–R5** (2026-07-29). Plumbing and product path now match locked intent (joint-primary via joint-for-single + repair, `auto` channel, Lance-native main search, honest meal/Vectors). **Operator smoke dogfood verification is still pending** before calling Phase 2 product-complete or flipping defaults. Flags: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off**.
+**Status:** **Product-intent rectified (code)** — Phase 2 ship **PR1–PR9** (2026-07-28) + **rectification PR-R1–R5** (2026-07-29) + **continuous encode** stack (embed-async PR1–PR4, 2026-08-03). Plumbing and product path match locked intent (joint-primary via joint-for-single + repair, `auto` channel, Lance-native main search, honest meal/Vectors, **background corpus drain while PE runs**). **Operator smoke dogfood verification is still pending** before calling Phase 2 product-complete or flipping defaults. Flags: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off**.
 **Package:** `elyra/memory/` (`embed/`, `index.py`, `parcel.py`; meal + Lance extensions; glass Vectors APIs)
 **Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
 **Design (planning):** [design-phase-2-semantic.md](../design-phase-2-semantic.md), [design-phase-2-implementation.md](../design-phase-2-implementation.md) (historical ship stack)
 **Rectification design (normative for R1–R5):** [design-phase-2-rectification.md](../design-phase-2-rectification.md)
+**Continuous encode (normative for drain/worker/gate):** [design-embed-async-encode-worker.md](../../design-embed-async-encode-worker.md) (KD-E1–E18)
 **Runtime contract:** [design-nemotron-runtime.md](../design-nemotron-runtime.md)
 **Spikes:** [architecture/spikes/lance-emb-migration.md](spikes/lance-emb-migration.md), [architecture/spikes/nemotron-runtime.md](spikes/nemotron-runtime.md)
 **Meal sketch:** [design-context-meal-composition.md](../design-context-meal-composition.md)
 **Baseline activities:** [inspiration-activity-model-and-storage.md](../inspiration-activity-model-and-storage.md) §3
 **Phase 1 manual:** [architecture/phase-1-temporal.md](phase-1-temporal.md)
 **Program status:** [stretch-2 README](../README.md) Phase 2 close-out
-**Bugs:** [known-bugs.md](../../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open)
+**Bugs:** [known-bugs.md](../../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open — packaging/Tensile; product continuous-encode path shipped)
 
 This is the **post-implement concept-mapping manual** for Phase 2. It describes what shipped (including rectification), how code maps to essay concepts, which activities are live, and how the system fails. It is not a re-statement of the design PR stack plan.
 
@@ -20,8 +21,9 @@ This is the **post-implement concept-mapping manual** for Phase 2. It describes 
 | Item | State |
 |------|--------|
 | Encode + index + parcels + meal semantic + Vectors glass | **Shipped** (PR1–PR9) + **rectified** (PR-R1–R5) — product path no longer joint-empty by default |
+| Continuous corpus encode (EncodeWorker + EmbedderGate + priority lanes) | **Shipped** (embed-async PR1–PR4) — drain while PE runs when `semantic_enabled` + `embed_enabled`; idle-only is **rollback only** (`encode_worker_enabled=false`) |
 | Rectification stack (channel / joint / Lance-native / meal omit / glass honesty) | **Code landed** PR-R1–R5; **operator smoke dogfood still pending** |
-| Optional Nemotron runtime | **Shipped** (PR8) — real load when deps present; mock fallback when not; GPU path **BUG-mem-gpu-01** open |
+| Optional Nemotron runtime | **Shipped** (PR8) — real load when deps present; mock fallback when not; GPU packaging path **BUG-mem-gpu-01** still open |
 | Feature flags | **Default off** — dogfood must opt in; Gate B before product default-on |
 | Glass **Vectors** tab | **Live + honest** — channel auto/toggle, resolved channel, repair remaining, optimize notes, empty-state reasons (PR7 + PR-R5) |
 | Glass **Graph** tab | **Stub** — Phase **2a** (directed traversal); **out of scope** for Phase 2 |
@@ -42,16 +44,18 @@ Phase 2 adds **associative / semantic** structure as a *supporting* context chan
 | Mock encoder (CI / dogfood without GPU) | `elyra/memory/embed/mock.py` — deterministic 2048-d L2 unit vectors; **joint-for-single = copy** (KD-R1) |
 | Portable open path | `elyra/memory/embed/runtime.py` — `open_encoder`; mock; optional `NemotronEmbedder` (PR8) with mock fallback; same joint policy as mock |
 | Encode helpers + content fingerprint | `elyra/memory/embed/encode.py` |
-| Async encode queue + drain | `elyra/memory/embed/queue.py` — FIFO, dedupe, `encode_queue_max` backpressure |
-| Store write hooks + `list_atoms` | `elyra/memory/store.py` Protocol; jsonl + lance implementations |
+| Thread-safe encode queue + priority lanes | `elyra/memory/embed/queue.py` — RLock; P1 `atom_create` > P2 `catchup`; dedupe/promote; overflow drops P2 then P1; `encode_queue_max` |
+| EmbedderGate + GatedEmbedder | `elyra/memory/embed/gate.py` — exclusive forward; **lookup > bulk** between atoms; meal/graph/API free-text use gated handle only |
+| Continuous EncodeWorker | `elyra/memory/embed/worker.py` — presence-owned daemon; budgeted drain ticks; Event wake + poll |
+| Store write hooks + `list_atoms` | `elyra/memory/store.py` Protocol; jsonl + lance; concurrent presence + encode worker under store/index locks |
 | Promote → `pending` + parcels | `elyra/memory/promote.py` (no embedder import; no `doloop.py` changes) |
 | Parcel split (opt-in) | `elyra/memory/parcel.py` — before truncate when `parcels_enabled` |
 | Lance emb columns + migration + preserve | `elyra/memory/lance_store.py` — `upsert_vectors`, KD19 read-merge-write; **eager joint-copy repair**; **Lance-native `search_vectors`** |
 | EmbeddingIndex + freshness | `elyra/memory/index.py` — `resolve_search_channel`, hybrid recent-buffer, honest `search_mode`, safe optimize (KD-R3) |
-| Meal semantic channel | `elyra/memory/meal.py` — `select_semantic` via auto→concrete; omit `no_hits` / `deduped`; `semantic_select_meta`; **wait-for-select default ON** (CPU dogfood: keep slow encodes under `semantic_wait_max_ms`, runtime toggle) |
+| Meal semantic channel | `elyra/memory/meal.py` — `select_semantic` via auto→concrete; omit `no_hits` / `deduped`; `semantic_select_meta`; **wait-for-select default ON** (CPU dogfood: keep slow encodes under `semantic_wait_max_ms`, runtime toggle); query encode via **GatedEmbedder** |
 | Budget split v2 | `elyra/memory/tokens.py` — `split_memory_budget_v2` + temporal floor |
-| Settings knobs | `elyra/memory/config.py` / `Settings.memory` (+ rectification knobs; validated in `elyra/settings.py`) |
-| Idle drain + optimize + meal wiring | `elyra/presence/worker.py` — idle repair continue; rebuild notes |
+| Settings knobs | `elyra/memory/config.py` / `Settings.memory` (+ rectification + continuous-encode knobs; validated in `elyra/settings.py`) |
+| Encode ownership + optimize + meal wiring | `elyra/presence/worker.py` — `encode_owner` single-owner; continuous worker start/stop/restart/gap drain; idle drain **rollback only**; idle joint-repair + ANN optimize; rebuild notes |
 | Glass Vectors tab + APIs (PR7 + PR-R5) | Health honesty, channel auto/toggle, neighbors resolved channel, rebuild `notes[]` |
 | Glass Memory page | Context + Atoms + **Vectors live**; **Graph stub** (Phase 2a) |
 | Inspect DTOs for vectors | `elyra/memory/inspect.py` — encoder/index health, vector rows, neighbor hits, score_kind cosine |
@@ -69,9 +73,9 @@ Dogfood on the initial PR1–PR9 stack showed a **dead semantic surface**: defau
 | **PR-R5** | Vectors glass: default `auto`, channel control, empty-state honesty, rebuild notes UX |
 | **PR-R6** | This architecture + README / known-bugs close-out (docs only) |
 
-**Not shipped in Phase 2 (by design):** directed multi-hop / temporary keep-set (Phase 2a), success-path / trajectory weights (Phase 3), historical glass→atom backfill, full hypergraph Graph UI, default-on semantic without Gate B, multi-channel ranking fusion / multi-try search (joint-primary only), optional 2D vector projection (KD18 non-gate), full ROCm product path (**BUG-mem-gpu-01**).
+**Not shipped in Phase 2 (by design):** directed multi-hop / temporary keep-set (Phase 2a), success-path / trajectory weights (Phase 3), historical glass→atom backfill, full hypergraph Graph UI, default-on semantic without Gate B, multi-channel ranking fusion / multi-try search (joint-primary only), optional 2D vector projection (KD18 non-gate), packaging/Tensile device-matrix close for **BUG-mem-gpu-01** (product continuous-encode path is separate — see design embed-async).
 
-**Deferred / follow-ups:** operator smoke + full dogfood on rectified path; Gate B before flipping semantic defaults; Phase 2a Graph tab; optional 2D projection polish.
+**Deferred / follow-ups:** operator smoke + full dogfood on rectified + continuous-encode path; Gate B before flipping semantic defaults; Phase 2a Graph tab; optional 2D projection polish; packaging matrix for modern ROCm / CUDA / CPU.
 
 ---
 
@@ -124,16 +128,19 @@ Essay / planning terms ↔ concrete implementation.
 
 | Surface | Purpose |
 |---------|---------|
-| `open_encoder(settings)` | Lazy embedder (mock / nemotron-fallback); no torch at `elyra.memory` import |
-| `EncodeQueue.enqueue` / `drain` | Idle-only corpus encode with ms/item caps |
+| `open_encoder(settings)` | Lazy embedder (mock / nemotron-fallback); no torch at `elyra.memory` import; **loader** role only for cold open |
+| `EncodeQueue.enqueue` / `drain` | Priority-lane corpus queue (P1 create / P2 catchup); budgeted drain under ms/item caps |
+| `EmbedderGate` / `GatedEmbedder` | Serialize shared-embedder forwards; **lookup > bulk** between atoms; meal/graph/API free-text use gated handle |
+| `EncodeWorker` | Presence-owned continuous drain daemon when `encode_owner=worker` |
 | `MemoryStore.set_write_hook` | After successful `put_atom`; primary enqueue path (KD16) |
-| `MemoryStore.list_atoms` | Glass/admin + idle pending scan (status/kind filter; limit ≤ 200) |
+| `MemoryStore.list_atoms` | Glass/admin + pending scan backstop (status/kind filter; limit ≤ 200) |
 | `LanceMemoryStore.upsert_vectors` | Patch emb columns + status without scalar wipe |
-| `LanceMemoryStore.repair_joint_copies` / open+idle repair | Eager joint-copy for ready sole-modality rows (KD-R11) |
+| `LanceMemoryStore.repair_joint_copies` / open+idle repair | Eager joint-copy for ready sole-modality rows (KD-R11); **stays idle-only** (not on EncodeWorker) |
 | `resolve_search_channel` | Pure auto→concrete policy (product authority for `channel_reason`) |
 | `EmbeddingIndex.upsert` / `search` / `optimize` / `health` | Vector write, hybrid search, safe optimize, honesty fields |
-| `select_semantic` / `compose_meal` | Supporting channel under `semantic_select_max_ms`; resolve then search |
+| `select_semantic` / `compose_meal` | Supporting channel under `semantic_select_max_ms`; resolve then search; query encode via gate |
 | `split_memory_budget_v2` | Semantic + episodic + temporal caps; Phase 1 math when semantic off |
+| `encode_worker_health_block` / Vectors encoder health | Process-local worker owner/alive/drain totals/gate waits (no secrets) |
 
 ### Lance physical schema (additive)
 
@@ -150,7 +157,7 @@ Logical `Atom.schema_version` stays **1** (vectors are not on the dataclass).
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `semantic_enabled` | `false` | Meal channel + promote may set `pending`; idle hooks/scan active when on |
+| `semantic_enabled` | `false` | Meal channel + promote may set `pending`; hooks/scan active when on |
 | `embed_enabled` | `false` | Allow load encoder + drain; without it, pending stays pending |
 | `embed_backend` | `mock` | `mock` \| `nemotron` (real load optional; falls back) |
 | `embed_device` | `auto` | `auto` \| `cuda` \| `rocm` \| `cpu` |
@@ -174,11 +181,16 @@ Logical `Atom.schema_version` stays **1** (vectors are not on the dataclass).
 | `ann_full_search_below` | `2000` | Full/unindexed search when few ready vectors |
 | `ann_optimize_every_n_encodes` | `64` | Idle optimize trigger |
 | `ann_optimize_interval_s` | `300` | Idle optimize interval |
-| `encode_max_ms_per_tick` | `100` | Idle drain budget |
-| `encode_max_items_per_tick` | `4` | Idle drain item cap |
-| `encode_queue_max` | `1024` | FIFO cap; drop oldest → skipped |
+| `encode_max_ms_per_tick` | `100` | Drain budget per EncodeWorker (or idle) tick |
+| `encode_max_items_per_tick` | `4` | Drain item cap per tick |
+| `encode_queue_max` | `1024` | Priority-queue cap; drop oldest P2 then P1 → skipped |
+| `encode_worker_enabled` | `true` | **false → owner=idle** (legacy idle-only drain rollback only) |
+| `encode_worker_poll_s` | `0.35` | EncodeWorker Event wait timeout between ticks |
+| `encode_worker_max_restarts` | `3` | Per-window thrash budget (not permanent give-up) |
+| `encode_worker_restart_window_s` | `60` | Restart thrash accounting window |
+| `encode_worker_restart_backoff_max_s` | `30` | Cap exponential restart backoff |
 
-Rollback: `semantic_enabled=false` empties the channel immediately; `embed_enabled=false` stops load/drain; vectors remain on disk inert. Search engine rollback: **`ann_search_backend=python`**. Phase 1 flags (`enabled` / `write_atoms`) unchanged. New knobs are allowlisted/coerced in `elyra/settings.py`.
+Rollback: `semantic_enabled=false` empties the channel immediately; `embed_enabled=false` stops load/drain; `encode_worker_enabled=false` reverts corpus drain to **idle-only** (operator rollback); vectors remain on disk inert. Search engine rollback: **`ann_search_backend=python`**. Phase 1 flags (`enabled` / `write_atoms`) unchanged. New knobs are allowlisted/coerced in `elyra/settings.py`. Continuous encode activates only when operator enables Phase 2 encode (`semantic_enabled` + `embed_enabled`); factory defaults stay off (KD9).
 
 ### Integration hooks
 
@@ -186,12 +198,14 @@ Rollback: `semantic_enabled=false` empties the channel immediately; `embed_enabl
 |------|-------|------|
 | Promote sets `pending` | `promote.promote_beat` / `promote_wake_observation` | When `semantic_enabled` and embeddable |
 | Parcel split before truncate | `promote` only | When `parcels_enabled` and body over threshold |
-| Store write hook enqueue | worker after `open_memory_store` | After put when semantic+embed and `pending` |
-| Idle pending scan | `worker._idle_memory_encode` | Backstop for restart / missed hooks |
-| Idle encode drain | outside state lock; not in-moment | `embed_enabled`; never mid-hop corpus encode |
-| Joint-copy repair | store open + idle continue | Ready sole-mod without joint; never hop / never inside `select_semantic` |
-| Idle index optimize / buffer seed | after encode tick | KD4 freshness; KD-R3 guards |
-| Meal query encode + search | `select_semantic` inside `compose_meal` / `rebuild_outer` | Only if embedder **already warm**; hard `semantic_select_max_ms` |
+| Store write hook enqueue | worker after `open_memory_store` | After put when semantic+embed and `pending` → P1 `atom_create` lane + wake Event |
+| Continuous EncodeWorker drain | `EncodeWorker` daemon (owner=`worker`) | While PE up + semantic+embed + `encode_worker_enabled`; **including busy moments**; budgeted ticks |
+| Pending scan / catch-up | EncodeWorker tick (or idle path if rollback) | Backstop for restart / missed hooks / `none`→`pending` → P2 `catchup` |
+| Idle encode drain | `worker._idle_memory_encode` | **Only when `encode_owner=idle`** (rollback); no-ops when owner=`worker` (incl. restart gaps) |
+| Gap drain on worker death | presence loop (finalize + idle path) | Busy-safe recovery while continuous enabled; **never** permanent idle while flag on |
+| Joint-copy repair | store open + idle continue | Ready sole-mod without joint; never hop / never inside `select_semantic` / **not** on EncodeWorker (OQ-E3) |
+| Idle index optimize / buffer seed | after idle path | KD4 freshness; KD-R3 guards; **stays idle-only** (OQ-E4) |
+| Meal/graph/API query encode | `select_semantic` / graph hop / Vectors free-text | Only if embedder **already warm**; **GatedEmbedder** lookup priority over bulk; hard budgets |
 
 ---
 
@@ -203,7 +217,7 @@ Which [§3 activities](../inspiration-activity-model-and-storage.md) are live af
 
 | Activity | Live? | Module / notes |
 |----------|-------|----------------|
-| Write multi-embeddings (per-modality + joint) | **Yes** (flags) | Idle `EncodeQueue` + `EmbeddingIndex.upsert`; promote only sets `pending` |
+| Write multi-embeddings (per-modality + joint) | **Yes** (flags) | Continuous `EncodeWorker` + priority `EncodeQueue` + `EmbeddingIndex.upsert`; promote only sets `pending` |
 | Split oversized content into parcels | **Yes** (`parcels_enabled`) | `parcel.py` + promote before truncate |
 | Sequential prev/next (experience) | **Yes** | Unchanged; parcels excluded from moment/global tail |
 | Link to contextual influencers | **No** | Later weave kinds / Phase 2a |
@@ -228,7 +242,7 @@ Unchanged from Phase 1 — ladder, range, walks, episodic meal fill. Ladder **do
 
 | Activity | Live? | Module / notes |
 |----------|-------|----------------|
-| Encode text / media / joint | **Yes** (idle; mock default) | `embed/encode.py` + runtime; single-mod joint = copy; multi-mod true joint |
+| Encode text / media / joint | **Yes** (continuous worker; mock default) | `embed/encode.py` + runtime + gate; single-mod joint = copy; multi-mod true joint; progress during busy moments |
 | Eager joint-copy repair (mid-migration) | **Yes** | Open + idle; no encoder; health `joint_repair_remaining` |
 | Vector top-k on resolved channel | **Yes** (Lance path) | `resolve_search_channel` → `EmbeddingIndex.search`; JSONL → Null index |
 | Filtered search (time, moment, kind) | **Yes** | Horizon, exclude open moment, kinds, exclude ids (parity on lance + python) |
@@ -254,7 +268,7 @@ Unchanged from Phase 1 — ladder, range, walks, episodic meal fill. Ladder **do
 |---------|-------|-------|
 | Restart-safe under `ELYRA_HOME` | **Yes** | Lance reload + buffer seed / full mode |
 | Hermetic tests without GPU/torch | **Yes** | Mock encoder; fake `EmbeddingIndex` for meal tests |
-| Single-writer friendly | **Yes** | Presence worker; store RLock |
+| Single logical PE process; concurrent presence + encode | **Yes** | Presence do-loop + EncodeWorker under store/index locks; no second OS process writer |
 | Scalar upsert preserves vectors | **Yes** | KD19 read-merge-write on Lance |
 | Core imports without torch | **Yes** | Lazy `open_encoder` |
 
@@ -264,8 +278,8 @@ Unchanged from Phase 1 — ladder, range, walks, episodic meal fill. Ladder **do
 
 Normative rules operators and later phases must preserve. Phase 1 invariants still apply; Phase 2 adds:
 
-1. **Corpus encode is idle-only.**  
-   Never run full atom→vector encode on the hop / `promote_beat` / mid-`rebuild_outer` path. Drain only when not in-moment, outside the presence state lock, under `encode_max_ms_per_tick` / `encode_max_items_per_tick`.
+1. **Corpus encode is continuous background under a single owner (KD-E1 / KD-E7 / KD-E10).**  
+   Never run full atom→vector encode on the hop / `promote_beat` / mid-`rebuild_outer` path (enqueue-only; KD-E2). Default product drain is a presence-owned **`EncodeWorker`** (`encode_owner=worker`) that makes progress **while PE is up**, including busy moments, under `encode_max_ms_per_tick` / `encode_max_items_per_tick`. **`encode_owner ∈ {none, idle, worker}`** — only one drain owner at a time; idle path no-ops when owner=`worker` (including restart gaps). Idle-only drain is **operator rollback only** (`encode_worker_enabled=false` → owner=`idle`), not the product default and not a permanent fallback after worker death. Lookup (meal / graph / API free-text) uses a **warm** embedder under **`EmbedderGate`** with **lookup > bulk** between atoms (never mid-forward kill). Design: [design-embed-async-encode-worker.md](../../design-embed-async-encode-worker.md).
 
 2. **Meal semantic select has a hard timeout.**  
    Entire query encode + ANN + pack must finish within `semantic_select_max_ms` (default 50). On exceed → empty semantic channel + `semantic_omitted_reason=timeout`. Never block the hop unbounded.
@@ -320,10 +334,12 @@ Normative rules operators and later phases must preserve. Phase 1 invariants sti
 |---------|----------|-----------|
 | Torch / model missing | Low | Mock or encoder ok=false; pending→skipped; semantic omit |
 | `embed_backend=nemotron` without real runtime | Low | Mock fallback; health notes fallback |
-| Cold load timeout on idle | Low | Partial drain; next tick continues; hop unaffected |
-| Encode exception | Low | `failed` + `meta.embed_error`; retry up to `encode_max_attempts` |
+| Cold load during continuous worker | Low | Load outside gate + outside long open-lock; consumer ensure returns None (omit); next drain tick continues; hop unaffected |
+| Encode exception | Low | `failed` + `meta.embed_error`; deferred retry (not same-tick thrash); up to `encode_max_attempts` |
+| EncodeWorker death while busy | Med | Presence monitors every loop; restart with backoff; busy gap drain; **desired owner stays worker** (never permanent idle while continuous on) |
 | Meal semantic select slow | Med | Exceed `semantic_select_max_ms` → omit; `semantic_omitted_reason=timeout` |
-| Embedder not warm at meal | Low | Omit; `semantic_omitted_reason=encoder` (or equivalent) |
+| Lookup starved under media bulk | Med | Gate between-atom yield; wait mode may still omit; gate wait metrics on Vectors health |
+| Embedder not warm at meal | Low | Omit; `semantic_omitted_reason=encoder` (or equivalent); never wait on ~18s cold load |
 | Empty open-moment seed | Low | Omit; `empty_seed` |
 | No index / JSONL backend | Low | Search `[]`; semantic omit `no_index` (not `no_hits`) |
 | Resolved channel has no candidates | Low | Meal omit **`no_hits`**; Vectors show reason + channel searched |
@@ -335,10 +351,10 @@ Normative rules operators and later phases must preserve. Phase 1 invariants sti
 | Lance search failure | Low | Fallback python cosine; honest search_mode; filters preserved |
 | Vector upsert fails | Low | Leave pending/failed; do not corrupt scalar atom |
 | Scalar path would wipe emb (prevented) | High if regressed | KD19 tests; preserve contract |
-| Queue overflow | Low | Drop oldest → `skipped` + metric |
-| Store write hook raises | Low | Log; idle pending scan backstop |
-| OOM on GPU | High | Catch, unload, unavailable; skip semantic; never crash worker |
-| GPU / ROCm Nemotron always CPU | Med | **BUG-mem-gpu-01** — Gate B / runtime; not rectification core |
+| Queue overflow | Low | Drop oldest P2 then P1 → `skipped` + metric |
+| Store write hook raises | Low | Log; worker/idle pending scan backstop |
+| OOM on GPU | High | Catch, unload, unavailable; skip semantic; never crash PE |
+| GPU / ROCm packaging / Tensile miss | Med | **BUG-mem-gpu-01** still Open for packaging/device matrix; continuous-encode **product path** is separate (worker + gate shipped) |
 | Parcel split partial put | Med | Reconcile parent meta; incomplete flags |
 | Dual backend operator switch | Med | Vectors only on Lance path; no auto-migrate to JSONL |
 
@@ -463,14 +479,18 @@ Overview: `GET /api/memory` reports `tabs.vectors: {stub: false, phase: "2"}` an
 | **`auto` channel** | Resolve request → one concrete column (repair-pending safety); not multi-try fusion |
 | **Joint-copy repair** | Fill null `emb_joint` from sole modality without encoder (open + idle) |
 | **Parcel** | Size-split child atom (`kind=parcel`); parent remains experience chain member |
-| **EncodeQueue** | In-process FIFO of pending atom_ids; idle drain only |
+| **EncodeQueue** | In-process priority queue of pending atom_ids (P1 create / P2 catchup); drained by EncodeWorker (or idle rollback) |
+| **EncodeWorker** | Presence-owned daemon that owns bulk corpus drain while `encode_owner=worker` |
+| **encode_owner** | `none` \| `idle` \| `worker` — single drain owner protocol (KD-E7) |
+| **EmbedderGate** | Exclusive shared-embedder forward lock; lookup priority over bulk between atoms |
+| **GatedEmbedder** | Only public encode handle for meal/graph/API free-text (`encode_text` under lookup gate) |
 | **EmbeddingIndex** | Façade for upsert/search/optimize/health over Lance or memory/null backends |
 | **Recent buffer** | In-process vectors for hybrid search correctness under continuous insert |
 | **`full_lance`** | Small-N / pre-IVF main-leg via Lance unindexed vector search (success path) |
 | **Index stale** | Health signal: buffer non-empty, optimize due, or seed incomplete |
 | **Semantic channel** | Supporting meal package section; not the open-moment spine |
 | **Mock encoder** | Deterministic hash→unit vector path for CI and GPU-free dogfood |
-| **Warm embedder** | Already loaded; required for meal-time query encode |
+| **Warm embedder** | Already loaded; required for meal-time query encode (consumer never blocks on cold load) |
 | **Gate B** | Spike checklist before product default-on of semantic flags |
 
 ---
@@ -481,7 +501,9 @@ Overview: `GET /api/memory` reports `tabs.vectors: {stub: false, phase: "2"}` an
 |------|-------|
 | `tests/test_memory_embed_types.py` | EmbeddingSet dim; channel helpers; joint helpers |
 | `tests/test_memory_embed_mock.py` | Deterministic vectors; L2 norm; joint-for-single **copy** |
-| `tests/test_memory_embed_queue.py` | enqueue/drain caps; dedupe; overflow → skipped |
+| `tests/test_memory_embed_queue.py` | enqueue/drain caps; priority lanes; concurrent enqueue+drain; overflow → skipped |
+| `tests/test_memory_embed_worker.py` | EncodeWorker continuous drain; owner; gate; busy death recovery; non-blocking ensure |
+| `tests/test_memory_encoder_health.py` | encode_worker / gate / depth_by_priority health (no secrets) |
 | `tests/test_memory_index.py` | Hybrid merge; filters; optimize guards; channel resolve; repair |
 | `tests/test_memory_parcel.py` | Split before truncate; parent on chain; default off parity |
 | `tests/test_memory_meal_semantic.py` | Budget v2; dedup; timeout; `no_hits` / `deduped`; meta |
@@ -501,6 +523,7 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unava
 | [design-phase-2-rectification.md](../design-phase-2-rectification.md) | **Normative fix plan** KD-R* + PR-R1–R6 (product-intent recovery) |
 | [design-phase-2-implementation.md](../design-phase-2-implementation.md) | Historical implementation design, KDs, PR plan (PR1–PR9) |
 | [design-phase-2-semantic.md](../design-phase-2-semantic.md) | Short phase outline (points here + implementation + rectification) |
+| [design-embed-async-encode-worker.md](../../design-embed-async-encode-worker.md) | **Normative continuous encode** — EncodeWorker, EmbedderGate, single-owner, KD-E1–E18 |
 | [design-nemotron-runtime.md](../design-nemotron-runtime.md) | Portable encode contract; Gate B checklist |
 | [spikes/lance-emb-migration.md](spikes/lance-emb-migration.md) | Lance emb migration spike (Gate A) |
 | [spikes/nemotron-runtime.md](spikes/nemotron-runtime.md) | Nemotron runtime spike notes |
@@ -521,10 +544,11 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 | Work | Role |
 |------|------|
 | **Operator smoke dogfood** | Enable `backend=lance` + embed/semantic flags; verify neighbors/meal/repair on live corpus (code rectification landed; verification pending) |
+| **Continuous encode dogfood** | Busy create→ready; `drain_ok_total` during multi-minute work; meal/API under text bulk; worker death resume; embed off→on — see **BUG-mem-gpu-01** product-path checklist (does **not** close packaging) |
 | **Gate B / default-on** | Dogfood mock → Nemotron → optional default-on; flip only after operator sign-off ([design-nemotron-runtime.md](../design-nemotron-runtime.md)) |
-| **BUG-mem-gpu-01** | ROCm / device product path — not blocking channel fix |
+| **BUG-mem-gpu-01** | Packaging / Tensile / multi-device matrix still Open; continuous encode **code path** shipped (worker + gate) |
 | **Optional 2D projection** | Non-gate polish for Vectors tab (KD18) |
 | **Phase 2a** | Directed traversal → **Graph** tab — **after** rectified semantic seeds |
 | **Phase 3** | Procedural / success-path (evaluation-first); vector ANN ≠ procedure |
 
-Phase 2 product surface: meal semantic + vector search + **Vectors glass** + architecture note, with rectification closing the joint-empty dogfood hole. Graph/hypergraph UI is Phase 2a. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.
+Phase 2 product surface: meal semantic + vector search + **Vectors glass** + continuous background encode + architecture note, with rectification closing the joint-empty dogfood hole and embed-async closing idle-only corpus starvation. Graph/hypergraph UI is Phase 2a. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.

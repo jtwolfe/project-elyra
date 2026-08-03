@@ -41,7 +41,7 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-prompt-01` | [#79](https://github.com/jtwolfe/project-elyra/issues/79) (open) | Open (defer) — review after memory is up (Phase 1 meal/store stable… |
 | `BUG-mem-p2-01` | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (open) | Fixed in code (PR-R1–R5, 2026-07-29) — residual: operator smoke dog… |
 | `BUG-mem-lance-01` | [#81](https://github.com/jtwolfe/project-elyra/issues/81) (closed) | Fixed (2026-07-29, `fcb5130`) — restart required so process maps re… |
-| `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open (defer to Gate B / runtime) |
+| `BUG-mem-gpu-01` | [#82](https://github.com/jtwolfe/project-elyra/issues/82) (open) | Open — packaging/Tensile/device matrix; product continuous-encode **code path** shipped (not full #82 close) |
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (closed) | **Fixed** on main — LLM period ladder + meal tip policy; dogfood OK on feature/92 |
 | `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (closed) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
@@ -893,13 +893,13 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Open** (defer to Gate B / runtime) |
+| **Status** | **Open** — packaging / Tensile / multi-device matrix residual; **do not claim full [#82](https://github.com/jtwolfe/project-elyra/issues/82) closed** |
 | **Issue** | [#82](https://github.com/jtwolfe/project-elyra/issues/82) |
-| **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **moment/meal encode path not verified**; wheel reinstall loses inject |
+| **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **continuous encode code path shipped** (EncodeWorker + gate); **live operator dogfood of busy drain still pending**; wheel reinstall loses inject |
 | **Severity later** | High when product default-on wants durable multi-device embed (CUDA / modern ROCm / CPU) + encode during live moments under meal budgets |
-| **Area** | `elyra/memory/embed/runtime.py`, encode queue / idle worker, moment/meal integration, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |
-| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; operator **suspects embeddings may not run during a moment** (not yet proven). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
-| **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md); **not** Phase 2 rectification core (KD-R10). Rectification only optional device honesty in health |
+| **Area** | `elyra/memory/embed/runtime.py`, `embed/queue.py`, `embed/gate.py`, `embed/worker.py`, presence encode ownership, moment/meal/API gated encode, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |
+| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; prior observation was idle-only drain (starvation under busy). **2026-08-03** — continuous encode stack (PR1–PR4) lands product drain path; architecture + this checklist updated (PR5). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
+| **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md) + [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md); **not** Phase 2 rectification core (KD-R10). Packaging residual stays here; continuous-encode product path is KD-E17 evidence only |
 
 ### Symptom
 
@@ -907,7 +907,7 @@ Operator requests GPU/ROCm for Omni-Embed-Nemotron; without operator steps, offi
 
 **2026-07-29 PM addendum:** Injecting `TensileLibrary_lazy_gfx906.dat` (+ kernels) from Arch `rocblas` 7.2.4-2 into the venv torch `rocblas/library` unlocks matmul and full Nemotron load/encode on Radeon VII. Helper: `docs/radeon-vii-dev/scripts/00_inject_gfx906_tensile.py`. This is **operator local**, not a product packaging fix.
 
-**2026-07-29 product-path observation (unconfirmed):** After setting local `embed_device = "rocm"`, presence appears to **load** Nemotron onto GPU, but the operator is **not sure embeddings actually run during a moment** (encode queue / idle / meal-path vs load-only). Treat as open dogfood — may be timing, queue, flags, or observation gap; **not** sealed as a separate root cause yet.
+**2026-07-29 product-path observation (historical):** After setting local `embed_device = "rocm"`, presence appeared to **load** Nemotron onto GPU, but corpus drain was **idle-only** (`PresenceWorker._idle_memory_encode` only when no wake claimed). Under multi-hour directed work, pending backlog and empty semantic seeds were expected. That **in-moment / continuous drain gap** is the product-path slice of #82 (known-bugs gap #7) — addressed in code by continuous EncodeWorker (see below). Packaging/Tensile remains separate and **Open**.
 
 ### Related design intent
 
@@ -915,33 +915,66 @@ Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product pa
 
 **Productization target (feature, tracked here so it is not lost):** keep a **generic modern** device story for operators; treat **Radeon VII / gfx906** as a **non-standard dev** profile, not the template for “all AMD.”
 
+**Continuous encode (product path — code shipped, dogfood pending):** corpus drain is the PE process’s background encode job while up (when `semantic_enabled` + `embed_enabled`), with **lookup priority** for meal/graph/API free-text via `EmbedderGate`. Design: [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md). Architecture invariant: [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) §3 invariant 1. **#82 honesty (KD-E17):** this path records product continuous-encode evidence only; it does **not** close packaging/Tensile/device-matrix work.
+
 ### Device matrix (desired product shape)
 
 | Path | Role | What “works” means |
 |------|------|---------------------|
-| **CPU** | Default-safe / CI / no GPU | Encode correct; slow OK |
-| **CUDA** | NVIDIA hosts with matching torch | `select_device` / load / encode on GPU; matmul green |
-| **ROCm (modern)** | AMD GPUs **in official PyTorch ROCm Tensile set** (typical current RDNA / CDNA listed by the wheel) | Host ROCm + matching `+rocm*` wheel; **A5 matmul green without inject**; then product encode |
+| **CPU** | Default-safe / CI / no GPU | Encode correct; slow OK; continuous drain valid success for product-path law |
+| **CUDA** | NVIDIA hosts with matching torch | `select_device` / load / encode on GPU; matmul green; continuous drain during busy |
+| **ROCm (modern)** | AMD GPUs **in official PyTorch ROCm Tensile set** (typical current RDNA / CDNA listed by the wheel) | Host ROCm + matching `+rocm*` wheel; **A5 matmul green without inject**; then product continuous encode |
 | **dev / Radeon VII (gfx906)** | **Non-standard** operator/dev only | Official wheel may enumerate HIP but omit Tensile → needs **explicit** inject (`00_inject_gfx906_tensile`) or equivalent; **must not** become the only documented AMD path |
 
 **Portability rule (ops):** on any AMD card, install host ROCm + matching venv torch → run hard gate **matmul smoke** → only then load Nemotron. Green A5 ⇒ same product path as modern AMD. Red A5 with missing Tensile for `gfx####` ⇒ arch not in the wheel; VII-style inject is **arch-specific**, not “install any packages.” Avoid cargo-cult `HSA_OVERRIDE` / Tier B for ISA miss.
 
-### Fix directions (later)
+### Product continuous-encode path (code evidence — not a full #82 close)
+
+Shipped on embed-async stack (2026-08-03), design [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md):
+
+| Slice | Status | Notes |
+|-------|--------|--------|
+| Thread-safe priority `EncodeQueue` (P1 create / P2 catchup) | **Code** | PR1; concurrent hook + worker safe |
+| Continuous `EncodeWorker` + `encode_owner` single-owner | **Code** | PR2; drain while PE up; death → restart/gap drain, **not** permanent idle |
+| `EmbedderGate` + `GatedEmbedder` (meal/graph/API lookup > bulk) | **Code** | PR2–PR3; between-atom only |
+| Worker/gate health on Vectors / inspect | **Code** | PR4; `drain_ok_total`, owner, alive, gate waits — no secrets |
+| Architecture + this checklist | **Docs** | PR5; invariant idle-only → continuous single-owner |
+| Live busy dogfood (`drain_ok_total` / pending→ready under continuous wakes) | **Pending** | Operator run still required |
+| Packaging / Tensile / modern device matrix | **Open** | Remains this bug’s residual; **not** closed by continuous encode |
+
+**Acceptance criterion for product-path evidence (when dogfood runs):** `drain_ok_total` (or ready count) rises during multi-minute busy work with pending atoms — CPU **or** GPU. Packaging green alone does **not** pass this criterion; continuous-encode evidence alone does **not** close #82.
+
+### Product continuous-encode dogfood checklist
+
+Use with `backend=lance`, `semantic_enabled` + `embed_enabled` on, and (default) `encode_worker_enabled=true`. Mock or Nemotron; GPU optional for product-path law.
+
+- [ ] **Create → pending → ready without idle claim** — promote during continuous wakes; vectors land while moments stay open
+- [ ] **Busy progress** — multi-minute directed/social work; Vectors health `encode_worker.drain_ok_total` or ready count ↑ (CPU **or** GPU)
+- [ ] **Lookup not starved (warm, text bulk)** — meal semantic / graph hop / free-text neighbors within budget; gate wait metrics may rise
+- [ ] **API free-text gated** — concurrent bulk drain + Vectors free-text; no crash; serialized encode
+- [ ] **Soft fail** — bad device / encode failure marks atom; PE process stays up
+- [ ] **Worker death during busy** — force worker exception under continuous wakes → restart and/or gap drain; `drain_ok_total` still ↑ (no idle-claim wait)
+- [ ] **embed off→on** — create pending with embed off; enable embed → ready without PE restart
+- [ ] **Cold load / ensure** — consumer ensure returns None while loading; hop latency not +load_ms; meal may omit `encoder`
+- [ ] **Rollback** — `encode_worker_enabled=false` → idle-only drain resumes
+- [ ] **#82 honesty** — record continuous-encode evidence here; **leave packaging matrix Open** (do not close issue)
+
+### Fix directions (later — packaging residual)
 
 1. **Generic modern stack (product):** document and dogfood **CPU + CUDA + modern ROCm** as the supported matrix; `embed_device=auto` prefers real GPU when probe/matmul-healthy, else CPU. Do not require VII inject on modern cards.
 2. **Non-standard Radeon VII / gfx906 (dev):** keep under `docs/radeon-vii-dev/`; optional setup flag or profile (e.g. “dev-radeon-vii”) that runs Tensile inject after torch install; never imply this is required for all AMD.
 3. Durable gfx906: inject script (done); re-run after torch reinstall; optional future vendor/document only for that profile.
-4. Vectors health: requested vs effective device honesty (optional polish).
+4. Vectors health: requested vs effective device honesty (optional polish) — worker metrics already expose process-local drain/gate state.
 5. Do **not** block meal/channel product path on GPU presence.
-6. Gate B: standalone smoke green; **product worker + in-moment encode dogfood still required** before semantic default-on.
-7. **Moment encode dogfood (next):** during a live moment, confirm encode queue activity, atom vectors land, health/device stay ROCm, and semantic expand is not load-only. Capture moment id + log snippets when repro’d.
+6. Gate B: standalone smoke green; **operator continuous-encode dogfood** (checklist above) still required before semantic default-on.
+7. **Operator continuous-encode dogfood (next):** run checklist during live work; capture moment ids + Vectors `encode_worker` health + log snippets. Criterion: `drain_ok_total` during busy — not packaging alone.
 8. **Project-wide setup script (ongoing feature, not VII-only):** evolve `scripts/setup_venv.sh` / project setup into a single operator entry that can install extras, optional torch backend (cpu / cuda / rocm), probe devices, run smoke gates, and **optionally** apply non-standard profiles (e.g. Radeon VII Tensile inject). Track as iterative work — not a one-shot PR; keep secrets out of repo; keep machine-specific freezes out of the generic path.
 
 ### Dogfood — venv ROCm smoke after Tensile inject (2026-07-29)
 
 | Field | Value |
 |-------|--------|
-| Status of BUG-mem-gpu-01 | **Still Open** (script path green; product moment encode **unverified**) |
+| Status of BUG-mem-gpu-01 | **Still Open** (script path green; continuous-encode **code** shipped 2026-08-03; **live busy dogfood pending**; packaging residual Open) |
 | torch_version | 2.13.0+rocm7.2 |
 | hip_version | 7.2.53211 |
 | device_name | AMD Radeon VII (gfx906); torch `"AMD Radeon Graphics"` |
@@ -950,14 +983,16 @@ Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product pa
 | encode_ms | ~2200 first / ~100 subsequent (**standalone `03` only**) |
 | vram_peak_bytes | ~9580803584 |
 | attn_impl if known | product tries flash_attention_2 then falls back |
-| product worker path | local `embed_device=rocm` after inject; **GPU load seen**; **in-moment encode not confirmed** |
-| Notes | Real GPU load+encode via `03` + `NemotronEmbedder(device="rocm")`. No “product GPU embed fixed.” Re-inject after torch reinstall. Dig later: does encode run during a moment? |
+| product worker path | local `embed_device=rocm` after inject; **GPU load seen** (2026-07-29); continuous EncodeWorker **code path** (2026-08-03); **operator busy drain dogfood not yet recorded** |
+| Notes | Real GPU load+encode via `03` + `NemotronEmbedder(device="rocm")`. No “product GPU embed fully fixed.” Re-inject after torch reinstall. Continuous encode does not close packaging. |
 
 Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) PR3/PR4 sections. Product-path note: same file PR5 / product follow-on.
 
 ### Related
 
 - **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
+- [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md) — continuous EncodeWorker + gate (product continuous-encode path).
+- [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) — corpus encode single-owner invariant (replaces idle-only product law).
 - [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions, portability notes; bug stays **Open**.
 - [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii-dev/STACK-INVENTORY.md) — post-switch inventory / A5 status.
 - [radeon-vii-dev/scripts/00_inject_gfx906_tensile.py](radeon-vii-dev/scripts/00_inject_gfx906_tensile.py) — **dev-only** gfx906 path, not generic AMD.
