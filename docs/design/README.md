@@ -114,7 +114,7 @@ Stretch-2 memory designs (PR2b / KD4). Architecture manuals: [docs/state/memory/
 | [design-phase-2-semantic.md](memory/design-phase-2-semantic.md) | Shipped (code; dogfood pending) | Phase 2 design |
 | [design-phase-2-implementation.md](memory/design-phase-2-implementation.md) | Shipped (code; dogfood pending) | Phase 2 PR plan |
 | [design-phase-2-rectification.md](memory/design-phase-2-rectification.md) | Shipped | Phase 2 rectification |
-| [design-mm-embed-buildout.md](memory/design-mm-embed-buildout.md) | **Active / Ready for review** | Multimodal semantic loop (ingest→encode→search→glass); branch `feature/mm-embed-buildout` |
+| [design-mm-embed-buildout.md](memory/design-mm-embed-buildout.md) | **Active / Approved (design skill 2026-08-05)** | Multimodal semantic loop (ingest→encode→search→glass); branch `feature/mm-embed-buildout`; #124 |
 | [design-phase-2a-directed-traversal.md](memory/design-phase-2a-directed-traversal.md) | Shipped (code; dogfood pending) | Phase 2a design |
 | [design-phase-2a-implementation.md](memory/design-phase-2a-implementation.md) | Shipped (code; dogfood pending) | Phase 2a PR plan |
 | [design-phase-3-procedural.md](memory/design-phase-3-procedural.md) | Draft / experimental | Phase 3 design |
