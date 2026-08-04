@@ -53,6 +53,17 @@ const memoryNeighborK = $("#memory-neighbor-k");
 const memoryNeighborsRun = $("#memory-neighbors-run");
 const memoryNeighborsList = $("#memory-neighbors-list");
 const memoryNeighborsMeta = $("#memory-neighbors-meta");
+const memoryNeighborAttach = $("#memory-neighbor-attach");
+const memoryNeighborFile = $("#memory-neighbor-file");
+const memoryNeighborAtt = $("#memory-neighbor-att");
+const memoryNeighborMediaClear = $("#memory-neighbor-media-clear");
+const memoryNeighborMediaChip = $("#memory-neighbor-media-chip");
+/**
+ * Vectors neighbor media-as-query seed (local File and/or resolved att_id).
+ * Upload reuses chat POST /api/media pattern; search uses POST neighbors.
+ * @type {{ id?: string, file?: File|Blob, name: string, kind: string, size: number, type?: string, previewUrl?: string|null } | null}
+ */
+let neighborQueryMedia = null;
 const memoryGraphOverview = $("#memory-graph-overview");
 const memoryGraphHonesty = $("#memory-graph-honesty");
 const memoryGraphSessionBadge = $("#memory-graph-session-badge");
@@ -3819,6 +3830,117 @@ function renderDirectedKeepStatusCard(meal) {
  * @param {object} a atom detail from GET /api/memory/atoms/:id
  * @param {{ showClose?: boolean, onClose?: () => void }} opts
  */
+/**
+ * Compact media count/type chip for list rows (Atoms / Vectors).
+ * @param {number|null|undefined} count
+ * @param {string} [title]
+ * @returns {HTMLElement|null}
+ */
+function makeMediaCountChip(count, title) {
+  const n = Number(count) || 0;
+  if (n <= 0) return null;
+  const chip = document.createElement("span");
+  chip.className = "badge memory-media-chip";
+  chip.textContent = n === 1 ? "media×1" : `media×${n}`;
+  chip.title = title || `${n} media attachment${n === 1 ? "" : "s"}`;
+  return chip;
+}
+
+/**
+ * Channel badges row (embed_channels / channels).
+ * @param {string[]|null|undefined} channels
+ * @returns {HTMLElement|null}
+ */
+function makeChannelChips(channels) {
+  if (!Array.isArray(channels) || !channels.length) return null;
+  const chips = document.createElement("div");
+  chips.className = "memory-channel-chips";
+  for (const ch of channels) {
+    const chip = document.createElement("span");
+    chip.className = "badge memory-channel-chip";
+    chip.textContent = String(ch);
+    chips.appendChild(chip);
+  }
+  return chips;
+}
+
+/**
+ * Media inventory strip for atom detail (id/kind/mime/filename + image thumb).
+ * @param {Array<Record<string, any>>|null|undefined} media
+ * @returns {HTMLElement|null}
+ */
+function renderAtomMediaInventory(media) {
+  if (!Array.isArray(media) || !media.length) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "memory-atom-media-inventory";
+  const label = document.createElement("div");
+  label.className = "memory-atom-media-label";
+  label.textContent =
+    media.length === 1 ? "Media (1)" : `Media (${media.length})`;
+  wrap.appendChild(label);
+  const list = document.createElement("div");
+  list.className = "memory-atom-media-list";
+  for (const m of media) {
+    if (!m || !m.id) continue;
+    const item = document.createElement("div");
+    item.className = "memory-atom-media-item";
+    const kind = String(m.kind || "file");
+    const href =
+      m.url && resolveMediaUrl(m.url)
+        ? resolveMediaUrl(m.url)
+        : ATT_ID_RE.test(String(m.id))
+          ? `/api/media/${m.id}`
+          : null;
+    if (kind === "image" && href) {
+      const a = document.createElement("a");
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.className = "memory-atom-media-thumb-link";
+      a.title = m.filename || m.id;
+      const img = document.createElement("img");
+      img.className = "memory-atom-media-thumb";
+      img.src = href;
+      img.alt = m.filename || m.id;
+      img.loading = "lazy";
+      a.appendChild(img);
+      item.appendChild(a);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "memory-atom-media-icon";
+      icon.textContent = kindIcon(kind);
+      icon.setAttribute("aria-hidden", "true");
+      item.appendChild(icon);
+    }
+    const meta = document.createElement("div");
+    meta.className = "memory-atom-media-meta";
+    const name = document.createElement("div");
+    name.className = "memory-atom-media-name";
+    name.textContent = m.filename || m.id;
+    name.title = m.id;
+    meta.appendChild(name);
+    const sub = document.createElement("div");
+    sub.className = "memory-atom-media-sub muted";
+    sub.textContent = [kind, m.mime || null, m.id]
+      .filter(Boolean)
+      .join(" · ");
+    meta.appendChild(sub);
+    item.appendChild(meta);
+    if (href) {
+      const open = document.createElement("a");
+      open.className = "link-btn";
+      open.href = href;
+      open.target = "_blank";
+      open.rel = "noopener noreferrer";
+      open.textContent = "open";
+      item.appendChild(open);
+    }
+    list.appendChild(item);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function fillAtomInspectInto(container, a, opts = {}) {
   container.innerHTML = "";
   const head = document.createElement("div");
@@ -3826,6 +3948,16 @@ function fillAtomInspectInto(container, a, opts = {}) {
   const strong = document.createElement("strong");
   strong.textContent = a.kind || "atom";
   head.appendChild(strong);
+  // Media count badge in head when inventory or media_ids present.
+  const mediaList = Array.isArray(a.media) ? a.media : [];
+  const mediaIds = Array.isArray(a.media_ids) ? a.media_ids : [];
+  const mediaCount =
+    mediaList.length ||
+    mediaIds.length ||
+    Number(a.media_count) ||
+    0;
+  const mediaChip = makeMediaCountChip(mediaCount);
+  if (mediaChip) head.appendChild(mediaChip);
   if (opts.showClose) {
     const closeBtn = document.createElement("button");
     closeBtn.type = "button";
@@ -3853,6 +3985,53 @@ function fillAtomInspectInto(container, a, opts = {}) {
     .filter(Boolean)
     .join(" · ");
   container.appendChild(meta);
+
+  // embed_channels badges (partial MM honesty — not "fully multimodal").
+  const channels = Array.isArray(a.embed_channels)
+    ? a.embed_channels
+    : Array.isArray(a.channels)
+      ? a.channels
+      : [];
+  const chChips = makeChannelChips(channels);
+  if (chChips) container.appendChild(chChips);
+
+  // embed_error / embed_media_skipped (KD-M3 partial encode honesty).
+  if (a.embed_error) {
+    const err = document.createElement("p");
+    err.className = "memory-embed-error muted";
+    err.textContent = `embed_error: ${a.embed_error}`;
+    err.title = String(a.embed_error);
+    container.appendChild(err);
+  }
+  if (Array.isArray(a.embed_media_skipped) && a.embed_media_skipped.length) {
+    const skip = document.createElement("div");
+    skip.className = "memory-embed-skips";
+    const skipLabel = document.createElement("div");
+    skipLabel.className = "memory-atom-media-label";
+    skipLabel.textContent = "Media encode skips (partial)";
+    skip.appendChild(skipLabel);
+    const ul = document.createElement("ul");
+    ul.className = "memory-embed-skip-list";
+    for (const s of a.embed_media_skipped) {
+      const li = document.createElement("li");
+      li.textContent = String(s);
+      ul.appendChild(li);
+    }
+    skip.appendChild(ul);
+    container.appendChild(skip);
+  }
+
+  const inv = renderAtomMediaInventory(mediaList.length ? mediaList : null);
+  if (inv) {
+    container.appendChild(inv);
+  } else if (mediaIds.length) {
+    // Fallback: ids only (no inventory enrichment).
+    const invFallback = renderAtomMediaInventory(
+      mediaIds.map((id) => ({ id, kind: null, mime: null, filename: null }))
+    );
+    if (invFallback) container.appendChild(invFallback);
+  }
+
   const text = a.content_text != null ? String(a.content_text) : "";
   const pretty = tryPrettyJsonContent(text);
   if (pretty != null) {
@@ -3979,6 +4158,22 @@ function renderMemoryChannelCard(item) {
   }
   meta.textContent = mbits.join(" · ") || "—";
   card.appendChild(meta);
+
+  // Context media marker when meal meta has media (temporal/semantic media-backed).
+  const mediaCount =
+    Number(metaObj.media_count) ||
+    (Array.isArray(metaObj.media_ids) ? metaObj.media_ids.length : 0) ||
+    0;
+  if (mediaCount > 0) {
+    const mChip = makeMediaCountChip(
+      mediaCount,
+      "Meal item includes media-backed atom(s)"
+    );
+    if (mChip) {
+      mChip.classList.add("memory-context-media-marker");
+      head.appendChild(mChip);
+    }
+  }
 
   // Prose-friendly body for summaries / speak-like channels.
   const proseCh = new Set([
@@ -4237,6 +4432,15 @@ function renderAtomsList(atoms) {
     badge.textContent = a.t_start || "—";
     head.appendChild(strong);
     head.appendChild(badge);
+    // Media count chip when media_count / media_ids present (list row honesty).
+    const mChip = makeMediaCountChip(a.media_count);
+    if (mChip) head.appendChild(mChip);
+    if (a.embedding_status) {
+      const emb = document.createElement("span");
+      emb.className = "badge memory-embed-status-chip";
+      emb.textContent = `embed=${a.embedding_status}`;
+      head.appendChild(emb);
+    }
     card.appendChild(head);
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -4296,6 +4500,13 @@ async function loadAtomDetail(id, opts = {}) {
       content_truncated: a.content_truncated,
       embedding_status: a.embedding_status,
       moment_id: a.moment_id,
+      embed_channels: a.embed_channels || [],
+      embed_error: a.embed_error || null,
+      embed_media_skipped: a.embed_media_skipped || [],
+      media: Array.isArray(a.media)
+        ? a.media.map((m) => (m && m.id) || null)
+        : [],
+      media_ids: a.media_ids || [],
     });
     // Soft poll: keep painted detail when body unchanged (BUG-glass-03 / #74).
     if (
@@ -4372,22 +4583,61 @@ async function refreshMemoryAtoms(opts = {}) {
 }
 
 /**
- * Format vectors_by_channel map for glass health (omit zero channels except joint/text).
+ * Format vectors_by_channel map for glass health.
+ * Always show joint/text/image/audio/video (zeros visible for media channels).
  * @param {Record<string, number> | null | undefined} counts
  */
 function formatVectorsByChannel(counts) {
-  if (!counts || typeof counts !== "object") return "—";
+  if (!counts || typeof counts !== "object") {
+    return "joint=0 · text=0 · image=0 · audio=0 · video=0";
+  }
   const order = ["joint", "text", "image", "audio", "video"];
   const parts = [];
   for (const ch of order) {
     const n = counts[ch];
-    if (n == null) continue;
-    const num = Number(n) || 0;
-    if (num > 0 || ch === "joint" || ch === "text") {
-      parts.push(`${ch}=${num}`);
-    }
+    const num = n == null ? 0 : Number(n) || 0;
+    parts.push(`${ch}=${num}`);
   }
-  return parts.length ? parts.join(" · ") : "—";
+  return parts.join(" · ");
+}
+
+/**
+ * media_encode health label + tooltip (KD-M4 / mock-fallback honesty).
+ * @param {Record<string, any>} enc encoder health block
+ * @returns {{ text: string, title: string, good: boolean|null }}
+ */
+function formatMediaEncode(enc) {
+  const me = enc.media_encode;
+  const note = enc.media_encode_note ? String(enc.media_encode_note) : "";
+  const backend = String(enc.backend || "").toLowerCase();
+  let text = "unknown";
+  let good = null;
+  if (me === true) {
+    text = "yes";
+    good = true;
+  } else if (me === false) {
+    text = "no";
+    good = false;
+  }
+  let title = "Whether this encoder accepts image/audio/video query inputs.";
+  if (me === true && (note === "mock" || backend === "mock")) {
+    title =
+      "Mock accepts media inputs (deterministic hash) — not Nemotron omni packing. media_encode=true means mock media path is open.";
+  } else if (me === true && (note === "nemotron_mm_utils" || backend === "nemotron")) {
+    title = "Nemotron multimodal packing available (qwen-omni-utils).";
+  } else if (me === false && note === "install_qwen_omni_utils") {
+    title =
+      "install qwen-omni-utils; text-only encode continues. Media query will omit with media_encode_unavailable.";
+  } else if (me === false) {
+    title =
+      "Media encode unavailable — media-as-query will return omitted_reason=media_encode_unavailable.";
+  } else if (me == null) {
+    title = "media_encode unknown (encoder not loaded or health omitted the key).";
+  }
+  if (note && me === true && note !== "mock" && note !== "nemotron_mm_utils") {
+    title = `${title} note=${note}`;
+  }
+  return { text, title, good };
 }
 
 /**
@@ -4500,6 +4750,10 @@ function renderVectorsHealth(data) {
       }`,
       null,
     ],
+    (() => {
+      const me = formatMediaEncode(enc);
+      return ["media_encode", me.text, me.good, me.title];
+    })(),
     [
       "index",
       idx.ok
@@ -4513,6 +4767,7 @@ function renderVectorsHealth(data) {
       "channels",
       formatVectorsByChannel(idx.vectors_by_channel),
       null,
+      "vectors_by_channel (zeros visible for image/audio/video)",
     ],
     [
       "repair",
@@ -4553,7 +4808,11 @@ function renderVectorsHealth(data) {
     ],
     ["store", mem.ok ? mem.backend || "ok" : mem.error || "down", mem.ok === true],
   ];
-  for (const [label, value, good] of rows) {
+  for (const rowSpec of rows) {
+    const label = rowSpec[0];
+    const value = rowSpec[1];
+    const good = rowSpec[2];
+    const title = rowSpec[3];
     const row = document.createElement("div");
     row.className = "status-row";
     const lab = document.createElement("span");
@@ -4564,13 +4823,18 @@ function renderVectorsHealth(data) {
     if (good === true) val.classList.add("status-ok");
     if (good === false) {
       // repair / freshness warn — not hard error (search still works).
+      // media_encode=no is warn-tone (text search still works).
       val.classList.add(
-        label === "freshness" || label === "repair"
+        label === "freshness" || label === "repair" || label === "media_encode"
           ? "memory-vector-stale"
           : "status-bad"
       );
     }
     val.textContent = value;
+    if (title) {
+      val.title = String(title);
+      lab.title = String(title);
+    }
     row.appendChild(lab);
     row.appendChild(val);
     memoryVectorsHealth.appendChild(row);
@@ -4598,6 +4862,8 @@ function renderVectorsAtomsList(atoms) {
     badge.textContent = a.kind || "—";
     head.appendChild(strong);
     head.appendChild(badge);
+    const mChip = makeMediaCountChip(a.media_count);
+    if (mChip) head.appendChild(mChip);
     card.appendChild(head);
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -4605,22 +4871,16 @@ function renderVectorsAtomsList(atoms) {
       a.atom_id || "—",
       a.t_start || null,
       a.embed_error ? `err=${a.embed_error}` : null,
+      Array.isArray(a.embed_media_skipped) && a.embed_media_skipped.length
+        ? `skips=${a.embed_media_skipped.length}`
+        : null,
     ]
       .filter(Boolean)
       .join(" · ");
     card.appendChild(meta);
     // embed_channels chips — joint vs text visible (PR-R5 honesty).
-    if (Array.isArray(a.channels) && a.channels.length) {
-      const chips = document.createElement("div");
-      chips.className = "memory-channel-chips";
-      for (const ch of a.channels) {
-        const chip = document.createElement("span");
-        chip.className = "badge memory-channel-chip";
-        chip.textContent = String(ch);
-        chips.appendChild(chip);
-      }
-      card.appendChild(chips);
-    }
+    const chChips = makeChannelChips(a.channels);
+    if (chChips) card.appendChild(chChips);
     const snip = document.createElement("div");
     snip.className = "muted";
     snip.style.fontSize = "0.85rem";
@@ -4632,6 +4892,8 @@ function renderVectorsAtomsList(atoms) {
         memoryNeighborAtom.value = a.atom_id;
       }
       if (memoryNeighborQ) memoryNeighborQ.value = "";
+      // Atom-id path: clear media seed so stored embedding is used.
+      clearNeighborQueryMedia();
       runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
     });
     memoryVectorsList.appendChild(card);
@@ -4640,6 +4902,7 @@ function renderVectorsAtomsList(atoms) {
 
 /**
  * Neighbor empty-state / meta line: never blank without explanation when query ran.
+ * Shows query modality, resolved channel, omit reasons (incl. media_encode_unavailable).
  * @param {Record<string, any>} data
  */
 function renderNeighborsMeta(data) {
@@ -4648,8 +4911,19 @@ function renderNeighborsMeta(data) {
   const req = q.channel || "auto";
   const resolved = q.resolved_channel || req;
   const reason = q.channel_reason || null;
+  const modality = q.query_modality || null;
+  const source = q.source || null;
   const parts = [
-    `channel ${req}${resolved && resolved !== req ? ` → ${resolved}` : resolved ? ` (${resolved})` : ""}`,
+    modality ? `modality=${modality}` : null,
+    source ? `source=${source}` : null,
+    q.att_id ? `att=${q.att_id}` : null,
+    `channel ${req}${
+      resolved && resolved !== req
+        ? ` → ${resolved}`
+        : resolved
+          ? ` (${resolved})`
+          : ""
+    }`,
     reason ? `reason=${reason}` : null,
   ].filter(Boolean);
   const idx = data.index || {};
@@ -4660,8 +4934,43 @@ function renderNeighborsMeta(data) {
   if (Number(idx.joint_repair_remaining) > 0) {
     parts.push(`repair_pending=${idx.joint_repair_remaining}`);
   }
+  if (data.omitted_reason) {
+    parts.push(`omit=${data.omitted_reason}`);
+  }
   memoryNeighborsMeta.hidden = false;
   memoryNeighborsMeta.textContent = parts.join(" · ");
+}
+
+/**
+ * Human copy for media-related neighbor omit reasons.
+ * @param {string} omit
+ * @returns {string|null}
+ */
+function neighborOmitHint(omit) {
+  switch (omit) {
+    case "media_encode_unavailable":
+      return "Encoder media_encode is off — install qwen-omni-utils or use mock; text-only path was not silently substituted.";
+    case "media_missing":
+      return "Media att_id not found in MediaStore (well-formed id, missing blob).";
+    case "media_oversize":
+      return "Media exceeds embed_media_max_bytes (client input error).";
+    case "media_unsupported_type":
+      return "Media type not mapable to image/audio/video for encode.";
+    case "invalid_att_id":
+      return "att_id failed validation.";
+    case "query_required":
+      return "Provide atom id, free-text q, or media att_id.";
+    case "no_hits":
+    case "no_vector":
+      return "Empty result is not necessarily broken search — try another channel or wait for encode/repair.";
+    case "no_index":
+    case "encoder":
+    case "search_failed":
+    case "encode_failed":
+      return "Search path unavailable (index/encoder) — not an IVF small-corpus skip.";
+    default:
+      return null;
+  }
 }
 
 function renderNeighborsList(data) {
@@ -4674,18 +4983,13 @@ function renderNeighborsList(data) {
     const q = data.query || {};
     const resolved = q.resolved_channel || q.channel || "—";
     const reason = q.channel_reason || "—";
+    const modality = q.query_modality || "—";
     const lines = [
       `No neighbors (${omit}).`,
-      `Searched channel ${resolved} (${reason}).`,
+      `Query modality ${modality}; searched channel ${resolved} (${reason}).`,
     ];
-    // Distinguish “search broken” vs empty channel / small corpus.
-    if (omit === "no_hits" || omit === "no_vector") {
-      lines.push(
-        "Empty result is not necessarily broken search — try another channel or wait for encode/repair."
-      );
-    } else if (omit === "no_index" || omit === "encoder" || omit === "search_failed") {
-      lines.push("Search path unavailable (index/encoder) — not an IVF small-corpus skip.");
-    }
+    const hint = neighborOmitHint(String(omit));
+    if (hint) lines.push(hint);
     memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
       lines.join(" ")
     )}</p>`;
@@ -4710,6 +5014,8 @@ function renderNeighborsList(data) {
     badge.title = "Cosine similarity (1 = identical direction)";
     head.appendChild(title);
     head.appendChild(badge);
+    const mChip = makeMediaCountChip(n.media_count);
+    if (mChip) head.appendChild(mChip);
     card.appendChild(head);
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -4728,6 +5034,177 @@ function renderNeighborsList(data) {
     card.appendChild(pre);
     memoryNeighborsList.appendChild(card);
   }
+}
+
+/** Clear Vectors neighbor media-as-query seed (file + att_id field). */
+function clearNeighborQueryMedia() {
+  if (neighborQueryMedia && neighborQueryMedia.previewUrl) {
+    try {
+      URL.revokeObjectURL(neighborQueryMedia.previewUrl);
+    } catch {
+      /* ignore */
+    }
+  }
+  neighborQueryMedia = null;
+  if (memoryNeighborAtt) memoryNeighborAtt.value = "";
+  if (memoryNeighborFile) memoryNeighborFile.value = "";
+  renderNeighborMediaChip();
+}
+
+/**
+ * Paint neighbor media seed chip from neighborQueryMedia or att_id input.
+ */
+function renderNeighborMediaChip() {
+  if (!memoryNeighborMediaChip) return;
+  const attField =
+    memoryNeighborAtt && memoryNeighborAtt.value.trim()
+      ? memoryNeighborAtt.value.trim()
+      : "";
+  const has =
+    neighborQueryMedia ||
+    (attField && ATT_ID_RE.test(attField));
+  if (!has) {
+    memoryNeighborMediaChip.hidden = true;
+    memoryNeighborMediaChip.innerHTML = "";
+    if (memoryNeighborMediaClear) memoryNeighborMediaClear.hidden = true;
+    return;
+  }
+  memoryNeighborMediaChip.hidden = false;
+  if (memoryNeighborMediaClear) memoryNeighborMediaClear.hidden = false;
+  memoryNeighborMediaChip.innerHTML = "";
+  const chip = document.createElement("div");
+  chip.className = "attach-chip memory-neighbor-attach-chip";
+  const kind = neighborQueryMedia
+    ? neighborQueryMedia.kind
+    : "file";
+  const name = neighborQueryMedia
+    ? neighborQueryMedia.name
+    : attField;
+  const idShown =
+    (neighborQueryMedia && neighborQueryMedia.id) || attField || "";
+  if (
+    neighborQueryMedia &&
+    neighborQueryMedia.kind === "image" &&
+    neighborQueryMedia.previewUrl
+  ) {
+    const img = document.createElement("img");
+    img.src = neighborQueryMedia.previewUrl;
+    img.alt = name;
+    chip.appendChild(img);
+  } else {
+    const icon = document.createElement("span");
+    icon.textContent = kindIcon(kind);
+    icon.setAttribute("aria-hidden", "true");
+    chip.appendChild(icon);
+  }
+  const meta = document.createElement("div");
+  meta.className = "chip-meta";
+  const subBits = [kind];
+  if (neighborQueryMedia && neighborQueryMedia.size) {
+    subBits.push(formatBytes(neighborQueryMedia.size));
+  }
+  if (idShown) subBits.push(idShown);
+  meta.innerHTML = `<span class="chip-name" title="${escapeHtml(
+    name
+  )}">${escapeHtml(name)}</span><span class="chip-sub">${escapeHtml(
+    subBits.join(" · ")
+  )}</span>`;
+  chip.appendChild(meta);
+  memoryNeighborMediaChip.appendChild(chip);
+}
+
+/**
+ * Resolve att_id for media-as-query: use existing id or upload local file
+ * via POST /api/media (same pattern as chat attach).
+ * @returns {Promise<string|null>}
+ */
+async function resolveNeighborMediaAttId() {
+  if (neighborQueryMedia && neighborQueryMedia.id) {
+    return neighborQueryMedia.id;
+  }
+  if (neighborQueryMedia && neighborQueryMedia.file) {
+    const formData = new FormData();
+    formData.append("user_id", getSessionUserId());
+    formData.append("origin", "user_upload");
+    formData.append(
+      "files",
+      neighborQueryMedia.file,
+      neighborQueryMedia.name || "query-media"
+    );
+    const res = await fetch("/api/media", { method: "POST", body: formData });
+    const text = await res.text();
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
+    if (!res.ok) {
+      const msg =
+        (data && (data.error || data.reason)) || text || res.statusText;
+      const err = new Error(`${res.status}: ${msg}`);
+      err.status = res.status;
+      err.body = data;
+      throw err;
+    }
+    const uploaded = Array.isArray(data.attachments) ? data.attachments : [];
+    const id = uploaded[0] && uploaded[0].id ? String(uploaded[0].id) : null;
+    if (!id) throw new Error("Upload returned no attachments");
+    neighborQueryMedia.id = id;
+    renderNeighborMediaChip();
+    return id;
+  }
+  const attField =
+    memoryNeighborAtt && memoryNeighborAtt.value.trim()
+      ? memoryNeighborAtt.value.trim()
+      : "";
+  if (attField) {
+    if (!ATT_ID_RE.test(attField)) {
+      const err = new Error("invalid_att_id: use a MediaStore id like att_…");
+      err.status = 400;
+      throw err;
+    }
+    return attField;
+  }
+  return null;
+}
+
+function setNeighborQueryMediaFromFile(file) {
+  if (!file) return;
+  const kind = detectAttachmentKind(file);
+  if (kind !== "image" && kind !== "audio" && kind !== "video") {
+    showNotice("Neighbor media query accepts image, audio, or video only.");
+    return;
+  }
+  const maxBytes = clientMaxBytesForKind(kind);
+  if (file.size > maxBytes) {
+    showNotice(
+      `${file.name} is too large (${formatBytes(file.size)}; max ${formatBytes(
+        maxBytes
+      )} for ${kind}).`
+    );
+    return;
+  }
+  if (neighborQueryMedia && neighborQueryMedia.previewUrl) {
+    try {
+      URL.revokeObjectURL(neighborQueryMedia.previewUrl);
+    } catch {
+      /* ignore */
+    }
+  }
+  neighborQueryMedia = {
+    name: file.name,
+    size: file.size,
+    type: file.type || "application/octet-stream",
+    kind,
+    previewUrl: kind === "image" ? URL.createObjectURL(file) : null,
+    file,
+  };
+  // Prefer attached file over stale att_id field.
+  if (memoryNeighborAtt) memoryNeighborAtt.value = "";
+  // Media query path: atom id would take precedence server-side — clear it.
+  if (memoryNeighborAtom) memoryNeighborAtom.value = "";
+  renderNeighborMediaChip();
 }
 
 async function refreshMemoryVectors(opts = {}) {
@@ -4764,7 +5241,6 @@ async function refreshMemoryVectors(opts = {}) {
 }
 
 async function runNeighborSearch() {
-  const params = new URLSearchParams();
   const atomId = memoryNeighborAtom ? memoryNeighborAtom.value.trim() : "";
   const q = memoryNeighborQ ? memoryNeighborQ.value.trim() : "";
   let k = 8;
@@ -4772,34 +5248,88 @@ async function runNeighborSearch() {
     const raw = parseInt(memoryNeighborK.value, 10);
     if (Number.isFinite(raw)) k = raw;
   }
-  params.set("k", String(k));
   // Default auto when select missing; always send explicit channel from UI.
   const channel =
     memoryNeighborChannel && memoryNeighborChannel.value
       ? memoryNeighborChannel.value.trim() || "auto"
       : "auto";
-  params.set("channel", channel);
-  if (atomId) params.set("atom_id", atomId);
-  else if (q) params.set("q", q);
-  else {
+
+  if (memoryNeighborsList) {
+    memoryNeighborsList.innerHTML = `<p class="muted">searching…</p>`;
+  }
+
+  let attId = null;
+  try {
+    attId = await resolveNeighborMediaAttId();
+  } catch (err) {
+    if (memoryNeighborsMeta) memoryNeighborsMeta.hidden = true;
+    if (memoryNeighborsList) {
+      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">${escapeHtml(
+        String(err.message || err)
+      )}</p>`;
+    }
+    return;
+  }
+
+  // Prefer media (+ optional text) over atom when media seed is set (API atom wins).
+  const useMedia = Boolean(attId);
+  const useAtom = Boolean(atomId) && !useMedia;
+  const useText = Boolean(q);
+
+  if (!useMedia && !useAtom && !useText) {
     if (memoryNeighborsMeta) {
       memoryNeighborsMeta.hidden = true;
       memoryNeighborsMeta.textContent = "";
     }
     if (memoryNeighborsList) {
-      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id or free-text query.</p>`;
+      memoryNeighborsList.innerHTML = `<p class="muted empty memory-empty">Pick an atom id, free-text query, or media seed.</p>`;
     }
     return;
   }
-  if (memoryNeighborsList) {
-    memoryNeighborsList.innerHTML = `<p class="muted">searching…</p>`;
-  }
+
   try {
-    const data = await fetchJson(
-      `/api/memory/vectors/neighbors?${params.toString()}`
-    );
+    let data;
+    if (useMedia) {
+      // POST media-as-query (KD-M15/M16) — att_id ± q.
+      const body = { channel, k };
+      body.att_id = attId;
+      if (useText) body.q = q;
+      data = await fetchJson("/api/memory/vectors/neighbors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      // GET atom_id or free-text q (existing path).
+      const params = new URLSearchParams();
+      params.set("k", String(k));
+      params.set("channel", channel);
+      if (useAtom) params.set("atom_id", atomId);
+      else if (useText) params.set("q", q);
+      data = await fetchJson(
+        `/api/memory/vectors/neighbors?${params.toString()}`
+      );
+    }
     renderNeighborsList(data);
   } catch (err) {
+    // Surface structured omit/error from 400 bodies when present.
+    const body = err && err.body && typeof err.body === "object" ? err.body : null;
+    if (body && (body.omitted_reason || body.error)) {
+      renderNeighborsList({
+        ok: false,
+        neighbors: [],
+        omitted_reason: body.omitted_reason || body.error,
+        error: body.error,
+        query: body.query || {
+          channel,
+          att_id: attId,
+          q: q || null,
+          atom_id: useAtom ? atomId : null,
+        },
+        index: body.index || {},
+      });
+      return;
+    }
     if (memoryNeighborsMeta) {
       memoryNeighborsMeta.hidden = true;
     }
@@ -5383,6 +5913,39 @@ if (memoryVectorStatus) {
 if (memoryNeighborsRun) {
   memoryNeighborsRun.addEventListener("click", () => {
     runNeighborSearch().catch((e) => panelLoadError("Memory neighbors", e));
+  });
+}
+if (memoryNeighborAttach && memoryNeighborFile) {
+  memoryNeighborAttach.addEventListener("click", () => {
+    memoryNeighborFile.click();
+  });
+  memoryNeighborFile.addEventListener("change", () => {
+    const files = memoryNeighborFile.files;
+    if (files && files[0]) setNeighborQueryMediaFromFile(files[0]);
+    memoryNeighborFile.value = "";
+  });
+}
+if (memoryNeighborAtt) {
+  memoryNeighborAtt.addEventListener("input", () => {
+    // Typing an att_id clears local file seed (prefer pick path).
+    if (memoryNeighborAtt.value.trim()) {
+      if (neighborQueryMedia && neighborQueryMedia.file) {
+        if (neighborQueryMedia.previewUrl) {
+          try {
+            URL.revokeObjectURL(neighborQueryMedia.previewUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+        neighborQueryMedia = null;
+      }
+    }
+    renderNeighborMediaChip();
+  });
+}
+if (memoryNeighborMediaClear) {
+  memoryNeighborMediaClear.addEventListener("click", () => {
+    clearNeighborQueryMedia();
   });
 }
 if (memoryGraphNeighborsRun) {

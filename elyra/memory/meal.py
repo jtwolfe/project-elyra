@@ -1528,19 +1528,23 @@ def select_semantic(
         score_f = float(score) if score is not None else None
         label = _semantic_label(via_parcel=via_parcel, score=score_f)
         body = format_atom_line(parent)
+        sem_meta: dict[str, Any] = {
+            "score": score_f,
+            "via_parcel": via_parcel,
+            "hit_atom_id": atom.atom_id,
+            "kind": parent.kind,
+            "moment_id": parent.moment_id,
+        }
+        # Glass Context media marker (MM #124 PR5) — same meta.media_ids path as temporal.
+        if parent.media_ids:
+            sem_meta["media_ids"] = list(parent.media_ids)
         item = _item_from_parts(
             atom_id=parent.atom_id,
             channel="semantic",
             label=label,
             content=body,
             t_start=parent.t_start,
-            meta={
-                "score": score_f,
-                "via_parcel": via_parcel,
-                "hit_atom_id": atom.atom_id,
-                "kind": parent.kind,
-                "moment_id": parent.moment_id,
-            },
+            meta=sem_meta,
         )
         if used + item.token_estimate > cap and packed:
             continue

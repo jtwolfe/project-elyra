@@ -3280,6 +3280,144 @@ body {
   opacity: 0.92;
 }
 
+.memory-media-chip,
+.memory-embed-status-chip,
+.memory-context-media-marker {
+  font-size: 0.72rem;
+  opacity: 0.95;
+}
+
+.memory-media-chip {
+  background: color-mix(in srgb, var(--good, #3d9a6a) 18%, var(--surface, #1a1a1e));
+  border-color: color-mix(in srgb, var(--good, #3d9a6a) 40%, var(--border));
+}
+
+.memory-embed-error {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--warn, #c9a227);
+  word-break: break-word;
+}
+
+.memory-embed-skips {
+  margin: 0.4rem 0 0.15rem;
+}
+
+.memory-embed-skip-list {
+  margin: 0.2rem 0 0;
+  padding-left: 1.15rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.memory-atom-media-inventory {
+  margin: 0.5rem 0 0.35rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface, #1a1a1e) 80%, transparent);
+}
+
+.memory-atom-media-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+}
+
+.memory-atom-media-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.memory-atom-media-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.memory-atom-media-thumb-link {
+  flex: 0 0 auto;
+  display: block;
+  line-height: 0;
+}
+
+.memory-atom-media-thumb {
+  width: 2.5rem;
+  height: 2.5rem;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface, #1a1a1e);
+}
+
+.memory-atom-media-icon {
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface, #1a1a1e);
+}
+
+.memory-atom-media-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.memory-atom-media-name {
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-atom-media-sub {
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-neighbors-media-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+  padding: 0.15rem 0 0.35rem;
+}
+
+.memory-neighbor-att {
+  min-width: 8rem;
+  flex: 0 1 12rem;
+  max-width: 16rem;
+}
+
+.memory-neighbor-media-chip {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.memory-neighbor-media-chip .attach-chip,
+.memory-neighbor-attach-chip {
+  max-width: 22rem;
+}
+
+.memory-neighbors-media-hint {
+  padding: 0 0 0.25rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  max-width: 48rem;
+}
+
 #memory-vectors-list {
   flex: 0 1 auto;
   max-height: min(36vh, 22rem);
