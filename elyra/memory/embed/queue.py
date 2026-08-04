@@ -38,12 +38,13 @@ _OVERFLOW_ERROR = "queue_overflow"
 
 
 def _copy_media_skipped(result: Any, updates: dict[str, Any]) -> None:
-    """Copy ``embed_media_skipped`` from EncodeResult.meta when present (KD-M3).
+    """Copy ``embed_media_skipped`` from EncodeResult.meta (KD-M3).
 
     Applied on ready / failed / skipped / media_unresolved paths so glass can
-    always read the last skip inventory. Non-empty lists are always persisted;
-    empty lists are only written when the key is explicitly present on result
-    meta (clears a prior partial-skip inventory on clean re-encode).
+    always read the last skip inventory. When the key is present (including an
+    empty list), write it so a clean re-encode clears a prior partial inventory.
+    When the key is absent, leave ``updates`` alone — the ready path may still
+    clear as a belt-and-suspenders default.
     """
     meta = getattr(result, "meta", None) or {}
     if not isinstance(meta, Mapping):
@@ -567,6 +568,11 @@ class EncodeQueue:
         updates[_META_ENCODED_AT] = emb.encoded_at or ""
         updates[_META_CHANNELS] = list(emb.channels_present)
         updates.pop(_META_ERROR, None)
+        # KD-M3 belt-and-suspenders: clean ready without a skip key still clears
+        # a prior partial inventory (encode_atom always attaches; other producers
+        # may omit the key).
+        if _META_MEDIA_SKIPPED not in updates:
+            updates[_META_MEDIA_SKIPPED] = []
 
         if index is not None:
             try:

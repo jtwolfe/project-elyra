@@ -770,13 +770,18 @@ def encoder_health_block(
             else:
                 block["media_encode"] = None
         # Optional tooltip honesty for glass (mock fallback vs real omni).
+        # Do not claim "install qwen-omni-utils" for closed mock / non-nemotron.
+        be_eff = str(block.get("backend") or "").lower()
+        err_s = str(block.get("error") or "")
         if block.get("media_encode") is True:
-            if str(block.get("backend") or "").lower() == "mock":
+            if be_eff == "mock":
                 block["media_encode_note"] = "mock"
-            elif str(block.get("backend") or "").lower() == "nemotron":
+            elif be_eff == "nemotron":
                 block["media_encode_note"] = "nemotron_mm_utils"
         elif block.get("media_encode") is False:
-            block["media_encode_note"] = "install_qwen_omni_utils"
+            if be_eff == "nemotron" or "mm_utils" in err_s or "qwen_omni" in err_s:
+                block["media_encode_note"] = "install_qwen_omni_utils"
+            # else: closed mock / encoder absent already returned / unknown — omit
     except Exception as exc:  # noqa: BLE001
         block["ok"] = False
         block["error"] = str(exc) or type(exc).__name__

@@ -1051,9 +1051,19 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
+            # Best-effort media inventory fill (KD-M3 / PR2 inspect enrichment).
+            media_store = None
+            try:
+                media_store = MediaStore(self.paths)
+            except Exception:  # noqa: BLE001 — inventory is optional
+                media_store = None
             self._json(
                 200,
-                {"ok": True, "atom": atom_to_detail(atom), "memory": flags},
+                {
+                    "ok": True,
+                    "atom": atom_to_detail(atom, media_store=media_store),
+                    "memory": flags,
+                },
             )
         except Exception as exc:  # noqa: BLE001
             _LOG.exception("get memory atom failed")

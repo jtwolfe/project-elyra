@@ -246,6 +246,21 @@ def test_encoder_health_block_media_encode_false_note():
     assert block["media_encode_note"] == "install_qwen_omni_utils"
 
 
+def test_encoder_health_block_closed_mock_no_install_note():
+    """Closed mock: media_encode false must not claim install qwen-omni-utils."""
+    emb = MockEmbedder()
+    emb.close()
+    block = encoder_health_block(
+        settings=MemorySettings(embed_enabled=True, embed_backend="mock"),
+        embedder=emb,
+        queue=None,
+    )
+    assert block["backend"] == "mock"
+    assert block["media_encode"] is False
+    assert block["error"] == "closed"
+    assert block.get("media_encode_note") is None
+
+
 # ── Queue drain: persist embed_media_skipped ──────────────────────────────
 
 
@@ -355,10 +370,11 @@ def test_drain_persists_media_skipped_on_skipped_kind(store):
 
 
 def test_drain_persists_media_skipped_on_failed(store, media_store):
-    """Failed encode still copies skip inventory from EncodeResult.meta."""
-    mid = "att_oversize_only"
-    # Build a result path: media present + text so encode is attempted, but
-    # embedder fails after resolve has recorded skips.
+    """Failed encode still copies resolve skip inventory (no synthetic meta).
+
+    Boom has no encode_atom_inputs — free helper hits encode_text which raises.
+    encode_atom exception path (or merge path) must still keep oversize tokens.
+    """
     att = media_store.put_bytes(
         FIXTURE_TINY_PNG.read_bytes(), filename="x.png", origin="user_upload"
     )
@@ -380,6 +396,8 @@ def test_drain_persists_media_skipped_on_failed(store, media_store):
     media_store.get = _get  # type: ignore[method-assign]
 
     class Boom:
+        """Protocol-only embedder: channel methods raise; no encode_atom_inputs."""
+
         def health(self):
             return {
                 "ok": True,
@@ -404,21 +422,6 @@ def test_drain_persists_media_skipped_on_failed(store, media_store):
         def encode_joint(self, parts):
             raise RuntimeError("boom")
 
-        def encode_atom_inputs(self, *a, **k):
-            from elyra.memory.embed.types import EncodeResult
-
-            return EncodeResult(
-                status="failed",
-                embeddings=None,
-                error="boom",
-                channels_encoded=(),
-                meta={"embed_media_skipped": [f"{mid}:synthetic_skip"]},
-            )
-
-    # encode_atom calls encode_atom_inputs via module helper — Boom needs
-    # encode_atom_inputs only if we go through that path. Use monkeypatch
-    # style: text-only with injected meta via a wrapper embedder that
-    # encode_atom will call encode_atom_inputs on when present.
     atom = store.put_atom(
         _atom(text="will fail", status="pending", media_ids=(att.id,))
     )
@@ -446,10 +449,65 @@ def test_drain_persists_media_skipped_on_failed(store, media_store):
     # Oversize soft-skip from resolve is recorded even when forward fails.
     skipped = got.meta.get("embed_media_skipped") or []
     assert any("oversize" in s for s in skipped)
+    assert any(att.id in s for s in skipped)
+
+
+def test_encode_atom_exception_preserves_media_skipped(media_store):
+    """Issue 4: hard raise after resolve still carries embed_media_skipped."""
+    from elyra.memory.embed.encode import encode_atom
+
+    att = media_store.put_bytes(
+        FIXTURE_TINY_PNG.read_bytes(), filename="exc.png", origin="user_upload"
+    )
+    real_get = media_store.get
+
+    def _get(aid: str):
+        a = real_get(aid)
+        if a is not None and a.id == att.id:
+            return SimpleNamespace(
+                id=a.id,
+                mime=a.mime,
+                filename=a.filename,
+                kind=a.kind,
+                sha256=a.sha256,
+                byte_size=99_000_000,
+            )
+        return a
+
+    media_store.get = _get  # type: ignore[method-assign]
+
+    class Boom:
+        def health(self):
+            return {"ok": True, "dim": 8, "model_id": "x", "backend": "mock"}
+
+        def encode_text(self, text: str):
+            raise RuntimeError("forward boom")
+
+        def encode_image(self, x):
+            raise RuntimeError("forward boom")
+
+        def encode_audio(self, x):
+            raise RuntimeError("forward boom")
+
+        def encode_video(self, x):
+            raise RuntimeError("forward boom")
+
+        def encode_joint(self, parts):
+            raise RuntimeError("forward boom")
+
+    atom = _atom(text="caption", media_ids=(att.id,))
+    result = encode_atom(
+        Boom(), atom, media_store=media_store, media_max_bytes=100
+    )
+    assert result.status == "failed"
+    assert "boom" in (result.error or "").lower()
+    skipped = (result.meta or {}).get("embed_media_skipped") or []
+    assert any("oversize" in s for s in skipped)
+    assert any(att.id in s for s in skipped)
 
 
 def test_drain_no_skip_list_when_clean_text_only(store):
-    """Zero-state: pure text encode does not invent embed_media_skipped."""
+    """Clean text encode durable-attaches empty skip list (glass zero-state)."""
     atom = store.put_atom(_atom(text="clean text only", status="pending"))
     q = EncodeQueue(maxsize=4)
     q.enqueue(atom.atom_id)
@@ -457,7 +515,34 @@ def test_drain_no_skip_list_when_clean_text_only(store):
     got = store.get_atom(atom.atom_id)
     assert got is not None
     assert got.embedding_status == "ready"
-    assert got.meta.get("embed_media_skipped") in (None, [])
+    # Always-write empty list so operators see last inventory, not stale absent.
+    assert got.meta.get("embed_media_skipped") == []
+
+
+def test_drain_clears_stale_skip_list_on_clean_reencode(store):
+    """KD-M3 bugfix: prior partial inventory must clear on clean re-encode.
+
+    Seeds a non-empty embed_media_skipped, then drains a pure-text atom through
+    the real encode_atom path (not a faked EncodeResult). Ready + channels and
+    durable ``[]``.
+    """
+    atom = store.put_atom(
+        _atom(
+            text="clean reencode after partial",
+            status="pending",
+            meta={"embed_media_skipped": ["att_old:oversize_bytes:999999"]},
+        )
+    )
+    assert (store.get_atom(atom.atom_id).meta.get("embed_media_skipped") or [])  # type: ignore[union-attr]
+    q = EncodeQueue(maxsize=4)
+    q.enqueue(atom.atom_id)
+    stats = q.drain(store, MockEmbedder(), index=_Idx(), max_items=2)
+    assert stats["ok"] == 1
+    got = store.get_atom(atom.atom_id)
+    assert got is not None
+    assert got.embedding_status == "ready"
+    assert "text" in (got.meta.get("embed_channels") or [])
+    assert got.meta.get("embed_media_skipped") == []
 
 
 def test_drain_clears_skip_list_when_result_has_empty_key(store):

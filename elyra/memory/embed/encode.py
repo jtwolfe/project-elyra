@@ -344,7 +344,13 @@ def encode_atom(
     Text channel uses ``content_text``. Media channels use the resolve path
     when a media_store is provided. Empty content → skipped. Exceptions →
     failed EncodeResult (queue updates durable status).
+
+    Always attaches ``meta.embed_media_skipped`` after media resolve (including
+    ``[]``) so drain can clear a prior partial-skip inventory on clean re-encode
+    (KD-M3).
     """
+    # Captured before try body so exception path can still report resolve skips.
+    media_skipped: list[str] = []
     try:
         if atom.kind in _SKIP_KINDS:
             return EncodeResult(
@@ -371,9 +377,8 @@ def encode_atom(
                     embeddings=None,
                     error="media_unresolved",
                     channels_encoded=(),
-                    meta={"embed_media_skipped": media_skipped}
-                    if media_skipped
-                    else {},
+                    # Always attach key (incl. []) so drain clears stale lists.
+                    meta={"embed_media_skipped": media_skipped},
                 )
             return EncodeResult(
                 status="skipped",
@@ -390,17 +395,22 @@ def encode_atom(
             video=media.get("video"),
             single_modality_joint=single_modality_joint,
         )
-        if media_skipped:
-            meta = dict(result.meta or {})
-            meta["embed_media_skipped"] = media_skipped
-            return EncodeResult(
-                status=result.status,
-                embeddings=result.embeddings,
-                error=result.error,
-                channels_encoded=result.channels_encoded,
-                meta=meta,
-            )
-        return result
+        # Merge resolve skips with any producer skips (e.g. Nemotron mm_utils).
+        # Always set the key — empty list clears a prior partial inventory.
+        meta = dict(result.meta or {})
+        producer_skipped = list(meta.get("embed_media_skipped") or [])
+        merged = list(media_skipped)
+        for token in producer_skipped:
+            if token not in merged:
+                merged.append(token)
+        meta["embed_media_skipped"] = merged
+        return EncodeResult(
+            status=result.status,
+            embeddings=result.embeddings,
+            error=result.error,
+            channels_encoded=result.channels_encoded,
+            meta=meta,
+        )
     except Exception as exc:  # noqa: BLE001 — never raise into do-loop / worker
         _LOG.exception("encode_atom failed atom_id=%s", getattr(atom, "atom_id", "?"))
         return EncodeResult(
@@ -408,6 +418,8 @@ def encode_atom(
             embeddings=None,
             error=f"{type(exc).__name__}: {exc}"[:500],
             channels_encoded=(),
+            # Preserve resolve inventory when forward fails after media resolve.
+            meta={"embed_media_skipped": list(media_skipped)},
         )
 
 
