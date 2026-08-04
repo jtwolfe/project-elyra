@@ -30,7 +30,7 @@ See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package basel
 | Path | Purpose |
 |------|---------|
 | [STACK-INVENTORY.md](STACK-INVENTORY.md) | Hardware, host ROCm, venv package baseline |
-| [design-rocm-venv-gpu-embed-smoke.md](design-rocm-venv-gpu-embed-smoke.md) | Full design (acceptance, G1–G9, KD*, PR plan) |
+| [design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md) | Full design (acceptance, G1–G9, KD*, PR plan) — DESIGN class |
 | [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md) | **Operator runbook** — pin, purge, install, gates, rollback |
 | [freezes/README.md](freezes/README.md) | Freeze artifacts purpose, machine scope, restore limits |
 | [scripts/README.md](scripts/README.md) | Smoke scripts overview (G1–G9, exit codes, prereqs) |

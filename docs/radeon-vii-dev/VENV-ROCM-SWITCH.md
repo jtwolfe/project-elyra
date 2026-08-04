@@ -1,7 +1,7 @@
 # Runbook: Project venv CUDA → ROCm 7.2 torch switch
 
 **Audience:** Operator on LuxPrimata  
-**Design:** [design-rocm-venv-gpu-embed-smoke.md](design-rocm-venv-gpu-embed-smoke.md) §2–§3  
+**Design:** [design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md) §2–§3  
 **Inventory:** [STACK-INVENTORY.md](STACK-INVENTORY.md)  
 **Policy:** Python ML libs stay in **project `.venv`** (Python 3.12.8). Host ROCm is system packages only. Never use system Python 3.14 / `python-pytorch-rocm`.
 

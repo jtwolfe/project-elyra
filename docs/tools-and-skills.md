@@ -90,7 +90,7 @@ Stretch 1 runners (finite; **implemented**):
 
 No host `eval` of model code. New runner kinds = rare code change.  
 Invalid `runner.json` shapes surface as `invalid_runner:*` on verify/promote.  
-Full isolation design: [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).
+Full isolation design: [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md).
 
 Host capability-growth tools (search, browser, secrets, git/gh, package VCS) are **`builtin`** runners — they need host network, Chromium, secrets inject, or host repo paths. Guest packages never receive secret env or host git worktrees.
 
@@ -442,7 +442,7 @@ Cumulative procedure for the full program (product design + implementation plan 
 | [design-capability-growth-search-browse-vcs-secrets.md](design/capability/design-capability-growth-search-browse-vcs-secrets.md) | Product design (v2): search, browser, package VCS, secrets, workflow skills |
 | [design-capability-growth-implementation-plan.md](design/capability/design-capability-growth-implementation-plan.md) | Execute-plan PR DAG, normative promote algorithm, security gates |
 | [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) | Identity draft/promote + multi-user prep (parallel version culture) |
-| [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md) | Sandbox runners, isolation, honesty |
+| [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md) | Sandbox runners, isolation, honesty |
 | [design-guest-package-stage-reliability.md](design/capability/design-guest-package-stage-reliability.md) | Content-hash stage-once gate, in-place restage, `guest_module_missing` |
 | [stretch-1.md](stretch-1.md) | Runtime freeze for Stretch 1 shape |
 

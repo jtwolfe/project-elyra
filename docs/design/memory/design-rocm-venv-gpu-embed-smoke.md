@@ -2,12 +2,15 @@
 
 | Field | Value |
 |-------|--------|
-| **Status** | Design (rev 2 — review hardening) — implement on branch `grok-improv-radeonvii` |
+| **Class** | DESIGN |
+| **Status** | Shipped (standalone A5–A7 green; product in-moment encode residuals — see BUG-mem-gpu-01) |
 | **Date** | 2026-07-29 |
 | **Revision** | 3 — post-swap pytest `-m "not gpu"`; uncommitted elyra.toml pin; H12 pin-before-uninstall |
-| **Audience** | Senior engineers / operator (LuxPrimata) |
+| **Audience** | Implementers / operator (LuxPrimata) |
+| **Normative?** | No — prefer code on `working` + radeon operator notes when conflict |
+| **Durable path** | `docs/design/memory/design-rocm-venv-gpu-embed-smoke.md` |
 | **Branch** | `grok-improv-radeonvii` |
-| **Related** | [`docs/radeon-vii-dev/STACK-INVENTORY.md`](docs/radeon-vii-dev/STACK-INVENTORY.md), [`docs/known-bugs.md`](docs/known-bugs.md) **BUG-mem-gpu-01**, [`docs/stretch-2/design-nemotron-runtime.md`](docs/stretch-2/design-nemotron-runtime.md), [`docs/stretch-2/architecture/spikes/nemotron-runtime.md`](docs/stretch-2/architecture/spikes/nemotron-runtime.md), product path [`elyra/memory/embed/runtime.py`](elyra/memory/embed/runtime.py), operator [`elyra.toml`](elyra.toml) |
+| **Related** | [STACK-INVENTORY.md](../../radeon-vii-dev/STACK-INVENTORY.md), [known-bugs.md](../../known-bugs.md) **BUG-mem-gpu-01**, [design-nemotron-runtime.md](../../stretch-2/design-nemotron-runtime.md), [spikes/nemotron-runtime.md](../../stretch-2/architecture/spikes/nemotron-runtime.md), product path [`elyra/memory/embed/runtime.py`](../../../elyra/memory/embed/runtime.py), operator [`elyra.toml`](../../../elyra.toml) |
 | **Host** | Arch/Omarchy LuxPrimata; Radeon VII **gfx906**; host ROCm **7.2.4** Tier A |
 | **Scope phase** | Dev-focused: venv HIP torch + standalone encode smoke. **Not** full meal/presence/worker integration as *acceptance*. **Note:** operator `elyra.toml` already enables nemotron+auto — ROCm swap **will arm product path** unless pinned (see §3.0). |
 
@@ -19,7 +22,7 @@ Replace the project `.venv` CUDA PyTorch stack (`torch==2.13.0+cu130`, `torchvis
 
 Product code already has a portable ROCm contract (`probe_devices` / `select_device` / `NemotronEmbedder` map ROCm → `torch` device string `"cuda"` when `torch.version.hip` is set). Today that path never fires because the venv wheel is a CUDA build with no HIP and no usable GPU (`cuda.is_available=False`, `hip=None` → `select_device(auto)→cpu`).
 
-**Critical operator fact (not inert):** live [`elyra.toml`](elyra.toml) already has:
+**Critical operator fact (not inert):** live [`elyra.toml`](../../../elyra.toml) already has:
 
 ```toml
 semantic_enabled = true
@@ -111,7 +114,7 @@ flowchart TB
 
 ### Product code already ROCm-aware (no redesign required for probe)
 
-From [`elyra/memory/embed/runtime.py`](elyra/memory/embed/runtime.py):
+From [`elyra/memory/embed/runtime.py`](../../../elyra/memory/embed/runtime.py):
 
 | Symbol | Behaviour relevant here |
 |--------|-------------------------|
@@ -359,7 +362,7 @@ pip freeze > docs/radeon-vii-dev/freezes/post-rocm-pip-freeze.txt
 | residual `nvidia-*` | **absent** (or only packages ROCm wheel re-pulled intentionally — document if any) |
 | product pin | `elyra.toml` still `embed_device=cpu` (or embed off) until A1–A7 |
 
-Update [`STACK-INVENTORY.md`](docs/radeon-vii-dev/STACK-INVENTORY.md) §3/§6 after success.
+Update [STACK-INVENTORY.md](../../radeon-vii-dev/STACK-INVENTORY.md) §3/§6 after success.
 
 #### 3.6b Hard gate A5 before model work
 

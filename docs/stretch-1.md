@@ -121,7 +121,7 @@ Queue order (simple bands): user/interjection > wait timeout > timer > task read
 - **Drafts vs staged tools:** host `tools/drafts/` is growth-tool-only (not visible via sandbox FS). Sandbox `tools/` holds staged runtime copies for promoted/bundled packages and verify (`.verify/`); not the draft tree.
 - Simple storage (jsonl/sqlite): moments, beats, goals, users, wakes — **migratable to Lance later**.
 - No Stretch 2 graph schema in Stretch 1.
-- Isolation design + install: [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md); operator doctor: `scripts/setup-microsandbox.sh`.
+- Isolation design + install: [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md); operator doctor: `scripts/setup-microsandbox.sh`.
 
 ---
 

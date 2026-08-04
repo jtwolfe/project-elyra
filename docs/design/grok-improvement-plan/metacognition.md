@@ -1,9 +1,15 @@
 # Metacognition (MC)
 
-**Status:** Concept + hybrid ontology locked; Stage B implementation plan ready — see [stage-b-mc.md](stage-b-mc.md)  
-**Branch:** `grok-improvement`  
-**Role in plan:** Named functionality unit; **shallow shape (Stage B / MC-beta)** after Grok path stable; **optional package (Stage C)** only if justified  
-**Engineering rules:** [docs/dev/engineering-principles.md](../dev/engineering-principles.md)
+| Field | Value |
+|-------|--------|
+| **Class** | DESIGN |
+| **Status** | Shipped (concept + hybrid ontology; Stage B plan ready — see [stage-b-mc.md](stage-b-mc.md)) |
+| **Audience** | Implementers |
+| **Normative?** | Soft geometry — prefer code on `working` when conflict |
+| **Durable path** | `docs/design/grok-improvement-plan/metacognition.md` |
+| **Branch (historical)** | `grok-improvement` (tip now **`working`**) |
+| **Role in plan** | Named functionality unit; **shallow shape (Stage B / MC-beta)** after Grok path stable; **optional package (Stage C)** only if justified |
+| **Engineering rules** | [engineering-principles.md](../../dev/engineering-principles.md) |
 
 ---
 
@@ -124,7 +130,7 @@ Hard policies are the **survival surface** (skeleton / immune system: glass, dis
 
 ### 3.4 Alignment with atomized memory (Phase 3 gravity)
 
-Design thesis (operator essay *What is wrong with my memory?* — recommend in-repo as [`docs/memory-atoms.pdf`](../memory-atoms.pdf) (PDF in-repo; optional `.md` twin later)): memory is **organized experience**, not a warehouse of facts. Units are **instances (atoms)** with content, context, felt signal, and connections; knowledge (facts, opinions, causal rules) is a **pattern / shadow** across many atoms; edges have strength; forgetting and consolidation keep the graph usable.
+Design thesis (operator essay *What is wrong with my memory?* — recommend in-repo as [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) (PDF in-repo; optional `.md` twin later)): memory is **organized experience**, not a warehouse of facts. Units are **instances (atoms)** with content, context, felt signal, and connections; knowledge (facts, opinions, causal rules) is a **pattern / shadow** across many atoms; edges have strength; forgetting and consolidation keep the graph usable.
 
 | System piece | Essay analogue |
 |--------------|----------------|
@@ -278,7 +284,7 @@ Even while Memory is Phase 3, Stage B language should leave three clean hooks:
 7. Design for eventual transparency carefully; do not require a package in the first instantiation.  
 8. **Do not over-constrain the CoT.**  
 9. **Hybrid:** soft Decide under MC naming; hard policies stay host law.  
-10. Respect [engineering-principles.md](../dev/engineering-principles.md): no god modules, tests with features, prompts/skills on disk, no Stretch 3 graph smuggled early.
+10. Respect [engineering-principles.md](../../dev/engineering-principles.md): no god modules, tests with features, prompts/skills on disk, no Stretch 3 graph smuggled early.
 
 ---
 

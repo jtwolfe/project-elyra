@@ -1,9 +1,17 @@
 # Phase 0 — Concept Design + Implementation Plan
 
-**Status:** Implementation complete on `grok-improvement` · Live smoke checklist ready for operator (not claimed green in-repo until operator-run against xAI)  
-**Branch:** `grok-improvement` (integration branch — all Phase 0 work branches stack on it and merge back here; not `main` until later promotion)  
-**Execution plan:** [phase-0-execution.md](phase-0-execution.md)  
-**Purpose:** Make Project Elyra runnable on xAI Grok models under SuperGrok Heavy with controlled token usage, without changing Stretch 1 runtime semantics.
+| Field | Value |
+|-------|--------|
+| **Class** | DESIGN |
+| **Status** | Freeze / Shipped (implementation complete; live smoke operator-owned) |
+| **Audience** | Implementers |
+| **Normative?** | No — prefer code on `working` when conflict |
+| **Durable path** | `docs/design/grok-improvement-plan/phase-0.md` |
+| **Execution plan** | [phase-0-execution.md](phase-0-execution.md) |
+| **Branch (historical)** | `grok-improvement` (integration tip now **`working`** — see [branch-law](../../dev/branch-law.md)) |
+| **Purpose** | Make Project Elyra runnable on xAI Grok models under SuperGrok Heavy with controlled token usage, without changing Stretch 1 runtime semantics |
+
+> **Status: Freeze / Shipped** — Phase 0 product decisions + success criteria. Prefer code on `working` for as-implemented behaviour.
 
 **Operator target after this work ships:**
 
@@ -427,7 +435,7 @@ Prefer configuration + thin adapters. Tests ship with each unit. Scope comments 
 ### Step 7 — Docs status
 
 - **Done (this PR):** status flipped to implementation complete; live smoke left as operator checklist (do not claim live green without a real xAI run).
-- [README.md](README.md) Phase 0 row updated accordingly.
+- [GI README.md](../../grok-improvement-plan/README.md) Phase 0 row updated accordingly.
 
 ---
 

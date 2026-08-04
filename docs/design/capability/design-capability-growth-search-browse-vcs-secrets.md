@@ -9,7 +9,7 @@
 | **Status** | Shipped |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` |
-| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `docs/grok-improvement-plan/harness-sandbox-fitness.md`, `prompts/system.md` |
+| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `docs/design/capability/harness-sandbox-fitness.md`, `prompts/system.md` |
 | **Parallel pattern** | Identity draft → promote + versions; create-tool draft → verify → promote |
 
 ---

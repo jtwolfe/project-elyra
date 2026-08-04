@@ -11,7 +11,7 @@
 | **Branch** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Dogfood refs** | Moments `be49e0ef`, `9aa82c11`, `d0440043` (post capability-growth merge) |
-| **Related** | [dev/engineering-principles.md](../../dev/engineering-principles.md), [harness-sandbox-fitness.md](../../grok-improvement-plan/harness-sandbox-fitness.md), [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [stage-b-mc.md](../../grok-improvement-plan/stage-b-mc.md), [tools-and-skills.md](../../tools-and-skills.md) |
+| **Related** | [dev/engineering-principles.md](../../dev/engineering-principles.md), [harness-sandbox-fitness.md](harness-sandbox-fitness.md), [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [stage-b-mc.md](../grok-improvement-plan/stage-b-mc.md), [tools-and-skills.md](../../tools-and-skills.md) |
 | **Durable path** | `docs/design/capability/design-capability-integrity-run-search-browser-sandbox.md` |
 | **Guest browser** | **Out of implementation scope here** — dual-backend *intent* + host fix (PR6a) only; guest path = separate design after spike |
 
@@ -51,7 +51,7 @@ This design ships **integrity fixes PR1–PR5 + PR6a** under one theme: **capabi
 | Area | Path | Current behaviour |
 |------|------|-------------------|
 | Guest run cap | `elyra/tools/builtin/run_cmd.py` | 4 KiB UTF-8; already returns soft `hint` about search_replace / FS tools |
-| Harness design | `docs/grok-improvement-plan/harness-sandbox-fitness.md` | elyra2 guest_shell pattern: **4 KiB command**, 15s default / 30s max (historical) |
+| Harness design | `docs/design/capability/harness-sandbox-fitness.md` | elyra2 guest_shell pattern: **4 KiB command**, 15s default / 30s max (historical) |
 | Registry priority | `elyra/tools/registry.py` | Bundled scan first; local overwrites; log once per override |
 | Good search | `elyra/tools/builtin/search.py` + `tools/bundled/web_search/` | Host `ddgs` via `elyra[search]`; fail-closed cooldown |
 | Bad search | `tools/local/web_search/` | Self-grown DDG Lite HTML scraper; depends on guest staging + bs4 |
@@ -66,7 +66,7 @@ This design ships **integrity fixes PR1–PR5 + PR6a** under one theme: **capabi
 | Tape beat | `elyra/loop/doloop.py` ~L1240 / L1255 | `"content": content[:500]` for tool (+ skip-identical obs) only production sites |
 | Chain cap | `elyra/settings.py` `LoopSettings.tool_result_max_chars = 8000` | Applied in `tool_result_to_content` |
 | Ledger | `elyra/tools/builtin/ledger.py` | `task_not_found` / `goal_not_found` bare empty payload |
-| Soft Decide hybrid | `docs/grok-improvement-plan/stage-b-mc.md` | Soft bias + skill/orient text; hard walls stay host law |
+| Soft Decide hybrid | `docs/design/grok-improvement-plan/stage-b-mc.md` | Soft bias + skill/orient text; hard walls stay host law |
 | ToolsSettings | `elyra/settings.py` | Today: `verify_timeout_seconds`, `allowed_repo_roots` only |
 
 ### Why these fixes together

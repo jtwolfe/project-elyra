@@ -17,7 +17,7 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 
 **Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
 **Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
-**DEV** process law lives under [dev/](dev/). **Root DESIGN** files live under [design/](design/) topic folders (PR2). stretch-2 designs / GI phases still pre-move until PR2b/PR2c; STATE/GOAL physical moves later.
+**DEV** process law lives under [dev/](dev/). **Root DESIGN** files live under [design/](design/) topic folders (PR2). GI phase designs + harness + design-rocm landed under DESIGN (PR2c). stretch-2 designs still pre-move until PR2b; STATE/GOAL physical moves later.
 
 **Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
 
@@ -64,7 +64,7 @@ elyra start --stub-llm   # stub LLM + UI (hermetic)
 
 **Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): [radeon-vii-dev/README.md](radeon-vii-dev/README.md) § *New terminal session — start Elyra*.
 
-Sandbox fitness (full H1–H6 design+plan — DESIGN class): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
+Sandbox fitness (full H1–H6 design+plan — DESIGN class): [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md).  
 Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
 
 ### Tests
@@ -111,8 +111,9 @@ Full status-indexed catalog: **[design/README.md](design/README.md)**.
 | Board | [design/board/](design/board/) | v0.1-ready board ops |
 | Embed | [design/embed/](design/embed/) | Async EncodeWorker (residuals open) |
 | Stretch 2 memory | [stretch-2/](stretch-2/) `design-*.md` | Phase designs + meal (→ PR2b) |
-| GI phases / harness | [grok-improvement-plan/](grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition, harness (→ PR2c) |
-| ROCm design | [radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md](radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md) | ROCm smoke design (→ PR2c) |
+| GI phases | [design/grok-improvement-plan/](design/grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition (PR2c) |
+| Harness / sandbox | [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md) | Full H1–H6 design+plan (PR2c; Shipped) |
+| ROCm design | [design/memory/design-rocm-venv-gpu-embed-smoke.md](design/memory/design-rocm-venv-gpu-embed-smoke.md) | ROCm smoke design (PR2c) |
 
 **Superseded freeze (do not follow for setup):** [design/stretch-1/design-gemma-sampling-hygiene-staged.md](design/stretch-1/design-gemma-sampling-hygiene-staged.md).
 

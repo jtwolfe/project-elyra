@@ -11,7 +11,7 @@
 | **Branch base** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Real goal** | Align Elyra metering with SuperGrok’s **unified weekly pool**, replace pure linear day/hour hard gates with **week-cumulative ledger + pace-aware throttle + burst**, keep **hard_stop_override** |
-| **Related docs** | [`docs/grok-improvement-plan/phase-0.md`](../../grok-improvement-plan/phase-0.md), [`docs/grok-improvement-plan/phase-0-execution.md`](../../grok-improvement-plan/phase-0-execution.md), [`docs/dev/engineering-principles.md`](../../dev/engineering-principles.md) |
+| **Related docs** | [`docs/design/grok-improvement-plan/phase-0.md`](../grok-improvement-plan/phase-0.md), [`docs/design/grok-improvement-plan/phase-0-execution.md`](../grok-improvement-plan/phase-0-execution.md), [`docs/dev/engineering-principles.md`](../../dev/engineering-principles.md) |
 | **Primary code today** | `elyra/llm/usage.py`, `elyra/llm/client.py` (`UsageGatedChatClient`), `elyra/llm/auth.py`, `elyra/settings.py` (`UsageSettings`), `elyra/runtime/provider_runtime.py`, `elyra/runtime/api.py`, `elyra/runtime/web/{app.js,index.html}` |
 | **Billing probe** | Externally validated 2026-07-27 against live `auth.json` (field names not yet in-repo fixtures) |
 
@@ -939,7 +939,7 @@ CLI `format_usage_posture`: e.g. `week 80% · pace green · sg 20% · burst 90%`
 
 - Code: `elyra/llm/usage.py`, `elyra/llm/client.py`, `elyra/llm/auth.py`, `elyra/settings.py`, `elyra/runtime/provider_runtime.py`, `elyra/runtime/supervisor.py`, `elyra/runtime/api.py`, `elyra/runtime/web/app.js`, `elyra/runtime/web/index.html`, `elyra/media/stt.py`, `elyra/media/tts.py`
 - Tests: `tests/test_llm_usage.py`, `tests/test_provider_api.py`, `tests/test_presence_usage_gate.py`, `tests/test_llm_provider_client.py`
-- Phase 0: `docs/grok-improvement-plan/phase-0-execution.md`
+- Phase 0: `docs/design/grok-improvement-plan/phase-0-execution.md`
 - Live probe 2026-07-27: `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`
 - Smoke: `scripts/prototype_xai_grok_auth_smoke.py` (auth/Completions only)
 - PR4 fixture target: `tests/fixtures/billing_credits_redacted.json` (to be captured)

@@ -1,7 +1,7 @@
 # Standalone Radeon VII / ROCm embed smoke scripts
 
 **Purpose:** Prove HIP torch + gfx906 matmul + Nemotron encode **outside** the presence worker, encode queue, and meal path.  
-**Design:** [design-rocm-venv-gpu-embed-smoke.md](../design-rocm-venv-gpu-embed-smoke.md) §4  
+**Design:** [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) §4  
 **Runbook:** [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md)
 
 **Status:** Scripts present (`00` / `01` / `02` / `03` / `_common.py`). On LuxPrimata after ROCm venv + **gfx906 Tensile inject**, A1–A7 green (2026-07-29). On cu130 (pre-swap) they **fail closed** (exit 2).

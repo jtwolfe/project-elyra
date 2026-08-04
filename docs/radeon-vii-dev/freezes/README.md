@@ -2,7 +2,7 @@
 
 **Purpose:** Capture pip package state before and after the project `.venv` CUDA → ROCm torch swap on **LuxPrimata**, for forensics, non-torch version restore, and review evidence.
 
-**Design:** [design-rocm-venv-gpu-embed-smoke.md](../design-rocm-venv-gpu-embed-smoke.md) §3.2, §3.9  
+**Design:** [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) §3.2, §3.9  
 **Runbook:** [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md)
 
 ---
