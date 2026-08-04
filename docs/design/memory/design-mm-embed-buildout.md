@@ -7,11 +7,12 @@
 | **Product** | project-elyra |
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-04 |
-| **Status** | **Ready for operator review** — not yet executed |
+| **Status** | **OQs locked (2026-08-04)** — ready to execute; not yet implemented |
 | **Topic branch** | `feature/mm-embed-buildout` (from `working`) |
 | **PR base** | `working` (integration tip; house branch law) |
 | **Depends on** | Phase 2 PR1–PR9 + rectification PR-R1–R5 + continuous encode (embed-async PR1–PR4) **shipped in code** |
-| **Related issues** | [#80](https://github.com/jtwolfe/project-elyra/issues/80) (semantic dogfood residual), [#114](https://github.com/jtwolfe/project-elyra/issues/114) (busy encode dogfood), [#115](https://github.com/jtwolfe/project-elyra/issues/115) (GPU packaging — peer, not blocking image path on CPU/mock) |
+| **Related issues** | Umbrella **[#124](https://github.com/jtwolfe/project-elyra/issues/124)** (this buildout); [#80](https://github.com/jtwolfe/project-elyra/issues/80) (semantic dogfood residual), [#114](https://github.com/jtwolfe/project-elyra/issues/114) (busy encode dogfood), [#115](https://github.com/jtwolfe/project-elyra/issues/115) (GPU packaging — peer, not blocking image path on CPU/mock) |
+| **OQ lock** | M1 pin in `memory-embed`; **M2 multimodal-as-query required** (image/audio/video); M3 partial `ready`; M4 umbrella issue |
 | **Architecture (as-shipped)** | [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md) |
 | **Normative priors** | [design-phase-2-implementation.md](design-phase-2-implementation.md) (historical), [design-phase-2-rectification.md](design-phase-2-rectification.md), [design-nemotron-runtime.md](design-nemotron-runtime.md), [design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md), [design-glass-multimodal-attachments.md](../glass/design-glass-multimodal-attachments.md) |
 | **Engineering** | [engineering-principles.md](../../dev/engineering-principles.md) |
@@ -117,7 +118,7 @@ This design plans the **vertical slice** to finish that loop, with **image-first
 1. **Closed multimodal product loop** for semantic memory: media on atom → encode channels → searchable → glass-visible.
 2. **Image-first hard gate** with contract tests + operator smoke checklist.
 3. **Honest encode outcomes**: durable, inspectable reasons for skip/fail/partial media (including `mm_utils_unavailable`).
-4. **Search honesty**: neighbors/meal work for media-backed atoms under `auto`/joint; optional per-channel inspect remains.
+4. **Search honesty**: neighbors/meal work for media-backed atoms under `auto`/joint; **Vectors query supports text and media-as-query** (image / audio / video attach or pick → encode query vector → neighbors).
 5. **Glass parity**: Atoms, Vectors, Context (and chat attach if gaps) match backend capabilities and failure modes.
 6. **Deps clarity**: document and optionally pin MM packing dependency in `memory-embed` (or explicit optional extra) without hard-failing text-only installs.
 7. **Architecture honesty**: update Phase 2 STATE note when loop is dogfood-green; leave default-on to a later Gate B.
@@ -182,8 +183,8 @@ Glass/chat/tool media
 |---------|---------|
 | Product search channel | `auto` (joint-primary when joint healthy) |
 | Meal seed | Text seed from meal composition (unchanged); hits may be media-backed atoms via joint |
-| Free-text neighbors API | Existing `q=` path |
-| Image-as-query | **Optional stretch** (PR-S1); not required for MM complete if text→image-atom works via joint |
+| Free-text neighbors API | Existing `q=` path (kept) |
+| **Media-as-query** (OQ-M2 locked) | Vectors (and API) accept **image / audio / video** query inputs: upload or existing `att_id` / blob → `encode_image` / `encode_audio` / `encode_video` (or joint with optional text) → ANN neighbors on resolved channel (`auto` default). **Required for MM complete** — not deferred. |
 
 ### Operator dogfood bar (“MM green”)
 
@@ -193,8 +194,9 @@ With `backend=lance`, `semantic_enabled`, `embed_enabled`, and (for real media) 
 2. Vectors health: `media_encode=true` (or honest false with reason).
 3. `vectors_by_channel.image ≥ 1` (or joint populated from true multi-mod when text+image).
 4. Text query related to image content returns the image atom in neighbors under `auto` (or documented channel).
-5. Meal Context either packs semantic hit or shows honest omit reason (not silent empty).
-6. Atoms detail shows media chip + channels + last encode error/skip if any.
+5. **Media-as-query:** submit fixture image (and smoke audio/video) as Vectors query → neighbors return related atoms; failure modes honest when `media_encode` false.
+6. Meal Context either packs semantic hit or shows honest omit reason (not silent empty).
+7. Atoms detail shows media chip + channels + last encode error/skip if any.
 
 Mock-only CI proves contract shape; live Nemotron proves real media.
 
@@ -216,6 +218,7 @@ Mock-only CI proves contract shape; live Nemotron proves real media.
 | **KD-M10** | **Branch law**: `feature/mm-embed-buildout` → PR(s) into `working`; hermetic `pytest -m 'not llm and not live_grok'` green before merge; no auto `main` | House process |
 | **KD-M11** | **No silent allow of text vectors under media channel names** (keep current fail-closed) | Trust invariant |
 | **KD-M14** | **MediaStore is the path authority** — encode resolve uses blob/sha256 (or one store helper); do not require `Attachment.path` | Verified gap; keeps media package cohesive |
+| **KD-M15** | **Vectors multimodal-as-query is in scope** (image, audio, video ± optional text) via gated embedder + existing ANN; glass must offer attach/pick UX | OQ-M2 locked 2026-08-04 |
 | **KD-M12** | **Multi-image bag encode deferred**; first-wins + skip reason is v1 | Avoid scope explosion |
 | **KD-M13** | Hyperedges / traversal **explicitly sequenced after** this buildout | Prevents walk polish on weak MM substrate |
 
@@ -286,6 +289,7 @@ Prefer reusing existing strings; only add when glass/tests need a stable code.
 - Health card: **`media_encode: yes/no`**, backend, device, queue, worker liveness (existing), `vectors_by_channel` including zeros for image/audio/video when useful.
 - Atoms-by-status table: show media chip + channels column if cheap.
 - Neighbors: keep channel select; show resolved channel; empty state reasons already partly present — ensure media-related empty (`media_encode` false) is named.
+- **Query bar (OQ-M2):** text field **plus** attach/pick for **image, audio, video** (reuse MediaStore upload → `att_id`). Show active query modality, resolved search channel, and structured errors (e.g. `media_encode` false).
 
 ### Context
 
@@ -331,13 +335,15 @@ PR3  image-first encode fixtures + mock (and optional live) contract
   │
   ├────────────┐
   ▼            ▼
-PR4 search   PR5 glass (Atoms/Vectors/Context parity)
-  │            │
-  └─────┬──────┘
-        ▼
-PR6  audio/video matrix dogfood (same pipeline; secondary)
-        │
-        ▼
+PR4 search/meal + **API media-as-query** (image/audio/video)
+  │
+  ▼
+PR5 glass (Atoms/Vectors/Context + **Vectors media query UX**)
+  │
+  ▼
+PR6  audio/video corpus matrix dogfood (encode path; query path covered in PR4/5)
+  │
+  ▼
 PR7  docs architecture closeout + dogfood checklist + issue comments (#80/#114 link)
 ```
 
@@ -375,20 +381,20 @@ PR7  docs architecture closeout + dogfood checklist + issue comments (#80/#114 l
 | **Out** | Full glass |
 | **Done** | Hermetic image channel ready; live test skips clean without deps |
 
-### PR4 — Search / meal honesty for media-backed atoms
+### PR4 — Search / meal honesty + media-as-query API
 
 | | |
 |--|--|
-| **Scope** | Tests: neighbors/auto find media-backed mock vectors; meal select does not crash on media atoms; semantic meta remains honest |
-| **Out** | New ANN algorithm |
-| **Done** | Contract tests green; document live cross-modal dogfood step |
+| **Scope** | (1) Corpus: neighbors/`auto` find media-backed mock vectors; meal select safe on media atoms; semantic meta honest. (2) **Query-side multimodal (OQ-M2):** extend `GET/POST /api/memory/vectors/neighbors` (prefer POST for multipart) to accept text `q` and/or media (`att_id` already in MediaStore, or upload-once then att_id). Resolve modality → `GatedEmbedder.encode_{image,audio,video}` (optional text+media joint when both present) → search on `auto`/requested channel. Fail closed with structured error when `media_encode` false or resolve fails — never silently run text-empty search. Hermetic tests with mock embedder + fixture bytes. |
+| **Out** | New ANN algorithm; Graph tab |
+| **Done** | Contract tests: text→media-atom; image-query→neighbors; audio/video query smoke with mock; error path without MM utils |
 
-### PR5 — Glass parity
+### PR5 — Glass parity + Vectors media query UX
 
 | | |
 |--|--|
-| **Scope** | Atoms media chips + detail inventory; Vectors `media_encode` + channel counts + skip/error display; Context media marker on semantic items when available |
-| **Out** | Graph tab redesign; STT/TTS feature work |
+| **Scope** | Atoms media chips + detail inventory; Vectors `media_encode` + channel counts + skip/error display; Context media marker on semantic items when available; **Vectors neighbor panel: text field + attach/pick image/audio/video** wired to media-as-query API (show which query modality ran, resolved channel, empty/error reasons) |
+| **Out** | Graph tab redesign; STT/TTS product work (reuse MediaStore upload patterns only) |
 | **Done** | Manual checklist on dogfood + any pure UI tests if present |
 
 ### PR6 — Audio / video matrix
@@ -414,8 +420,8 @@ PR7  docs architecture closeout + dogfood checklist + issue comments (#80/#114 l
 | PR1 | PR0 (or together if design already on branch) | |
 | PR2 | PR1 | |
 | PR3 | PR2 | |
-| PR4 | PR3 | parallel with PR5 after PR3 |
-| PR5 | PR2 (API fields); ideally PR3 | parallel with PR4 |
+| PR4 | PR3 | includes media-as-query API |
+| PR5 | PR2 + PR4 | glass needs query API |
 | PR6 | PR3 | after PR4/PR5 preferred |
 | PR7 | PR4+PR5 (+PR6 if claimed) | |
 
@@ -441,8 +447,9 @@ Copy into issue or STATE when executing PR7.
 - [ ] attach fixture image → atom `media_ids` → ready with `image` and/or multi joint
 - [ ] Vectors `vectors_by_channel` reflects media
 - [ ] text query finds image atom (joint/`auto`)
+- [ ] **image-as-query** (and smoke audio/video-as-query) returns related neighbors in Vectors
 - [ ] Glass Atoms/Vectors/Context show media + encode truth
-- [ ] (optional) short wav/mp4 same path
+- [ ] short wav/mp4 corpus + query path (PR6 / PR4)
 
 ---
 
@@ -456,19 +463,18 @@ Copy into issue or STATE when executing PR7.
 | Large media binaries in git | Tiny fixtures only; size caps at encode |
 | Glass poll flash | Reuse existing soft-refresh patterns; no full DOM thrash |
 | Partial encode misread as full MM | Glass shows channels + skip list (KD-M3/M7) |
+| Media-as-query API size / multipart | Prefer `att_id` after existing upload path; size caps match encode matrix |
 
 ---
 
-## Open questions (operator)
+## Open questions — **locked 2026-08-04**
 
-Defaults recommended; lock before PR1 if disagreeing.
-
-| ID | Question | Recommended default |
-|----|----------|---------------------|
-| **OQ-M1** | Pin `qwen-omni-utils` inside `memory-embed` vs nested `memory-embed-mm` extra? | **Inside `memory-embed`** with soft import (matches torch optional pattern); document in README |
-| **OQ-M2** | Image-as-query in Vectors free-text box? | **Defer** (PR-S1 later); text query sufficient for MM green |
-| **OQ-M3** | Should partial media (text ready, image skipped) keep `ready`? | **Yes** (current KD20); glass must show partial |
-| **OQ-M4** | Open umbrella GitHub issue for this buildout? | **Yes** — single epic “MM embed buildout” linking #80/#114; children optional per PR |
+| ID | Question | Decision |
+|----|----------|----------|
+| **OQ-M1** | Pin `qwen-omni-utils` inside `memory-embed` vs nested extra? | **Yes — inside `memory-embed`**, soft import; document in README |
+| **OQ-M2** | Media-as-query in Vectors? | **Yes — image, audio, and video** as query modalities (not text-only; not deferred). API + glass in PR4/PR5 |
+| **OQ-M3** | Partial media (text ready, image skipped) keep `ready`? | **Yes** (KD20); glass must show partial channels + skip reasons |
+| **OQ-M4** | Open umbrella GitHub issue? | **Yes** — **[#124](https://github.com/jtwolfe/project-elyra/issues/124)** |
 
 ---
 
