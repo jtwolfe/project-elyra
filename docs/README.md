@@ -15,11 +15,11 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 | **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) |
 | **Archive / investigations** | Archaeology | Superseded freezes, sealed bags | [archive/](archive/) · [investigations/](investigations/) |
 
-**Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
+**Taxonomy status:** documented — design + hub + [dev/engineering-principles.md](dev/engineering-principles.md) **§10** (PR6 of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
 **Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
 **DEV** process law lives under [dev/](dev/). **DESIGN** under [design/](design/) topic folders (PR2 + PR2b/PR2c). **STATE** living ops under [state/](state/) (PR4). **Investigations / archive** under [investigations/](investigations/) · [archive/](archive/) (PR5).
 
-**Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
+**Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)). Normative docs rules: [dev/engineering-principles.md](dev/engineering-principles.md) §10.
 
 ---
 
@@ -127,7 +127,7 @@ Index: **[dev/README.md](dev/README.md)**.
 
 | Doc | Role |
 |-----|------|
-| [dev/engineering-principles.md](dev/engineering-principles.md) | How we write code — modules, tests, config, dogfood |
+| [dev/engineering-principles.md](dev/engineering-principles.md) | How we write code — modules, tests, config, dogfood; **§10** docs taxonomy |
 | [dev/branch-law.md](dev/branch-law.md) | **Normative tip law** — `working` integration tip; promote → `main`; pins; tags |
 | [dev/operating-pins.md](dev/operating-pins.md) | Manual operating pin convention (C3) |
 | [dev/development-governance.md](dev/development-governance.md) | Multi-party governance + operating pin ladder |
@@ -178,4 +178,4 @@ Start at [state/memory/README.md](state/memory/README.md). Runtime law: [state/s
 
 **Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([dev/branch-law.md](dev/branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [state/memory/README.md](state/memory/README.md).
 
-Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — hub + DEV + DESIGN + STATE (PR4) + **archive/investigations (PR5)** landed; principles § PR6.
+Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — hub + DEV + DESIGN + STATE (PR4) + archive/investigations (PR5) + **principles §10 (PR6)** landed; link sweep / closeout PR7.

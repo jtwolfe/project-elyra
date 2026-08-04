@@ -20,7 +20,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 | Doc | Status | Notes |
 |-----|--------|-------|
-| [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) | Active | Taxonomy reorg plan (#121). Hub-first; physical moves PR1–PR5; principles § PR6. |
+| [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) | Active | Taxonomy reorg plan (#121). Hub-first; physical moves PR1–PR5; principles [§10](../dev/engineering-principles.md) (PR6); closeout PR7. |
 
 ---
 

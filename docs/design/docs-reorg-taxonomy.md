@@ -12,7 +12,7 @@
 | **Branch** | `chore/docs-reorg` (base `working`) |
 | **Label** | `backlog` (not `v0.1-gate`) |
 | **Landing path (execution)** | `docs/design/docs-reorg-taxonomy.md` (this design; see KD1) |
-| **Related** | [../dev/engineering-principles.md](../dev/engineering-principles.md) §9, [../dev/branch-law.md](../dev/branch-law.md), [../dev/operating-pins.md](../dev/operating-pins.md), [../README.md](../README.md), root [README.md](../../README.md), [../promotion-discussion/](../promotion-discussion/), Project #2 draft *Refactor docs structure* (converted) |
+| **Related** | [../dev/engineering-principles.md](../dev/engineering-principles.md) §9 (structure) · **§10 (docs taxonomy)**, [../dev/branch-law.md](../dev/branch-law.md), [../dev/operating-pins.md](../dev/operating-pins.md), [../README.md](../README.md), root [README.md](../../README.md), [../promotion-discussion/](../promotion-discussion/), Project #2 draft *Refactor docs structure* (converted) |
 | **Integration tip** | `working` (normative; branch-law) |
 
 ---
@@ -380,7 +380,7 @@ Grouped by current location. Paths are current unless noted.
 
 | Path | Class | Action | Notes |
 |------|-------|--------|-------|
-| `docs/dev/engineering-principles.md` | DEV | **move** + later **rewrite** § taxonomy | §9 already points to branch-law/pins |
+| `docs/dev/engineering-principles.md` | DEV | **move** + **§10 taxonomy** (PR6) | §9 structure; §10 freeze/supersede/class rules |
 | `docs/dev/branch-law.md` | DEV | **move** | Normative tip law |
 | `docs/dev/operating-pins.md` | DEV | **move** | Manual pin convention |
 | `docs/dev/development-governance.md` | DEV | **move** | Multi-party governance; tip supersession already noted |
@@ -845,7 +845,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 | **Title** | `docs: engineering-principles taxonomy + freeze/supersede rules (#121)` |
 | **Files** | `docs/dev/engineering-principles.md` (new section — e.g. §10 Docs taxonomy: four classes, banner schema, archive decision tree pointer, prefer-code-on-working, freeze non-edit, GOAL-short, dual-home rule); cross-link hub + this design; summary table row; note in `github-workflow` skill if § number changes |
 | **Deps** | PR1 (file under dev/); ideally after PR5 so rules match final layout |
-| **Description** | Completes #121 “taxonomy documented (… + engineering-principles docs rules)” (KD10). |
+| **Description** | Completes #121 “taxonomy documented (… + engineering-principles docs rules)” (KD10). **Landed:** §10 + hub/DEV/design cross-links; `github-workflow` still cites §9 (development structure) — section number unchanged. |
 
 ### PR7 — Sweep and close
 
@@ -866,7 +866,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 |-----------------|--------------|--------------|
 | Real issue + branch linked | #121 + `chore/docs-reorg` (done at issue open) | Done |
 | Draft board card disposed | **PR7** — mark Project #2 draft *Refactor docs structure…* Done/removed (converted to #121) | PR7 |
-| Taxonomy documented (issue + engineering-principles docs rules) | This design + hub (**PR0** partial); principles § (**PR6** complete) | Partial @ PR0 → complete @ PR6 |
+| Taxonomy documented (issue + engineering-principles docs rules) | This design + hub (**PR0** partial); principles [§10](../dev/engineering-principles.md) (**PR6** complete) | **Complete @ PR6** |
 | `docs/README.md` hub four-class | PR0 | PR0 |
 | STATE architecture entry beyond root README | PR4 `state/architecture.md` | PR4 |
 | DEV findable | PR1 (`docs/dev/` + skills) | PR1 |
@@ -881,7 +881,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 - Project #2 draft *Refactor docs structure (state/goal/design/plan)* (converted)
 - [docs/README.md](../README.md) — four-class hub (was chronological)
 - Root [README.md](../../README.md) — best current STATE entry
-- [docs/dev/engineering-principles.md](../dev/engineering-principles.md) §9 development structure
+- [docs/dev/engineering-principles.md](../dev/engineering-principles.md) §9 development structure · **§10 docs taxonomy**
 - [docs/dev/branch-law.md](../dev/branch-law.md), [docs/dev/operating-pins.md](../dev/operating-pins.md)
 - [docs/state/memory/README.md](../state/memory/README.md) — architecture vs design split precedent (STATE after PR4)
 - [docs/design/stretch-1/design-remove-gemma-local-stub.md](stretch-1/design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
@@ -896,6 +896,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 
 ## Revision Summary
 
+- **PR6** 2026-08-04 — engineering-principles **§10 Docs taxonomy** landed; hub + DEV index + design Related/acceptance mark taxonomy complete; `github-workflow` §9 cite unchanged.
 - **Initial draft** 2026-08-04 — full taxonomy design, inventory classification, banner schema, archival decision tree, STATE content plan, Key Decisions KD1–KD12, phased PR0–PR7 plan for #121 / `chore/docs-reorg`.
 - **Post-review rev1** 2026-08-04 — address review issues 1–8:
   - **PR2b / PR2c** schedule complete DESIGN corpus (17 stretch-2 designs + spikes; GI phase designs + harness + design-rocm); phase table + KD4/KD15.

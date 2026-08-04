@@ -198,6 +198,95 @@ Even when the operator asks via Grok Build for a “quick fix,” prefer: inspec
 - Do not re-grow long-lived personal tips; restack stale stacks onto `working` (branch-law ~10-day rule).
 - Tip map honesty: document `working` / `main` / operating pin; do not teach superseded `grok-improvement` as the integration tip.
 
+Docs for this structure live under the **DEV** class (§10). When adding or moving docs, follow the taxonomy rules below rather than inventing a parallel shelf.
+
+---
+
+## 10. Docs taxonomy (STATE / GOAL / DESIGN / DEV)
+
+Normative process rules for documentation layout, banners, freezes, and supersession.  
+**Authoritative design + inventory:** [docs-reorg-taxonomy.md](../design/docs-reorg-taxonomy.md) (issue [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
+**Hub:** [docs/README.md](../README.md). Class indexes: [state/](../state/) · [goal/](../goal/) · [design/](../design/) · [dev/](./) · [archive/](../archive/) · [investigations/](../investigations/).
+
+### Four classes
+
+| Class | Audience | Contents | Living? |
+|-------|----------|----------|---------|
+| **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits, known bugs, ops checklists | Yes — prefer code on `working` |
+| **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why*, success bars | Yes but **short**; link to DESIGN |
+| **DESIGN / PLAN** | Implementers | Designs and PR plans; freeze / shipped / superseded banners; history kept | Frozen or active |
+| **DEV** | Jamie + Grok Build | This file, branch-law, operating pins, governance, board hygiene | Yes — normative process |
+
+**Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is **Active**. **DEV** wins for tip / branch / pin law ([branch-law.md](branch-law.md)).
+
+### Prefer code on `working`
+
+- Living STATE and DEV describe intended law; if prose and tip disagree, **trust the code on `working`** and fix the doc in the same change when behaviour is intentional.
+- Do not invent a second “source of truth” folder outside the four classes + archive/investigations.
+
+### Status banner schema
+
+Every substantial doc (especially DESIGN, freezes, archive/investigation packages) gets a **metadata table** near the top. Living STATE/DEV may use a shorter form.
+
+| Status | Meaning |
+|--------|---------|
+| **Active** | Normative for ongoing work |
+| **Shipped** | Implemented; keep as contract or decision archaeology |
+| **Superseded** | Replaced by a **named** successor; do not follow for new work |
+| **Freeze** | Historical procedure frozen in place; not setup law |
+| **Archive** | Research / snapshot / sealed bag; not build law |
+| **Draft** | Not yet approved for execution (DESIGN only) |
+
+Template (fields as needed):
+
+```markdown
+| Field | Value |
+|-------|--------|
+| **Class** | STATE \| GOAL \| DESIGN \| DEV \| ARCHIVE \| INVESTIGATION |
+| **Status** | Active \| Shipped \| Superseded \| Freeze \| Archive \| Draft |
+| **Audience** | Operators \| Product \| Implementers \| Jamie+Grok Build |
+| **Normative?** | Yes \| No — prefer code on `working` when conflict |
+| **Successor** | path or issue (required if Superseded) |
+| **Supersedes** | path (optional) |
+| **Last verified** | YYYY-MM-DD (STATE/DEV living docs) |
+| **Related** | links |
+```
+
+Non-Active / non-living docs: one-line callout under the H1 (`Status: Superseded / Freeze / Archive` + successor). Full schema and examples: design [§2 banner schema](../design/docs-reorg-taxonomy.md#2-document-status-banner-schema).
+
+### Freeze non-edit
+
+- **Freeze** and **Archive** bodies are not bulk-rewritten in reorg or drive-by PRs (banners + path/index fixes only).
+- Sealed investigation evidence (`investigations/**/evidence/**`, sealed run notes) is **not** rewritten — update package README, test path constants, and script usage/help only when needed.
+- Prefer `archive/` or `investigations/` + banner **over delete** (non-destructive).
+
+### GOAL short; DESIGN long
+
+- GOAL pages stay **short** (north star, success bars, links) — roughly one to two screens.
+- Full designs, PR plans, and long discussion live under **DESIGN** (or long-form GOAL discussion with a short claim entry — not a second full design dump).
+- No dual full design bodies in GOAL **or STATE** (KD3).
+
+### Dual-home rule
+
+- A file lives in **exactly one** class folder. The hub indexes by class; do not leave a second full copy elsewhere.
+- Ambiguous cases follow the dual-home table in the design ([§4.7a](../design/docs-reorg-taxonomy.md#47a-dual-home-resolution-table-authoritative--kd14) / KD14): e.g. full harness → DESIGN + short STATE checklist extract; meal composition → DESIGN only; architecture manuals → STATE; phase `design-*.md` → DESIGN.
+
+### Archive decision tree
+
+Age alone is **not** the primary signal. Classify with the decision tree and criteria in the design:
+
+- [§3 Archival criteria and decision tree](../design/docs-reorg-taxonomy.md#3-archival-criteria-and-decision-tree)
+- Living criteria also summarized in [archive/README.md](../archive/README.md)
+
+Route operators → STATE; product north star → GOAL; implementers → DESIGN; Jamie/agents → DEV; archaeology → archive/investigations.
+
+### When docs change with code
+
+- Behaviour change → update STATE (or runtime contract) in the **same** change (§7 / §8).
+- New design or PR plan → DESIGN with banner; link from hub/catalog; do not park full designs only under GOAL.
+- Process / tip / pin law → DEV (this file, branch-law, pins).
+- Superseding a path → set Status **Superseded** or **Freeze**, name **Successor**, and prefer archive move when it is no longer living law.
+
 ---
 
 ## Summary
@@ -213,5 +302,6 @@ Even when the operator asks via Grok Build for a “quick fix,” prefer: inspec
 | 7 | Reliability | Serialize LLM; honest tool errors; single worker |
 | 8 | Done | Tests + boundaries + docs with the change |
 | 9 | Development structure | Issue inspect/update → typed branch from `working` → board honesty |
+| 10 | Docs taxonomy | STATE/GOAL/DESIGN/DEV; banners; freeze non-edit; GOAL short; dual-home |
 
 These principles are how we avoid another 12k-line cycle file and another flag lattice. Product shape stays in [stretch-1.md](../state/stretch-1.md); this doc keeps the code honest.
