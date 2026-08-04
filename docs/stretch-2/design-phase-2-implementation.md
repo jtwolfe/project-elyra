@@ -1283,7 +1283,7 @@ All items below are **Resolved (operator 2026-07-28 — accept defaults)**. No f
 - `docs/stretch-2/design-phase-1-implementation.md` — patterns, PR packaging, KDs
 - `docs/stretch-2/architecture/phase-1-temporal.md` — shipped Phase 1
 - `docs/stretch-2/design-phase-2a-directed-traversal.md` — boundary
-- `docs/engineering-principles.md` — modularity, tests, config
+- `docs/dev/engineering-principles.md` — modularity, tests, config
 - Code: `elyra/memory/*`, `elyra/presence/worker.py`, `elyra/settings.py`, `elyra/runtime/api.py`, `elyra/runtime/web/*`, `tests/test_memory_*`
 
 ---

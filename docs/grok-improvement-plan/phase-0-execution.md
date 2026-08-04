@@ -75,7 +75,7 @@ Phase 0 makes `elyra start` boot by default against **xAI Grok** using the **Gro
 
 ### Why Phase 0 first
 
-Engineering principles (`docs/engineering-principles.md`): modular packages, small units, tests with the feature, defaults first. Concept plan: meter before sophistication; do-loop unchanged; continuous stays OFF.
+Engineering principles (`docs/dev/engineering-principles.md`): modular packages, small units, tests with the feature, defaults first. Concept plan: meter before sophistication; do-loop unchanged; continuous stays OFF.
 
 ---
 
@@ -1641,7 +1641,7 @@ DEBUG: billable tokens per completion optional.
 - `docs/grok-improvement-plan/README.md`
 - `docs/grok-improvement-plan/phase-0.md`
 - `docs/grok-improvement-plan/metacognition.md`
-- `docs/engineering-principles.md`
+- `docs/dev/engineering-principles.md`
 - `scripts/prototype_xai_grok_auth_smoke.py` (default model id + URL join reference)
 - `elyra/llm/client.py`, `elyra/loop/doloop.py` (outer `except Exception`), `elyra/runtime/api.py`, `elyra/loop/continuous_policy.py`
 

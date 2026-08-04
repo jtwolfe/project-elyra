@@ -10,7 +10,7 @@
 | **Branch base** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Real goal** | Improve Elyra’s **sense of self and others**; multi-user UX and collab prep serve that goal |
-| **Related docs** | [`docs/time-and-identity.md`](docs/time-and-identity.md), [`docs/tools-and-skills.md`](docs/tools-and-skills.md), [`docs/engineering-principles.md`](docs/engineering-principles.md), [`prompts/system.md`](prompts/system.md) |
+| **Related docs** | [`docs/time-and-identity.md`](docs/time-and-identity.md), [`docs/tools-and-skills.md`](docs/tools-and-skills.md), [`docs/dev/engineering-principles.md`](dev/engineering-principles.md), [`prompts/system.md`](prompts/system.md) |
 | **Parallel pattern** | create-tool draft → verify → promote (skills process, thin tools) |
 
 ---

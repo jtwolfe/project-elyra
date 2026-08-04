@@ -8,7 +8,7 @@
 | **Product** | project-elyra (main; continuous work + skill-commit shipped) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Live refs** | Moment `cbbb29b9-7b08-4e3c-8bc0-8400d5c57521` (Create Search Tool thrash); outer re-wake `9d95001c-2b5f-46f6-a067-c912c1b961c9` |
-| **Prior art** | `docs/design-post-skill-commitment.md`, `docs/design-continuous-work-orient-ledger-reset.md`, `docs/engineering-principles.md`, `docs/stretch-1.md` |
+| **Prior art** | `docs/design-post-skill-commitment.md`, `docs/design-continuous-work-orient-ledger-reset.md`, `docs/dev/engineering-principles.md`, `docs/stretch-1.md` |
 
 ---
 
@@ -1151,7 +1151,7 @@ PR1 (A) ──► PR2 (B + K15) ──► PR3 (lessons)
 
 | Doc | Why |
 |-----|-----|
-| [`docs/engineering-principles.md`](engineering-principles.md) | Modular packages; tests as feature; defaults over flags; prefer deleting recovery lattices; honest tool errors |
+| [`docs/dev/engineering-principles.md`](dev/engineering-principles.md) | Modular packages; tests as feature; defaults over flags; prefer deleting recovery lattices; honest tool errors |
 | [`docs/stretch-1.md`](stretch-1.md) | Single worker; do-loop; speak-only; skills on load; hop not main stop law |
 | [`docs/design-continuous-work-orient-ledger-reset.md`](design-continuous-work-orient-ledger-reset.md) | work_continue HOST; moment_continue; tools_ran definition; flood gates |
 | [`docs/design-post-skill-commitment.md`](design-post-skill-commitment.md) | Free-text order; skill_commit pure policy pattern; playbook framing |

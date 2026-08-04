@@ -1,6 +1,6 @@
 # Grok Improvement Plan
 
-> **Integration tip migration (2026-08-01):** The house integration tip is now **`working`**, which **supersedes `grok-improvement`** as current tip law. Prefer feature / execute-plan branches and PR bases off **`working`**; promote `working` → `main` with full suite. Normative detail: **[docs/branch-law.md](../branch-law.md)**. Historical “Branch / Integration branch: `grok-improvement`” prose in this folder remains Phase 0 context only — do not treat it as the live base.
+> **Integration tip migration (2026-08-01):** The house integration tip is now **`working`**, which **supersedes `grok-improvement`** as current tip law. Prefer feature / execute-plan branches and PR bases off **`working`**; promote `working` → `main` with full suite. Normative detail: **[docs/dev/branch-law.md](../dev/branch-law.md)**. Historical “Branch / Integration branch: `grok-improvement`” prose in this folder remains Phase 0 context only — do not treat it as the live base.
 
 This folder holds the design documentation for migrating Project Elyra from local Gemma (llama.cpp) onto xAI Grok models under a SuperGrok Heavy subscription, and for enabling safe self-improvement via Grok Build.
 
@@ -12,7 +12,7 @@ This folder holds the design documentation for migrating Project Elyra from loca
 4. **Person / Instrument separation.** Elyra remains the durable person (identity, goals, moments). Grok Build is the high-capability coding instrument that Elyra can call later. Phase 0 only prepares the model path and budgets; the `grok_build` tool itself is Phase 1+.
 5. **Documentation before code.** Designs live here before implementation begins on the `grok-improvement` branch.
 6. **Glue, not ceremony.** Metacognition (MC) is the light path that keeps goals, tasks, skills, tools (and later memory) coherent under continuous work. It is not a second mind. Name it early; give it **shallow shape (Stage B)** after the Grok path is stable; **optional package (Stage C)** only if self-mod or Memory dual force it.
-7. **Hybrid Decide.** Soft Decide (bias, orient cadence, handover vocabulary) is the MC surface. Hard host policies (speak→glass, skill-commit, thrash, continuous gates, usage) stay where they are — do not consolidate enforcement into an MC god module. See [metacognition.md](metacognition.md) §3 and [docs/engineering-principles.md](../engineering-principles.md).
+7. **Hybrid Decide.** Soft Decide (bias, orient cadence, handover vocabulary) is the MC surface. Hard host policies (speak→glass, skill-commit, thrash, continuous gates, usage) stay where they are — do not consolidate enforcement into an MC god module. See [metacognition.md](metacognition.md) §3 and [docs/dev/engineering-principles.md](../dev/engineering-principles.md).
 
 ## Folder contents
 
@@ -55,7 +55,7 @@ elyra start
 
 ## Branch
 
-> **Superseded tip:** The live integration tip is **`working`** — see [docs/branch-law.md](../branch-law.md). Table below is **historical** Phase 0 / GI-era process.
+> **Superseded tip:** The live integration tip is **`working`** — see [docs/dev/branch-law.md](../dev/branch-law.md). Table below is **historical** Phase 0 / GI-era process.
 
 **Historical integration branch:** `grok-improvement` (created from `main`; **superseded by `working`**).
 

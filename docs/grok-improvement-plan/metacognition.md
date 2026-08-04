@@ -3,7 +3,7 @@
 **Status:** Concept + hybrid ontology locked; Stage B implementation plan ready — see [stage-b-mc.md](stage-b-mc.md)  
 **Branch:** `grok-improvement`  
 **Role in plan:** Named functionality unit; **shallow shape (Stage B / MC-beta)** after Grok path stable; **optional package (Stage C)** only if justified  
-**Engineering rules:** [docs/engineering-principles.md](../engineering-principles.md)
+**Engineering rules:** [docs/dev/engineering-principles.md](../dev/engineering-principles.md)
 
 ---
 
@@ -278,7 +278,7 @@ Even while Memory is Phase 3, Stage B language should leave three clean hooks:
 7. Design for eventual transparency carefully; do not require a package in the first instantiation.  
 8. **Do not over-constrain the CoT.**  
 9. **Hybrid:** soft Decide under MC naming; hard policies stay host law.  
-10. Respect [engineering-principles.md](../engineering-principles.md): no god modules, tests with features, prompts/skills on disk, no Stretch 3 graph smuggled early.
+10. Respect [engineering-principles.md](../dev/engineering-principles.md): no god modules, tests with features, prompts/skills on disk, no Stretch 3 graph smuggled early.
 
 ---
 

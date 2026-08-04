@@ -4,10 +4,10 @@
 |-------|--------|
 | **Created** | 2026-07-30 |
 | **Goal** | Orient **promotion to a durable v0.1 product cut** + instantiate a **long-term self-improvement gym** (process + GitHub Project), without pretending unfinished dogfood is done |
-| **Branch context** | Product work has lived on `grok-improvement` → `grok-improvement-memory` → `grok-improv-radeonvii`; tips and docs drift — sanitation is part of v0.1. **Live tip law:** **`working`** (see [branch-law.md](../branch-law.md)). |
+| **Branch context** | Product work has lived on `grok-improvement` → `grok-improvement-memory` → `grok-improv-radeonvii`; tips and docs drift — sanitation is part of v0.1. **Live tip law:** **`working`** (see [branch-law.md](../dev/branch-law.md)). |
 | **Status** | Working discussion (not a freeze contract). When it conflicts with Stretch 1 runtime rules, [stretch-1.md](../stretch-1.md) wins |
 
-> **Tip supersession:** Normative integration tip is **`working`** (not sole day-to-day use of `main`, and not historical `grok-improvement`). Full tip / promote / pin / tag / stale-stack law: **[docs/branch-law.md](../branch-law.md)**. Multi-party process still lives in [development-governance.md](development-governance.md).
+> **Tip supersession:** Normative integration tip is **`working`** (not sole day-to-day use of `main`, and not historical `grok-improvement`). Full tip / promote / pin / tag / stale-stack law: **[docs/dev/branch-law.md](../dev/branch-law.md)**. Multi-party process still lives in [development-governance.md](../dev/development-governance.md).
 
 This folder is the home for **promotion / v0.1** thinking: what we have, what remains, meal/context limits, and how to track everything that landed in ~1–2 weeks of dense build.
 
@@ -16,13 +16,13 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 | Doc | Role |
 |-----|------|
 | **This README** | Charter, roadmap reflection, GitHub Project, meal reconstruction & budgets |
-| **[development-governance.md](development-governance.md)** | Git model, Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Jamie×Colin dual approaches, **naming** (tip law → [branch-law.md](../branch-law.md)) |
-| **[branch-law.md](../branch-law.md)** | **Normative** `working` / `main` / operating pin / tags / short-lived / Graphite default |
+| **[development-governance.md](../dev/development-governance.md)** | Git model, Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Jamie×Colin dual approaches, **naming** (tip law → [branch-law.md](../dev/branch-law.md)) |
+| **[branch-law.md](../dev/branch-law.md)** | **Normative** `working` / `main` / operating pin / tags / short-lived / Graphite default |
 | *(later)* | Exit criteria checklist, milestone seed issues, merge plan |
 
-Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md), [branch-law.md](../branch-law.md).
+Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md), [branch-law.md](../dev/branch-law.md).
 
-**Programme name (working):** *Project Elyra — Autopoiesis Commons* (runtime stays “Elyra”; short label *Autopoiesis Commons* / *Elyra AC* — see [governance §6](development-governance.md#6-naming--project-identity)).
+**Programme name (working):** *Project Elyra — Autopoiesis Commons* (runtime stays “Elyra”; short label *Autopoiesis Commons* / *Elyra AC* — see [governance §6](../dev/development-governance.md#6-naming--project-identity)).
 
 ---
 
@@ -123,7 +123,7 @@ Phase 3 (procedural / success-path) remains **interesting** for a long-term gym 
 
 In ~1–2 weeks the repo became **large and featureful**: harness, Grok path, Stage B, identity, full memory phases 1–2a, GPU embed train, glass panels, known-bugs sprawl. Markdown alone is no longer a reliable **tracking surface**. Instantiating a **GitHub Project** is justified **almost immediately** — even before `grok_build` lands — as the outer loop for humans (and later Elyra-assisted issue updates).
 
-**Broader than one-agent self-mod:** the gym must serve **Jamie, Colin, each PE instance, and later others**. Full git/operating-pin model and Stage ladder: **[development-governance.md](development-governance.md)**. Treat prior “enterprise self-mod only” advice as **loose guidance**, not gospel — PE has advanced; multi-party is first-class.
+**Broader than one-agent self-mod:** the gym must serve **Jamie, Colin, each PE instance, and later others**. Full git/operating-pin model and Stage ladder: **[development-governance.md](../dev/development-governance.md)**. Treat prior “enterprise self-mod only” advice as **loose guidance**, not gospel — PE has advanced; multi-party is first-class.
 
 ### 3.2 What the gym is
 
@@ -378,7 +378,7 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 ## 7. Immediate checklist (promotion program)
 
 - [ ] Create GitHub Project **Project Elyra — Autopoiesis Commons** + **v0.1** milestone; seed issues from §3.3  
-- [ ] Stage 1 process: light `main` protection, branch hygiene, link [development-governance.md](development-governance.md)  
+- [ ] Stage 1 process: light `main` protection, branch hygiene, link [development-governance.md](../dev/development-governance.md)  
 - [ ] Confirm with Colin: programme name, review/promote roles, dual-instance operating pins  
 - [ ] Refresh [project-status-pass.md](../project-status-pass.md) or replace with link to this folder  
 - [ ] Branch FF/merge plan: product tip includes memory + radeon dogfood  
@@ -425,4 +425,4 @@ Convert draft cards to Issues when work starts; keep the board as the gym surfac
 
 *Promotion discussion seed 2026-07-30. GitHub Project linked above.*
 
-**Grok Build Phase 1:** design + instrument stack on `feature/gb-3b3094ab-*`; tip law [branch-law.md](../branch-law.md).
+**Grok Build Phase 1:** design + instrument stack on `feature/gb-3b3094ab-*`; tip law [branch-law.md](../dev/branch-law.md).

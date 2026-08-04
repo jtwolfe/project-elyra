@@ -1317,7 +1317,7 @@ Regression: existing `test_loop_context.py` / `test_doloop.py` remain green with
 - `docs/stretch-2/design-phase-1-temporal.md` — short phase outline
 - `docs/stretch-2/design-database-choices.md` — Lance direction + interface rule
 - `docs/stretch-2/philosophical-soft-guidance.md` — soft influences
-- `docs/engineering-principles.md` — modularity, tests, config
+- `docs/dev/engineering-principles.md` — modularity, tests, config
 - `docs/stretch-1.md` — moment = do-loop; sliding meal contract
 - `docs/known-bugs.md` — BUG-wake-01 density risk
 - Code: `elyra/loop/context.py`, `elyra/loop/doloop.py`, `elyra/loop/context_meter.py`, `elyra/moment/store.py`, `elyra/presence/worker.py`, `elyra/settings.py`, `elyra/llm/constants.py`

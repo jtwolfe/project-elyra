@@ -10,7 +10,7 @@
 | **Tracks** | Issue #109 follow-on; live dogfood job `fdaf572ce9454bc299b2e246330e4d8f` |
 | **Stack base (normative)** | `feature/grok-build-tool` (~`407e4af`) |
 | **Completion tip (normative)** | `feature/grok-build-tool` (merge-down / restack; **not** `main`, not house `working` tip law change) |
-| **Related** | [docs/design-grok-build-tool.md](docs/design-grok-build-tool.md), [docs/branch-law.md](docs/branch-law.md), [docs/grok-build-dogfood.md](docs/grok-build-dogfood.md), [docs/grok-build-headless-spike.md](docs/grok-build-headless-spike.md), Grok 0.2.118 user-guide `02-authentication.md` |
+| **Related** | [docs/design-grok-build-tool.md](docs/design-grok-build-tool.md), [docs/dev/branch-law.md](dev/branch-law.md), [docs/grok-build-dogfood.md](docs/grok-build-dogfood.md), [docs/grok-build-headless-spike.md](docs/grok-build-headless-spike.md), Grok 0.2.118 user-guide `02-authentication.md` |
 | **Revised** | 2026-08-03 (review a7f29241; auth-classifier false-positive gate) |
 
 ---
@@ -126,7 +126,7 @@ Against Grok **0.2.118**:
 
 | ID | Decision | Rationale |
 |----|----------|-----------|
-| **KD-F1** | **Stack base = `feature/grok-build-tool`; completion tip = `feature/grok-build-tool`** | User-normative for this workstream; does not redefine [branch-law.md](docs/branch-law.md) house `working` tip. Prefer short-lived `fix/gb-*` / `feature/gb-*` branches, stacked, then fold into the feature tip. |
+| **KD-F1** | **Stack base = `feature/grok-build-tool`; completion tip = `feature/grok-build-tool`** | User-normative for this workstream; does not redefine [branch-law.md](dev/branch-law.md) house `working` tip. Prefer short-lived `fix/gb-*` / `feature/gb-*` branches, stacked, then fold into the feature tip. |
 | **KD-F2** | **Cold-start auth = seed access-only `GROK_HOME/auth.json` (ExternalBinary shape) + keep live `auth_provider_command`** | Empirically required on Grok 0.2.118: provider alone does not authenticate headless `-p`. Seeding access-only session unblocks cold start; provider handles mid-run refresh without PE refresh_token. Preserves KD4/KD5b spirit. |
 | **KD-F3** | **`auth_mode` for seeded session = `external`** (not `oidc` / `oauth`) | `external` routes refresh through `auth_provider_command` (`ExternalBinary` chain). `oidc` without refresh_token is fragile for multi-hour modes. Valid Grok enum includes `grok`, `web_login`, `oidc`, `external`, … |
 | **KD-F4** | **Never seed `refresh_token`; never set `XAI_API_KEY` from OAuth access as the primary path** | Refresh stays in PE `data/secrets` only. `XAI_API_KEY` works as a short-path hack but is env-visible (`/proc/.../environ`), skips Grok session semantics, and is a weaker mid-run story. Documented as rejected alternative. |
@@ -885,7 +885,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 - Prefer short-lived `fix/gb-*` / `feature/gb-*` names.
 - **Completion condition:** tip of `feature/grok-build-tool` advances to include the full stack (merge-down / restack).  
 - **Do not** merge these fixes directly to `main` as the completion condition.  
-- House law in `docs/branch-law.md` still names `working` as product integration tip for broader GI; **this design does not redefine that**. PR8-style merge of the whole Phase 1 instrument to `working` remains a **later** product gate after dogfood D3/D6 **and** after operator D1 on the advanced feature tip.
+- House law in `docs/dev/branch-law.md` still names `working` as product integration tip for broader GI; **this design does not redefine that**. PR8-style merge of the whole Phase 1 instrument to `working` remains a **later** product gate after dogfood D3/D6 **and** after operator D1 on the advanced feature tip.
 
 #### Feature flags
 
@@ -961,7 +961,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 ## References
 
 - Phase 1 design: `docs/design-grok-build-tool.md` (KD4, KD5, KD5b, KD11, KD16) — PE assumed provider cold-start under isolated `GROK_HOME`
-- Branch law (house): `docs/branch-law.md` — `working` integration tip; **this workstream tip is `feature/grok-build-tool`**
+- Branch law (house): `docs/dev/branch-law.md` — `working` integration tip; **this workstream tip is `feature/grok-build-tool`**
 - Dogfood: `docs/grok-build-dogfood.md`
 - Headless spike: `docs/grok-build-headless-spike.md`
 - Code: `elyra/instrument/{auth_handoff,auth_provider,process,jobs,reaper,result}.py`, `elyra/tools/builtin/grok_build.py`, `elyra/secrets/inject.py`, `elyra/llm/{xai_oauth,auth}.py`

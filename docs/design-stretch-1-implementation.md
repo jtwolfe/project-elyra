@@ -142,7 +142,7 @@ flowchart TB
 
 ### Package layout and dependency rules
 
-Align with `docs/engineering-principles.md` §1.
+Align with `docs/dev/engineering-principles.md` §1.
 
 ```text
 elyra/
@@ -1168,7 +1168,7 @@ _(Resolved into Key Decisions: bare content policy, verify hash, no promote forc
 ## References
 
 - `/home/jim/Workspace/project-elyra/docs/stretch-1.md`
-- `/home/jim/Workspace/project-elyra/docs/engineering-principles.md`
+- `/home/jim/Workspace/project-elyra/docs/dev/engineering-principles.md`
 - `/home/jim/Workspace/project-elyra/docs/overview.md`
 - `/home/jim/Workspace/project-elyra/docs/tools-and-skills.md`
 - `/home/jim/Workspace/project-elyra/docs/time-and-identity.md`

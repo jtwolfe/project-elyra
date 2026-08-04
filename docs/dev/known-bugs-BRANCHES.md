@@ -1,5 +1,16 @@
 # Known-bugs fix branch stack
 
+| Field | Value |
+|-------|--------|
+| **Class** | DEV (archive-leaning) |
+| **Status** | Archive |
+| **Audience** | Jamie + Grok Build |
+| **Normative?** | No — not tip law; historical fix-branch map only |
+| **Last verified** | 2026-08-04 |
+
+> **Status: Archive** — historical fix-branch map for the known-bugs batch. Not tip law.
+> Prefer [branch-law.md](branch-law.md) for integration tip. Living product bugs: [known-bugs.md](../known-bugs.md). Prefer code on `working`.
+
 | Role | Branch | Merges into |
 |------|--------|-------------|
 | **Integration** | `fix/known-bugs` | `main` (via PR when ready) |
@@ -24,4 +35,4 @@
 
 1. Branch from latest `main`.
 2. PR base = `main`.
-3. Update `docs/known-bugs.md` + board when landing.
+3. Update [known-bugs.md](../known-bugs.md) + board when landing.

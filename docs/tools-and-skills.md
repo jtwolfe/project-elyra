@@ -353,7 +353,7 @@ Exact checklists live in `skills/bundled/review-identity/SKILL.md` and `skills/b
 |-------|------------|-------|
 | `web-research` | `web_search`, ledger | No invent on empty/rate-limit; cite; stop conditions |
 | `browse` | `browser_*` | Re-snapshot after navigation; close sessions; unavailable → honest stop |
-| `github-workflow` | `git_*`, `gh_*`, package VCS | **Before any change:** inspect issues → update/create → typed branch from `working` → work → update issue/board. Never force-push main; worktrees; Projects; grant stops. See [engineering-principles.md](engineering-principles.md) §9, [branch-law.md](branch-law.md), [operating-pins.md](operating-pins.md) |
+| `github-workflow` | `git_*`, `gh_*`, package VCS | **Before any change:** inspect issues → update/create → typed branch from `working` → work → update issue/board. Never force-push main; worktrees; Projects; grant stops. See [dev/engineering-principles.md](dev/engineering-principles.md) §9, [dev/branch-law.md](dev/branch-law.md), [dev/operating-pins.md](dev/operating-pins.md) |
 
 ### Grok Build (`grok_build`)
 
@@ -370,9 +370,9 @@ Phase 1 `grok_build` **is in the callable surface on the feature branch** (`feat
 
 Design (Phase 1): [design-grok-build-tool.md](design-grok-build-tool.md) · summary [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md).  
 Post-dogfood functionalization (auth seed + zombie/finalize): [design-grok-build-functionalization.md](design-grok-build-functionalization.md).  
-Branch / tip law: [branch-law.md](branch-law.md) (`working` remains house integration tip for broader product land).  
-Operating pin (manual): [operating-pins.md](operating-pins.md).  
-Development structure (issue + branch): [engineering-principles.md](engineering-principles.md) §9 — Grok Build and `github-workflow` always recommend inspect → issue update/create → short-lived branch from `working` → work → board update.
+Branch / tip law: [dev/branch-law.md](dev/branch-law.md) (`working` remains house integration tip for broader product land).  
+Operating pin (manual): [dev/operating-pins.md](dev/operating-pins.md).  
+Development structure (issue + branch): [dev/engineering-principles.md](dev/engineering-principles.md) §9 — Grok Build and `github-workflow` always recommend inspect → issue update/create → short-lived branch from `working` → work → board update.
 
 ---
 

@@ -837,7 +837,7 @@ No open OQs remain for v1 implementation.
 - `docs/stretch-2/architecture/phase-2-semantic.md` — encode/queue/meal invariants
 - `docs/stretch-2/design-nemotron-runtime.md` / spikes
 - `docs/radeon-vii-dev/NOTES-DOGFOOD.md`, `STACK-INVENTORY.md`
-- `docs/branch-law.md` — PRs base `working`
+- `docs/dev/branch-law.md` — PRs base `working`
 - Code: `elyra/memory/embed/queue.py`, `runtime.py`, `encode.py`; `elyra/presence/worker.py`; `elyra/memory/promote.py`; `elyra/memory/meal.py`; `elyra/memory/graph.py`; `elyra/runtime/api.py` (free-text encode); `elyra/runtime/supervisor.py` (`shutdown`); `elyra/memory/lance_store.py`; `elyra/memory/index.py`; `elyra/memory/config.py`; `elyra/memory/store.py` protocol
 - Pattern prior art: `elyra/instrument/reaper.py` daemon poll thread
 

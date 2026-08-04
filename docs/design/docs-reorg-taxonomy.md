@@ -12,7 +12,7 @@
 | **Branch** | `chore/docs-reorg` (base `working`) |
 | **Label** | `backlog` (not `v0.1-gate`) |
 | **Landing path (execution)** | `docs/design/docs-reorg-taxonomy.md` (this design; see KD1) |
-| **Related** | [../engineering-principles.md](../engineering-principles.md) §9, [../branch-law.md](../branch-law.md), [../operating-pins.md](../operating-pins.md), [../README.md](../README.md), root [README.md](../../README.md), [../promotion-discussion/](../promotion-discussion/), Project #2 draft *Refactor docs structure* (converted) |
+| **Related** | [../dev/engineering-principles.md](../dev/engineering-principles.md) §9, [../dev/branch-law.md](../dev/branch-law.md), [../dev/operating-pins.md](../dev/operating-pins.md), [../README.md](../README.md), root [README.md](../../README.md), [../promotion-discussion/](../promotion-discussion/), Project #2 draft *Refactor docs structure* (converted) |
 | **Integration tip** | `working` (normative; branch-law) |
 
 ---
@@ -380,11 +380,11 @@ Grouped by current location. Paths are current unless noted.
 
 | Path | Class | Action | Notes |
 |------|-------|--------|-------|
-| `docs/engineering-principles.md` | DEV | **move** + later **rewrite** § taxonomy | §9 already points to branch-law/pins |
-| `docs/branch-law.md` | DEV | **move** | Normative tip law |
-| `docs/operating-pins.md` | DEV | **move** | Manual pin convention |
-| `docs/promotion-discussion/development-governance.md` | DEV | **move** | Multi-party governance; tip supersession already noted |
-| `docs/known-bugs-BRANCHES.md` | DEV / Archive | **move** + **banner** Archive | Historical fix-stack map; not current tip law |
+| `docs/dev/engineering-principles.md` | DEV | **move** + later **rewrite** § taxonomy | §9 already points to branch-law/pins |
+| `docs/dev/branch-law.md` | DEV | **move** | Normative tip law |
+| `docs/dev/operating-pins.md` | DEV | **move** | Manual pin convention |
+| `docs/dev/development-governance.md` | DEV | **move** | Multi-party governance; tip supersession already noted |
+| `docs/dev/known-bugs-BRANCHES.md` | DEV / Archive | **move** + **banner** Archive | Historical fix-stack map; not current tip law |
 
 #### 4.4 Product direction (→ GOAL)
 
@@ -493,8 +493,8 @@ Grouped by current location. Paths are current unless noted.
 | `tests/test_live_grok_build.py` | design / dogfood / spike paths | Docstring refs | Update comments when files move | PR2 / PR4 |
 | `tests/test_lance_debug1_api_matrix_fixture.py` | **`SCRIPTS = REPO_ROOT / "docs" / "lance-debug1" / "scripts"`** (and derived `API_MATRIX`, `BUILD_FIXTURE`, …) | **Runtime path constant** (CI-breaking) | Must co-change to `docs/investigations/lance-debug1/scripts` when tree moves — not docstring-only | **PR5 mandatory** |
 | `docs/lance-debug1/scripts/*.py` | `docs/lance-debug1/...` in usage/help strings | Operator help (non-evidence) | **OK to update** help strings after tree move; **do not** rewrite sealed `evidence/**` JSON or run notes | PR5 |
-| `skills/bundled/github-workflow/SKILL.md` | `docs/engineering-principles.md` §9, `docs/branch-law.md`, `docs/operating-pins.md` | Agent-facing law | **Must update in PR1** to `docs/dev/...` (agents follow this skill) | **PR1 mandatory** |
-| `skills/bundled/self-improve/SKILL.md` | `docs/branch-law.md` | Agent-facing law | **Must update in PR1** to `docs/dev/branch-law.md` | **PR1 mandatory** |
+| `skills/bundled/github-workflow/SKILL.md` | `docs/dev/engineering-principles.md` §9, `docs/dev/branch-law.md`, `docs/dev/operating-pins.md` | Agent-facing law | **Must update in PR1** to `docs/dev/...` (agents follow this skill) | **PR1 mandatory** |
+| `skills/bundled/self-improve/SKILL.md` | `docs/dev/branch-law.md` | Agent-facing law | **Must update in PR1** to `docs/dev/branch-law.md` | **PR1 mandatory** |
 | `scripts/live_eval/README.md` | historical design / live-eval links | Docs | Update in archive PR | PR5 |
 | Root README “Further reading” table | multiple `docs/*` | Docs | Update per PR that moves rows | each move PR |
 | Hub `docs/README.md` | class links | Docs | Update every move PR | each |
@@ -543,7 +543,7 @@ Four classes. Prefer **code on `working`** over stale prose.
 | **STATE** | Operators / users | [state/README.md](state/README.md) · root README |
 | **GOAL** | Product direction | [goal/README.md](goal/README.md) |
 | **DESIGN** | Implementers | [design/README.md](design/README.md) |
-| **DEV** | Jamie + Grok Build | [dev/README.md](dev/README.md) |
+| **DEV** | Jamie + Grok Build | [dev/README.md](../dev/README.md) |
 | Archive / investigations | Archaeology | [archive/](archive/) · [investigations/](investigations/) |
 
 ## Quick links (living)
@@ -790,7 +790,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 | **Files** | All root `docs/design-*.md` (~20) + `grok-build-headless-spike.md` → topic subfolders under `docs/design/` (stretch-1/, identity/, glass/, capability/, grok-build/, usage/, board/, embed/); `docs/design/README.md` status catalog; hub DESIGN section; grok-build test docstring path updates |
 | **Deps** | PR0; **prefer PR1 first** (DEV paths stable) |
 | **Description** | Move flat root dump into DESIGN topic folders. Add Status banners where missing without rewriting freeze bodies. |
-| **Link-fix procedure (mandatory)** | (1) `git mv` into topic folders; (2) `rg` for each moved basename and old `docs/design-*.md` paths across repo (exclude sandboxes/.venv/data); (3) fix sibling-relative links that broke (`](tools-and-skills.md)` → hub or eventual `../../state/…`; `](design-foo.md)` → new topic-relative path; `](engineering-principles.md)` → `../dev/engineering-principles.md` if PR1 landed); (4) for targets not yet moved (STATE still at docs root), link **current** paths or hub anchors — do not invent `state/` destinations early; (5) if topic subfolders + inbound link churn exceeds ~40 files, land files **flat under `docs/design/` first** (PR2) and open **PR2.1** for topic subfolders only. |
+| **Link-fix procedure (mandatory)** | (1) `git mv` into topic folders; (2) `rg` for each moved basename and old `docs/design-*.md` paths across repo (exclude sandboxes/.venv/data); (3) fix sibling-relative links that broke (`](tools-and-skills.md)` → hub or eventual `../../state/…`; `](design-foo.md)` → new topic-relative path; `](../dev/engineering-principles.md)` → `../dev/engineering-principles.md` if PR1 landed); (4) for targets not yet moved (STATE still at docs root), link **current** paths or hub anchors — do not invent `state/` destinations early; (5) if topic subfolders + inbound link churn exceeds ~40 files, land files **flat under `docs/design/` first** (PR2) and open **PR2.1** for topic subfolders only. |
 | **Soft limit** | Prefer &lt;~40 file touches; banners + hub + every inbound link count toward the budget. |
 
 ### PR2b — stretch-2 designs + spikes → design/memory (KD4 physical split)
@@ -852,7 +852,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 | Field | Value |
 |-------|--------|
 | **Title** | `docs: reorg link sweep + #121 closeout` |
-| **Files** | Root `README.md` consistency; final `rg` for stale `docs/branch-law.md` / flat design paths / `stretch-2/design-` paths; optional link-check script; design Status → **Shipped**; issue #121 acceptance checklist; **dispose Project #2 draft card** *Refactor docs structure (state/goal/design/plan)* if still open (mark Done / remove — converted to #121) |
+| **Files** | Root `README.md` consistency; final `rg` for stale `docs/dev/branch-law.md` / flat design paths / `stretch-2/design-` paths; optional link-check script; design Status → **Shipped**; issue #121 acceptance checklist; **dispose Project #2 draft card** *Refactor docs structure (state/goal/design/plan)* if still open (mark Done / remove — converted to #121) |
 | **Deps** | PR0–PR6 as landed |
 | **Description** | Final hermetic pytest; mark design Shipped; close #121 or residual-comment named successors. |
 
@@ -881,8 +881,8 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 - Project #2 draft *Refactor docs structure (state/goal/design/plan)* (converted)
 - [docs/README.md](../README.md) — four-class hub (was chronological)
 - Root [README.md](../../README.md) — best current STATE entry
-- [docs/engineering-principles.md](../engineering-principles.md) §9 development structure
-- [docs/branch-law.md](../branch-law.md), [docs/operating-pins.md](../operating-pins.md)
+- [docs/dev/engineering-principles.md](../dev/engineering-principles.md) §9 development structure
+- [docs/dev/branch-law.md](../dev/branch-law.md), [docs/dev/operating-pins.md](../dev/operating-pins.md)
 - [docs/stretch-2/README.md](../stretch-2/README.md) — architecture vs design split precedent
 - [docs/design-remove-gemma-local-stub.md](../design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
 - [docs/lance-debug1/README.md](../lance-debug1/README.md) — sealed investigation pattern

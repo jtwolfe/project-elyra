@@ -4,7 +4,7 @@
 **Branch:** `grok-improvement`  
 **Workstream nickname:** **MC-beta** = this Stage B shallow-shape work only  
 **Canonical concept:** [metacognition.md](metacognition.md)  
-**Engineering rules:** [docs/engineering-principles.md](../engineering-principles.md)
+**Engineering rules:** [docs/dev/engineering-principles.md](../dev/engineering-principles.md)
 
 This document is the **handoff plan** for implementing Stage B. It is written so Grok Build (or any implementer) can execute **without** prior chat context. Read [metacognition.md](metacognition.md) first for geometry and hybrid ontology; this file is the ordered, file-level plan.
 
@@ -99,7 +99,7 @@ Operator design essay *What is wrong with my memory?* (Jamie Moller, 2026-04-28)
 
 ### 2.6 Engineering principles to respect
 
-From [engineering-principles.md](../engineering-principles.md):
+From [engineering-principles.md](../dev/engineering-principles.md):
 
 - One job per module; **no god module** named MC that owns speak + continuous + thrash + bias.
 - Small units; pure bias helper testable without presence I/O.

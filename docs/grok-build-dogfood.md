@@ -147,4 +147,4 @@ Mark each item after a real PE or headless run. Pass criteria match the design t
 | `elyra/instrument/jobs.py` / `reaper.py` | Liveness, reap, finalize |
 | `elyra/instrument/validate.py` | Mode-conditional dry-run validation |
 
-Full PR stack and module contracts: [design-grok-build-tool.md](design-grok-build-tool.md) · summary [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md). Tip law: [branch-law.md](branch-law.md).
+Full PR stack and module contracts: [design-grok-build-tool.md](design-grok-build-tool.md) · summary [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md). Tip law: [dev/branch-law.md](dev/branch-law.md).

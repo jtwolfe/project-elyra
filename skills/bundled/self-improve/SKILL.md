@@ -86,7 +86,7 @@ host-absolute path** to a git repo under `allowed_repo_roots`:
 
 ### M — Medium (needs investigation, multi-file, unclear edges)
 
-- **`github-workflow`**: worktree/branch off **`working`** (not `main`; former GI tip `grok-improvement` is superseded — see `docs/branch-law.md`)
+- **`github-workflow`**: worktree/branch off **`working`** (not `main`; former GI tip `grok-improvement` is superseded — see `docs/dev/branch-law.md`)
 - `grok_build` mode=`implement` effort=2–3 (**async**) → poll `job_id`
 - `review-work` + `grok_build` mode=`review` before PR when the change warrants it
 - **No `execute_plan`** unless a design doc already exists and was approved

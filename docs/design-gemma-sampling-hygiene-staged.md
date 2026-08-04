@@ -231,7 +231,7 @@ From full stack (`elyra start` + real GGUF + real PresenceWorker/do-loop):
 
 #### Harness shape (modular, no god module)
 
-**Location (normative):** `scripts/live_eval/` — **not** under `tools/`. On-disk tool packages live in `tools/{bundled,local,drafts}/` per `docs/engineering-principles.md`; a non-tool package beside them confuses discovery and promote flows.
+**Location (normative):** `scripts/live_eval/` — **not** under `tools/`. On-disk tool packages live in `tools/{bundled,local,drafts}/` per `docs/dev/engineering-principles.md`; a non-tool package beside them confuses discovery and promote flows.
 
 ```text
 scripts/live_eval/
@@ -865,7 +865,7 @@ No new metrics backend required for P0; structured logs + moment tape suffice.
 - `elyra/settings.py` — loop knobs (no LLM sampling section yet)
 - `skills/bundled/talk/SKILL.md` — social speak rules
 - `tools/bundled/speak/TOOL.md` — glass write contract
-- `docs/inference.md`, `docs/stretch-1.md` §3, `docs/engineering-principles.md`
+- `docs/inference.md`, `docs/stretch-1.md` §3, `docs/dev/engineering-principles.md`
 - `tests/test_doloop.py`, `tests/test_llm_client_tools.py` — `@pytest.mark.llm` smokes
 
 ### Prior art (aurimago/project-elyra2)

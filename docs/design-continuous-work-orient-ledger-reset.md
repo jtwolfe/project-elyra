@@ -1240,7 +1240,7 @@ All product questions for this design are **closed**. Implementers follow the de
 ## References
 
 - `docs/stretch-1.md` — runtime contract (orient includes goals/skills; wake ⟂ goals)
-- `docs/engineering-principles.md` — modularity, disk prompts, stretch discipline
+- `docs/dev/engineering-principles.md` — modularity, disk prompts, stretch discipline
 - `docs/tools-and-skills.md` — ledger tool list (update today; create pending this design)
 - `docs/design-stretch-1-implementation.md` — original S1 implementation plan
 - `docs/live-eval.md` / `scripts/live_eval/` — eval harness

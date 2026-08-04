@@ -107,5 +107,5 @@ Example shape (illustrative — not required schema until automation):
 
 - [branch-law.md](branch-law.md) — tip, promote, pin safety property
 - [engineering-principles.md](engineering-principles.md) §9 — development structure
-- [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md) — multi-party governance
+- [development-governance.md](development-governance.md) — multi-party governance
 - Epic #111 · checkpoint #113

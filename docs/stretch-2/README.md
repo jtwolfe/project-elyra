@@ -18,7 +18,7 @@ Stretch 2 is deliberately slow and phased. Phases 2a and 3 require evidence and 
 
 ## Alignment with engineering principles
 
-All of [engineering-principles.md](../engineering-principles.md) applies. Stretch 2 **extends** them in one critical way:
+All of [engineering-principles.md](../dev/engineering-principles.md) applies. Stretch 2 **extends** them in one critical way:
 
 ### Documentation is part of the product surface
 

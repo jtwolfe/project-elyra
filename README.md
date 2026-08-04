@@ -254,7 +254,7 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 | [docs/project-status-pass.md](docs/project-status-pass.md) | Status snapshot (may lag code—prefer recent issues/board) |
 | [docs/stretch-1.md](docs/stretch-1.md) | Runtime contract + done-when |
 | [docs/stretch-2/README.md](docs/stretch-2/README.md) | Memory / Stretch 2 index |
-| [docs/engineering-principles.md](docs/engineering-principles.md) | How we build |
+| [docs/dev/engineering-principles.md](docs/dev/engineering-principles.md) | How we build |
 | [docs/overview.md](docs/overview.md) | Glossary |
 | [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote |
 | [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, search/browser/secrets/git·gh, dogfood checklist |

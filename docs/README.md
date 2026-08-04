@@ -12,14 +12,14 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 | **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits | [state/README.md](state/README.md) (stub → current paths) |
 | **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why* | [goal/README.md](goal/README.md) (stub → current paths) |
 | **DESIGN / PLAN** | Implementers | Designs, PR plans, freezes (history kept) | [design/README.md](design/README.md) |
-| **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) (stub → current paths) |
+| **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) |
 | **Archive / investigations** | Archaeology | Superseded freezes, sealed bags | [archive/](archive/) · islands below |
 
 **Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
-**Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; mass `git mv` in later PRs).  
-**Paths in this hub are current locations** — files have not all moved into class folders yet.
+**Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
+**DEV process law** lives under [dev/](dev/). Other class folders still mostly pre-move paths until later PRs.
 
-**Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([branch-law.md](branch-law.md)).
+**Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
 
 ---
 
@@ -119,13 +119,15 @@ Full status-indexed catalog: **[design/README.md](design/README.md)**.
 
 ## DEV — how we work
 
+Index: **[dev/README.md](dev/README.md)**.
+
 | Doc | Role |
 |-----|------|
-| [engineering-principles.md](engineering-principles.md) | How we write code — modules, tests, config, dogfood |
-| [branch-law.md](branch-law.md) | **Normative tip law** — `working` integration tip; promote → `main`; pins; tags |
-| [operating-pins.md](operating-pins.md) | Manual operating pin convention (C3) |
-| [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md) | Multi-party governance + operating pin ladder |
-| [known-bugs-BRANCHES.md](known-bugs-BRANCHES.md) | Historical fix-branch map (archive-leaning; not tip law) |
+| [dev/engineering-principles.md](dev/engineering-principles.md) | How we write code — modules, tests, config, dogfood |
+| [dev/branch-law.md](dev/branch-law.md) | **Normative tip law** — `working` integration tip; promote → `main`; pins; tags |
+| [dev/operating-pins.md](dev/operating-pins.md) | Manual operating pin convention (C3) |
+| [dev/development-governance.md](dev/development-governance.md) | Multi-party governance + operating pin ladder |
+| [dev/known-bugs-BRANCHES.md](dev/known-bugs-BRANCHES.md) | Historical fix-branch map (archive-leaning; not tip law) |
 
 ---
 
@@ -167,6 +169,6 @@ Start at [stretch-2/README.md](stretch-2/README.md). Runtime law: [stretch-1.md]
 
 ## Status
 
-**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([branch-law.md](branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).
+**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([dev/branch-law.md](dev/branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).
 
-Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — Phase 0 hub (this file); physical class folders in later PRs.
+Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — Phase 0 hub + **PR1 DEV** (`docs/dev/`); further class folders in later PRs.

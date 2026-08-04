@@ -646,7 +646,7 @@ No `.pill-llama` CSS class exists today (id-only); renaming id is sufficient.
 | `docs/design-post-skill-commitment.md` | **Historical** | Gemma residual wording |
 | `docs/project-status-pass.md` | **Partially stale** | Future status pass only |
 | `docs/README.md` | **Stale reading order** | Future status pass |
-| `docs/engineering-principles.md` | **Mostly valid** | Serialize single-slot local HTTP (conceptually) |
+| `docs/dev/engineering-principles.md` | **Mostly valid** | Serialize single-slot local HTTP (conceptually) |
 | `docs/tools-and-skills.md` / `time-and-identity.md` | **Mostly valid** | Historical Gemma wording |
 | `docs/grok-improvement-plan/*` | **Active direction** | Aligns with this design |
 | `docs/design-glass-aurimago-gold-polish.md` | **Historical UI freeze** | `pill-llama` snippet |

@@ -10,7 +10,7 @@
 | **Branch base** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Real goal** | Align Elyra metering with SuperGrok’s **unified weekly pool**, replace pure linear day/hour hard gates with **week-cumulative ledger + pace-aware throttle + burst**, keep **hard_stop_override** |
-| **Related docs** | [`docs/grok-improvement-plan/phase-0.md`](docs/grok-improvement-plan/phase-0.md), [`docs/grok-improvement-plan/phase-0-execution.md`](docs/grok-improvement-plan/phase-0-execution.md), [`docs/engineering-principles.md`](docs/engineering-principles.md) |
+| **Related docs** | [`docs/grok-improvement-plan/phase-0.md`](docs/grok-improvement-plan/phase-0.md), [`docs/grok-improvement-plan/phase-0-execution.md`](docs/grok-improvement-plan/phase-0-execution.md), [`docs/dev/engineering-principles.md`](dev/engineering-principles.md) |
 | **Primary code today** | `elyra/llm/usage.py`, `elyra/llm/client.py` (`UsageGatedChatClient`), `elyra/llm/auth.py`, `elyra/settings.py` (`UsageSettings`), `elyra/runtime/provider_runtime.py`, `elyra/runtime/api.py`, `elyra/runtime/web/{app.js,index.html}` |
 | **Billing probe** | Externally validated 2026-07-27 against live `auth.json` (field names not yet in-repo fixtures) |
 

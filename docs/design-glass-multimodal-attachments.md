@@ -1078,7 +1078,7 @@ No unresolved product open questions.
 
 ### Product docs
 
-- `docs/engineering-principles.md` — new capability → new module
+- `docs/dev/engineering-principles.md` — new capability → new module
 - Glass polish design (visual tokens; media CSS additive)
 
 ---

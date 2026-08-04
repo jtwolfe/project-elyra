@@ -3,7 +3,7 @@
 **Full design:** [design-grok-build-tool.md](design-grok-build-tool.md)  
 **Date:** 2026-08-01 (revised post-review + re-review cf9024a3)  
 **Branch context:** `feature/grok-build-tool` · Issue #109 · GI Phase 1  
-**Tip law:** [branch-law.md](branch-law.md) (`working` integration tip)  
+**Tip law:** [dev/branch-law.md](dev/branch-law.md) (`working` integration tip)  
 
 
 ## What was produced
