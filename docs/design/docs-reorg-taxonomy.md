@@ -5,7 +5,7 @@
 | **Document** | Docs taxonomy reorg — STATE / GOAL / DESIGN·PLAN / DEV |
 | **Author** | design skill (Elyra) |
 | **Date** | 2026-08-04 |
-| **Status** | Approved (design consensus 2026-08-04; execution via #121 PR0+) |
+| **Status** | Active (execution via #121 PR0+; design consensus 2026-08-04 → Shipped when reorg complete) |
 | **Product** | project-elyra |
 | **Repo** | [jtwolfe/project-elyra](https://github.com/jtwolfe/project-elyra) |
 | **Issue** | [#121](https://github.com/jtwolfe/project-elyra/issues/121) `docs: reorg taxonomy STATE / GOAL / DESIGN / DEV` |
@@ -879,14 +879,14 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 
 - Issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — taxonomy + acceptance
 - Project #2 draft *Refactor docs structure (state/goal/design/plan)* (converted)
-- [docs/README.md](docs/README.md) — current chronological hub
-- Root [README.md](README.md) — best current STATE entry
-- [docs/engineering-principles.md](docs/engineering-principles.md) §9 development structure
-- [docs/branch-law.md](docs/branch-law.md), [docs/operating-pins.md](docs/operating-pins.md)
-- [docs/stretch-2/README.md](docs/stretch-2/README.md) — architecture vs design split precedent
-- [docs/design-remove-gemma-local-stub.md](docs/design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
-- [docs/lance-debug1/README.md](docs/lance-debug1/README.md) — sealed investigation pattern
-- [docs/archive/README.md](docs/archive/README.md) — existing archive pattern
+- [docs/README.md](../README.md) — four-class hub (was chronological)
+- Root [README.md](../../README.md) — best current STATE entry
+- [docs/engineering-principles.md](../engineering-principles.md) §9 development structure
+- [docs/branch-law.md](../branch-law.md), [docs/operating-pins.md](../operating-pins.md)
+- [docs/stretch-2/README.md](../stretch-2/README.md) — architecture vs design split precedent
+- [docs/design-remove-gemma-local-stub.md](../design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
+- [docs/lance-debug1/README.md](../lance-debug1/README.md) — sealed investigation pattern
+- [docs/archive/README.md](../archive/README.md) — existing archive pattern
 - `tests/test_stretch1_donewhen.py` — content path pins for `docs/stretch-1.md`, `docs/inference.md`
 - `tests/test_lance_debug1_api_matrix_fixture.py` — `SCRIPTS` runtime constant under `docs/lance-debug1/scripts`
 - `skills/bundled/github-workflow/SKILL.md`, `skills/bundled/self-improve/SKILL.md` — DEV law path pins

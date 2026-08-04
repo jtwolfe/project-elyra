@@ -14,7 +14,9 @@ Living product behaviour and operator docs:
 | [../grok-build-dogfood.md](../grok-build-dogfood.md) | Grok Build operator checklist |
 | [../grok-improvement-plan/usage-tracking-supergrok-pacing.md](../grok-improvement-plan/usage-tracking-supergrok-pacing.md) | Usage / SuperGrok pacing (ops) |
 | [../stretch-2/README.md](../stretch-2/README.md) | Memory phase status |
-| [../stretch-2/architecture/](../stretch-2/architecture/) | Phase architecture manuals (not spikes) |
+| [../stretch-2/architecture/phase-1-temporal.md](../stretch-2/architecture/phase-1-temporal.md) | As-implemented temporal manual |
+| [../stretch-2/architecture/phase-2-semantic.md](../stretch-2/architecture/phase-2-semantic.md) | As-implemented semantic manual |
+| [../stretch-2/architecture/phase-2a-directed-traversal.md](../stretch-2/architecture/phase-2a-directed-traversal.md) | As-implemented directed-traversal manual |
 | [../radeon-vii-dev/README.md](../radeon-vii-dev/README.md) | ROCm dogfood start path |
 
 Root [README.md](../../README.md) remains the primary operator entry.
