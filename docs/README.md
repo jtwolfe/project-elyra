@@ -86,15 +86,20 @@ Live protocol (historical Gemma stages — freeze): [live-eval.md](live-eval.md)
 
 ## GOAL — product direction (short north stars)
 
+Index: **[goal/README.md](goal/README.md)**.
+
 | Doc | Role |
 |-----|------|
-| [promotion-discussion/README.md](promotion-discussion/README.md) | **v0.1 promotion / gym** — pillars, meal/context, Phase 3 defer (long form; short claim lands in PR3) |
-| [state/memory/README.md](state/memory/README.md) | Stretch 2 phase goals + status tables (also STATE honesty) |
-| [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (explicit non-deliverable; GOAL move later) |
-| [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phase map (Phase 0–3); refresh if it lags code |
-| [memory-atoms.pdf](memory-atoms.pdf) | Philosophy reference (GOAL + STATE) |
+| [goal/programme.md](goal/programme.md) | North star / programme intent |
+| [goal/v0.1.md](goal/v0.1.md) | **v0.1 dogfood product cut** — short claim (In/Out) |
+| [goal/v0.1-discussion.md](goal/v0.1-discussion.md) | Long-form promotion/gym discussion |
+| [goal/stretch-2-north-star.md](goal/stretch-2-north-star.md) | Stretch 2 phase goals (short) |
+| [goal/grok-improvement-phases.md](goal/grok-improvement-phases.md) | GI phase map extract |
+| [goal/philosophical-soft-guidance.md](goal/philosophical-soft-guidance.md) | Soft conceptual influences (non-deliverable) |
+| [state/memory/README.md](state/memory/README.md) | Stretch 2 status honesty (also STATE) |
+| [memory-atoms.pdf](memory-atoms.pdf) | Philosophy reference |
 
-GOAL stays **short** when new pages are added (PR3); full designs stay under DESIGN.
+GOAL stays **short**; full designs stay under DESIGN.
 
 ---
 
