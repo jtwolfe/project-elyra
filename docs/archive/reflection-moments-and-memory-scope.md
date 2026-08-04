@@ -1,10 +1,10 @@
-> **Archived.** Not build freeze. See [../stretch-1.md](../stretch-1.md) and [../README.md](../README.md).
+> **Archived.** Not build freeze. See [../state/stretch-1.md](../state/stretch-1.md) and [../README.md](../README.md).
 
 # Reflection: memory scope — moments, linear atoms, sleep
 
 **Status:** Consideration — **not** an implementation freeze.  
 **Date:** 2026-07  
-**Pairs with:** [reflection-memory-and-lineage.md](reflection-memory-and-lineage.md), [tools-and-skills.md](tools-and-skills.md), [time-and-identity.md](time-and-identity.md), atomic-memory essay (esp. *what is an atom* / *why atomize*).
+**Pairs with:** [reflection-memory-and-lineage.md](reflection-memory-and-lineage.md), [tools-and-skills.md](../state/tools-and-skills.md), [time-and-identity.md](../state/time-and-identity.md), atomic-memory essay (esp. *what is an atom* / *why atomize*).
 
 ---
 

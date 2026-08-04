@@ -1,8 +1,8 @@
 # DESIGN / PLAN
 
-Design documents and PR plans that implement goals. Living catalogue during [#121](https://github.com/jtwolfe/project-elyra/issues/121) reorg.
+Design documents and PR plans that implement goals. Status-indexed catalogue (four-class taxonomy [#121](https://github.com/jtwolfe/project-elyra/issues/121)).
 
-**Taxonomy:** [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) (Active) — hub-first, non-destructive.  
+**Taxonomy:** [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) (**Shipped**) — hub-first, non-destructive.  
 **Hub:** [docs/README.md](../README.md) four-class index.  
 **Layout:** root designs under `docs/design/<topic>/` (PR2). stretch-2 designs under `memory/` (PR2b). GI phase designs + harness + design-rocm under DESIGN (PR2c).
 
@@ -20,7 +20,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 | Doc | Status | Notes |
 |-----|--------|-------|
-| [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) | Active | Taxonomy reorg plan (#121). Hub-first; physical moves PR1–PR5; principles [§10](../dev/engineering-principles.md) (PR6); closeout PR7. |
+| [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) | **Shipped** | Taxonomy reorg (#121) complete: hub + DEV + DESIGN + STATE + archive/investigations + principles [§10](../dev/engineering-principles.md) + link sweep. |
 
 ---
 

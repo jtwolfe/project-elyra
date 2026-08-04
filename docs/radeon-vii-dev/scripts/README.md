@@ -185,7 +185,7 @@ from elyra.memory.embed.types import EMBED_DIM  # 2048
 | Doc | Why |
 |-----|-----|
 | [VENV-ROCM-SWITCH.md](../../state/radeon-vii/VENV-ROCM-SWITCH.md) | Install/purge/rollback before scripts matter |
-| [freezes/README.md](../freezes/README.md) | Host freezes after A1–A5 |
+| [radeon-vii-freezes/](../../investigations/radeon-vii-freezes/) | Host freezes after A1–A5 (moved under investigations/) |
 | design §4.3 / G1–G9 | Normative assert table |
 | BUG-mem-gpu-01 | Partial evidence only; bug stays Open |
 

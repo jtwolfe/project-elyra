@@ -5,7 +5,7 @@
 | **Document** | Docs taxonomy reorg — STATE / GOAL / DESIGN·PLAN / DEV |
 | **Author** | design skill (Elyra) |
 | **Date** | 2026-08-04 |
-| **Status** | Active (execution via #121 PR0+; design consensus 2026-08-04 → Shipped when reorg complete) |
+| **Status** | **Shipped** (2026-08-04; #121 PR0–PR7 complete) |
 | **Product** | project-elyra |
 | **Repo** | [jtwolfe/project-elyra](https://github.com/jtwolfe/project-elyra) |
 | **Issue** | [#121](https://github.com/jtwolfe/project-elyra/issues/121) `docs: reorg taxonomy STATE / GOAL / DESIGN / DEV` |
@@ -865,13 +865,13 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 | Acceptance item | Satisfied by | Completeness |
 |-----------------|--------------|--------------|
 | Real issue + branch linked | #121 + `chore/docs-reorg` (done at issue open) | Done |
-| Draft board card disposed | **PR7** — mark Project #2 draft *Refactor docs structure…* Done/removed (converted to #121) | PR7 |
+| Draft board card disposed | **PR7** — Project #2 draft *Refactor docs structure…* converted to #121; board card already **Done** (verified 2026-08-04) | **Done** |
 | Taxonomy documented (issue + engineering-principles docs rules) | This design + hub (**PR0** partial); principles [§10](../dev/engineering-principles.md) (**PR6** complete) | **Complete @ PR6** |
-| `docs/README.md` hub four-class | PR0 | PR0 |
-| STATE architecture entry beyond root README | PR4 `state/architecture.md` | PR4 |
-| DEV findable | PR1 (`docs/dev/` + skills) | PR1 |
-| DESIGN/GOAL indexed with status | PR2 + **PR2b** + **PR2c** + PR3 + design README catalog | PR2–PR3 |
-| No broken critical links; non-destructive | Per-PR `rg` + path pins (skills, tests, SCRIPTS); PR7 sweep; KD6 | Continuous + PR7 |
+| `docs/README.md` hub four-class | PR0 | **Done** |
+| STATE architecture entry beyond root README | PR4 `state/architecture.md` | **Done** |
+| DEV findable | PR1 (`docs/dev/` + skills) | **Done** |
+| DESIGN/GOAL indexed with status | PR2 + **PR2b** + **PR2c** + PR3 + design README catalog | **Done** |
+| No broken critical links; non-destructive | Per-PR `rg` + path pins (skills, tests, SCRIPTS); PR7 sweep; KD6 | **Done @ PR7** |
 
 ---
 
@@ -887,7 +887,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 - [docs/design/stretch-1/design-remove-gemma-local-stub.md](stretch-1/design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
 - [docs/investigations/lance-debug1/README.md](../investigations/lance-debug1/README.md) — sealed investigation pattern
 - [docs/archive/README.md](../archive/README.md) — existing archive pattern
-- `tests/test_stretch1_donewhen.py` — content path pins for `docs/stretch-1.md`, `docs/inference.md`
+- `tests/test_stretch1_donewhen.py` — content path pins for `docs/state/stretch-1.md`, `docs/inference.md`
 - `tests/test_lance_debug1_api_matrix_fixture.py` — `SCRIPTS` runtime constant under `docs/investigations/lance-debug1/scripts`
 - `skills/bundled/github-workflow/SKILL.md`, `skills/bundled/self-improve/SKILL.md` — DEV law path pins
 - Inventory: `find docs` 2026-08-04 (~118 md files; 17 stretch-2 designs)
@@ -896,6 +896,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 
 ## Revision Summary
 
+- **PR7** 2026-08-04 — link sweep + closeout: living-doc path fixes (archive banners, philosophical soft guidance, radeon freezes pointer); root README Documentation table aligned to four-class hub; design **Status → Shipped**; hub + design catalog consistency; acceptance mapping closed; hermetic path-pin tests green. Project #2 draft card dispose noted for operator if residual open.
 - **PR6** 2026-08-04 — engineering-principles **§10 Docs taxonomy** landed; hub + DEV index + design Related/acceptance mark taxonomy complete; `github-workflow` §9 cite unchanged.
 - **Initial draft** 2026-08-04 — full taxonomy design, inventory classification, banner schema, archival decision tree, STATE content plan, Key Decisions KD1–KD12, phased PR0–PR7 plan for #121 / `chore/docs-reorg`.
 - **Post-review rev1** 2026-08-04 — address review issues 1–8:

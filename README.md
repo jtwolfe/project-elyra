@@ -251,19 +251,24 @@ create-tool / create-skill fail-closed is covered by **PR13** gates in `tests/te
 
 ## Documentation
 
+Four-class hub: **[docs/README.md](docs/README.md)** (STATE · GOAL · DESIGN · DEV · archive/investigations).
+
 | Doc | Role |
 |-----|------|
-| [docs/archive/project-status-pass.md](docs/archive/project-status-pass.md) | Status snapshot (may lag code—prefer recent issues/board) |
+| [docs/README.md](docs/README.md) | **Hub** — class index + run/test pointers |
 | [docs/state/architecture.md](docs/state/architecture.md) | As-implemented architecture map |
 | [docs/state/stretch-1.md](docs/state/stretch-1.md) | Runtime contract + done-when |
-| [docs/state/memory/README.md](docs/state/memory/README.md) | Memory / Stretch 2 index |
-| [docs/dev/engineering-principles.md](docs/dev/engineering-principles.md) | How we build |
-| [docs/state/overview.md](docs/state/overview.md) | Glossary |
-| [docs/state/time-and-identity.md](docs/state/time-and-identity.md) | Self ≠ user; draft/promote |
+| [docs/state/overview.md](docs/state/overview.md) | Glossary / big picture |
 | [docs/state/tools-and-skills.md](docs/state/tools-and-skills.md) | Packages, search/browser/secrets/git·gh, dogfood checklist |
-| [docs/memory-atoms.pdf](docs/memory-atoms.pdf) | Memory philosophy (*What is wrong with my memory?*) |
+| [docs/state/time-and-identity.md](docs/state/time-and-identity.md) | Self ≠ user; draft/promote |
+| [docs/state/memory/README.md](docs/state/memory/README.md) | Memory / Stretch 2 index |
+| [docs/state/usage-and-pacing.md](docs/state/usage-and-pacing.md) | SuperGrok pool vs ledger, burst, override |
+| [docs/dev/engineering-principles.md](docs/dev/engineering-principles.md) | How we build (+ **§10** docs taxonomy) |
+| [docs/dev/branch-law.md](docs/dev/branch-law.md) | Integration tip `working` → promote → `main` |
+| [docs/design/README.md](docs/design/README.md) | DESIGN catalog (status-indexed) |
 | [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration / dogfood phases |
-| [docs/README.md](docs/README.md) | Full index |
+| [docs/memory-atoms.pdf](docs/memory-atoms.pdf) | Memory philosophy (*What is wrong with my memory?*) |
+| [docs/archive/project-status-pass.md](docs/archive/project-status-pass.md) | Historical status snapshot (prefer hub + board) |
 
 ---
 

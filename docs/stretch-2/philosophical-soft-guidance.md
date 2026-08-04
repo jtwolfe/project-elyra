@@ -3,7 +3,7 @@
 **Status:** Soft guidance only (not a phase plan, not acceptance criteria)
 **Branch:** `grok-improvement-memory`
 **Primary philosophy:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
-**Related:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
+**Related:** [inspiration-activity-model-and-storage.md](../design/memory/inspiration-activity-model-and-storage.md)
 
 This note records **conceptual influences** that shaped how we think about atomized memory. They are tools for *reasoning about form* while implementing — ways to ask “does this structure still honour the essay?” — not a backlog of features.
 
@@ -139,10 +139,10 @@ These appear in the essay or early design talk; they remain **intentionally soft
 | Document | Relationship |
 |----------|----------------|
 | [memory-atoms.pdf](../memory-atoms.pdf) | Authoritative philosophical essay |
-| [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | Operational baseline (activities, data prototype, storage needs) |
-| [design-context-meal-composition.md](design-context-meal-composition.md) | Product design for labeled meals and slide-off — may *reflect* reconstructive / patch ideas without implementing them as philosophy runtime |
-| [design-phase-*.md](README.md) | Concrete phase design; this file does not override them |
-| Architecture manuals (future) | May cite this note when explaining *why* a shape was chosen |
+| [inspiration-activity-model-and-storage.md](../design/memory/inspiration-activity-model-and-storage.md) | Operational baseline (activities, data prototype, storage needs) |
+| [design-context-meal-composition.md](../design/memory/design-context-meal-composition.md) | Product design for labeled meals and slide-off — may *reflect* reconstructive / patch ideas without implementing them as philosophy runtime |
+| [design/memory/](../design/memory/) · [state/memory/](../state/memory/README.md) | Concrete phase designs + architecture manuals; this file does not override them |
+| Architecture manuals | [state/memory/architecture/](../state/memory/architecture/) — may cite this note when explaining *why* a shape was chosen |
 
 If soft guidance and a phase design ever appear to conflict, **phase design and engineering principles win for what ships**; update this note if the influence story needs correction.
 

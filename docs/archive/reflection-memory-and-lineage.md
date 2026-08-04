@@ -1,4 +1,4 @@
-> **Archived.** Not build freeze. See [../stretch-1.md](../stretch-1.md) and [../README.md](../README.md).
+> **Archived.** Not build freeze. See [../state/stretch-1.md](../state/stretch-1.md) and [../README.md](../README.md).
 
 # Reflection: lineage contrast, two stretches, and where memory might live
 
@@ -7,7 +7,7 @@
 **Method:** Parallel explore agents over greenfield docs, prior Aurimago Elyra lineages, atomic-memory essay, and harness/memory patterns (Grok-like loop, elyra2 consideration packs).  
 **Rule for this note:** map options and tensions; **do not freeze** how Stretch 2 memory plugs into Stretch 1.
 
-**Read with:** [mental-units.md](mental-units.md), [tools-and-skills.md](tools-and-skills.md), [time-and-identity.md](time-and-identity.md), [reflection-moments-and-memory-scope.md](reflection-moments-and-memory-scope.md) (moment/run zoom).
+**Read with:** [tools-and-skills.md](../state/tools-and-skills.md), [time-and-identity.md](../state/time-and-identity.md), [reflection-moments-and-memory-scope.md](reflection-moments-and-memory-scope.md) (moment/run zoom).
 
 ---
 

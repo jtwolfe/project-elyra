@@ -108,25 +108,25 @@ Promote gi → main             ── OPERATOR SIGN-OFF
 
 ### Still truthful
 
-- [stretch-1.md](stretch-1.md), [dev/engineering-principles.md](dev/engineering-principles.md)
-- [tools-and-skills.md](tools-and-skills.md), [time-and-identity.md](time-and-identity.md) (identity draft/promote + capability-growth catalog/dogfood)
-- Design docs for recent work: [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md), [design-glass-aurimago-gold-polish.md](design/glass/design-glass-aurimago-gold-polish.md)
-- Capability growth: [design-capability-growth-search-browse-vcs-secrets.md](design/capability/design-capability-growth-search-browse-vcs-secrets.md), [design-capability-growth-implementation-plan.md](design/capability/design-capability-growth-implementation-plan.md) (package VCS, search, browser, secrets, git/gh, judgment skills — see tools-and-skills dogfood checklist)
+- [stretch-1.md](../state/stretch-1.md), [dev/engineering-principles.md](../dev/engineering-principles.md)
+- [tools-and-skills.md](../state/tools-and-skills.md), [time-and-identity.md](../state/time-and-identity.md) (identity draft/promote + capability-growth catalog/dogfood)
+- Design docs for recent work: [design-identity-self-other-multi-user.md](../design/identity/design-identity-self-other-multi-user.md), [design-glass-aurimago-gold-polish.md](../design/glass/design-glass-aurimago-gold-polish.md)
+- Capability growth: [design-capability-growth-search-browse-vcs-secrets.md](../design/capability/design-capability-growth-search-browse-vcs-secrets.md), [design-capability-growth-implementation-plan.md](../design/capability/design-capability-growth-implementation-plan.md) (package VCS, search, browser, secrets, git/gh, judgment skills — see tools-and-skills dogfood checklist)
 - Phase 0 / H-series designs (good history; implemented)
 
 ### Stale or misleading (cleanup candidates)
 
 | Doc | Problem |
 |-----|---------|
-| [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Still says Stage B “code not started”; understates identity / glass / post-H6 work |
-| [docs/README.md](README.md) | Reading order still Gemma-first; weak pointers to Grok plan + new designs |
+| [grok-improvement-plan/README.md](../grok-improvement-plan/README.md) | Still says Stage B “code not started”; understates identity / glass / post-H6 work |
+| [docs/README.md](../README.md) | Reading order still Gemma-first; weak pointers to Grok plan + new designs |
 | Root [README.md](../README.md) | Dual Gemma/Grok story without “gi is current product tip” |
 | Older freeze designs | Gemma sampling, thrash, continuous, post-skill commit — historical “why,” not “what to do next” |
 
 ### Archive / essay
 
-- [archive/](archive/) — Stretch 2 / memory research (not freeze)
-- [memory-atoms.pdf](memory-atoms.pdf) — Phase 3 thesis, not an implementation plan
+- [archive/](./) — Stretch 2 / memory research (not freeze)
+- [memory-atoms.pdf](../memory-atoms.pdf) — Phase 3 thesis, not an implementation plan
 
 **Conflict rule for this pass:** Prefer **code on `grok-improvement`** over stale status prose in plan READMEs.
 
@@ -254,14 +254,14 @@ That workflow should feel like a **skill + ledger pattern**, not a second mind. 
 
 | Doc | Role |
 |-----|------|
-| [stretch-1.md](stretch-1.md) | Stretch 1 runtime contract |
-| [overview.md](overview.md) | Glossary / big picture |
-| [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok phases (refresh status) |
-| [metacognition.md](design/grok-improvement-plan/metacognition.md) / [stage-b-mc.md](design/grok-improvement-plan/stage-b-mc.md) | Soft Decide / Stage B |
-| [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) | Identity + multi-user prep |
-| [design-glass-aurimago-gold-polish.md](design/glass/design-glass-aurimago-gold-polish.md) | Glass gold polish |
-| [memory-atoms.pdf](memory-atoms.pdf) | Phase 3 memory thesis |
-| [dev/engineering-principles.md](dev/engineering-principles.md) | How we write code |
+| [stretch-1.md](../state/stretch-1.md) | Stretch 1 runtime contract |
+| [overview.md](../state/overview.md) | Glossary / big picture |
+| [grok-improvement-plan/README.md](../grok-improvement-plan/README.md) | Grok phases (refresh status) |
+| [metacognition.md](../design/grok-improvement-plan/metacognition.md) / [stage-b-mc.md](../design/grok-improvement-plan/stage-b-mc.md) | Soft Decide / Stage B |
+| [design-identity-self-other-multi-user.md](../design/identity/design-identity-self-other-multi-user.md) | Identity + multi-user prep |
+| [design-glass-aurimago-gold-polish.md](../design/glass/design-glass-aurimago-gold-polish.md) | Glass gold polish |
+| [memory-atoms.pdf](../memory-atoms.pdf) | Phase 3 memory thesis |
+| [dev/engineering-principles.md](../dev/engineering-principles.md) | How we write code |
 
 ---
 
@@ -281,8 +281,8 @@ Elyra is a **working teammate runtime on Grok**, with soft metacognition and a r
 
 ## Grok Build instrument (2026-08-01)
 
-- Design: [design-grok-build-tool.md](design/grok-build/design-grok-build-tool.md) (approved)
-- Branch law: [dev/branch-law.md](dev/branch-law.md) — integration tip **`working`**
+- Design: [design-grok-build-tool.md](../design/grok-build/design-grok-build-tool.md) (approved)
+- Branch law: [dev/branch-law.md](../dev/branch-law.md) — integration tip **`working`**
 - Implementation stack: `feature/gb-3b3094ab-pr0`…`pr8` (execute-plan 3b3094ab)
 - Status: code landed on feature stack; dogfood D1–D13 operator-run before operating pin move
 - Operating pin: **not** auto-moved
