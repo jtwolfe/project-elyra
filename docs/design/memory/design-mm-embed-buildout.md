@@ -93,11 +93,12 @@ This design plans the **vertical slice** to finish that loop, with **image-first
 
 ### Pain points
 
-1. **Silent demotion** — media soft-skip (mm utils missing, MIME, oversize) can leave text-only ready atoms that look “fine” while `emb_image` stays empty.
-2. **Glass lag** — operators cannot see `media_encode`, skip reasons, or which channels are populated without reading Lance internals.
-3. **No fixed smoke fixtures** — hard to claim MM green without a reproducible image→neighbor path.
-4. **Audio/video second class only in practice** — matrix exists but dogfood energy is text-biased.
-5. **Open residuals** (#80, #114) can still mask MM truth if text path is flaky under busy PE.
+1. **Media path contract break (highest)** — encode resolve does not speak MediaStore’s blob/sha256 API; media channels may never populate in product despite correct promote.
+2. **Silent demotion** — media soft-skip (mm utils missing, MIME, oversize, `no_path`) can leave text-only ready atoms that look “fine” while `emb_image` stays empty.
+3. **Glass lag** — operators cannot see `media_encode`, skip reasons, or which channels are populated without reading Lance internals.
+4. **No fixed smoke fixtures** — hard to claim MM green without a reproducible image→neighbor path.
+5. **Audio/video second class only in practice** — matrix exists but dogfood energy is text-biased.
+6. **Open residuals** (#80, #114) can still mask MM truth if text path is flaky under busy PE.
 
 ### What must not regress
 
@@ -214,6 +215,7 @@ Mock-only CI proves contract shape; live Nemotron proves real media.
 | **KD-M9** | **#80 / #114 are prerequisites or parallel dogfood**, not re-implemented here | Link and re-verify; do not reopen rectification |
 | **KD-M10** | **Branch law**: `feature/mm-embed-buildout` → PR(s) into `working`; hermetic `pytest -m 'not llm and not live_grok'` green before merge; no auto `main` | House process |
 | **KD-M11** | **No silent allow of text vectors under media channel names** (keep current fail-closed) | Trust invariant |
+| **KD-M14** | **MediaStore is the path authority** — encode resolve uses blob/sha256 (or one store helper); do not require `Attachment.path` | Verified gap; keeps media package cohesive |
 | **KD-M12** | **Multi-image bag encode deferred**; first-wins + skip reason is v1 | Avoid scope explosion |
 | **KD-M13** | Hyperedges / traversal **explicitly sequenced after** this buildout | Prevents walk polish on weak MM substrate |
 
@@ -348,14 +350,14 @@ PR7  docs architecture closeout + dogfood checklist + issue comments (#80/#114 l
 | **Tests** | n/a |
 | **Done** | Operator accepts KDs / PR DAG (or notes OQ answers) |
 
-### PR1 — Ingest integrity
+### PR1 — Ingest integrity + MediaStore resolve contract
 
 | | |
 |--|--|
-| **Scope** | Audit/fix promote paths so glass `attachment_ids` / beat media become atom `media_ids`; hermetic tests with fake beats + MediaStore |
+| **Scope** | (1) Audit/fix promote so glass `attachment_ids` / beat media become atom `media_ids`. (2) **Fix `resolve_media_inputs` ↔ MediaStore**: resolve filesystem path via `blob_path(sha256)` (or a single store helper e.g. `resolve_blob_path(att_id)`), using `Attachment.mime` / filename for modality. Hermetic tests with real `MediaStore` + tiny fixture bytes — not a fake path-only double that hides the bug. |
 | **Out** | Glass chrome; Nemotron weights |
-| **Modules** | `promote.py`, tests; maybe thin message→beat glue if gap proven |
-| **Done** | Media-only and text+image promote tests green |
+| **Modules** | `embed/encode.py`, `media/store.py` (thin helper only if needed), `promote.py` if gaps, tests |
+| **Done** | Promote tests green; **encode_atom with real MediaStore image blob yields image channel under mock embedder** |
 
 ### PR2 — Encode diagnostics + deps + health
 
