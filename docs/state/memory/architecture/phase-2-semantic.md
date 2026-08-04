@@ -1,20 +1,22 @@
 # Architecture — Phase 2 Semantic Memory
 
-**Status:** **Product-intent rectified (code)** — Phase 2 ship **PR1–PR9** (2026-07-28) + **rectification PR-R1–R5** (2026-07-29) + **continuous encode** stack (embed-async PR1–PR4, 2026-08-03). Plumbing and product path match locked intent (joint-primary via joint-for-single + repair, `auto` channel, Lance-native main search, honest meal/Vectors, **background corpus drain while PE runs**). **Operator smoke dogfood verification is still pending** before calling Phase 2 product-complete or flipping defaults. Flags: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off**.
+**Status:** **Product-intent rectified + multimodal loop code-complete** — Phase 2 ship **PR1–PR9** (2026-07-28) + **rectification PR-R1–R5** (2026-07-29) + **continuous encode** stack (embed-async PR1–PR4, 2026-08-03) + **MM embed buildout PR0–PR7** (#124, 2026-08-05). Plumbing and product path match locked intent (joint-primary via joint-for-single + repair, `auto` channel, Lance-native main search, honest meal/Vectors, **background corpus drain while PE runs**). **Multimodal product loop (ingest → encode → search → glass) is complete in code** — MediaStore resolve, durable encode diagnostics, media-as-query neighbors, Atoms/Vectors/Context honesty. **Operator smoke / live dogfood verification is still pending** before calling Phase 2 product-complete or flipping defaults. Flags: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off**. **Not** Gate B default-on.
 **Package:** `elyra/memory/` (`embed/`, `index.py`, `parcel.py`; meal + Lance extensions; glass Vectors APIs)
 **Philosophy:** [memory-atoms.pdf](../../../memory-atoms.pdf)
 **Design (planning):** [design-phase-2-semantic.md](../../../design/memory/design-phase-2-semantic.md), [design-phase-2-implementation.md](../../../design/memory/design-phase-2-implementation.md) (historical ship stack)
 **Rectification design (normative for R1–R5):** [design-phase-2-rectification.md](../../../design/memory/design-phase-2-rectification.md)
+**MM embed buildout (normative for multimodal loop):** [design-mm-embed-buildout.md](../../../design/memory/design-mm-embed-buildout.md) (**Shipped (code)**; KD-M*)
 **Continuous encode (normative for drain/worker/gate):** [design-embed-async-encode-worker.md](../../../design/embed/design-embed-async-encode-worker.md) (KD-E1–E18)
 **Runtime contract:** [design-nemotron-runtime.md](../../../design/memory/design-nemotron-runtime.md)
 **Spikes:** [architecture/spikes/lance-emb-migration.md](../../../design/memory/spikes/lance-emb-migration.md), [architecture/spikes/nemotron-runtime.md](../../../design/memory/spikes/nemotron-runtime.md)
 **Meal sketch:** [design-context-meal-composition.md](../../../design/memory/design-context-meal-composition.md)
 **Baseline activities:** [inspiration-activity-model-and-storage.md](../../../design/memory/inspiration-activity-model-and-storage.md) §3
 **Phase 1 manual:** [architecture/phase-1-temporal.md](phase-1-temporal.md)
-**Program status:** [stretch-2 README](../README.md) Phase 2 close-out
+**Program status:** [memory README](../README.md) Phase 2 close-out
+**Operator dogfood:** [mm-embed-dogfood.md](../mm-embed-dogfood.md) (checklist open — code complete ≠ live signed)
 **Bugs:** [known-bugs.md](../../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open — packaging/Tensile; product continuous-encode path shipped)
 
-This is the **post-implement concept-mapping manual** for Phase 2. It describes what shipped (including rectification), how code maps to essay concepts, which activities are live, and how the system fails. It is not a re-statement of the design PR stack plan.
+This is the **post-implement concept-mapping manual** for Phase 2. It describes what shipped (including rectification and MM buildout), how code maps to essay concepts, which activities are live, and how the system fails. It is not a re-statement of the design PR stack plan.
 
 ### Caveats (honest ship state)
 
@@ -22,12 +24,17 @@ This is the **post-implement concept-mapping manual** for Phase 2. It describes 
 |------|--------|
 | Encode + index + parcels + meal semantic + Vectors glass | **Shipped** (PR1–PR9) + **rectified** (PR-R1–R5) — product path no longer joint-empty by default |
 | Continuous corpus encode (EncodeWorker + EmbedderGate + priority lanes) | **Shipped** (embed-async PR1–PR4) — drain while PE runs when `semantic_enabled` + `embed_enabled`; idle-only is **rollback only** (`encode_worker_enabled=false`) |
+| Multimodal loop (ingest → encode media channels → search → glass) | **Code complete** (MM #124 PR0–PR7, 2026-08-05) — see **MM embed buildout close-out** below; hermetic green; **live operator dogfood still open** |
+| MediaStore resolve for encode / media-as-query | **Fixed** — `resolve_one_media` uses `get` + `blob_path(sha256)` / `read_bytes`; mime/filename classify on extensionless blobs (no product `no_path` when blob exists) |
+| Encode diagnostics | **Shipped** — durable atom meta `embed_media_skipped`; inspect + glass surface channels / error / skips; encoder health `media_encode` (+ mock note) |
+| Media-as-query (Vectors neighbors) | **Shipped** — `POST /api/memory/vectors/neighbors` with `att_id` (± `q`); GET remains atom_id / free-text; seed-aware `auto` (KD-M20) |
+| Glass Atoms / Vectors / Context MM honesty | **Shipped** — media chips, inventory, `media_encode` health, neighbor media attach/pick UX, Context media marker on media-backed hits |
 | Rectification stack (channel / joint / Lance-native / meal omit / glass honesty) | **Code landed** PR-R1–R5; **operator smoke dogfood still pending** |
-| Optional Nemotron runtime | **Shipped** (PR8) — real load when deps present; mock fallback when not; GPU packaging path **BUG-mem-gpu-01** still open |
+| Optional Nemotron runtime | **Shipped** (PR8) — real load when deps present; mock fallback when not; GPU packaging path **BUG-mem-gpu-01** still open; media path needs `qwen-omni-utils` (soft import; listed in `memory-embed`) |
 | Feature flags | **Default off** — dogfood must opt in; Gate B before product default-on |
-| Glass **Vectors** tab | **Live + honest** — channel auto/toggle, resolved channel, repair remaining, optimize notes, empty-state reasons (PR7 + PR-R5) |
-| Glass **Graph** tab | **Stub** — Phase **2a** (directed traversal); **out of scope** for Phase 2 |
-| Product default-on semantic | **Not** done — rectified dogfood + Gate B + operator sign-off still required |
+| Glass **Vectors** tab | **Live + honest** — channel auto/toggle, resolved channel, repair remaining, optimize notes, empty-state reasons (Phase 2 PR7 + PR-R5) + **MM media query / media_encode** (#124 PR5) |
+| Glass **Graph** tab | **Out of Phase 2 scope** — directed traversal is Phase **2a** (shipped separately; not MM) |
+| Product default-on semantic | **Not** done — dogfood + Gate B + operator sign-off still required |
 | Default `backend` | CI / factory default remains **jsonl** (no ANN); durable vectors require `backend=lance` + `elyra[memory-lance]` |
 | Small-N ANN IVF | Expected **not** built below `ann_ivf_min_vectors` (256); **`full_lance`** (or python rollback) is success path — not a product error |
 
@@ -56,9 +63,32 @@ Phase 2 adds **associative / semantic** structure as a *supporting* context chan
 | Budget split v2 | `elyra/memory/tokens.py` — `split_memory_budget_v2` + temporal floor |
 | Settings knobs | `elyra/memory/config.py` / `Settings.memory` (+ rectification + continuous-encode knobs; validated in `elyra/settings.py`) |
 | Encode ownership + optimize + meal wiring | `elyra/presence/worker.py` — `encode_owner` single-owner; continuous worker start/stop/restart/gap drain; idle drain **rollback only**; idle joint-repair + ANN optimize; rebuild notes |
-| Glass Vectors tab + APIs (PR7 + PR-R5) | Health honesty, channel auto/toggle, neighbors resolved channel, rebuild `notes[]` |
-| Glass Memory page | Context + Atoms + **Vectors live**; **Graph stub** (Phase 2a) |
-| Inspect DTOs for vectors | `elyra/memory/inspect.py` — encoder/index health, vector rows, neighbor hits, score_kind cosine |
+| Glass Vectors tab + APIs (Phase 2 PR7 + PR-R5 + MM PR4/PR5) | Health honesty (incl. `media_encode`), channel auto/toggle, neighbors resolved channel, rebuild `notes[]`, **media-as-query** |
+| Glass Memory page | Context + Atoms + **Vectors live** (MM media honesty); Graph is Phase **2a** |
+| Inspect DTOs for vectors | `elyra/memory/inspect.py` — encoder/index health, vector rows, neighbor hits, score_kind cosine; atom `embed_channels` / `embed_error` / `embed_media_skipped` |
+| Shared media resolve (MM PR1) | `elyra/memory/embed/encode.py` — `resolve_one_media` / `resolve_media_inputs` via MediaStore `blob_path` / `read_bytes` |
+| Encode diagnostics (MM PR2) | queue persists `embed_media_skipped`; mock/Nemotron `media_encode` in health; `encoder_health_block` promotes it |
+| Media-as-query API (MM PR4) | `POST /api/memory/vectors/neighbors` — `att_id` + optional `q`; KD-M20 seed-aware auto; omit reasons |
+| MM fixtures + hermetic matrix (MM PR1/PR3/PR6) | `tests/fixtures/mm_embed/` (`tiny.png` / `tiny.wav` / `tiny.mp4`); resolve / drain / A/V encode+query tests |
+
+### Multimodal embed buildout (MM #124 PR0–PR7) — product loop
+
+Closes the **ingest → encode → search → glass** multimodal loop that Phase 2 plumbing described but did not product-complete. Design: [design-mm-embed-buildout.md](../../../design/memory/design-mm-embed-buildout.md). Operator checklist (open): [mm-embed-dogfood.md](../mm-embed-dogfood.md).
+
+| PR | What (code) |
+|----|-------------|
+| **PR0** | Design supersede + OQ lock (docs) |
+| **PR1** | MediaStore-native resolve (`get` + `blob_path` / size-before-`read_bytes`); mime/filename classify; real-MediaStore hermetic tests + `tiny.png` |
+| **PR2** | Durable `embed_media_skipped`; `media_encode` on mock + inspect; `qwen-omni-utils` listed in `memory-embed` (soft import) |
+| **PR3** | Image-first drain → ready + joint text+image contracts; optional live encode markers |
+| **PR4** | Neighbors media-as-query API + MM search contracts (KD-M20 pairing) |
+| **PR5** | Glass Atoms / Vectors / Context MM honesty + Vectors media attach/pick UX |
+| **PR6** | Audio/video fixture matrix + encode/query hermetic coverage |
+| **PR7** | This architecture + program README honesty + design **Shipped** + dogfood STATE checklist |
+
+**Encode outcome / skip codes (stable product strings):** prefer `{mid}:missing`, `{mid}:no_path` (rare after PR1 when blob exists), `{mid}:unknown_type`, `{mid}:oversize`, `{mid}:channel_full:<mod>`, `{mid}:mm_utils_unavailable` (and related producer skips). Partial media keeps atom `ready` when text/joint path succeeds (OQ-M3 / KD20); glass must show skip list.
+
+**Claim boundary:** code + hermetic tests complete ≠ live dogfood signed ≠ Gate B default-on.
 
 ### Rectification (PR-R1–R5) — product path fixes
 
@@ -73,9 +103,9 @@ Dogfood on the initial PR1–PR9 stack showed a **dead semantic surface**: defau
 | **PR-R5** | Vectors glass: default `auto`, channel control, empty-state honesty, rebuild notes UX |
 | **PR-R6** | This architecture + README / known-bugs close-out (docs only) |
 
-**Not shipped in Phase 2 (by design):** directed multi-hop / temporary keep-set (Phase 2a), success-path / trajectory weights (Phase 3), historical glass→atom backfill, full hypergraph Graph UI, default-on semantic without Gate B, multi-channel ranking fusion / multi-try search (joint-primary only), optional 2D vector projection (KD18 non-gate), packaging/Tensile device-matrix close for **BUG-mem-gpu-01** (product continuous-encode path is separate — see design embed-async).
+**Not shipped in Phase 2 (by design):** directed multi-hop / temporary keep-set (Phase 2a — separate ship), success-path / trajectory weights (Phase 3), historical glass→atom backfill, full hypergraph Graph UI, default-on semantic without Gate B, multi-channel ranking fusion / multi-try search (joint-primary only; media-as-query uses **seed-aware single resolve**, not multi-try), multi-image bag encode (first-wins + `channel_full`), long-form video/streaming audio, optional 2D vector projection (KD18 non-gate), packaging/Tensile device-matrix close for **BUG-mem-gpu-01** (product continuous-encode path is separate — see design embed-async).
 
-**Deferred / follow-ups:** operator smoke + full dogfood on rectified + continuous-encode path; Gate B before flipping semantic defaults; Phase 2a Graph tab; optional 2D projection polish; packaging matrix for modern ROCm / CUDA / CPU.
+**Deferred / follow-ups:** operator smoke + full dogfood on rectified + continuous-encode + **MM** path ([mm-embed-dogfood.md](../mm-embed-dogfood.md)); Gate B before flipping semantic defaults; optional 2D projection polish; packaging matrix for modern ROCm / CUDA / CPU; hyperedge formation after MM dogfood.
 
 ---
 
@@ -509,10 +539,15 @@ Overview: `GET /api/memory` reports `tabs.vectors: {stub: false, phase: "2"}` an
 | `tests/test_memory_meal_semantic.py` | Budget v2; dedup; timeout; `no_hits` / `deduped`; meta |
 | `tests/test_memory_semantic_integration.py` | Flags off = Phase 1 parity; semantic on + mock + fake index |
 | `tests/test_memory_vectors_api.py` | Health honesty; neighbors auto; rebuild notes; fail closed |
+| `tests/test_memory_embed_resolve_media.py` | Real MediaStore resolve; extensionless blob classify; oversize without full read (MM PR1) |
+| `tests/test_memory_embed_diagnostics.py` | `embed_media_skipped` durability; `media_encode` health (MM PR2) |
+| `tests/test_memory_embed_mm_drain.py` | Image-first drain → ready + joint; optional live encode (MM PR3) |
+| `tests/test_memory_embed_mm_av.py` | Audio/video fixture matrix + query-seed path (MM PR6) |
+| Neighbors media-as-query | Covered in vectors/API suite + MM contracts (MM PR4) |
 | `tests/test_settings.py` | Invalid channel/backend/ivf min rejection |
 | Phase 1 suite | Still green with semantic defaults off |
 
-Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unavailable. Optional Nemotron path behind markers / missing-deps mock fallback.
+Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unavailable. Optional Nemotron / live media encode behind markers / missing-deps mock fallback.
 
 ---
 
@@ -521,6 +556,8 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unava
 | Document | Role |
 |----------|------|
 | [design-phase-2-rectification.md](../../../design/memory/design-phase-2-rectification.md) | **Normative fix plan** KD-R* + PR-R1–R6 (product-intent recovery) |
+| [design-mm-embed-buildout.md](../../../design/memory/design-mm-embed-buildout.md) | **MM loop** design + KD-M* + PR0–PR7 — **Shipped (code)**; dogfood open |
+| [mm-embed-dogfood.md](../mm-embed-dogfood.md) | Operator MM dogfood checklist (unchecked until live sign-off) |
 | [design-phase-2-implementation.md](../../../design/memory/design-phase-2-implementation.md) | Historical implementation design, KDs, PR plan (PR1–PR9) |
 | [design-phase-2-semantic.md](../../../design/memory/design-phase-2-semantic.md) | Short phase outline (points here + implementation + rectification) |
 | [design-embed-async-encode-worker.md](../../../design/embed/design-embed-async-encode-worker.md) | **Normative continuous encode** — EncodeWorker, EmbedderGate, single-owner, KD-E1–E18 |
@@ -544,11 +581,13 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 | Work | Role |
 |------|------|
 | **Operator smoke dogfood** | Enable `backend=lance` + embed/semantic flags; verify neighbors/meal/repair on live corpus (code rectification landed; verification pending) |
-| **Continuous encode dogfood** | Busy create→ready; `drain_ok_total` during multi-minute work; meal/API under text bulk; worker death resume; embed off→on — see **BUG-mem-gpu-01** product-path checklist (does **not** close packaging) |
-| **Gate B / default-on** | Dogfood mock → Nemotron → optional default-on; flip only after operator sign-off ([design-nemotron-runtime.md](../../../design/memory/design-nemotron-runtime.md)) |
+| **MM live dogfood** | Run [mm-embed-dogfood.md](../mm-embed-dogfood.md) — image-first attach→ready→neighbors media-as-query; A/V smoke; glass honesty. Code complete; **live sign-off open** |
+| **Continuous encode dogfood** | Busy create→ready; `drain_ok_total` during multi-minute work; meal/API under text bulk; worker death resume; embed off→on — see **BUG-mem-gpu-01** product-path checklist (does **not** close packaging); link #114 |
+| **Gate B / default-on** | Dogfood mock → Nemotron → optional default-on; flip only after operator sign-off ([design-nemotron-runtime.md](../../../design/memory/design-nemotron-runtime.md)). **Do not** flip from MM code-complete alone |
 | **BUG-mem-gpu-01** | Packaging / Tensile / multi-device matrix still Open; continuous encode **code path** shipped (worker + gate) |
 | **Optional 2D projection** | Non-gate polish for Vectors tab (KD18) |
-| **Phase 2a** | Directed traversal → **Graph** tab — **after** rectified semantic seeds |
+| **Hyperedge formation** | After MM dogfood (#98-class) — operator sequence MM → edges → traversal polish |
+| **Phase 2a residual** | Graph/traversal polish (#103/#105) — structural walk already shipped separately |
 | **Phase 3** | Procedural / success-path (evaluation-first); vector ANN ≠ procedure |
 
-Phase 2 product surface: meal semantic + vector search + **Vectors glass** + continuous background encode + architecture note, with rectification closing the joint-empty dogfood hole and embed-async closing idle-only corpus starvation. Graph/hypergraph UI is Phase 2a. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.
+Phase 2 product surface: meal semantic + vector search + **Vectors glass** + continuous background encode + **multimodal media channels + media-as-query** + architecture note, with rectification closing the joint-empty dogfood hole, embed-async closing idle-only corpus starvation, and MM buildout closing the MediaStore/glass product loop. Graph/hypergraph UI is Phase 2a. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.

@@ -7,16 +7,19 @@
 | **Product** | project-elyra |
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-05 |
-| **Status** | **Draft — OQs locked; implementation-ready** (rev 2026-08-05 review pass) |
+| **Status** | **Shipped (code)** — PR0–PR7 landed on `feature/mm-embed-buildout` (2026-08-05); **ready for merge to `working`**. Hermetic tests green. **Operator live dogfood still pending** (checklist recorded, not signed). **Not** Gate B / product default-on. |
 | **Topic branch** | `feature/mm-embed-buildout` (from `working`) |
 | **PR base** | `working` (integration tip; house branch law) |
 | **Depends on** | Phase 2 PR1–PR9 + rectification PR-R1–R5 + continuous encode (embed-async PR1–PR4) **shipped in code** |
 | **Related issues** | Umbrella **[#124](https://github.com/jtwolfe/project-elyra/issues/124)** (this buildout); [#80](https://github.com/jtwolfe/project-elyra/issues/80) (semantic dogfood residual), [#114](https://github.com/jtwolfe/project-elyra/issues/114) (busy encode dogfood), [#115](https://github.com/jtwolfe/project-elyra/issues/115) (GPU packaging — peer, not blocking image path on CPU/mock) |
 | **OQ lock** | M1 pin in `memory-embed`; **M2 multimodal-as-query required** (image/audio/video); M3 partial `ready`; M4 umbrella issue |
 | **Architecture (as-shipped)** | [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md) |
+| **Operator dogfood (STATE)** | [mm-embed-dogfood.md](../../state/memory/mm-embed-dogfood.md) — checklist open; code-complete claim only |
 | **Normative priors** | [design-phase-2-implementation.md](design-phase-2-implementation.md) (historical), [design-phase-2-rectification.md](design-phase-2-rectification.md), [design-nemotron-runtime.md](design-nemotron-runtime.md), [design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md), [design-glass-multimodal-attachments.md](../glass/design-glass-multimodal-attachments.md) |
 | **Engineering** | [engineering-principles.md](../../dev/engineering-principles.md) |
 | **Out of scope** | Hyperedge formation product (#98-class); Phase 2a traversal polish; Phase 3 procedural; product default-on Gate B for all installs |
+
+> **Ship honesty (2026-08-05):** The **ingest → encode → search → glass** multimodal loop is **complete in code** (MediaStore resolve via `blob_path`/`read_bytes`; durable `embed_media_skipped` + `media_encode` health; media-as-query neighbors API; Atoms/Vectors/Context glass honesty; image + audio/video hermetic matrix). Body sections below retain **design-time gap analysis** as archaeology — do not re-open PR1 as unfixed. **Do not** claim live operator dogfood complete or flip Gate B defaults without signed checklist evidence.
 
 > **Terminology (locked):** This design completes the **multimodal product loop** for Phase 2 **vector ANN / bonded multi-channel embeddings**. It does **not** own hypergraph edge formation or directed traversal product polish. Those follow **after** this buildout (operator sequence: MM → edges → traversal).
 
@@ -860,31 +863,9 @@ Do not start edge/traversal product work on this branch except to fix a hard blo
 
 ## Dogfood checklist (operator)
 
-Copy into issue or STATE when executing PR7.
+**Canonical STATE checklist (PR7):** [docs/state/memory/mm-embed-dogfood.md](../../state/memory/mm-embed-dogfood.md).
 
-### Text residual (link #80)
-
-- [ ] lance + semantic + embed: neighbors under `auto` non-empty on text corpus
-- [ ] `joint_repair_remaining` drains toward 0
-- [ ] meal semantic packs or honest omit
-
-### Busy encode (link #114)
-
-- [ ] under continuous wakes, `pending` → `ready` progresses
-
-### Multimodal (this design)
-
-- [ ] `media_encode` true after MM utils + Nemotron load (or false with clear reason)
-- [ ] mock/fallback backend: glass tooltip does not claim Nemotron omni when `backend=mock`
-- [ ] attach fixture image → atom `media_ids` → ready with `image` and/or multi joint
-- [ ] Vectors `vectors_by_channel` reflects media
-- [ ] text query finds image atom (joint/`auto`) when true multi-mod joint exists
-- [ ] **image-as-query** under `auto` resolves to modality (or documented fallback) and returns related neighbors; glass shows `resolved_channel` / `channel_reason`
-- [ ] smoke audio/video-as-query (PR4/PR6)
-- [ ] Glass Atoms/Vectors/Context show media + encode truth (partial skips visible)
-- [ ] short wav/mp4 corpus + query path (PR6 / PR4)
-- [ ] confirm no `no_path` / no extensionless-blob `unknown_type` on product MediaStore after PR1
-- [ ] promote/wake audit checklist A1–A5 green
+Items remain **unchecked** until an operator signs live evidence. Code-complete claim is hermetic suite + architecture honesty, **not** live dogfood.
 
 ---
 
@@ -892,6 +873,7 @@ Copy into issue or STATE when executing PR7.
 
 - [engineering-principles.md](../../dev/engineering-principles.md)
 - [docs/state/memory/README.md](../../state/memory/README.md)
+- [mm-embed-dogfood.md](../../state/memory/mm-embed-dogfood.md) — operator checklist (open)
 - [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md)
 - [design-phase-2-rectification.md](design-phase-2-rectification.md)
 - [design-nemotron-runtime.md](design-nemotron-runtime.md)
@@ -1047,33 +1029,33 @@ PR7  docs architecture closeout + dogfood checklist + issue comments
 | | |
 |--|--|
 | **PR title** | `docs(memory): MM embed buildout closeout + architecture honesty (#124)` |
-| **Files/components** | `docs/state/memory/architecture/phase-2-semantic.md`; memory README; this design Status → Shipped; dogfood checklist under STATE or design appendix; issue comments on #80/#114/#124 |
-| **Dependencies** | PR4+PR5 (+PR6 if claimed) |
-| **Description** | Update architecture Phase 2 honesty banner + memory README status; record dogfood evidence; mark design **Shipped** when merged to `working`. |
-| **Out** | Gate B default-on flip (separate decision) |
+| **Files/components** | `docs/state/memory/architecture/phase-2-semantic.md`; memory README; this design Status → **Shipped (code)** / ready for `working` merge; [mm-embed-dogfood.md](../../state/memory/mm-embed-dogfood.md); `docs/design/README.md`; issue comments on #80/#114/#124 |
+| **Dependencies** | PR4+PR5 (+PR6 claimed on tip) |
+| **Description** | Update architecture Phase 2 honesty banner + memory README for MM loop **code complete** (MediaStore resolve, media-as-query, glass, diagnostics); record dogfood checklist (unchecked — no live sign-off claimed); mark design **Shipped** for merge-to-working. |
+| **Out** | Gate B default-on flip (separate decision); claiming live dogfood complete without evidence |
+| **Done (PR7)** | Docs honesty matches code; design catalog **Shipped**; dogfood STATE file present with open boxes |
 
 ---
 
-## Appendix A — Verified code anchors (2026-08-05)
+## Appendix A — Design-time code anchors (pre-PR1, 2026-08-05)
 
-| Claim | Anchor |
+> **Archaeology only.** Rows describe the gap inventory at design lock. After PR1–PR5 those “broken” surfaces are fixed in code — see architecture Phase 2 MM close-out. Do not re-open as open bugs.
+
+| Claim (design-time) | Anchor |
 |-------|--------|
 | Attachment has no path | `elyra/media/types.py` `Attachment` fields |
 | Store blob authority | `MediaStore.blob_path`, `read_bytes`, `get` |
 | Blob path extensionless | `blob_relpath` → `blobs/<sha[:2]>/<sha>` |
-| Broken resolve | `encode.resolve_media_inputs` L115–142 (`path` / `path_for`) |
-| MIME field name | Attachment.`mime` vs encode `mime_type`/`content_type` |
-| Skip list not durable | `queue.py` updates omit `embed_media_skipped` |
+| Broken resolve (**fixed PR1**) | was `encode.resolve_media_inputs` path/`path_for` only |
+| MIME field name (**fixed PR1**) | Attachment.`mime` (+ filename classify) |
+| Skip list not durable (**fixed PR2**) | was `queue.py` omit of `embed_media_skipped` |
 | Nemotron health has media_encode | `runtime.py` health dict |
-| Mock health lacks media_encode | `mock.py` health |
-| Health block omits media_encode | `inspect.encoder_health_block` |
-| Neighbors text-only | `api._get_memory_vectors_neighbors` |
+| Mock health lacks media_encode (**fixed PR2**) | was `mock.py` health |
+| Health block omits media_encode (**fixed PR2**) | was `inspect.encoder_health_block` |
+| Neighbors text-only (**fixed PR4**) | was GET-only; POST media-as-query now |
 | Gated media encode exists | `GatedEmbedder.encode_image/audio/video` |
-| `seed_channels` reserved unused | `index.resolve_search_channel` (`del seed_channels`) |
 | Wake media_ids | `presence/worker.py` `_media_ids_from_wake` |
-| Fake store in tests | `tests/test_memory_embed_nemotron.py` `_Store.path_for` |
-| memory-embed deps | `pyproject.toml` L29–35 — no qwen-omni-utils |
-| Caps | `memory/config.py` embed_media_max_bytes=8e6; `media/upload.py` MAX_MEDIA_REQUEST_BYTES=64MiB |
+| Caps | `memory/config.py` embed_media_max_bytes; `media/upload.py` MAX_MEDIA_REQUEST_BYTES |
 
 ---
 
