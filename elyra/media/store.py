@@ -227,6 +227,18 @@ class MediaStore:
     def blob_path(self, sha256: str) -> Path:
         return self.blobs_dir / blob_relpath(sha256)
 
+    def resolve_blob_path(self, att_id: str) -> Path | None:
+        """Return blob filesystem path when meta + blob exist; else None.
+
+        Thin helper for encode resolve (KD-M14): consumers should not invent
+        path fields on Attachment.
+        """
+        att = self.get(att_id)
+        if att is None or not att.sha256:
+            return None
+        p = self.blob_path(att.sha256)
+        return p if p.is_file() else None
+
     def meta_path(self, att_id: str) -> Path:
         safe = validate_att_id(att_id)
         root = self.meta_dir.resolve()
@@ -424,7 +436,9 @@ class MediaStore:
                 out.append(child.stem)
         return out
 
-    def delete_attachment(self, att_id: str, *, remove_blob_if_orphan: bool = True) -> bool:
+    def delete_attachment(
+        self, att_id: str, *, remove_blob_if_orphan: bool = True
+    ) -> bool:
         """Remove meta; optionally remove blob when no other meta references it.
 
         Returns True if meta existed. Used by tests/GC; reset wipes whole tree.
