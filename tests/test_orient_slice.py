@@ -117,6 +117,36 @@ def test_format_skill_catalog_nonpositive_budget_is_empty():
     assert "talk" in format_skill_catalog(catalog, max_tokens=None)
 
 
+def test_bundled_skill_catalog_size_bands() -> None:
+    """Uncapped bundled catalog stays under meal soft/hard token bands.
+
+    Historical soft cap was 400 tokens (dropped late-alpha skills like talk).
+    Bands: soft/warn = 800 (2×), hard/error = 1600 (4×). Meal-content review
+    will re-tune before v0.1; hard fail should never hit in practice.
+    """
+    import warnings
+
+    from elyra.skills.catalog import SkillCatalog
+
+    catalog = SkillCatalog().catalog()
+    full = format_skill_catalog(catalog, max_tokens=None)
+    tokens = estimate_tokens(full)
+    soft_warn = 800
+    hard_fail = 1600
+    assert "- talk:" in full, "full catalog must include talk (late-alpha skill)"
+    assert tokens < hard_fail, (
+        f"bundled skill catalog is {tokens} tokens (hard budget {hard_fail}); "
+        "review meal content before this ceiling"
+    )
+    if tokens >= soft_warn:
+        warnings.warn(
+            f"bundled skill catalog is {tokens} tokens (soft budget {soft_warn}); "
+            "review meal content before further growth",
+            UserWarning,
+            stacklevel=1,
+        )
+
+
 # ---------------------------------------------------------------------------
 # A. Social override (ledger ignored)
 # ---------------------------------------------------------------------------

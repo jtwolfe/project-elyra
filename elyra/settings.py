@@ -79,7 +79,9 @@ class LoopSettings:
     # of this window (runtime meal_budget.json; default 0.5 → 250k).
     model_context_window_tokens: int = MODEL_CONTEXT_WINDOW_TOKENS
     # Orient slice budgets (skill catalog + goals/tasks in outer meal).
-    orient_skill_catalog_max_tokens: int = 400
+    # Soft operating budget (2× historical 400). Full bundled catalog is ~573
+    # tokens today; meal-content review will re-tune before v0.1.
+    orient_skill_catalog_max_tokens: int = 800
     orient_goals_max_tokens: int = 600
     # Optional generation lever (K12 / item 5): pin tool_choice=required on the
     # hop while a commit-eligible skill is pending after load_skill. Default OFF;

@@ -1248,9 +1248,8 @@ def test_rebuild_outer_injects_goals_catalog_and_bias(paths):
         assert "Wire rebuild_outer" in orient_body
         assert BIAS_TALK in orient_body
         # Catalog from bundled skills — exact bullet shape, not incidental text.
-        # Assert an alphabetically early skill: under orient_skill_catalog_max_tokens
-        # trailing skills (e.g. talk) may drop when the catalog grows.
-        assert "- create-tool:" in orient_body
+        # talk is alphabetically late; soft budget (800) must still fit the full list.
+        assert "- talk:" in orient_body
         assert "{{GOALS}}" not in orient_body
         assert "{{SKILL_CATALOG}}" not in orient_body
         assert "{{SKILL_BIAS}}" not in orient_body

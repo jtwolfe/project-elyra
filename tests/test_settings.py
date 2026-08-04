@@ -29,7 +29,7 @@ def test_default_settings_match_design():
     assert s.loop.in_turn_max_tokens == 250_000
     assert s.loop.tool_result_max_chars == 8000
     assert s.loop.generation_max_tokens == 8192
-    assert s.loop.orient_skill_catalog_max_tokens == 400
+    assert s.loop.orient_skill_catalog_max_tokens == 800
     assert s.loop.orient_goals_max_tokens == 600
     # K12 / item 5: optional post-load tool_choice pin — default OFF
     assert s.loop.post_load_skill_tool_choice_required is False

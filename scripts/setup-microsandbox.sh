@@ -114,20 +114,22 @@ async def main() -> None:
         "/workspace/tools": Volume.bind(str(host / "tools"), readonly=False),
     }
     # Match product default (ELYRA_SANDBOX_NETWORK / public_only egress).
-    # microsandbox 0.6.x: public_only removed → from_profiles("public"); fail closed.
+    # Pinned product: microsandbox==0.6.8 → from_profiles("public").
+    # Legacy Network.public_only is dual-map backup only — remove prior to v0.1.
     pol = (os.environ.get("ELYRA_SANDBOX_NETWORK") or "public_only").strip().lower()
     if pol == "none":
         net = Network.none()
     elif pol == "allow_all":
         net = Network.allow_all()
-    elif callable(getattr(Network, "public_only", None)):
-        net = Network.public_only()
     elif callable(getattr(Network, "from_profiles", None)):
         net = Network.from_profiles("public")
+    elif callable(getattr(Network, "public_only", None)):
+        # TODO(pre-v0.1): drop legacy public_only dual-map once pin is universal.
+        net = Network.public_only()
     else:
         raise AttributeError(
-            "microsandbox Network has neither public_only nor from_profiles; "
-            "upgrade microsandbox or set ELYRA_SANDBOX_NETWORK=allow_all|none"
+            "microsandbox Network has neither from_profiles nor public_only; "
+            "install microsandbox==0.6.8 or set ELYRA_SANDBOX_NETWORK=allow_all|none"
         )
     sb = await Sandbox.create(
         name,

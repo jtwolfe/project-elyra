@@ -13,7 +13,8 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 # Optional warm microVM isolation. Default install stays hermetic (Fake / host stub).
-sandbox = ["microsandbox>=0.6.0"]
+# Pin 0.6.8 (Network.from_profiles). Dual-map legacy public_only is temporary.
+sandbox = ["microsandbox==0.6.8"]
 # Optional native web search (web_search builtin). Fail-closed without this extra.
 search = ["ddgs>=9.0"]
 # Optional Playwright browser primitives (host builtins). Also run:

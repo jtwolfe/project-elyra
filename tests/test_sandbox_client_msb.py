@@ -192,5 +192,5 @@ def test_build_create_kwargs_public_only_fails_closed_without_mapping(
     for _guest, host_rel, _ro in MOUNT_SPEC:
         (root / host_rel).mkdir(parents=True, exist_ok=True)
 
-    with pytest.raises(AttributeError, match="from_profiles"):
+    with pytest.raises(AttributeError, match="from_profiles nor public_only"):
         client.build_create_kwargs(str(root), env=guest_env())

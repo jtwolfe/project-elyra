@@ -21,9 +21,14 @@ def _msb_network(Network: Any) -> Any:
     """Map resolved policy id → microsandbox Network object.
 
     Product policy ids: ``none`` | ``public_only`` | ``allow_all``.
-    microsandbox 0.6.x removed ``Network.public_only`` in favor of
-    ``Network.from_profiles("public")``; keep a fallback for older SDKs
-    that still expose ``public_only``.
+
+    Pinned product SDK is microsandbox **0.6.8**, where ``Network.public_only``
+    was removed in favor of ``Network.from_profiles("public")``. Prefer that
+    path first.
+
+    Dual map (legacy ``public_only``) is a temporary backup for older SDKs
+    still on developer machines. **Remove the public_only branch prior to
+    v0.1** (full pre-v0.1 code review pass will sweep this; no tracking issue).
 
     Fail closed when neither public mapping exists — do **not** silently
     fall back to ``allow_all`` (operator must set ELYRA_SANDBOX_NETWORK=allow_all
@@ -34,17 +39,18 @@ def _msb_network(Network: Any) -> Any:
         return Network.none()
     if policy == "allow_all":
         return Network.allow_all()
-    # public_only (default product egress for tool dogfood)
-    public_only = getattr(Network, "public_only", None)
-    if callable(public_only):
-        return public_only()
+    # public_only product policy id → 0.6.8 from_profiles; legacy public_only backup
     from_profiles = getattr(Network, "from_profiles", None)
     if callable(from_profiles):
         return from_profiles("public")
+    # TODO(pre-v0.1): drop legacy public_only dual-map once pin is universal.
+    public_only = getattr(Network, "public_only", None)
+    if callable(public_only):
+        return public_only()
     raise AttributeError(
-        "microsandbox Network has neither public_only nor from_profiles; "
-        "upgrade microsandbox, or set ELYRA_SANDBOX_NETWORK=allow_all / none "
-        "explicitly"
+        "microsandbox Network has neither from_profiles nor public_only; "
+        "install microsandbox==0.6.8 (elyra[sandbox]), or set "
+        "ELYRA_SANDBOX_NETWORK=allow_all / none explicitly"
     )
 
 

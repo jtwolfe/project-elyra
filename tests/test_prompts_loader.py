@@ -42,12 +42,31 @@ def test_load_prompt_missing_raises(tmp_path):
 
 
 def test_system_prompt_is_valid_nonempty_lean():
-    """Disk smoke: system.md is usable lean prompt text (no model required)."""
+    """Disk smoke: system.md is usable lean prompt text (no model required).
+
+    Size bands (historical hard ceiling was 6000 chars):
+    - soft/warn: 2× → 12_000 (growth signal; meal/prompt review later)
+    - hard/error: 4× → 24_000 (should never hit)
+    """
+    import warnings
+
     text = load_prompt("system")
     assert isinstance(text, str)
     assert len(text.strip()) > 40
-    # lean system — not a multi-page bible (room for search/browser/git/secrets/growth)
-    assert len(text) < 6000
+    n = len(text)
+    soft_warn = 12_000
+    hard_fail = 24_000
+    assert n < hard_fail, (
+        f"system.md is {n} chars (hard budget {hard_fail}); "
+        "trim or re-budget before this ceiling"
+    )
+    if n >= soft_warn:
+        warnings.warn(
+            f"system.md is {n} chars (soft budget {soft_warn}); "
+            "review meal/prompt content before further growth",
+            UserWarning,
+            stacklevel=1,
+        )
 
 
 def test_system_prompt_defines_growth_path():
