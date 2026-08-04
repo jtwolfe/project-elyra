@@ -32,8 +32,26 @@ _META_ENCODE_OK = "embed_encode_ok"
 _META_CONTENT_FP = "embed_content_fp"
 _META_ENCODED_AT = "embed_encoded_at"
 _META_CHANNELS = "embed_channels"
+_META_MEDIA_SKIPPED = "embed_media_skipped"
 
 _OVERFLOW_ERROR = "queue_overflow"
+
+
+def _copy_media_skipped(result: Any, updates: dict[str, Any]) -> None:
+    """Copy ``embed_media_skipped`` from EncodeResult.meta when present (KD-M3).
+
+    Applied on ready / failed / skipped / media_unresolved paths so glass can
+    always read the last skip inventory. Non-empty lists are always persisted;
+    empty lists are only written when the key is explicitly present on result
+    meta (clears a prior partial-skip inventory on clean re-encode).
+    """
+    meta = getattr(result, "meta", None) or {}
+    if not isinstance(meta, Mapping):
+        return
+    if _META_MEDIA_SKIPPED not in meta:
+        return
+    skipped = meta.get(_META_MEDIA_SKIPPED) or []
+    updates[_META_MEDIA_SKIPPED] = list(skipped)
 
 
 class EncodePriority(str, Enum):
@@ -509,6 +527,8 @@ class EncodeQueue:
 
         attempts = int(meta.get(_META_ATTEMPTS) or 0) + 1
         updates: dict[str, Any] = {_META_ATTEMPTS: attempts}
+        # KD-M3: durable skip inventory on every outcome that carries it.
+        _copy_media_skipped(result, updates)
 
         # Media-only atom with unresolved media: leave pending (retry when
         # MediaStore is available). Do not burn toward permanent failed/skipped.

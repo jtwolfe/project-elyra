@@ -101,12 +101,15 @@ class MockEmbedder:
         return self._model_id
 
     def health(self) -> dict[str, Any]:
+        # media_encode: mock accepts media inputs (deterministic hash) when open.
+        # Does not mean Nemotron omni packing is configured (KD-M4).
         return {
             "ok": not self._closed,
             "device": self._device,
             "model_id": self._model_id,
             "dim": self._dim,
             "backend": "mock",
+            "media_encode": not self._closed,
             "error": "closed" if self._closed else None,
         }
 

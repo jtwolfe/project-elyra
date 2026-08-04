@@ -196,8 +196,18 @@ def atom_to_list_row(atom: Atom) -> dict[str, Any]:
     }
 
 
-def atom_to_detail(atom: Atom) -> dict[str, Any]:
-    """Fuller atom payload for drill-down (still no secrets; text capped)."""
+def atom_to_detail(
+    atom: Atom,
+    *,
+    media_store: Any | None = None,
+) -> dict[str, Any]:
+    """Fuller atom payload for drill-down (still no secrets; text capped).
+
+    Promotes encode diagnostics from ``atom.meta`` for glass Atoms detail
+    (KD-M3): ``embed_channels``, ``embed_error``, ``embed_media_skipped``.
+    Best-effort media inventory (id / kind / mime / filename / url) when
+    ``media_store`` is provided; never includes blob bytes or secrets.
+    """
     row = atom_to_dict(atom)
     text = row.get("content_text") or ""
     if isinstance(text, str) and len(text) > _ATOM_TEXT_CAP:
@@ -206,6 +216,46 @@ def atom_to_detail(atom: Atom) -> dict[str, Any]:
     else:
         row["content_truncated"] = False
     # content_ref may be a relative blob path — fine for operators; not a secret.
+
+    meta = atom.meta or {}
+    channels = meta.get("embed_channels")
+    if isinstance(channels, (list, tuple)):
+        row["embed_channels"] = [str(c) for c in channels if c]
+    else:
+        row["embed_channels"] = []
+    err = meta.get("embed_error")
+    row["embed_error"] = str(err) if err else None
+    skipped = meta.get("embed_media_skipped")
+    if isinstance(skipped, (list, tuple)):
+        row["embed_media_skipped"] = [str(s) for s in skipped if s is not None]
+    else:
+        row["embed_media_skipped"] = []
+
+    # Optional media inventory for glass (no blob bytes).
+    media_ids = list(atom.media_ids or ())
+    inventory: list[dict[str, Any]] = []
+    for mid in media_ids:
+        if not mid:
+            continue
+        entry: dict[str, Any] = {
+            "id": str(mid),
+            "kind": None,
+            "mime": None,
+            "filename": None,
+            "url": f"/api/media/{mid}",
+        }
+        if media_store is not None:
+            try:
+                get_fn = getattr(media_store, "get", None)
+                att = get_fn(str(mid)) if callable(get_fn) else None
+                if att is not None:
+                    entry["kind"] = getattr(att, "kind", None) or None
+                    entry["mime"] = getattr(att, "mime", None) or None
+                    entry["filename"] = getattr(att, "filename", None) or None
+            except Exception:  # noqa: BLE001 — inventory is best-effort
+                pass
+        inventory.append(entry)
+    row["media"] = inventory
     return row
 
 
@@ -332,6 +382,10 @@ def atom_to_vector_row(atom: Atom) -> dict[str, Any]:
         row["embed_model"] = str(meta.get("embed_model"))
     if meta.get("embed_encoded_at"):
         row["encoded_at"] = str(meta.get("embed_encoded_at"))
+    # Partial-encode honesty for Vectors list (KD-M3); glass may badge chips.
+    skipped = meta.get("embed_media_skipped")
+    if isinstance(skipped, (list, tuple)) and skipped:
+        row["embed_media_skipped"] = [str(s) for s in skipped if s is not None]
     return row
 
 
@@ -625,6 +679,9 @@ def encoder_health_block(
         "model_id": model_pin or None,
         "dim": None,
         "loaded": embedder is not None,
+        # media_encode: can this instance accept media inputs (KD-M4)?
+        # Null until embedder health is read; derived below when absent.
+        "media_encode": None,
         "queue_depth": 0,
         "queue_depth_by_priority": _empty_depth_by_priority(),
         "queue_max": int(getattr(cfg, "encode_queue_max", 1024) or 1024)
@@ -679,6 +736,8 @@ def encoder_health_block(
             block["error"] = "embed_disabled"
         else:
             block["error"] = "encoder_not_loaded"
+        # No embedder → media encode unavailable (honest null / false).
+        block["media_encode"] = False
         return block
 
     try:
@@ -697,9 +756,31 @@ def encoder_health_block(
         for key in ("requested_backend", "requested_model_id", "note"):
             if key in health and health[key] is not None:
                 block[key] = health[key]
+        # KD-M4: promote media_encode; derive when health omits the key.
+        if "media_encode" in health:
+            me = health.get("media_encode")
+            block["media_encode"] = None if me is None else bool(me)
+        else:
+            be = str(block.get("backend") or "").lower()
+            if be == "mock":
+                block["media_encode"] = bool(block.get("ok"))
+            elif be == "nemotron":
+                # Unloaded / unknown — null (not a false claim).
+                block["media_encode"] = None
+            else:
+                block["media_encode"] = None
+        # Optional tooltip honesty for glass (mock fallback vs real omni).
+        if block.get("media_encode") is True:
+            if str(block.get("backend") or "").lower() == "mock":
+                block["media_encode_note"] = "mock"
+            elif str(block.get("backend") or "").lower() == "nemotron":
+                block["media_encode_note"] = "nemotron_mm_utils"
+        elif block.get("media_encode") is False:
+            block["media_encode_note"] = "install_qwen_omni_utils"
     except Exception as exc:  # noqa: BLE001
         block["ok"] = False
         block["error"] = str(exc) or type(exc).__name__
+        block["media_encode"] = None
     return block
 
 
