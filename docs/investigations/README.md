@@ -16,8 +16,8 @@ Sealed forensic packages, post-ship review islands, and host-specific freeze bag
 | Package | Role | Old path (pre-PR5) |
 |---------|------|--------------------|
 | [lance-debug1/](lance-debug1/) | Sealed Lance load-truncation inspection + product-fix design notes | `docs/lance-debug1/` |
-| [meal-continuity-review/](meal-continuity-review/) | BUG-meal-03 meal/continuity fault isolation package | `docs/investigations/meal-continuity-review/` |
-| [radeon-vii-freezes/](radeon-vii-freezes/) | LuxPrimata pip / GPU-stack freezes (forensics; not portable restore) | `docs/investigations/radeon-vii-freezes/` |
+| [meal-continuity-review/](meal-continuity-review/) | BUG-meal-03 meal/continuity fault isolation package | `docs/stretch-2/meal-continuity-review/` |
+| [radeon-vii-freezes/](radeon-vii-freezes/) | LuxPrimata pip / GPU-stack freezes (forensics; not portable restore) | `docs/radeon-vii-dev/freezes/` |
 
 ## Rules (KD12)
 
