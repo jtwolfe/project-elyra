@@ -61,8 +61,13 @@ def resolve_search_channel(
 
     While ``joint_repair_remaining > 0``, auto prefers text (or first sole
     modality with coverage) so product search does not lock onto sparse joint.
+
+    **KD-M20 seed-aware auto:** when ``seed_channels`` is a sole media modality
+    (``image`` / ``audio`` / ``video`` with no text), prefer that modality
+    channel when covered; else joint if covered; else first sole with coverage.
+    Text+media seeds (or no seed) keep joint-primary auto. Explicit ``channel=``
+    always wins regardless of seed.
     """
-    del seed_channels  # optional hint reserved for future; unused in v1
     req = (request or "").strip().lower()
     if not req:
         req = "auto"
@@ -76,6 +81,47 @@ def resolve_search_channel(
     counts = dict(vectors_by_channel or {})
     remaining = max(0, int(joint_repair_remaining))
 
+    # Normalize seed channel hints (KD-M20).
+    seed_mods: list[str] = []
+    if seed_channels:
+        for raw in seed_channels:
+            s = str(raw or "").strip().lower()
+            if s in ("text", "image", "audio", "video") and s not in seed_mods:
+                seed_mods.append(s)
+    media_seeds = [m for m in seed_mods if m in ("image", "audio", "video")]
+    has_text_seed = "text" in seed_mods
+    # Sole media seed: exactly one media modality and no text.
+    sole_media: str | None = (
+        media_seeds[0]
+        if len(media_seeds) == 1 and not has_text_seed and len(seed_mods) == 1
+        else None
+    )
+
+    if sole_media is not None:
+        mod = sole_media
+        if remaining > 0:
+            # Repair pending: still prefer matching modality when covered so
+            # incomplete joint is not locked; else text / other sole / empty.
+            if int(counts.get(mod) or 0) > 0:
+                return mod, f"auto_seed_{mod}_repair_pending"
+            if int(counts.get("text") or 0) > 0:
+                return "text", "auto_text_repair_pending"
+            for ch in ("image", "audio", "video"):
+                if int(counts.get(ch) or 0) > 0:
+                    return ch, f"auto_{ch}_repair_pending"
+            return "joint", "auto_empty_repair_pending"
+        if int(counts.get(mod) or 0) > 0:
+            return mod, f"auto_seed_{mod}"
+        if int(counts.get("joint") or 0) > 0:
+            return "joint", "auto_joint_seed_fallback"
+        if int(counts.get("text") or 0) > 0:
+            return "text", "auto_text_seed_fallback"
+        for ch in ("image", "audio", "video"):
+            if int(counts.get(ch) or 0) > 0:
+                return ch, f"auto_{ch}"
+        return "joint", "auto_empty"
+
+    # Text-only / text+media / no seed: joint-primary (existing KD-R2 policy).
     if remaining > 0:
         if int(counts.get("text") or 0) > 0:
             return "text", "auto_text_repair_pending"

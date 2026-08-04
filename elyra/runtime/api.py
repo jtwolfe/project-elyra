@@ -13,6 +13,7 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   device-code; never returns tokens or device_code; optional loopback Origin),
   memory inspect GET /api/memory/* (PR9 — meal context + atoms, read-only;
   Phase 2 PR7 — vectors health/status/neighbors;
+  MM #124 PR4 — POST vectors/neighbors media-as-query (att_id ± q);
   Phase 2a PR-A5 — graph overview/session/neighbors + optional debug POST).
 Out of scope: Glass draft editors, multi-party chat protocol,
   TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
@@ -522,6 +523,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/memory/vectors/rebuild":
             self._post_memory_vectors_rebuild(body)
+            return
+
+        if path == "/api/memory/vectors/neighbors":
+            self._post_memory_vectors_neighbors(body)
             return
 
         if path == "/api/memory/ladder/rebuild":
@@ -1354,30 +1359,17 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def _get_memory_vectors_neighbors(self, qs: dict[str, list[str]]) -> None:
         """GET /api/memory/vectors/neighbors — top-k by atom_id or free-text q.
 
-        Read-only. No raw 2048-d vectors in the response. Fail soft with empty
-        neighbors when encoder/index unavailable (may no-op).
-
-        Channel policy (PR-R5 / KD-R16): default ``channel=auto``; resolve once
-        from index health, then query-vector + ``search(concrete)`` on that
-        same snapshot. Response echoes request, ``resolved_channel``, and
-        ``channel_reason``.
+        Media-as-query uses POST (KD-M17). Shared body with
+        :meth:`_neighbors_search`.
         """
-        from elyra.memory.index import resolve_search_channel
-        from elyra.memory.inspect import (
-            index_health_block,
-            neighbor_hit_to_inspect,
-            query_vector_for_atom,
-            resolve_neighbor_k,
-        )
+        from elyra.memory.inspect import resolve_neighbor_k
 
-        flags = self._memory_flags_block()
         atom_id_raw = (qs.get("atom_id") or [None])[0]
         q_raw = (qs.get("q") or [None])[0]
         channel_req = (
             (qs.get("channel") or ["auto"])[0] or "auto"
         ).strip() or "auto"
         k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
-
         atom_id = (
             atom_id_raw.strip()
             if isinstance(atom_id_raw, str) and atom_id_raw.strip()
@@ -1386,17 +1378,115 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         query_text = (
             q_raw.strip() if isinstance(q_raw, str) and q_raw.strip() else None
         )
-        if not atom_id and not query_text:
+        self._neighbors_search(
+            atom_id=atom_id,
+            query_text=query_text,
+            att_id=None,
+            channel_req=channel_req,
+            k=k,
+        )
+
+    def _post_memory_vectors_neighbors(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/vectors/neighbors — media-as-query + text/atom seeds.
+
+        Preferred path for ``att_id`` (KD-M16/M17). JSON body:
+        ``{q?, att_id?, atom_id?, channel?, k?}``. Thin parse only — resolve
+        via shared ``resolve_one_media`` (KD-M21); no MIME/path/size logic here.
+        """
+        from elyra.memory.inspect import resolve_neighbor_k
+
+        if not isinstance(body, dict):
+            body = {}
+
+        def _str_field(key: str) -> str | None:
+            raw = body.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return raw.strip()
+            return None
+
+        atom_id = _str_field("atom_id")
+        query_text = _str_field("q")
+        att_id = _str_field("att_id")
+        channel_raw = body.get("channel")
+        channel_req = (
+            str(channel_raw).strip()
+            if isinstance(channel_raw, str) and str(channel_raw).strip()
+            else "auto"
+        ) or "auto"
+        k = resolve_neighbor_k(body.get("k", 12))
+        self._neighbors_search(
+            atom_id=atom_id,
+            query_text=query_text,
+            att_id=att_id,
+            channel_req=channel_req,
+            k=k,
+        )
+
+    def _neighbors_search(
+        self,
+        *,
+        atom_id: str | None,
+        query_text: str | None,
+        att_id: str | None,
+        channel_req: str,
+        k: int,
+    ) -> None:
+        """Shared GET/POST neighbors implementation (KD-M15–M17, M20–M21).
+
+        Read-only ANN. No raw 2048-d vectors. Operational unavailability →
+        200 + ``omitted_reason``; client input errors → 400 (OQ-M5).
+        Never silently demotes media queries to empty-text search.
+        """
+        from elyra.memory.embed.encode import resolve_one_media
+        from elyra.memory.embed.types import ModalityParts
+        from elyra.memory.index import resolve_search_channel
+        from elyra.memory.inspect import (
+            index_health_block,
+            neighbor_hit_to_inspect,
+            query_vector_for_atom,
+        )
+
+        flags = self._memory_flags_block()
+        channel_req = (channel_req or "auto").strip() or "auto"
+
+        has_atom = bool(atom_id)
+        has_q = bool(query_text)
+        has_att = bool(att_id)
+        if not has_atom and not has_q and not has_att:
             self._json(
                 400,
                 {
                     "ok": False,
-                    "error": "atom_id or q required",
+                    "error": "query_required",
+                    "omitted_reason": "query_required",
                     "neighbors": [],
                     "memory": flags,
                 },
             )
             return
+
+        # Prefer atom_id when combined with other seeds (stored-vector path).
+        # Media+text without atom_id is the multimodal query path (KD-M15).
+        use_atom = has_atom
+        use_media = has_att and not use_atom
+        use_text = has_q and not use_atom
+
+        # ── att_id shape validation (400 before store work) ──────────────
+        if has_att:
+            try:
+                att_id = validate_att_id(str(att_id))
+            except ValueError:
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "invalid_att_id",
+                        "omitted_reason": "invalid_att_id",
+                        "neighbors": [],
+                        "memory": flags,
+                    },
+                )
+                return
 
         try:
             store = self.worker._ensure_memory_store()  # noqa: SLF001
@@ -1412,46 +1502,197 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             )
             return
 
-        embedder, _queue, index = self._vectors_worker_handles()
-        # One health snapshot for resolve + response honesty (KD-R16).
+        _embedder, _queue, index = self._vectors_worker_handles()
         idx_health = index_health_block(index)
-        resolved_channel, channel_reason = resolve_search_channel(
-            channel_req,
-            vectors_by_channel=idx_health.get("vectors_by_channel") or {},
-            joint_repair_remaining=int(
-                idx_health.get("joint_repair_remaining") or 0
-            ),
-        )
+        vectors_by_channel = idx_health.get("vectors_by_channel") or {}
+        joint_repair_remaining = int(idx_health.get("joint_repair_remaining") or 0)
+
+        # Seed channel hints for KD-M20 (filled after media resolve).
+        seed_channels: list[str] | None = None
+        query_modality: str | None = None
+        media_input: bytes | str | None = None
+        source = "atom" if use_atom else ("text" if use_text and not use_media else "media")
+        omit_reason: str | None = None
+        query_vec: list[float] | None = None
+        seed_atom_id: str | None = atom_id if use_atom else None
+        resolved_channel = "joint"
+        channel_reason = "auto_empty"
+        searched = False
 
         def _query_block(
             *,
-            source: str,
+            source_val: str,
             extra: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             block: dict[str, Any] = {
-                "atom_id": atom_id,
+                "atom_id": atom_id if use_atom else None,
                 "q": query_text,
+                "att_id": att_id if use_media else None,
+                "query_modality": query_modality,
                 "channel": channel_req,
                 "resolved_channel": resolved_channel,
                 "channel_reason": channel_reason,
                 "k": k,
-                "source": source,
+                "source": source_val,
             }
             if extra:
                 block.update(extra)
             return block
 
-        query_vec: list[float] | None = None
-        seed_atom_id: str | None = atom_id
-        source = "atom" if atom_id else "text"
-        omit_reason: str | None = None
-        searched = False
+        def _index_block() -> dict[str, Any]:
+            return {
+                "search_mode": idx_health.get("search_mode"),
+                "ann_index_built": idx_health.get("ann_index_built"),
+                "vectors_by_channel": idx_health.get("vectors_by_channel"),
+                "joint_repair_remaining": idx_health.get("joint_repair_remaining"),
+                "vectors_ready": idx_health.get("vectors_ready"),
+            }
 
-        if atom_id:
-            # Query vector for concrete resolved channel only (no cross-channel
-            # soft-fallback, no encode_text invent — PR-R5 review Issue 1).
-            # Missing channel vector → omitted_reason=no_vector (empty neighbors).
-            # Free-text q= keeps encode_text; atom_id uses stored vectors only.
+        def _respond_200(
+            *,
+            neighbors: list[dict[str, Any]],
+            source_val: str,
+            omit: str | None,
+            ok: bool = True,
+            error: str | None = None,
+        ) -> None:
+            payload: dict[str, Any] = {
+                "ok": ok,
+                "neighbors": neighbors,
+                "count": len(neighbors),
+                "omitted_reason": omit if not neighbors else None,
+                "query": _query_block(source_val=source_val),
+                "index": _index_block(),
+                "memory": flags,
+            }
+            if error:
+                payload["error"] = error
+            self._json(200, payload)
+
+        # ── Media resolve (shared helper only — KD-M21) ──────────────────
+        if use_media:
+            assert att_id is not None
+            mem_cfg = getattr(getattr(self.worker, "settings", None), "memory", None)
+            max_bytes = int(
+                getattr(mem_cfg, "embed_media_max_bytes", 8_000_000) or 8_000_000
+            )
+            media_store = MediaStore(self.paths)
+            try:
+                one = resolve_one_media(media_store, att_id, max_bytes=max_bytes)
+            except Exception:  # noqa: BLE001
+                _LOG.debug("resolve_one_media failed att_id=%s", att_id, exc_info=True)
+                one = {
+                    "modality": None,
+                    "input": None,
+                    "skipped": f"{att_id}:error",
+                }
+            skipped = one.get("skipped")
+            modality = one.get("modality")
+            media_input = one.get("input")
+
+            if skipped:
+                sk = str(skipped)
+                # Map resolve tokens → HTTP policy (OQ-M5 / design table).
+                if ":oversize_bytes" in sk or sk.endswith(":oversize"):
+                    self._json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "media_oversize",
+                            "omitted_reason": "media_oversize",
+                            "neighbors": [],
+                            "memory": flags,
+                            "query": {
+                                "atom_id": None,
+                                "q": query_text,
+                                "att_id": att_id,
+                                "query_modality": None,
+                                "channel": channel_req,
+                                "resolved_channel": None,
+                                "channel_reason": None,
+                                "k": k,
+                                "source": "media",
+                            },
+                        },
+                    )
+                    return
+                if ":unknown_type" in sk:
+                    self._json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "media_unsupported_type",
+                            "omitted_reason": "media_unsupported_type",
+                            "neighbors": [],
+                            "memory": flags,
+                            "query": {
+                                "atom_id": None,
+                                "q": query_text,
+                                "att_id": att_id,
+                                "query_modality": None,
+                                "channel": channel_req,
+                                "resolved_channel": None,
+                                "channel_reason": None,
+                                "k": k,
+                                "source": "media",
+                            },
+                        },
+                    )
+                    return
+                # missing / no_path / error → soft 200 omit (no 404 on media path)
+                omit_tok = "media_missing"
+                if ":no_path" in sk or ":unresolved" in sk:
+                    omit_tok = "media_missing"
+                omit_reason = omit_tok
+                source = "text+media" if has_q else "media"
+                # Still resolve channel for response honesty (no seed modality).
+                resolved_channel, channel_reason = resolve_search_channel(
+                    channel_req,
+                    vectors_by_channel=vectors_by_channel,
+                    joint_repair_remaining=joint_repair_remaining,
+                )
+                _respond_200(neighbors=[], source_val=source, omit=omit_reason)
+                return
+
+            if not modality or media_input is None:
+                omit_reason = "media_missing"
+                source = "text+media" if has_q else "media"
+                resolved_channel, channel_reason = resolve_search_channel(
+                    channel_req,
+                    vectors_by_channel=vectors_by_channel,
+                    joint_repair_remaining=joint_repair_remaining,
+                )
+                _respond_200(neighbors=[], source_val=source, omit=omit_reason)
+                return
+
+            query_modality = str(modality)
+            if has_q:
+                source = "text+media"
+                seed_channels = ["text", query_modality]
+            else:
+                source = "media"
+                seed_channels = [query_modality]
+
+        elif use_text:
+            source = "text"
+            seed_channels = ["text"]
+            query_modality = "text"
+        else:
+            source = "atom"
+            seed_channels = None  # atom path: joint-primary auto (existing)
+
+        # Resolve channel once (KD-R16 / KD-M20).
+        resolved_channel, channel_reason = resolve_search_channel(
+            channel_req,
+            vectors_by_channel=vectors_by_channel,
+            joint_repair_remaining=joint_repair_remaining,
+            seed_channels=seed_channels,
+        )
+
+        # ── Query vector ─────────────────────────────────────────────────
+        if use_atom:
+            assert atom_id is not None
+            # Stored emb for concrete resolved channel only (PR-R5 Issue 1).
             query_vec, omit_reason = query_vector_for_atom(
                 atom_id,
                 index=index,
@@ -1460,7 +1701,6 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             )
             if query_vec is None:
                 omit_reason = omit_reason or "no_vector"
-                # 404 only when the atom itself is missing (not merely unembedded).
                 if store is not None:
                     try:
                         atom = store.get_atom(atom_id)
@@ -1474,14 +1714,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                                 "error": "atom not found",
                                 "neighbors": [],
                                 "memory": flags,
-                                "query": _query_block(source=source),
+                                "query": _query_block(source_val=source),
                             },
                         )
                         return
         else:
-            # Free-text query — gated consumer encode_text (KD-E5).
-            # Never open a second embedder on the API thread; never use raw
-            # _embedder from handles (lookup priority via GatedEmbedder).
+            # Consumer encode via gated embedder (KD-E5). Never raw _embedder.
             gated: Any | None = None
             ensure_emb = getattr(self.worker, "_ensure_embedder", None)
             if callable(ensure_emb):
@@ -1496,12 +1734,51 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     emb_health = (
                         gated.health() if hasattr(gated, "health") else {}
                     )
-                    if isinstance(emb_health, dict) and emb_health.get("ok") is False:
+                    if not isinstance(emb_health, dict):
+                        emb_health = {}
+                    if emb_health.get("ok") is False:
                         omit_reason = "encoder"
+                    elif use_media:
+                        # Fail closed when media_encode unavailable (never empty text).
+                        media_ok = emb_health.get("media_encode")
+                        if media_ok is False or media_ok is None:
+                            # None (unknown) also fail-closed for media query honesty.
+                            if media_ok is not True:
+                                omit_reason = "media_encode_unavailable"
+                        if omit_reason is None:
+                            assert query_modality is not None
+                            if has_q and query_text:
+                                # Joint query: text + media (KD-M15 table).
+                                parts = ModalityParts(
+                                    text=str(query_text),
+                                    image=media_input if query_modality == "image" else None,
+                                    audio=media_input if query_modality == "audio" else None,
+                                    video=media_input if query_modality == "video" else None,
+                                )
+                                encode_joint = getattr(gated, "encode_joint", None)
+                                if callable(encode_joint):
+                                    query_vec = list(encode_joint(parts))
+                                else:
+                                    # Fallback: modality-only encode if joint missing.
+                                    enc_name = f"encode_{query_modality}"
+                                    enc_fn = getattr(gated, enc_name, None)
+                                    if not callable(enc_fn):
+                                        omit_reason = "encode_failed"
+                                    else:
+                                        query_vec = list(enc_fn(media_input))
+                            else:
+                                enc_name = f"encode_{query_modality}"
+                                enc_fn = getattr(gated, enc_name, None)
+                                if not callable(enc_fn):
+                                    omit_reason = "encode_failed"
+                                else:
+                                    query_vec = list(enc_fn(media_input))
                     else:
+                        # Free-text only.
                         query_vec = list(gated.encode_text(str(query_text)))
                 except Exception:  # noqa: BLE001 — gate timeout / encode fail
                     omit_reason = "encode_failed"
+                    query_vec = None
 
         neighbors: list[dict[str, Any]] = []
         if query_vec is not None and index is not None:
@@ -1509,7 +1786,6 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if seed_atom_id:
                 exclude.add(seed_atom_id)
             try:
-                # Fetch k+1 when excluding seed so we still fill the page.
                 fetch_k = k + (1 if exclude else 0)
                 hits = index.search(
                     query_vec,
@@ -1535,7 +1811,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         "omitted_reason": "search_failed",
                         "memory": flags,
                         "index": idx_health,
-                        "query": _query_block(source=source),
+                        "query": _query_block(source_val=source),
                     },
                 )
                 return
@@ -1550,26 +1826,11 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             elif omit_reason is None:
                 omit_reason = "no_vector"
 
-        self._json(
-            200,
-            {
-                "ok": True,
-                "neighbors": neighbors,
-                "count": len(neighbors),
-                "omitted_reason": omit_reason if not neighbors else None,
-                "query": _query_block(source=source),
-                "index": {
-                    "search_mode": idx_health.get("search_mode"),
-                    "ann_index_built": idx_health.get("ann_index_built"),
-                    "vectors_by_channel": idx_health.get("vectors_by_channel"),
-                    "joint_repair_remaining": idx_health.get(
-                        "joint_repair_remaining"
-                    ),
-                    "vectors_ready": idx_health.get("vectors_ready"),
-                },
-                "memory": flags,
-            },
-        )
+        # GET free-text: keep prior query shape (att_id/query_modality may be null).
+        if source == "text" and query_modality is None:
+            query_modality = "text"
+
+        _respond_200(neighbors=neighbors, source_val=source, omit=omit_reason)
 
     # ── Phase 2a Graph tab (PR-A5) ────────────────────────────────────────
 

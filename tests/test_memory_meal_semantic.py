@@ -1674,3 +1674,70 @@ def test_semantic_select_meta_seed_source(store):
     assert pkg.semantic_select_meta is not None
     assert pkg.semantic_select_meta.get("seed_source") == "glass_tail"
     assert pkg.semantic_omitted_reason != SEMANTIC_OMIT_EMPTY_SEED
+
+
+def test_select_semantic_safe_on_media_backed_atoms(store):
+    """PR4: meal select packs media-backed atoms (empty text + media_ids) safely.
+
+    Joint-copy of image vectors are searchable; format_atom_line must not raise
+    on empty content_text.
+    """
+    from elyra.memory.embed.types import l2_normalize
+
+    emb = MockEmbedder()
+    png = b"\x89PNG\r\n\x1a\n" + b"meal-media-bytes"
+    img_vec = tuple(l2_normalize(emb.encode_image(png)))
+
+    media_atom = _atom(
+        t="2026-07-27T10:00:00Z",
+        text="",  # media-only observation
+        moment_id="m_media_past",
+        atom_id="a_media_img",
+        embedding_status="ready",
+        media_ids=("att_" + "b" * 32,),
+    )
+    store.put_atom(media_atom)
+
+    idx = MemoryEmbeddingIndex(store)
+    assert idx.upsert(
+        EmbeddingSet(
+            atom_id=media_atom.atom_id,
+            emb_image=img_vec,
+            emb_joint=img_vec,
+            model_id=emb.model_id,
+            encoded_at="2026-07-27T10:00:00Z",
+        )
+    )
+
+    # Force a hit via fixed index so we exercise pack path on media atom.
+    hit = ScoredAtom(
+        atom_id=media_atom.atom_id,
+        score=0.91,
+        channel="joint",
+        atom=media_atom,
+    )
+    fixed = _FixedHitIndex([hit])
+    cfg = MemorySettings(
+        semantic_enabled=True,
+        semantic_select_max_ms=500,
+        semantic_min_score=0.0,
+    )
+    items, reason, meta = select_semantic(
+        store,
+        index=fixed,
+        embedder=emb,
+        open_moment_atoms=[
+            _atom(t="2026-07-28T12:00:00Z", text="looking at a photo")
+        ],
+        open_moment_id="m_open",
+        cap_tokens=500,
+        settings=cfg,
+    )
+    assert reason is None
+    assert len(items) == 1
+    assert items[0].atom_id == media_atom.atom_id
+    assert items[0].channel == "semantic"
+    # Empty body is fine — no exception; content is a formatted line.
+    assert isinstance(items[0].content, str)
+    assert meta is not None
+    assert meta["packed"] == 1
