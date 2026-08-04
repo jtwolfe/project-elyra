@@ -14,10 +14,10 @@
 | **Critical branch rule** | **Every product implementation branch is created FROM** `design/BUG-meal-03-93-instance-continuity` (not bare `main`). Stack: feature branches off design tip → dogfood → merge design branch (or stacked PRs) → main after testing. |
 | **Product draft** | [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](design-instance-continuity-glass-tail-directed-keep.md) (**Ready for implement plan**) |
 | **Prior sketch** | [`docs/stretch-2/design-instance-continuity-implement-plan.md`](design-instance-continuity-implement-plan.md) — this document **refines and supersedes** that sketch with code-level specificity |
-| **Review report** | [`docs/stretch-2/meal-continuity-review/REPORT.md`](../../stretch-2/meal-continuity-review/REPORT.md) (S0 done) |
-| **Edge matrix** | [`docs/stretch-2/meal-continuity-review/EDGE-MATRIX.md`](../../stretch-2/meal-continuity-review/EDGE-MATRIX.md) |
-| **Code-path map** | [`docs/stretch-2/meal-continuity-review/CODE-PATH-MAP.md`](../../stretch-2/meal-continuity-review/CODE-PATH-MAP.md) |
-| **Evidence** | [`docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/`](../../stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/) |
+| **Review report** | [`docs/investigations/meal-continuity-review/REPORT.md`](../../investigations/meal-continuity-review/REPORT.md) (S0 done) |
+| **Edge matrix** | [`docs/investigations/meal-continuity-review/EDGE-MATRIX.md`](../../investigations/meal-continuity-review/EDGE-MATRIX.md) |
+| **Code-path map** | [`docs/investigations/meal-continuity-review/CODE-PATH-MAP.md`](../../investigations/meal-continuity-review/CODE-PATH-MAP.md) |
+| **Evidence** | [`docs/investigations/meal-continuity-review/evidence/sa9b-e6d460f2/`](../../investigations/meal-continuity-review/evidence/sa9b-e6d460f2/) |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
 | **Repo landing path (recommended)** | `docs/stretch-2/design-instance-continuity-product-implement.md` (supersede pointer in implement-plan sketch) |
 
@@ -1098,10 +1098,10 @@ Do **not** re-open OQ4/6/7 without new evidence.
 
 ## References
 
-- `docs/stretch-2/meal-continuity-review/REPORT.md` — faults F-01…F-11, DRAFT-EXTENSIONS
-- `docs/stretch-2/meal-continuity-review/EDGE-MATRIX.md` — P1–P9
-- `docs/stretch-2/meal-continuity-review/CODE-PATH-MAP.md`
-- `docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/`
+- `docs/investigations/meal-continuity-review/REPORT.md` — faults F-01…F-11, DRAFT-EXTENSIONS
+- `docs/investigations/meal-continuity-review/EDGE-MATRIX.md` — P1–P9
+- `docs/investigations/meal-continuity-review/CODE-PATH-MAP.md`
+- `docs/investigations/meal-continuity-review/evidence/sa9b-e6d460f2/`
 - `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`
 - `docs/stretch-2/design-instance-continuity-implement-plan.md` (superseded sketch)
 - `docs/stretch-2/design-phase-2a-implementation.md` — keep channel origin
@@ -1211,7 +1211,7 @@ flowchart LR
 | `tests/test_memory_meal.py` | **Rewrite** `test_compose_meal_message_order` for optional glass_tail band |
 | `tests/test_memory_meal_directed_keep.py` | v4 inactive golden parity + new active identity cases |
 | `tests/test_meal_glass_tail.py` | **New** — named fixtures below |
-| Optional golden | Shape from `docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/` |
+| Optional golden | Shape from `docs/investigations/meal-continuity-review/evidence/sa9b-e6d460f2/` |
 
 #### Acceptance
 

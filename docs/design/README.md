@@ -156,7 +156,7 @@ GI README (short phase map / history) stays under [../grok-improvement-plan/READ
 
 | Doc | Notes |
 |-----|-------|
-| [lance-debug1/](../lance-debug1/) | Sealed forensic package (designs + evidence) |
-| [stretch-2/meal-continuity-review/](../stretch-2/meal-continuity-review/) | Meal continuity investigation |
+| [investigations/lance-debug1/](../investigations/lance-debug1/) | Sealed forensic package (designs + evidence) |
+| [investigations/meal-continuity-review/](../investigations/meal-continuity-review/) | Meal continuity investigation |
 
 See taxonomy design § inventory for full classification and move plan.

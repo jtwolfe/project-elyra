@@ -3,7 +3,7 @@
 **Branch / train:** `grok-improv-radeonvii`  
 **Host target:** LuxPrimata (AMD Radeon VII, gfx906, host ROCm 7.2.4)  
 **Scope:** Project `.venv` ROCm torch swap + standalone Nemotron encode smoke.  
-**Isolation:** Operator start docs live under **`docs/state/radeon-vii/`**; freezes + scripts remain under **`docs/radeon-vii-dev/`** until investigations PR. No product-tree `dev_shims`.
+**Isolation:** Operator start docs live under **`docs/state/radeon-vii/`**; freezes under **`docs/investigations/radeon-vii-freezes/`**; smoke scripts under **`docs/radeon-vii-dev/scripts/`**. No product-tree `dev_shims`.
 
 ---
 
@@ -32,9 +32,9 @@ See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package basel
 | [STACK-INVENTORY.md](STACK-INVENTORY.md) | Hardware, host ROCm, venv package baseline |
 | [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) | Full design (acceptance, G1–G9, KD*, PR plan) — DESIGN class |
 | [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md) | **Operator runbook** — pin, purge, install, gates, rollback |
-| [freezes/README.md](../../radeon-vii-dev/freezes/README.md) | Freeze artifacts purpose, machine scope, restore limits |
+| [freezes/README.md](../../investigations/radeon-vii-freezes/README.md) | Freeze artifacts purpose, machine scope, restore limits |
 | [scripts/README.md](../../radeon-vii-dev/scripts/README.md) | Smoke scripts overview (G1–G9, exit codes, prereqs) |
-| `freezes/*.txt` | Operator freezes (post-swap; LuxPrimata/ROCm-only) |
+| `docs/investigations/radeon-vii-freezes/*.txt` | Operator freezes (post-swap; LuxPrimata/ROCm-only) |
 | `scripts/01_*.py` … | Standalone probes (land in scripts PR) |
 | [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) | Switch / inject / A5–A7 dogfood + product-path notes |
 | **This README § New terminal** | **How to start Elyra on LuxPrimata from a fresh shell** |

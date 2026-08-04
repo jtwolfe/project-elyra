@@ -79,7 +79,7 @@ source .venv/bin/activate
 python -V   # expect 3.12.8
 python -c "import torch; print(torch.__version__, torch.version.cuda, torch.version.hip, torch.cuda.is_available())"
 # expect today: 2.13.0+cu130  13.0  None  False
-pip list | rg -i 'nvidia|cuda|rocm|torch|triton' | tee docs/radeon-vii-dev/freezes/pre-rocm-gpu-stack.txt
+pip list | rg -i 'nvidia|cuda|rocm|torch|triton' | tee docs/investigations/radeon-vii-freezes/pre-rocm-gpu-stack.txt
 ```
 
 Confirm presence stopped and `elyra.toml` pin applied **before uninstall** (§2 / H12). Confirm pin is **not** staged for commit unless intentional.
@@ -89,11 +89,11 @@ Confirm presence stopped and `elyra.toml` pin applied **before uninstall** (§2 
 ## 4. Capture freeze (partial rollback artifact)
 
 ```bash
-mkdir -p docs/radeon-vii-dev/freezes
-pip freeze > docs/radeon-vii-dev/freezes/pre-rocm-pip-freeze.txt
+mkdir -p docs/investigations/radeon-vii-freezes
+pip freeze > docs/investigations/radeon-vii-freezes/pre-rocm-pip-freeze.txt
 ```
 
-**Limitation (normative):** `pip freeze` shows `torch==2.13.0` **without** the `+cu130` local label. Restoring with `pip install -r pre-rocm-pip-freeze.txt` alone will **not** reliably restore a CUDA (or HIP) wheel and may pull a generic/CPU-oriented build. Freezes are for **forensics and non-torch package versions**, not for torch backend restore. See [freezes/README.md](../../radeon-vii-dev/freezes/README.md).
+**Limitation (normative):** `pip freeze` shows `torch==2.13.0` **without** the `+cu130` local label. Restoring with `pip install -r pre-rocm-pip-freeze.txt` alone will **not** reliably restore a CUDA (or HIP) wheel and may pull a generic/CPU-oriented build. Freezes are for **forensics and non-torch package versions**, not for torch backend restore. See [freezes/README.md](../../investigations/radeon-vii-freezes/README.md).
 
 ---
 
@@ -125,7 +125,7 @@ pip list | rg -i '^(nvidia-|cuda-)' || true
 Capture post-cleanup listing:
 
 ```bash
-pip list | rg -i 'nvidia|cuda|rocm|torch|triton' | tee docs/radeon-vii-dev/freezes/mid-swap-gpu-stack.txt
+pip list | rg -i 'nvidia|cuda|rocm|torch|triton' | tee docs/investigations/radeon-vii-freezes/mid-swap-gpu-stack.txt
 # expect: essentially empty (no torch yet)
 ```
 
@@ -142,7 +142,7 @@ pip install torch==2.13.0 torchvision==0.28.0 \
 Pins file (for documentation / PR3 artifacts):
 
 ```text
-# docs/radeon-vii-dev/freezes/torchn-rocm7.2-pins.txt
+# docs/investigations/radeon-vii-freezes/torchn-rocm7.2-pins.txt
 # Install (only valid after uninstall of cu130 + nvidia residual):
 #   pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/rocm7.2
 torch==2.13.0+rocm7.2
@@ -183,8 +183,8 @@ python -c "from elyra.memory.embed.runtime import probe_devices, select_device; 
 # Note: select_device('auto') ignores elyra.toml — only MemorySettings/open_encoder reads toml.
 # Product worker uses open_encoder → MemorySettings.embed_device from elyra.toml pin.
 
-pip list | rg -i 'nvidia|cuda|rocm|torch|triton' | tee docs/radeon-vii-dev/freezes/post-rocm-gpu-stack.txt
-pip freeze > docs/radeon-vii-dev/freezes/post-rocm-pip-freeze.txt
+pip list | rg -i 'nvidia|cuda|rocm|torch|triton' | tee docs/investigations/radeon-vii-freezes/post-rocm-gpu-stack.txt
+pip freeze > docs/investigations/radeon-vii-freezes/post-rocm-pip-freeze.txt
 ```
 
 | Check | Expected |

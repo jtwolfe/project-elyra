@@ -166,7 +166,7 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-instance-continuity-implement-plan.md](../../design/memory/design-instance-continuity-implement-plan.md) | **Implement plan** for #93 — ordered product PRs S1–S6 (glass-tail → framing → sticky keep → merge → nudge → graph UX defer) |
 | [`design-instance-continuity-product-implement.md`](../../design/memory/design-instance-continuity-product-implement.md) | **Product implement design** for #93 (glass-tail, framing, sticky keep, semantic seed) — Ready to execute |
 | [design-meal-formation-continuity-review-plan.md](../../design/memory/design-meal-formation-continuity-review-plan.md) | **Executable review methodology** (inspection + fault isolation) refining the #93 draft — not product code |
-| [meal-continuity-review/REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) | **Review report** (S0 done) — fault isolation B1/B12 co-primary; B5+B5b; evidence sa9b |
+| [meal-continuity-review/REPORT.md](../../investigations/meal-continuity-review/REPORT.md) | **Review report** (S0 done) — fault isolation B1/B12 co-primary; B5+B5b; evidence sa9b |
 | [design-database-choices.md](../../design/memory/design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
 | [design-nemotron-runtime.md](../../design/memory/design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
 | [design-phase-1-temporal.md](../../design/memory/design-phase-1-temporal.md) | Phase 1 design (short outline) |
@@ -182,7 +182,7 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-phase-3-procedural.md](../../design/memory/design-phase-3-procedural.md) | Phase 3 design |
 | `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 + Phase 2 + Phase 2a shipped) |
 
-Memory **designs** live under **`docs/design/memory/`**; **architecture manuals** under **`docs/state/memory/architecture/`**; residual stretch-2 island: philosophical guidance + meal-continuity-review (GOAL/investigations later).
+Memory **designs** live under **`docs/design/memory/`**; **architecture manuals** under **`docs/state/memory/architecture/`**; residual stretch-2 island: philosophical guidance. Meal continuity review: [investigations/meal-continuity-review/](../../investigations/meal-continuity-review/).
 
 ---
 

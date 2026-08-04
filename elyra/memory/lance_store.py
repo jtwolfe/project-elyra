@@ -112,7 +112,7 @@ def _require_lancedb():
 
 # Documented library behavior on lancedb 0.20.x — not a product cap.
 # Bare Table.to_arrow() is a default-limit query (~10 rows), not a full scan.
-# See docs/lance-debug1/BUG-DOSSIER.md.
+# See docs/investigations/lance-debug1/BUG-DOSSIER.md.
 _LANCEDB_DEFAULT_TO_ARROW_LIMIT = 10
 
 
@@ -132,7 +132,7 @@ def _materialize_table_arrow(table: Any, *, purpose: str) -> Any:
     """Return a full ``pyarrow.Table`` for *table* (all rows).
 
     Never uses bare ``table.to_arrow()`` — that is a default-limit query (~10)
-    on lancedb 0.20.x (see docs/lance-debug1/BUG-DOSSIER.md).
+    on lancedb 0.20.x (see docs/investigations/lance-debug1/BUG-DOSSIER.md).
 
     Strategy (stop at first successful full materialize):
       1. n = count_rows() when available

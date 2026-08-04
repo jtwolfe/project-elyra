@@ -13,11 +13,11 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 | **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why* | [goal/README.md](goal/README.md) (stub → current paths) |
 | **DESIGN / PLAN** | Implementers | Designs, PR plans, freezes (history kept) | [design/README.md](design/README.md) |
 | **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) |
-| **Archive / investigations** | Archaeology | Superseded freezes, sealed bags | [archive/](archive/) · islands below |
+| **Archive / investigations** | Archaeology | Superseded freezes, sealed bags | [archive/](archive/) · [investigations/](investigations/) |
 
 **Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
 **Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
-**DEV** process law lives under [dev/](dev/). **DESIGN** under [design/](design/) topic folders (PR2 + PR2b/PR2c). **STATE** living ops under [state/](state/) (PR4) — architecture map + runtime/memory/ops moves.
+**DEV** process law lives under [dev/](dev/). **DESIGN** under [design/](design/) topic folders (PR2 + PR2b/PR2c). **STATE** living ops under [state/](state/) (PR4). **Investigations / archive** under [investigations/](investigations/) · [archive/](archive/) (PR5).
 
 **Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
 
@@ -137,15 +137,18 @@ Index: **[dev/README.md](dev/README.md)**.
 
 ## Archive / investigations
 
+Index: **[investigations/README.md](investigations/README.md)** · **[archive/README.md](archive/README.md)**.
+
 | Path | Role |
 |------|------|
-| [archive/](archive/) | Early research notes (reflection-*); expand criteria in later PR |
-| [project-status-pass.md](project-status-pass.md) | Stale status snapshot (archive-candidate; tip names lag) |
-| [inference.md](inference.md) | **Freeze** — Gemma/llama setup; not product path |
+| [archive/](archive/) | Research notes + stale status snapshots; archival criteria in README |
+| [archive/project-status-pass.md](archive/project-status-pass.md) | Stale status snapshot (2026-07-26; tip names lag) |
+| [investigations/lance-debug1/](investigations/lance-debug1/) | Sealed forensic investigation (product fix outside bag) |
+| [investigations/meal-continuity-review/](investigations/meal-continuity-review/) | Meal continuity investigation package |
+| [investigations/radeon-vii-freezes/](investigations/radeon-vii-freezes/) | HW / pip freezes (not operator start path) |
+| [inference.md](inference.md) | **Freeze** — Gemma/llama setup; not product path (partial successor: [state/usage-and-pacing.md](state/usage-and-pacing.md)) |
 | [live-eval.md](live-eval.md) | **Freeze** — live 3-attempt protocol (Gemma stages historical) |
-| [lance-debug1/](lance-debug1/) | Sealed forensic investigation (product fix outside bag) |
-| [stretch-2/meal-continuity-review/](stretch-2/meal-continuity-review/) | Meal continuity investigation package |
-| [radeon-vii-dev/freezes/](radeon-vii-dev/freezes/) | HW / pip freezes (not operator start path) |
+| [radeon-vii-dev/scripts/](radeon-vii-dev/scripts/) | ROCm / embed smoke scripts (living helpers; freezes moved) |
 
 ---
 
@@ -175,4 +178,4 @@ Start at [state/memory/README.md](state/memory/README.md). Runtime law: [state/s
 
 **Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([dev/branch-law.md](dev/branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [state/memory/README.md](state/memory/README.md).
 
-Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — hub + DEV + DESIGN + **STATE (PR4)** landed; archive/investigations PR5; principles § PR6.
+Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — hub + DEV + DESIGN + STATE (PR4) + **archive/investigations (PR5)** landed; principles § PR6.

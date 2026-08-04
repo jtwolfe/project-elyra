@@ -7,10 +7,13 @@ still loads for hermetic tests (`tests/test_live_eval_scenarios.py` — no GPU
 in CI).
 
 Historical protocol (3-attempt rule, A/B modes, P0 exit): **`docs/live-eval.md`**
-(historical freeze — do not treat as active setup). Design stages + Adaptive
-Execution Protocol: `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` (historical).
-Ship knobs inventory: `docs/inference.md` (historical freeze). Continuous design:
+(historical freeze — do not treat as active setup; still at docs root until a
+full STATE Grok inference page lands). Design stages + Adaptive Execution
+Protocol: `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` (historical).
+Ship knobs inventory: `docs/inference.md` (historical freeze; partial successor
+`docs/state/usage-and-pacing.md`). Continuous design:
 `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md`.
+Archive criteria: `docs/archive/README.md`.
 
 ## Layout
 

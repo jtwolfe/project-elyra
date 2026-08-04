@@ -39,7 +39,7 @@ This design specifies a **non-destructive, hub-first reorganisation** into four 
 | `docs/stretch-2/` | Phase designs + **architecture/** manuals + inspiration + investigation | Architecture (STATE) co-located with designs (DESIGN); island-style |
 | `docs/grok-improvement-plan/` | GI migration phases + operator pacing notes | Part GOAL/history, part STATE operator notes |
 | `docs/promotion-discussion/` | v0.1 / gym + governance | GOAL mixed with DEV governance |
-| `docs/lance-debug1/`, meal-continuity-review, `radeon-vii-dev/` | Investigation / HW dogfood islands | Valuable archaeology; not living product law |
+| `docs/lance-debug1/`, meal-continuity-review, `radeon-vii-dev/` (pre-reorg) | Investigation / HW dogfood islands | Valuable archaeology; not living product law |
 | `docs/archive/` | Early research notes | Correct pattern; under-used |
 | DEV law | `engineering-principles.md`, `branch-law.md`, `operating-pins.md` at docs root | Not grouped; easy to miss as process class |
 
@@ -337,9 +337,9 @@ flowchart TD
 | Explicitly superseded setup path | Freeze banner + archive move (or leave in design/ with Freeze) | `inference.md` Gemma/llama, `design-gemma-sampling-hygiene-staged.md` |
 | Superseded tip/process prose already warned | Banner; keep in place until DEV move; do not teach as law | GI README tip table |
 | Sealed evidence bag; product fix landed | `investigations/` + Archive banner; do not rewrite sealed JSON | `lance-debug1/` |
-| Investigation island post-ship | `investigations/` | `stretch-2/meal-continuity-review/` |
+| Investigation island post-ship | `investigations/` | `investigations/meal-continuity-review/` |
 | Status snapshot superseded by board/code | Archive candidate | `project-status-pass.md` (2026-07-26, still names `grok-improvement` tip) |
-| HW freezes / pip freezes | `investigations/radeon-vii-freezes/` or keep under radeon tree with Archive | `radeon-vii-dev/freezes/*` |
+| HW freezes / pip freezes | `investigations/radeon-vii-freezes/` or keep under radeon tree with Archive | `investigations/radeon-vii-freezes/*` |
 | Early research folded into Stretch 1 | Already `archive/` | reflection-*.md |
 | Long-unupdated but still sole description of shipped behaviour | **Do not archive** — promote to STATE or banner Shipped | stretch-1 runtime contract |
 | Active design / open implementation | DESIGN Active — never archive by age | grok-build functionalization, board recategorization |
@@ -461,11 +461,11 @@ Grouped by current location. Paths are current unless noted.
 | Path | Class | Action |
 |------|-------|--------|
 | `docs/archive/*` | ARCHIVE | **keep**; expand README with criteria |
-| `docs/project-status-pass.md` | ARCHIVE | **archive-candidate** — stale tip names; supersede with board + root README |
+| `docs/project-status-pass.md` | ARCHIVE | **archive** → `archive/project-status-pass.md` — stale tip names; supersede with board + root README |
 | `docs/inference.md` | Freeze | **banner** already present; **archive-candidate** move to `archive/inference-gemma-llama.md` **after** STATE Grok inference page exists; **tests pin path** — update or leave stub |
 | `docs/live-eval.md` | Freeze / Archive | **archive-candidate**; protocol idea reusable; Gemma stages not setup law |
-| `docs/lance-debug1/**` | INVESTIGATION | **move** whole tree; sealed bag; product fix outside package |
-| `docs/radeon-vii-dev/freezes/**` | INVESTIGATION | **move** freezes; keep operator README in STATE |
+| `docs/lance-debug1/**` | INVESTIGATION | **move** whole tree → `investigations/lance-debug1/`; sealed bag; product fix outside package |
+| `docs/radeon-vii-dev/freezes/**` | INVESTIGATION | **move** freezes → `investigations/radeon-vii-freezes/`; keep operator README in STATE |
 
 #### 4.9 This design
 
@@ -492,7 +492,7 @@ Grouped by current location. Paths are current unless noted.
 | `tests/test_stretch1_donewhen.py` | Root `README.md` content | Content assert | No move; content retouch only | PR7 / retouch |
 | `tests/test_live_grok_build.py` | design / dogfood / spike paths | Docstring refs | Update comments when files move | PR2 / PR4 |
 | `tests/test_lance_debug1_api_matrix_fixture.py` | **`SCRIPTS = REPO_ROOT / "docs" / "lance-debug1" / "scripts"`** (and derived `API_MATRIX`, `BUILD_FIXTURE`, …) | **Runtime path constant** (CI-breaking) | Must co-change to `docs/investigations/lance-debug1/scripts` when tree moves — not docstring-only | **PR5 mandatory** |
-| `docs/lance-debug1/scripts/*.py` | `docs/lance-debug1/...` in usage/help strings | Operator help (non-evidence) | **OK to update** help strings after tree move; **do not** rewrite sealed `evidence/**` JSON or run notes | PR5 |
+| `docs/investigations/lance-debug1/scripts/*.py` | `docs/investigations/lance-debug1/...` in usage/help strings | Operator help (non-evidence) | **OK to update** help strings after tree move; **do not** rewrite sealed `evidence/**` JSON or run notes | PR5 |
 | `skills/bundled/github-workflow/SKILL.md` | `docs/dev/engineering-principles.md` §9, `docs/dev/branch-law.md`, `docs/dev/operating-pins.md` | Agent-facing law | **Must update in PR1** to `docs/dev/...` (agents follow this skill) | **PR1 mandatory** |
 | `skills/bundled/self-improve/SKILL.md` | `docs/dev/branch-law.md` | Agent-facing law | **Must update in PR1** to `docs/dev/branch-law.md` | **PR1 mandatory** |
 | `scripts/live_eval/README.md` | historical design / live-eval links | Docs | Update in archive PR | PR5 |
@@ -512,7 +512,7 @@ Grouped by current location. Paths are current unless noted.
 ```bash
 # 1. git mv files
 # 2. ripgrep for old basenames / paths from repo root (exclude .venv, data, sandboxes)
-rg -n 'docs/stretch-1\.md|docs/branch-law\.md|docs/engineering-principles\.md|docs/operating-pins\.md|docs/lance-debug1' \
+rg -n 'docs/stretch-1\.md|docs/branch-law\.md|docs/engineering-principles\.md|docs/operating-pins\.md|docs/investigations/lance-debug1' \
   --glob '!sandboxes/**' --glob '!.venv/**' --glob '!data/**'
 # 3. Fix: markdown links + skill bodies + test path constants + script help strings
 # 4. Optional: python scripts/check_docs_links.py (add in later PR if valuable)
@@ -885,10 +885,10 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 - [docs/dev/branch-law.md](../dev/branch-law.md), [docs/dev/operating-pins.md](../dev/operating-pins.md)
 - [docs/state/memory/README.md](../state/memory/README.md) — architecture vs design split precedent (STATE after PR4)
 - [docs/design/stretch-1/design-remove-gemma-local-stub.md](stretch-1/design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
-- [docs/lance-debug1/README.md](../lance-debug1/README.md) — sealed investigation pattern
+- [docs/investigations/lance-debug1/README.md](../investigations/lance-debug1/README.md) — sealed investigation pattern
 - [docs/archive/README.md](../archive/README.md) — existing archive pattern
 - `tests/test_stretch1_donewhen.py` — content path pins for `docs/stretch-1.md`, `docs/inference.md`
-- `tests/test_lance_debug1_api_matrix_fixture.py` — `SCRIPTS` runtime constant under `docs/lance-debug1/scripts`
+- `tests/test_lance_debug1_api_matrix_fixture.py` — `SCRIPTS` runtime constant under `docs/investigations/lance-debug1/scripts`
 - `skills/bundled/github-workflow/SKILL.md`, `skills/bundled/self-improve/SKILL.md` — DEV law path pins
 - Inventory: `find docs` 2026-08-04 (~118 md files; 17 stretch-2 designs)
 

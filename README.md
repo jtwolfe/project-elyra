@@ -253,7 +253,7 @@ create-tool / create-skill fail-closed is covered by **PR13** gates in `tests/te
 
 | Doc | Role |
 |-----|------|
-| [docs/project-status-pass.md](docs/project-status-pass.md) | Status snapshot (may lag code—prefer recent issues/board) |
+| [docs/archive/project-status-pass.md](docs/archive/project-status-pass.md) | Status snapshot (may lag code—prefer recent issues/board) |
 | [docs/state/architecture.md](docs/state/architecture.md) | As-implemented architecture map |
 | [docs/state/stretch-1.md](docs/state/stretch-1.md) | Runtime contract + done-when |
 | [docs/state/memory/README.md](docs/state/memory/README.md) | Memory / Stretch 2 index |

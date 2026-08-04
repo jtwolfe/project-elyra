@@ -852,8 +852,8 @@ Architecture: [architecture/phase-2-semantic.md](memory/architecture/phase-2-sem
 | **Severity now** | Low residual (code fixed; live process still thin until restart) |
 | **Severity later** | High if regressed — glass / meal / graph / traverse operate on ~10-atom prefix after every restart |
 | **Area** | `elyra/memory/lance_store.py` (`_load`, migrate, promote, empty-check, health dual-count) |
-| **Dogfood** | 2026-07-29 sealed run `docs/lance-debug1/evidence/2026-07-29-run-01/`: `count_rows`/`head`/`to_lance` = **386**; bare `to_arrow` = **10**; process `atom_count` ≈ 10 after open |
-| **Fix ownership** | [design-fix-load-truncation.md](../lance-debug1/design-fix-load-truncation.md); inspection dossier [BUG-DOSSIER.md](../lance-debug1/BUG-DOSSIER.md); product fix commit `fcb5130` |
+| **Dogfood** | 2026-07-29 sealed run `docs/investigations/lance-debug1/evidence/2026-07-29-run-01/`: `count_rows`/`head`/`to_lance` = **386**; bare `to_arrow` = **10**; process `atom_count` ≈ 10 after open |
+| **Fix ownership** | [design-fix-load-truncation.md](../investigations/lance-debug1/design-fix-load-truncation.md); inspection dossier [BUG-DOSSIER.md](../investigations/lance-debug1/BUG-DOSSIER.md); product fix commit `fcb5130` |
 
 ### Symptom
 
@@ -873,7 +873,7 @@ Bare `lancedb.Table.to_arrow()` on **0.20.x** is a **default-limit query of ~10 
 | **Health** | Open-store dual-count: `disk_atom_count`, `atom_count_parity` |
 | **Tests** | Reopen N=25; Phase-1 migrate N=15; FakeTable `head`; materialize unit paths |
 
-Design: [lance-debug1/design-fix-load-truncation.md](../lance-debug1/design-fix-load-truncation.md). Package status: [lance-debug1/README.md](../lance-debug1/README.md).
+Design: [lance-debug1/design-fix-load-truncation.md](../investigations/lance-debug1/design-fix-load-truncation.md). Package status: [lance-debug1/README.md](../investigations/lance-debug1/README.md).
 
 ### Residual / operator note
 
@@ -1061,7 +1061,7 @@ Shipped on `feature/92` then merged to `main`: write scales `1h→1y`, hourly ca
 | **Area** | Memory meal rebuild; glass-tail band; wait/interject/restart paths; directed_keep tray TTL/LRU |
 | **Design home** | [design/memory/design-instance-continuity-glass-tail-directed-keep.md](../design/memory/design-instance-continuity-glass-tail-directed-keep.md) (refined from review DRAFT-EXTENSIONS) |
 | **Implement plan** | [design/memory/design-instance-continuity-implement-plan.md](../design/memory/design-instance-continuity-implement-plan.md) — ordered product PRs S1 glass-tail → S2 framing dual-write → S3 sticky keep B5+B5b → S4 merge/confirm → S5 recall nudge → S6 graph UX defer |
-| **Review report** | [stretch-2/meal-continuity-review/REPORT.md](../stretch-2/meal-continuity-review/REPORT.md) — fault isolation (B1/B12 co-primary; B5+B5b sticky keep dual kill); evidence `meal-continuity-review/evidence/sa9b-e6d460f2/` |
+| **Review report** | [investigations/meal-continuity-review/REPORT.md](../investigations/meal-continuity-review/REPORT.md) — fault isolation (B1/B12 co-primary; B5+B5b sticky keep dual kill); evidence `meal-continuity-review/evidence/sa9b-e6d460f2/` |
 | **Also** | [design/memory/design-meal-formation-continuity-review-plan.md](../design/memory/design-meal-formation-continuity-review-plan.md) (review method; done); [design/memory/design-instance-continuity-implement-plan.md](../design/memory/design-instance-continuity-implement-plan.md) (execute-plan); [promotion-discussion/README.md](../promotion-discussion/README.md) §4; Phase 2a keep channel |
 
 ### Goal

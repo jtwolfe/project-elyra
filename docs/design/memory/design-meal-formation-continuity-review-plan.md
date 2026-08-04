@@ -11,7 +11,7 @@
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` |
 | **Bug id** | `BUG-meal-03` |
 | **Branch** | Content origin: `design/BUG-meal-03-93-instance-continuity`; landed on main via docs PR |
-| **Work product (when executed)** | Written **fault report** under `docs/stretch-2/meal-continuity-review/` that refines the product draft |
+| **Work product (when executed)** | Written **fault report** under `docs/investigations/meal-continuity-review/` that refines the product draft |
 | **Product draft refined by report** | [`design-instance-continuity-glass-tail-directed-keep.md`](design-instance-continuity-glass-tail-directed-keep.md) |
 | **Repo path for this plan (PR-R1)** | `docs/stretch-2/design-meal-formation-continuity-review-plan.md` |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
@@ -118,7 +118,7 @@ The product draft already sketches glass-tail + sticky keep. Ratios, cut order, 
 ### Work product of execution
 
 ```text
-docs/stretch-2/meal-continuity-review/   # or single report md under stretch-2/
+docs/investigations/meal-continuity-review/   # or single report md under stretch-2/
   README.md                 # index + how to re-run
   REPORT.md                 # primary fault report (template § below)
   evidence/                 # dumps, meal snapshots, moment excerpts
@@ -269,7 +269,7 @@ sequenceDiagram
 - Meal composition sketch: `docs/stretch-2/design-context-meal-composition.md`
 - Phase 2a keep: `docs/stretch-2/design-phase-2a-implementation.md` (lifetime rules)
 - Known bug: `docs/state/known-bugs.md` BUG-meal-03
-- Inspection pattern exemplar: `docs/lance-debug1/design-inspection-plan.md`
+- Inspection pattern exemplar: `docs/investigations/lance-debug1/design-inspection-plan.md`
 
 ### Out of primary review scope
 
@@ -537,10 +537,10 @@ jq '.' data/wakes/waits.json | head
 
 ### Offline recompose evidence packaging
 
-Mirror `docs/lance-debug1/evidence/` discipline:
+Mirror `docs/investigations/lance-debug1/evidence/` discipline:
 
 ```text
-docs/stretch-2/meal-continuity-review/evidence/<run_id>/
+docs/investigations/meal-continuity-review/evidence/<run_id>/
   meta.json          # moment_id, glass ids, budget, flags, git sha, timestamp
   recompose_meal.json  # package inspect + message role/label summary
   tape_excerpt.jsonl
@@ -669,7 +669,7 @@ WP4 is **optional** for landing, but SA-9b itself is **mandatory** (can be a one
 | `scripts/meal_continuity_dump.py` (or under `meal-continuity-review/scripts/`) | Given moment_id: glass window, why_now, atoms, **offline recompose** summary (SA-9b), optional warm snapshot if attached | Mutate store; call Completions |
 | Hermetic fixture in tests (later implement plan) | Build meal with epi bulk + thin wake obs + skill_bias orient | Land as product default |
 
-Reuse patterns from `docs/lance-debug1/scripts/` for evidence packaging discipline.
+Reuse patterns from `docs/investigations/lance-debug1/scripts/` for evidence packaging discipline.
 
 ---
 
@@ -819,7 +819,7 @@ Because this workstream produces a **report** (not a product feature ship), PRs 
 | Field | Value |
 |-------|--------|
 | **Title** | `tools: read-only meal continuity dump for review` |
-| **Files** | e.g. `scripts/meal_continuity_dump.py` or `docs/stretch-2/meal-continuity-review/scripts/…`; small unit test with tmp paths if needed |
+| **Files** | e.g. `scripts/meal_continuity_dump.py` or `docs/investigations/meal-continuity-review/scripts/…`; small unit test with tmp paths if needed |
 | **Dependencies** | PR-R1 |
 | **Effort** | ~0.5–1 person-day |
 | **Description** | CLI: given paths/moment_id, print glass window, why_now, open-moment atoms summary, **SA-9b offline recompose** summary, last meal snapshot if process-attached. **Must not** mutate memory or call LLM. Skip this PR if one-off evidence scripts under `evidence/` suffice. |
@@ -829,7 +829,7 @@ Because this workstream produces a **report** (not a product feature ship), PRs 
 | Field | Value |
 |-------|--------|
 | **Title** | `docs: meal continuity review report (BUG-meal-03 findings)` |
-| **Files** | `docs/stretch-2/meal-continuity-review/REPORT.md` (+ evidence/, CODE-PATH-MAP, EDGE-MATRIX as needed); redact PII if publishing |
+| **Files** | `docs/investigations/meal-continuity-review/REPORT.md` (+ evidence/, CODE-PATH-MAP, EDGE-MATRIX as needed); redact PII if publishing |
 | **Dependencies** | PR-R1; WP1–WP2 mandatory; WP3 if host available |
 | **Effort** | ~1 person-day assembly after WP1–WP3 |
 | **Exit criteria (report complete enough to lock OQs / open PR-R4)** | See below |
@@ -906,7 +906,7 @@ flowchart LR
 - Meal composition: `docs/stretch-2/design-context-meal-composition.md`
 - Promotion discussion §4–5: `docs/promotion-discussion/README.md`
 - Known bugs BUG-meal-03: `docs/state/known-bugs.md`
-- Inspection pattern: `docs/lance-debug1/design-inspection-plan.md`
+- Inspection pattern: `docs/investigations/lance-debug1/design-inspection-plan.md`
 - Phase 2a: `docs/stretch-2/design-phase-2a-implementation.md`
 - Code: `elyra/memory/meal.py`, `elyra/memory/tokens.py` (`split_memory_budget_v3`), `elyra/presence/worker.py`, `elyra/loop/doloop.py`, `elyra/loop/context.py`, `elyra/loop/orient_slice.py` (`format_skill_bias`), `elyra/messages.py`, `elyra/memory/promote.py`, `elyra/memory/traverse.py`, `elyra/runtime/api.py`, `elyra/runtime/meal_budget.py`
 - Tests: `tests/test_memory_meal.py`, `test_memory_meal_semantic.py`, `test_memory_meal_directed_keep.py`, `test_interject.py`, `test_presence_worker.py`, `test_loop_context.py`

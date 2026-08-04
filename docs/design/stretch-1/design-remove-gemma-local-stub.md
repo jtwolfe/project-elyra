@@ -645,7 +645,7 @@ No `.pill-llama` CSS class exists today (id-only); renaming id is sufficient.
 | `docs/design/stretch-1/design-tool-thrash-recovery.md` | **Historical evidence** | Policies remain |
 | `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md` | **Historical motivation** | Policies remain |
 | `docs/design/stretch-1/design-post-skill-commitment.md` | **Historical** | Gemma residual wording |
-| `docs/project-status-pass.md` | **Partially stale** | Future status pass only |
+| `docs/archive/project-status-pass.md` | **Partially stale** | Future status pass only |
 | `docs/README.md` | **Stale reading order** | Future status pass |
 | `docs/dev/engineering-principles.md` | **Mostly valid** | Serialize single-slot local HTTP (conceptually) |
 | `docs/state/tools-and-skills.md` / `time-and-identity.md` | **Mostly valid** | Historical Gemma wording |

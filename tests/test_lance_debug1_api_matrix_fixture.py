@@ -1,4 +1,4 @@
-"""Hermetic tests for docs/lance-debug1 api_matrix probe (no live operator data).
+"""Hermetic tests for docs/investigations/lance-debug1 api_matrix probe (no live operator data).
 
 Skips when lancedb is missing or connect is unusable (e.g. segfault on some
 Python builds). Does not import or open LanceMemoryStore.
@@ -17,7 +17,7 @@ import pytest
 pytest.importorskip("lancedb")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = REPO_ROOT / "docs" / "lance-debug1" / "scripts"
+SCRIPTS = REPO_ROOT / "docs" / "investigations" / "lance-debug1" / "scripts"
 API_MATRIX = SCRIPTS / "api_matrix.py"
 BUILD_FIXTURE = SCRIPTS / "fixtures" / "build_tiny_atoms.py"
 ENV_CHECK = SCRIPTS / "env_check.py"

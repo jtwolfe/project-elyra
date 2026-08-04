@@ -20,7 +20,7 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 | **[branch-law.md](../dev/branch-law.md)** | **Normative** `working` / `main` / operating pin / tags / short-lived / Graphite default |
 | *(later)* | Exit criteria checklist, milestone seed issues, merge plan |
 
-Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [memory/README.md](../state/memory/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../state/known-bugs.md), [radeon-vii/README.md](../state/radeon-vii/README.md), [branch-law.md](../dev/branch-law.md).
+Related: [project-status-pass.md](../archive/project-status-pass.md) (stale snapshot), [memory/README.md](../state/memory/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../state/known-bugs.md), [radeon-vii/README.md](../state/radeon-vii/README.md), [branch-law.md](../dev/branch-law.md).
 
 **Programme name (working):** *Project Elyra — Autopoiesis Commons* (runtime stays “Elyra”; short label *Autopoiesis Commons* / *Elyra AC* — see [governance §6](../dev/development-governance.md#6-naming--project-identity)).
 
@@ -178,7 +178,7 @@ Not a second mind. Same philosophy as goals/tasks — and, in Colin’s framing,
 
 - Do not auto-merge from the board.  
 - Secrets never in issues.  
-- Machine-specific freezes stay under `docs/state/radeon-vii/` (+ freezes/scripts under `docs/radeon-vii-dev/`).  
+- Machine-specific freezes under `docs/investigations/radeon-vii-freezes/`; operator start under `docs/state/radeon-vii/`; smoke scripts under `docs/radeon-vii-dev/scripts/`.  
 - Prefer linking known-bugs IDs and design paths in issue bodies.  
 - Later: Elyra tools for issue CRUD are optional; **human ownership of promote-to-main** remains.
 
@@ -380,7 +380,7 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 - [ ] Create GitHub Project **Project Elyra — Autopoiesis Commons** + **v0.1** milestone; seed issues from §3.3  
 - [ ] Stage 1 process: light `main` protection, branch hygiene, link [development-governance.md](../dev/development-governance.md)  
 - [ ] Confirm with Colin: programme name, review/promote roles, dual-instance operating pins  
-- [ ] Refresh [project-status-pass.md](../project-status-pass.md) or replace with link to this folder  
+- [ ] Refresh [project-status-pass.md](../archive/project-status-pass.md) or replace with link to this folder  
 - [ ] Branch FF/merge plan: product tip includes memory + radeon dogfood  
 - [ ] Dogfood: Phase 2 semantic smoke; moment encode; note chat-chain inclusion  
 - [ ] Triage meal budget experiment (~50% window) vs chat-tail hybrid design  

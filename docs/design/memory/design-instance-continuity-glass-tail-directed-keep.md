@@ -9,9 +9,9 @@
 | **Status** | **Ready for implement plan** — continuity review report applied; OQ4/6/7 locked with evidence; OQ1/2/3/5 provisional; OQ8 prefer-lock after S1 |
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` (scope expanded) |
 | **Bug id** | `BUG-meal-03` |
-| **Branch** | Content origin: `design/BUG-meal-03-93-instance-continuity`; refined after `docs/stretch-2/meal-continuity-review/` |
+| **Branch** | Content origin: `design/BUG-meal-03-93-instance-continuity`; refined after `docs/investigations/meal-continuity-review/` |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
-| **Review report** | [meal-continuity-review/REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) (DRAFT-EXTENSIONS §6 applied here) |
+| **Review report** | [meal-continuity-review/REPORT.md](../../investigations/meal-continuity-review/REPORT.md) (DRAFT-EXTENSIONS §6 applied here) |
 | **Related design** | [design-context-meal-composition.md](design-context-meal-composition.md), [design-phase-2a-implementation.md](design-phase-2a-implementation.md), [promotion-discussion/README.md](../../promotion-discussion/README.md) §4–5 |
 | **Adjacent issues** | [#68](https://github.com/jtwolfe/project-elyra/issues/68) wake-02 (post-restart wrong work thread); [#92](https://github.com/jtwolfe/project-elyra/issues/92) LLM summaries (episodic quality, not tip); provider timeout board draft |
 
@@ -25,7 +25,7 @@ Define how Project Elyra keeps a **well-formed “memory of instance”** for ev
 - **Intentionally pinned** material survives hours with slow decay (**sticky directed keep**).
 - **Path variants** (wait reply, interject, timeout, restart, continue) cannot shatter the tip of continuity while episodic bulk still looks healthy.
 
-This document is the **design home for #93** after dogfood expanded the issue from “add a chat band” to **instance continuity** (tip + intentional working set). The **meal formation / continuation review report** ([REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md)) refined this draft; next step is an implement plan / execute-plan on a fix branch.
+This document is the **design home for #93** after dogfood expanded the issue from “add a chat band” to **instance continuity** (tip + intentional working set). The **meal formation / continuation review report** ([REPORT.md](../../investigations/meal-continuity-review/REPORT.md)) refined this draft; next step is an implement plan / execute-plan on a fix branch.
 
 ---
 
@@ -85,7 +85,7 @@ Legacy path (memory off) still centers sliding glass — do not regress that pat
 
 ### 2.5 Rockets fix-evaluation summary (review)
 
-Keep **empirical** vs **normative** labels distinct (from [REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) SA-9b + EDGE-MATRIX P2):
+Keep **empirical** vs **normative** labels distinct (from [REPORT.md](../../investigations/meal-continuity-review/REPORT.md) SA-9b + EDGE-MATRIX P2):
 
 > **Empirical SA-9b recompose ranking** (hop-0 carriers in outer + tape): **B12 → B11 → B3 → B7 → B1**.  
 > **Normative fix / structural priority** (implement order): **B12 + B1 co-primary → B3 → B7 → B11** (epi mass under tip floor once a glass-tail channel exists).  
@@ -356,7 +356,7 @@ Order preferred for risk (S1 before S3; S0 complete via review report):
 
 | Slice | Content | Risk |
 |-------|---------|------|
-| **S0** | ~~Review report: meal formation + continuation edge matrix~~ → [REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) | Process — **done** |
+| **S0** | ~~Review report: meal formation + continuation edge matrix~~ → [REPORT.md](../../investigations/meal-continuity-review/REPORT.md) | Process — **done** |
 | **S1** | Glass-tail select + pack + budget floor; compose order; dedupe with wake; evaluate tail-only vs tail+orient for rockets | Product tip |
 | **S2** | Framing dual-write (**why_now user snippet** recommended) + path parity tests P1–P2–P5–P7 + hybrid dedupe vs tail (B12 / B10) | Correctness |
 | **S3** | Persist directed_keep tray; **stop moment-end wipe (B5)**; **meal wire without moment_id filter (B5b)**; TTL+LRU; restart load | Working set |
@@ -402,7 +402,7 @@ Do **not** ship prompt-only soft recall (A5) as S1.
 
 1. ~~Draft this design~~.  
 2. ~~Update GitHub #93 + project board~~.  
-3. ~~Review plan (normative method)~~ — [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) → report under `docs/stretch-2/meal-continuity-review/`.  
+3. ~~Review plan (normative method)~~ — [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) → report under `docs/investigations/meal-continuity-review/`.  
 4. ~~Refine **this** draft from the report~~ (this revision).  
 5. **Implement plan** on a fix branch (S1 → S2 → S3); measure provisional OQs; lock OQ8 after tip exists.
 
@@ -415,4 +415,4 @@ Locked OQs (4/6/7) and confirmed order / cut law / B5+B5b scope are **normative 
 | Date | Change |
 |------|--------|
 | 2026-07-30 | Initial draft from dogfood (wait_reply rockets), interject asymmetry, sticky keep discussion; scope of #93 expanded |
-| 2026-07-30 | Refined from [meal-continuity-review/REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) DRAFT-EXTENSIONS: confirmed outer order; normative min tip set; cut order + tip floor from SA-9b; named acceptance tests; sticky keep B5 wipe + B5b meal-wire (instance tray without moment_id filter); OQ4/6/7 locked with evidence; S2 framing dual-write explicit; rockets empirical vs normative ranking; status → Ready for implement plan |
+| 2026-07-30 | Refined from [meal-continuity-review/REPORT.md](../../investigations/meal-continuity-review/REPORT.md) DRAFT-EXTENSIONS: confirmed outer order; normative min tip set; cut order + tip floor from SA-9b; named acceptance tests; sticky keep B5 wipe + B5b meal-wire (instance tray without moment_id filter); OQ4/6/7 locked with evidence; S2 framing dual-write explicit; rockets empirical vs normative ranking; status → Ready for implement plan |

@@ -52,7 +52,7 @@ Memory **designs** (not manuals): [docs/design/memory/](../design/memory/).
 | [radeon-vii/VENV-ROCM-SWITCH.md](radeon-vii/VENV-ROCM-SWITCH.md) | Venv ROCm switch runbook |
 | [radeon-vii/STACK-INVENTORY.md](radeon-vii/STACK-INVENTORY.md) | Stack inventory |
 
-Scripts and freezes still under [docs/radeon-vii-dev/](../radeon-vii-dev/) until archive/investigations PR. ROCm design: [design/memory/design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md).
+ROCm smoke **scripts** remain under [docs/radeon-vii-dev/scripts/](../radeon-vii-dev/scripts/). **Freezes** live under [investigations/radeon-vii-freezes/](../investigations/radeon-vii-freezes/). ROCm design: [design/memory/design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md).
 
 ---
 
@@ -75,4 +75,4 @@ Full install matrix and extras: root [README.md](../../README.md). Sandbox smoke
 |------|------|
 | [docs/inference.md](../inference.md) | Gemma/llama freeze — product path is Grok + [usage-and-pacing.md](usage-and-pacing.md) |
 | [docs/live-eval.md](../live-eval.md) | Historical live protocol |
-| [docs/lance-debug1/](../lance-debug1/) | Sealed investigation (moves to investigations/ later) |
+| [docs/investigations/](../investigations/) | Sealed forensic packages (lance, meal continuity, radeon freezes) |

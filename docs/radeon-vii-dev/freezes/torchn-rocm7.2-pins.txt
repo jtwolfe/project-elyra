@@ -1,5 +1,0 @@
-# docs/radeon-vii-dev/freezes/torchn-rocm7.2-pins.txt
-# Install (only valid after uninstall of cu130 + nvidia residual):
-#   pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/rocm7.2
-torch==2.13.0+rocm7.2
-torchvision==0.28.0+rocm7.2

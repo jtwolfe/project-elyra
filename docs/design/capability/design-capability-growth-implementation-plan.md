@@ -10,7 +10,7 @@
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` @ `deba40b` (capability-growth design v2) |
 | **Source of truth** | `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md` (product design v2) |
-| **Related** | `docs/state/tools-and-skills.md`, `docs/state/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `prompts/system.md` |
+| **Related** | `docs/state/tools-and-skills.md`, `docs/state/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/archive/project-status-pass.md`, `prompts/system.md` |
 | **Parallel pattern** | Identity draft → promote + versions; create-tool draft → verify → promote |
 
 ---
@@ -1304,7 +1304,7 @@ flowchart TB
 | Path | Action |
 |------|--------|
 | `docs/state/tools-and-skills.md` | Full layout, promote archive semantics, new tool groups, skills, secrets, extras install |
-| `docs/project-status-pass.md` | Capability status lines if file tracks ship state |
+| `docs/archive/project-status-pass.md` | Capability status lines if file tracks ship state |
 | `README.md` | Optional extras install snippet |
 | `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md` | Status note: implemented via PRs (optional) |
 

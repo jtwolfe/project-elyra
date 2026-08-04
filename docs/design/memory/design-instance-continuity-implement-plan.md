@@ -10,10 +10,10 @@
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` |
 | **Bug id** | `BUG-meal-03` |
 | **Refined product draft** | [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md) (**Ready for implement plan**) |
-| **Review report** | [meal-continuity-review/REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) (S0 done) |
+| **Review report** | [meal-continuity-review/REPORT.md](../../investigations/meal-continuity-review/REPORT.md) (S0 done) |
 | **Review method** | [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) |
-| **Evidence** | [meal-continuity-review/evidence/sa9b-e6d460f2/](../../stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/) |
-| **Code-path map** | [meal-continuity-review/CODE-PATH-MAP.md](../../stretch-2/meal-continuity-review/CODE-PATH-MAP.md) |
+| **Evidence** | [meal-continuity-review/evidence/sa9b-e6d460f2/](../../investigations/meal-continuity-review/evidence/sa9b-e6d460f2/) |
+| **Code-path map** | [meal-continuity-review/CODE-PATH-MAP.md](../../investigations/meal-continuity-review/CODE-PATH-MAP.md) |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
 | **Adjacent** | [#68](https://github.com/jtwolfe/project-elyra/issues/68) wake-02; [#92](https://github.com/jtwolfe/project-elyra/issues/92) LLM summaries (bulb, not tip) |
 
@@ -215,7 +215,7 @@ flowchart TB
 | `elyra/memory/types.py` (or meal item types) | Channel label / MealItem support for glass-tail if needed |
 | `tests/test_memory_meal.py` | **Extend** — order + omit contracts include glass_tail; legacy flags still green |
 | `tests/test_meal_glass_tail.py` (or extend meal tests) | **Create/extend** — named fixtures below |
-| Golden shape from `docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/` | Offline recompose-style fixture optional in S1, required shape for P2 |
+| Golden shape from `docs/investigations/meal-continuity-review/evidence/sa9b-e6d460f2/` | Offline recompose-style fixture optional in S1, required shape for P2 |
 
 **Key symbols (today / touch points):**
 
