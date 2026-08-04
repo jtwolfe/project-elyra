@@ -756,6 +756,12 @@ def test_finalize_moment_invokes_close_for_moment(tmp_path: Any) -> None:
     worker._phase = "in_moment"
     worker._worker_error = None
     worker._continuous = ContinuousRuntimeState(enabled=False, streak=0)
+    # Encode/traversal fields optional after defensive teardown, but set for realism.
+    worker._encode_epoch = 0
+    worker._encode_worker = None
+    worker._embedder = None
+    worker._embedder_open_lock = __import__("threading").Lock()
+    worker._traversal = MagicMock()
 
     wake = MagicMock()
     wake.id = "wake_ok"
@@ -785,6 +791,26 @@ def test_worker_run_finally_closes_all(monkeypatch: pytest.MonkeyPatch) -> None:
     worker._poll = 0.01
     worker._startup_recover = MagicMock()
     worker._started = False
+    # run() finally always tears down encode path — minimal fields for bare worker.
+    worker._encode_epoch = 0
+    worker._encode_worker = None
+    worker._encode_owner = "none"
+    worker._embedder = None
+    worker._embedder_open_lock = __import__("threading").Lock()
+    # Short-circuit body of run() before heavy memory ensure when stop already set:
+    # still need _ensure_memory_store not to blow if called — mock it.
+    worker._ensure_memory_store = MagicMock()  # type: ignore[method-assign]
+    worker._start_encode_worker_if_needed = MagicMock()  # type: ignore[method-assign]
+    worker._maybe_restart_encode_worker = MagicMock()  # type: ignore[method-assign]
+    worker._claim_and_open = MagicMock(return_value=None)  # type: ignore[method-assign]
+    worker._lock = __import__("threading").RLock()
+    worker._fire_due_unlocked = MagicMock()  # type: ignore[method-assign]
+    worker._idle_memory_ladder = MagicMock()  # type: ignore[method-assign]
+    worker._idle_memory_encode = MagicMock()  # type: ignore[method-assign]
+    worker._gap_drain_if_needed = MagicMock()  # type: ignore[method-assign]
+    worker._idle_memory_joint_repair = MagicMock()  # type: ignore[method-assign]
+    worker._idle_memory_optimize = MagicMock()  # type: ignore[method-assign]
+    worker._idle_traversal_ttl = MagicMock()  # type: ignore[method-assign]
 
     PresenceWorker.run(worker)
     assert mgr.session_count == 0
@@ -818,6 +844,7 @@ def test_supervisor_shutdown_calls_close_all(monkeypatch: pytest.MonkeyPatch) ->
     sup._sandbox = None
     sup._api_server = None
     sup._api_thread = None
+    sup._instrument_reaper = None
 
     import elyra.runtime.supervisor as sup_mod
 

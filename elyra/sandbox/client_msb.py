@@ -18,14 +18,34 @@ _LOG = logging.getLogger(__name__)
 
 
 def _msb_network(Network: Any) -> Any:
-    """Map resolved policy id → microsandbox Network object."""
+    """Map resolved policy id → microsandbox Network object.
+
+    Product policy ids: ``none`` | ``public_only`` | ``allow_all``.
+    microsandbox 0.6.x removed ``Network.public_only`` in favor of
+    ``Network.from_profiles("public")``; keep a fallback for older SDKs
+    that still expose ``public_only``.
+
+    Fail closed when neither public mapping exists — do **not** silently
+    fall back to ``allow_all`` (operator must set ELYRA_SANDBOX_NETWORK=allow_all
+    explicitly if unrestricted egress is intended).
+    """
     policy = resolve_msb_network_policy_id()
-    factory = {
-        "none": Network.none,
-        "public_only": Network.public_only,
-        "allow_all": Network.allow_all,
-    }.get(policy, Network.public_only)
-    return factory()
+    if policy == "none":
+        return Network.none()
+    if policy == "allow_all":
+        return Network.allow_all()
+    # public_only (default product egress for tool dogfood)
+    public_only = getattr(Network, "public_only", None)
+    if callable(public_only):
+        return public_only()
+    from_profiles = getattr(Network, "from_profiles", None)
+    if callable(from_profiles):
+        return from_profiles("public")
+    raise AttributeError(
+        "microsandbox Network has neither public_only nor from_profiles; "
+        "upgrade microsandbox, or set ELYRA_SANDBOX_NETWORK=allow_all / none "
+        "explicitly"
+    )
 
 
 def microsandbox_available() -> bool:

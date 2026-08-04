@@ -1515,13 +1515,23 @@ class PresenceWorker:
 
         Forces state away from ``loading``/``warm`` so a concurrent loader
         publish is rejected (orphan closed by loader guard).
+
+        Safe when attributes are missing (partial ``object.__new__`` fixtures
+        and early teardown paths).
         """
         emb = None
-        with self._embedder_open_lock:
-            emb = self._embedder
+        lock = getattr(self, "_embedder_open_lock", None)
+        if lock is not None:
+            with lock:
+                emb = getattr(self, "_embedder", None)
+                self._embedder = None
+                self._embedder_state = "absent"
+                # Keep open_failed sticky for this process life if it was set.
+        else:
+            emb = getattr(self, "_embedder", None)
             self._embedder = None
-            self._embedder_state = "absent"
-            # Keep open_failed sticky for this process life if it was set.
+            if hasattr(self, "_embedder_state"):
+                self._embedder_state = "absent"
         if emb is not None:
             close = getattr(emb, "close", None)
             if callable(close):
@@ -1555,7 +1565,10 @@ class PresenceWorker:
 
     def _memory_ladder_active(self) -> bool:
         """True when ladder should run on idle / finalize (PR5 placement)."""
-        mem_cfg = self.settings.memory
+        settings = getattr(self, "settings", None)
+        if settings is None:
+            return False
+        mem_cfg = settings.memory
         if not mem_cfg.ladder_enabled:
             return False
         if not (mem_cfg.write_atoms or mem_cfg.enabled):
@@ -1688,9 +1701,13 @@ class PresenceWorker:
         """Moment end hygiene: abandon active; clear last_session (KD-A19).
 
         Meal directed_keep tray is retained on the registry (B5); do not wipe.
+        No-op when traversal was never installed (partial worker fixtures).
         """
+        trav = getattr(self, "_traversal", None)
+        if trav is None:
+            return
         try:
-            self._traversal.on_moment_close(moment_id)
+            trav.on_moment_close(moment_id)
         except Exception:  # noqa: BLE001
             _LOG.exception(
                 "traversal moment-close cleanup failed moment_id=%s", moment_id
@@ -1886,8 +1903,9 @@ class PresenceWorker:
         Returns True if thread is dead (or was absent).
         """
         # Invalidate any in-flight poll_once bound to the prior epoch.
-        self._encode_epoch = int(self._encode_epoch) + 1
-        w = self._encode_worker
+        # getattr: partial workers (tests) may lack encode fields.
+        self._encode_epoch = int(getattr(self, "_encode_epoch", 0)) + 1
+        w = getattr(self, "_encode_worker", None)
         if w is None:
             return True
         dead = True
@@ -1915,6 +1933,7 @@ class PresenceWorker:
 
         Order (KD-E13): signal + join encode worker, close embedder, owner=none.
         Longer join on shutdown; epoch + shutting_down block zombie publish.
+        Soft-safe when encode subsystem was never initialized.
         """
         self._encode_shutting_down = True
         try:
@@ -1926,7 +1945,8 @@ class PresenceWorker:
             self._close_embedder()
         except Exception:  # noqa: BLE001
             _LOG.exception("shutdown embedder close failed")
-        self._encode_owner = "none"
+        if hasattr(self, "_encode_owner"):
+            self._encode_owner = "none"
 
     def _maybe_restart_encode_worker(self) -> None:
         """Restart dead encode worker with backoff (every presence loop).

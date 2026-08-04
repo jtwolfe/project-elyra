@@ -503,9 +503,11 @@ class ElyraSupervisor:
             if self.provider_runtime is not None:
                 self.provider_runtime.credits_poller = None
         # 0a. Instrument reaper stop/join (before worker; leaves running jobs for next GC).
-        if self._instrument_reaper is not None:
+        # getattr: partial supervisors (tests) may not have run __init__/start.
+        reaper = getattr(self, "_instrument_reaper", None)
+        if reaper is not None:
             try:
-                self._instrument_reaper.stop(join_timeout_s=5.0)
+                reaper.stop(join_timeout_s=5.0)
             except Exception as exc:  # noqa: BLE001
                 _LOG.warning("instrument reaper stop failed: %s", exc)
             self._instrument_reaper = None

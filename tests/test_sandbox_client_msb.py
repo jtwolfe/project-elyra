@@ -71,6 +71,28 @@ def test_microsandbox_client_ctor_raises_without_package(
         MicrosandboxClient()
 
 
+def _install_msb_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    network_cls: type[Any],
+) -> None:
+    """Inject a minimal microsandbox module so MicrosandboxClient can construct."""
+    stub = ModuleType("microsandbox")
+
+    class _Volume:
+        @staticmethod
+        def bind(host: str, readonly: bool = False) -> dict[str, Any]:
+            return {"host": host, "readonly": readonly}
+
+    class _Sandbox:
+        pass
+
+    stub.Volume = _Volume  # type: ignore[attr-defined]
+    stub.Network = network_cls  # type: ignore[attr-defined]
+    stub.Sandbox = _Sandbox  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "microsandbox", stub)
+
+
 def test_build_create_kwargs_volume_map(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -78,12 +100,6 @@ def test_build_create_kwargs_volume_map(
 
     Inject a stub microsandbox module so MicrosandboxClient can construct.
     """
-    stub = ModuleType("microsandbox")
-
-    class _Volume:
-        @staticmethod
-        def bind(host: str, readonly: bool = False) -> dict[str, Any]:
-            return {"host": host, "readonly": readonly}
 
     class _Network:
         @staticmethod
@@ -98,13 +114,7 @@ def test_build_create_kwargs_volume_map(
         def allow_all() -> str:
             return "allow_all"
 
-    class _Sandbox:
-        pass
-
-    stub.Volume = _Volume  # type: ignore[attr-defined]
-    stub.Network = _Network  # type: ignore[attr-defined]
-    stub.Sandbox = _Sandbox  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "microsandbox", stub)
+    _install_msb_stub(monkeypatch, network_cls=_Network)
 
     client = MicrosandboxClient()
     root = tmp_path / "sandbox0"
@@ -130,3 +140,57 @@ def test_build_create_kwargs_volume_map(
     assert volumes["/workspace/media"]["readonly"] is True
     assert volumes["/workspace/tmp"]["readonly"] is False
     assert volumes["/workspace/tools"]["readonly"] is False
+
+
+def test_build_create_kwargs_public_only_via_from_profiles(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """microsandbox 0.6.8+: public_only removed; use from_profiles('public')."""
+
+    class _Network:
+        @staticmethod
+        def none() -> str:
+            return "none"
+
+        @staticmethod
+        def allow_all() -> str:
+            return "allow_all"
+
+        @staticmethod
+        def from_profiles(*profiles: str) -> tuple[str, ...]:
+            return profiles
+
+    _install_msb_stub(monkeypatch, network_cls=_Network)
+
+    client = MicrosandboxClient()
+    root = tmp_path / "sandbox0"
+    for _guest, host_rel, _ro in MOUNT_SPEC:
+        (root / host_rel).mkdir(parents=True, exist_ok=True)
+
+    kwargs = client.build_create_kwargs(str(root), env=guest_env())
+    assert kwargs["network"] == ("public",)
+
+
+def test_build_create_kwargs_public_only_fails_closed_without_mapping(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Neither public_only nor from_profiles → AttributeError (not allow_all)."""
+
+    class _Network:
+        @staticmethod
+        def none() -> str:
+            return "none"
+
+        @staticmethod
+        def allow_all() -> str:
+            return "allow_all"
+
+    _install_msb_stub(monkeypatch, network_cls=_Network)
+
+    client = MicrosandboxClient()
+    root = tmp_path / "sandbox0"
+    for _guest, host_rel, _ro in MOUNT_SPEC:
+        (root / host_rel).mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(AttributeError, match="from_profiles"):
+        client.build_create_kwargs(str(root), env=guest_env())
