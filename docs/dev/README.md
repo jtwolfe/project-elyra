@@ -1,6 +1,6 @@
 # DEV — how we work
 
-Process law for Jamie + Grok Build. Prefer the [docs hub](../README.md).  
+Process law for Developer + Grok Build. Prefer the [docs hub](../README.md).  
 **Class home:** files in this folder (PR1 of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).
 
 | Doc | Role | Status |

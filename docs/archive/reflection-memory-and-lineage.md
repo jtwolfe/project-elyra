@@ -288,7 +288,7 @@ Retrieval woven into orient automatically (chain + dynamic). Model never “call
 These are not choices; they are walls already drawn.
 
 1. **One mind** — memory must not become a second will or dual chat/auto engine.  
-2. **Self ≠ user** — scopes, edges, and sleep must not merge Jim's prefs into `identity/core`.  
+2. **Self ≠ user** — scopes, edges, and sleep must not merge Developer's prefs into `identity/core`.  
 3. **Speak is an act** — public speech is high-value atom material; not free final text.  
 4. **Structural time** — UTC on storage; relatives recomputed; dues/timers drive wake; graph is not the scheduler.  
 5. **Dogfood formats** — if memory exposes tools/skills, they should look like other packages where possible.  

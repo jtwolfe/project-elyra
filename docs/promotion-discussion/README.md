@@ -16,7 +16,7 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 | Doc | Role |
 |-----|------|
 | **This README** | Charter, roadmap reflection, GitHub Project, meal reconstruction & budgets |
-| **[development-governance.md](../dev/development-governance.md)** | Git model, Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Jamie×Colin dual approaches, **naming** (tip law → [branch-law.md](../dev/branch-law.md)) |
+| **[development-governance.md](../dev/development-governance.md)** | Git model, Stage 0–3 ladder, **multi-human multi-PE** hierarchy, Developer×Colin dual approaches, **naming** (tip law → [branch-law.md](../dev/branch-law.md)) |
 | **[branch-law.md](../dev/branch-law.md)** | **Normative** `working` / `main` / operating pin / tags / short-lived / Graphite default |
 | *(later)* | Exit criteria checklist, milestone seed issues, merge plan |
 
@@ -123,7 +123,7 @@ Phase 3 (procedural / success-path) remains **interesting** for a long-term gym 
 
 In ~1–2 weeks the repo became **large and featureful**: harness, Grok path, Stage B, identity, full memory phases 1–2a, GPU embed train, glass panels, known-bugs sprawl. Markdown alone is no longer a reliable **tracking surface**. Instantiating a **GitHub Project** is justified **almost immediately** — even before `grok_build` lands — as the outer loop for humans (and later Elyra-assisted issue updates).
 
-**Broader than one-agent self-mod:** the gym must serve **Jamie, Colin, each PE instance, and later others**. Full git/operating-pin model and Stage ladder: **[development-governance.md](../dev/development-governance.md)**. Treat prior “enterprise self-mod only” advice as **loose guidance**, not gospel — PE has advanced; multi-party is first-class.
+**Broader than one-agent self-mod:** the gym must serve **Developer, Colin, each PE instance, and later others**. Full git/operating-pin model and Stage ladder: **[development-governance.md](../dev/development-governance.md)**. Treat prior “enterprise self-mod only” advice as **loose guidance**, not gospel — PE has advanced; multi-party is first-class.
 
 ### 3.2 What the gym is
 

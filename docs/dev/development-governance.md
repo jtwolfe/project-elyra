@@ -4,7 +4,7 @@
 |-------|--------|
 | **Created** | 2026-07-30 |
 | **Status** | Working guidance — **not gospel**, not a freeze contract |
-| **Sources** | Prior Grok Web discussion (repo/structure + Stage 0–3 ladder); current Project Elyra state on `grok-improv-radeonvii`; multi-party intent (Jamie, Colin, multiple PE instances); consciousness research briefs prepared for Colin (2026-07-29) |
+| **Sources** | Prior Grok Web discussion (repo/structure + Stage 0–3 ladder); current Project Elyra state on `grok-improv-radeonvii`; multi-party intent (Developer, Colin, multiple PE instances); consciousness research briefs prepared for Colin (2026-07-29) |
 | **Related** | [promotion-discussion/README.md](../promotion-discussion/README.md) (v0.1 promotion), [engineering-principles.md](engineering-principles.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [branch-law.md](branch-law.md) |
 
 > **Supersession (2026-08-01):** Normative **integration tip** is now **`working`** (not `main` alone, and not historical `grok-improvement`). Full tip / promote / pin / tag / stale-stack law: **[docs/dev/branch-law.md](branch-law.md)**. Sections below that still describe `main` as the sole day-to-day integration base are historical Stage 1 guidance; prefer `working` → promote to `main` with full suite.
@@ -57,7 +57,7 @@ Implications:
 | Stage 1 “do soon” | **Overdue and high leverage** — Project board + main protection + written map |
 | Full operating-pin automation | Still **later** (Stage 3); manual operating record is enough for Stage 1–2 |
 | Self-mod as the only next work | **Wrong** — next work is multi-human multi-instance **and** product close (v0.1) |
-| Single operator (you) only | **Jamie + Colin** (+ PE instances each may run) — process must scale to **quorum and continuity** |
+| Single operator (you) only | **Developer + Colin** (+ PE instances each may run) — process must scale to **quorum and continuity** |
 
 Treat the Grok Web structure as **loose architectural guidance** to grow into, not a checklist that freezes current dogfood.
 
@@ -97,7 +97,7 @@ Treat the Grok Web structure as **loose architectural guidance** to grow into, n
 | Enforce for admins | **Off** — owner can admin-bypass in emergency / solo land; **do not use casually** |
 | Delete head branch on merge | **Off** (operator preference) |
 
-**Meaning of “only Jamie approves”:** only `@jtwolfe` is code owner. Collaborator approvals do **not** satisfy the code-owner requirement. You still cannot approve your *own* PR as the sole review — for solo work, use a PR for visibility and **admin merge** only when necessary, or get a second account/reviewer later.
+**Meaning of “only Developer approves”:** only `@jtwolfe` is code owner. Collaborator approvals do **not** satisfy the code-owner requirement. You still cannot approve your *own* PR as the sole review — for solo work, use a PR for visibility and **admin merge** only when necessary, or get a second account/reviewer later.
 
 **Do not** grant write access lightly: anyone with write can open PRs; only your code-owner approval completes the gate.
 
@@ -128,7 +128,7 @@ Next stages are **not** only “Elyra improves Elyra.” Expected participants:
 
 | Actor | Role (sketch) |
 |-------|----------------|
-| **Jamie** | Founder / engineering continuity; PE instance on LuxPrimata (and others); strong vote on architecture and promote |
+| **Developer** | Founder / engineering continuity; PE instance on LuxPrimata (and others); strong vote on architecture and promote |
 | **Colin** | Collaborator; data/governance lens; may run **his own PE instance**; committee / ontology / community emphasis |
 | **PE instances** | Durable “persons” on pinned commits; each has own `ELYRA_HOME` memory, tools, glass — **not** shared mutable state by default |
 | **Later humans + PE instances** | Same pattern: identity, operating pin, promote gates scale by **roles**, not by ad-hoc trust |
@@ -152,14 +152,14 @@ Next stages are **not** only “Elyra improves Elyra.” Expected participants:
               ┌────────────────────┼────────────────────┐
               ▼                    ▼                    ▼
      Operating pin A        Operating pin B        Public release
-     (Jamie’s PE)           (Colin’s PE)           (tags / Releases)
+     (Developer’s PE)           (Colin’s PE)           (tags / Releases)
      controlled restart     controlled restart     installable snapshot
 ```
 
 | Layer | Who decides | What fails if wrong |
 |-------|-------------|---------------------|
-| **Public release** | Human release authority (Jamie ± committee) | External users, reputation |
-| **Operating promote (per instance)** | Instance owner human (Jamie for his PE, Colin for his) + optional second review for risky changes | **That** PE’s continuity, memory, tools |
+| **Public release** | Human release authority (Developer ± committee) | External users, reputation |
+| **Operating promote (per instance)** | Instance owner human (Developer for his PE, Colin for his) + optional second review for risky changes | **That** PE’s continuity, memory, tools |
 | **Merge to `main`** | PR review (any qualified human; later PE-assisted drafts) | Integration quality for everyone |
 | **Development** | Author human or PE in worktree | Isolated; should not brick others |
 
@@ -176,7 +176,7 @@ Minimum bar before something is **safe to promote to operating** on a shared rec
 | Memory smoke | If meal/store/embed touched: encode path + meal rebuild (see promotion README §4–5) |
 | Tool honesty | create-tool / MSB fitness if capability surface changed |
 | Instance-local backup | Recommend snapshot of `ELYRA_HOME` before promote on that machine |
-| Dual-party review (when available) | Jamie **or** Colin review for risky PRs; both for public `vX.Y.Z` when possible |
+| Dual-party review (when available) | Developer **or** Colin review for risky PRs; both for public `vX.Y.Z` when possible |
 
 Public releases should be **stricter** than a single-instance operating promote (more smoke, longer bake on at least one operating pin).
 
@@ -191,11 +191,11 @@ Memory is **not** merged across instances by default. Continuity is **per person
 
 ---
 
-## 5. Dual research approaches (Jamie × Colin) — how they shape the project
+## 5. Dual research approaches (Developer × Colin) — how they shape the project
 
 These are complementary, not competitive. Product structure should hold **both**.
 
-| Axis | Jamie (engineering continuity) | Colin (data / community / committee) |
+| Axis | Developer (engineering continuity) | Colin (data / community / committee) |
 |------|--------------------------------|--------------------------------------|
 | **Unit of mind** | Isolated system that interacts and perceives | Groups, community, **relational** emergence |
 | **Information metaphor** | **Containers** with structure applied | **Landscape** with ontologies to extract |
@@ -218,7 +218,7 @@ Consciousness research briefs (2026-07-29, prepared for Colin — **external** t
 | Relational mind | Multiple PE instances + human discussion; **not** one shared brain by default |
 | Governance before capability | Operating pin + PR before live; least-privilege tokens; Stage ladder |
 
-| Jamie-flavoured need | Mechanism |
+| Developer-flavoured need | Mechanism |
 |----------------------|-----------|
 | Single continuity | Per-instance operating pin + controlled restart; no live-tree edits |
 | Structured containers | Packages, worktrees, tagged releases, memory atoms as durable units |
@@ -243,7 +243,7 @@ Consciousness research briefs (2026-07-29, prepared for Colin — **external** t
 
 **Why this lands:**
 
-- **Autopoiesis** (self-production under constraint): the system maintains identity while changing structure — operating pin, controlled restart, memory continuity, self-development without bricking the person. Fits Jamie’s engineering of durable containers and linear continuity.  
+- **Autopoiesis** (self-production under constraint): the system maintains identity while changing structure — operating pin, controlled restart, memory continuity, self-development without bricking the person. Fits Developer’s engineering of durable containers and linear continuity.  
 - **Commons**: shared code lineage, Project board, PRs, public tags — without implying shared *soul* or shared `ELYRA_HOME`. Each PE instance remains a private person; the **commons** is craft and governance. Fits Colin’s committee / landscape / multi-party scale.  
 - Together: *selves that remake themselves carefully, in a shared yard, under multi-human care.*
 
@@ -272,7 +272,7 @@ Immediate (Stage 1 + v0.1 prep):
 
 1. GitHub Project under **Project Elyra — Autopoiesis Commons**
 2. Light `main` protection + branch hygiene doc (this file linked from root docs)  
-3. Manual operating SHA record when restarting Jamie’s (and later Colin’s) PE  
+3. Manual operating SHA record when restarting Developer’s (and later Colin’s) PE  
 4. Continue product close (memory dogfood, meal/chat-chain, `grok_build`) **without** waiting for Stage 3  
 
 Explicitly **not** required for v0.1:
@@ -284,7 +284,7 @@ Explicitly **not** required for v0.1:
 
 ---
 
-## 8. Open decisions (for Jamie + Colin)
+## 8. Open decisions (for Developer + Colin)
 
 1. Who holds **repo admin** / protection rules (shared?).  
 2. Public release bar: one human or **both** for `v0.1.0`?  

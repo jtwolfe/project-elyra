@@ -62,7 +62,7 @@ This design specifies a **non-destructive, hub-first reorganisation** into four 
 ### Why now
 
 - Issue **#121** / Project #2 converted draft: taxonomy agreed; branch `chore/docs-reorg` open; **backlog** (process quality, not packaging gate).
-- Grok Build and multi-party dogfood need **deterministic routing**: operator → STATE; product north star → GOAL; implementer → DESIGN; Jamie/agents → DEV.
+- Grok Build and multi-party dogfood need **deterministic routing**: operator → STATE; product north star → GOAL; implementer → DESIGN; Developer/agents → DEV.
 - Root README already teaches “prefer code on `working`” — docs should reinforce that with class + banner, not a single chronological list.
 
 ---
@@ -100,7 +100,7 @@ This design specifies a **non-destructive, hub-first reorganisation** into four 
 | **STATE** | Users / operators | As-implemented architecture and functional behaviour; run/deploy; honest limits; known bugs; dogfood checklists that describe *current* ops | Yes — prefer code on `working` |
 | **GOAL** | Product direction | Programme goals, phase north stars, v0.1 claim — *what* and *why*, success bars | Yes but **short**; link to DESIGN |
 | **DESIGN / PLAN** | Implementers | Designs and PR plans; freeze / shipped / superseded banners; preserve history | Frozen or active; history kept |
-| **DEV** | Jamie + Grok Build | Engineering principles, branch-law, operating pins, issue+branch workflow, board hygiene | Yes — normative process |
+| **DEV** | Developer + Grok Build | Engineering principles, branch-law, operating pins, issue+branch workflow, board hygiene | Yes — normative process |
 
 **Conflict rule (hub + all living docs):** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law (`branch-law.md`).
 
@@ -288,7 +288,7 @@ Every substantial doc (especially DESIGN, archive candidates, and freezes) gets 
 |-------|--------|
 | **Class** | STATE \| GOAL \| DESIGN \| DEV \| ARCHIVE \| INVESTIGATION |
 | **Status** | Active \| Shipped \| Superseded \| Freeze \| Archive \| Draft |
-| **Audience** | Operators \| Product \| Implementers \| Jamie+Grok Build |
+| **Audience** | Operators \| Product \| Implementers \| Developer+Grok Build |
 | **Normative?** | Yes \| No — prefer code on `working` when conflict |
 | **Successor** | path or issue (required if Superseded) |
 | **Supersedes** | path (optional) |
@@ -543,7 +543,7 @@ Four classes. Prefer **code on `working`** over stale prose.
 | **STATE** | Operators / users | [state/README.md](state/README.md) · root README |
 | **GOAL** | Product direction | [goal/README.md](goal/README.md) |
 | **DESIGN** | Implementers | [design/README.md](design/README.md) |
-| **DEV** | Jamie + Grok Build | [dev/README.md](../dev/README.md) |
+| **DEV** | Developer + Grok Build | [dev/README.md](../dev/README.md) |
 | Archive / investigations | Archaeology | [archive/](archive/) · [investigations/](investigations/) |
 
 ## Quick links (living)

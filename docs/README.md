@@ -12,7 +12,7 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 | **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits | [state/README.md](state/README.md) |
 | **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why* | [goal/README.md](goal/README.md) (stub → current paths) |
 | **DESIGN / PLAN** | Implementers | Designs, PR plans, freezes (history kept) | [design/README.md](design/README.md) |
-| **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) |
+| **DEV** | Developer + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) |
 | **Archive / investigations** | Archaeology | Superseded freezes, sealed bags | [archive/](archive/) · [investigations/](investigations/) |
 
 **Taxonomy status:** **Shipped** — hub + DEV + DESIGN + STATE + archive/investigations + [dev/engineering-principles.md](dev/engineering-principles.md) **§10** ([#121](https://github.com/jtwolfe/project-elyra/issues/121) PR0–PR7).  

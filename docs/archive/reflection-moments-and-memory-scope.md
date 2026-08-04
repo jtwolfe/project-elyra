@@ -85,7 +85,7 @@ wake (why-now)
 Examples that *feel* like one moment:
 
 - User asks to fix a bug → multi-hop tools → speak summary → stop  
-- Timer “follow up Jim” → talk skill → speak → maybe schedule again  
+- Timer “follow up Developer” → talk skill → speak → maybe schedule again  
 - Quiet work: do-work on task T until blocked / hop budget / acceptance  
 
 Examples that are probably **not** one micro-atom-as-whole-life:
@@ -111,7 +111,7 @@ Likely useful **tags on a moment** (when we specify later): wake reason, skill(s
 Keep fine grain **inside** the episode — that’s still atomization, but **scoped**.
 
 ```text
-Moment M42  "help Jim with deploy"
+Moment M42  "help Developer with deploy"
   [0] wake: user message …
   [1] skill: do-work
   [2] tool: read_file …
@@ -144,7 +144,7 @@ Essay-compatible reading: the *instance you care about recalling* is often the m
 ## 5. Moments chained together
 
 ```text
-M40 — morning check-in with Jim
+M40 — morning check-in with Developer
   ↓ follows / caused_by / same_day
 M41 — implement schedule_wake tool
   ↓

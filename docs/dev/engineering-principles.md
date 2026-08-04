@@ -215,7 +215,7 @@ Normative process rules for documentation layout, banners, freezes, and superses
 | **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits, known bugs, ops checklists | Yes — prefer code on `working` |
 | **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why*, success bars | Yes but **short**; link to DESIGN |
 | **DESIGN / PLAN** | Implementers | Designs and PR plans; freeze / shipped / superseded banners; history kept | Frozen or active |
-| **DEV** | Jamie + Grok Build | This file, branch-law, operating pins, governance, board hygiene | Yes — normative process |
+| **DEV** | Developer + Grok Build | This file, branch-law, operating pins, governance, board hygiene | Yes — normative process |
 
 **Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is **Active**. **DEV** wins for tip / branch / pin law ([branch-law.md](branch-law.md)).
 
@@ -244,7 +244,7 @@ Template (fields as needed):
 |-------|--------|
 | **Class** | STATE \| GOAL \| DESIGN \| DEV \| ARCHIVE \| INVESTIGATION |
 | **Status** | Active \| Shipped \| Superseded \| Freeze \| Archive \| Draft |
-| **Audience** | Operators \| Product \| Implementers \| Jamie+Grok Build |
+| **Audience** | Operators \| Product \| Implementers \| Developer+Grok Build |
 | **Normative?** | Yes \| No — prefer code on `working` when conflict |
 | **Successor** | path or issue (required if Superseded) |
 | **Supersedes** | path (optional) |
@@ -278,7 +278,7 @@ Age alone is **not** the primary signal. Classify with the decision tree and cri
 - [§3 Archival criteria and decision tree](../design/docs-reorg-taxonomy.md#3-archival-criteria-and-decision-tree)
 - Living criteria also summarized in [archive/README.md](../archive/README.md)
 
-Route operators → STATE; product north star → GOAL; implementers → DESIGN; Jamie/agents → DEV; archaeology → archive/investigations.
+Route operators → STATE; product north star → GOAL; implementers → DESIGN; Developer/agents → DEV; archaeology → archive/investigations.
 
 ### When docs change with code
 

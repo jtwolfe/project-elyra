@@ -148,7 +148,7 @@ Session user today:
 | Per-user orient history | **No** |
 | Memory per user | **No** |
 
-**Implication:** A first “glass per user” can be a **channel lens** (filter/thread on tags) without full Phase 3 memory. Real **relationship continuity** (“what I know with Jim vs Sam”) wants memory design so isolation does not fight continuous work and a shared ledger. See also the multi-user section of the identity design.
+**Implication:** A first “glass per user” can be a **channel lens** (filter/thread on tags) without full Phase 3 memory. Real **relationship continuity** (“what I know with Developer vs Sam”) wants memory design so isolation does not fight continuous work and a shared ledger. See also the multi-user section of the identity design.
 
 ---
 
@@ -190,7 +190,7 @@ A **base development workflow** would be the *default way she does software work
 
 1. **Notice** a gap (failure, missing capability, user ask, ledger item)  
 2. **Orient** (why-now, goals, skills, self/users)  
-3. **Plan** (goal/tasks with acceptance; maybe provenance “for Jim”)  
+3. **Plan** (goal/tasks with acceptance; maybe provenance “for Developer”)  
 4. **Change** (tools: edit, run, tests — later: stronger coding instrument)  
 5. **Verify** (tests, dogfood gates, review-work)  
 6. **Promote or rollback** (tool promote; later: branch/worktree/restart)  
@@ -226,7 +226,7 @@ That workflow should feel like a **skill + ledger pattern**, not a second mind. 
    Speak→glass, usage ceilings, promote gates, path jail — already hybrid MC doctrine.
 
 5. **How does memory change the loop?**  
-   “Remember last thrash lesson” vs “remember Jim prefers small PRs” — different stores, same workflow shape?
+   “Remember last thrash lesson” vs “remember Developer prefers small PRs” — different stores, same workflow shape?
 
 6. **Multi-user and self-improve**  
    Improvement work for the shared person vs work *for* a specific user (provenance already exists; isolation does not).

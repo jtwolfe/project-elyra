@@ -297,7 +297,7 @@ Hard store cap remains `MemorySettings.atom_max_chars` (8000) with blob spill ab
    - Prose: soft mentions of important atoms / goals / tasks.
    - Meta: `meta.pointer_atom_ids`, `meta.pointer_goal_ids`, `meta.pointer_task_ids` (capped lists; extracted from sources + optional JSON trailer parse).
 3. **User-linked vs independent work:**
-   - User-linked: “Jim asked…” (display name from `UsersStore` / orient user digest).
+   - User-linked: “Developer asked…” (display name from `UsersStore` / orient user digest).
    - Independent: “I decided…” (self `display_name` from `IdentityStore`, default Elyra).
 4. **Soft continuous-work span merge:** prompt-only (“you may merge continuous tool chains into one beat”). **No** hard skip-parent-recompute engine.
 5. **No warehouse collapse:** do not invent facts not grounded in sources; prefer under-claim.
@@ -318,7 +318,7 @@ For **1h** (from raw):
 
 ```text
 [window 1h | ws → we]
-[identity] self=Elyra; user=Jim (soft names only)
+[identity] self=Elyra; user=Developer (soft names only)
 [moments]
 - m_… t0–t1 why_now=… n_atoms=…
   - speak: …

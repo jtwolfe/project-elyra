@@ -16,9 +16,9 @@
 | Change | Rare reflect → `draft_identity` → hard promote (operator grant) | `draft_identity` → medium promote (social / session user) |
 | On wake | Short **SELF** digest (always) | At most **one USER** digest (work-origin; may be empty) |
 
-**Bans:** fused persona file; writing user prefs into core self; unlabeled “you and Jim” blob; cross-user profile inject; one “update who” tool for both; silent live rewrite without promote.
+**Bans:** fused persona file; writing user prefs into core self; unlabeled “you and Developer” blob; cross-user profile inject; one “update who” tool for both; silent live rewrite without promote.
 
-Chatting with Jim must not rewrite who Elyra is. There are **no** `patch_identity` / `patch_user` tools — only the draft/promote trio (process in skills).
+Chatting with Developer must not rewrite who Elyra is. There are **no** `patch_identity` / `patch_user` tools — only the draft/promote trio (process in skills).
 
 ---
 
@@ -87,8 +87,8 @@ SELF is always Elyra’s current self digest. **USER is not “always operator.�
 
 | Wake | USER digest |
 |------|-------------|
-| User message as Jim | Jim’s current profile |
-| `task_ready` on a Jim-context goal/task | Jim’s profile (work *with/for* Jim) |
+| User message as Developer | Developer’s current profile |
+| `task_ready` on a Developer-context goal/task | Developer’s profile (work *with/for* Developer) |
 | Continuous / timer with no linked context | **Empty** — not operator, not last-speaker memory |
 | Invalid / missing linked user | Empty (fail soft) |
 

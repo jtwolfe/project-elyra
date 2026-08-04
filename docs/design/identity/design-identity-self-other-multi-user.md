@@ -18,7 +18,7 @@
 
 ## Overview
 
-Elyra today has **read-only** identity walls: a single `data/identity/self.md` and per-user `data/users/<id>/profile.md`, injected into orient as SELF (always) and one USER digest (today: wake `user_id` **or `"operator"`** on pure work — a fake social counterpart). There are **no write tools**, **no version history**, **no draft/promote lifecycle**, and Glass hardcodes `USER_ID = "operator"` with role chips labeled `user` / `assistant`. Goals lack provenance (`created_in_context`), so narratives like “Jim said use Langchain…” cannot be grounded in the ledger.
+Elyra today has **read-only** identity walls: a single `data/identity/self.md` and per-user `data/users/<id>/profile.md`, injected into orient as SELF (always) and one USER digest (today: wake `user_id` **or `"operator"`** on pure work — a fake social counterpart). There are **no write tools**, **no version history**, **no draft/promote lifecycle**, and Glass hardcodes `USER_ID = "operator"` with role chips labeled `user` / `assistant`. Goals lack provenance (`created_in_context`), so narratives like “Developer said use Langchain…” cannot be grounded in the ledger.
 
 This design introduces a **thin, versioned identity system** for both self and users:
 
@@ -46,7 +46,7 @@ Self ≠ user is already **law** (`prompts/system.md`, `docs/state/time-and-iden
 | Orient inject | `PresenceWorker.rebuild_outer` → `assemble_outer_meal` | SELF always; USER from `user_id = _user_id_from_wake(wake) or "operator"` today — pure work gets **operator** even with no social counterpart. **Target (K13/K19):** work-origin policy — social speaker, else linked goal/task `created_in_context`, else **empty** (not operator). Content never evolves via tools |
 | Docs aspirational | `time-and-identity.md` cites `patch_identity` / `patch_user` | Not implemented; wrong shape (would invite thrashing / fused “update who” tool) |
 | Glass | `USER_ID = "operator"`; chips show `user`/`assistant` | Single actor; no identity panel versions; no session switch |
-| Goals | `GoalsStore.create_goal` — no user fields | Cannot attribute “Jim said…” |
+| Goals | `GoalsStore.create_goal` — no user fields | Cannot attribute “Developer said…” |
 | Live culture | Recent SELF narrative seed; sandbox `SELF_v3_draft.md` | Operator already treats self promote as **grant-gated**; host must match culture |
 
 ### Current architecture (verified)
@@ -167,7 +167,7 @@ Do **not** put Elyra in the USER slot. Glass session user (keyboard) is independ
 | K6 | **Shared goals ledger + `created_in_context`** on goals **and** tasks | Provenance without per-user DBs; null when `ctx.user_id` is None (expected on continuous) |
 | K7 | **Reuse user_id path jail** for all user FS ops | Existing hardened pattern (`UsersStore`) |
 | K8 | **Compat read**: if `current.md` missing, fall back to `self.md` / `profile.md`; migrate on ensure (normative order below) | Dogfood homes keep working |
-| K9 | **Glass labels from meta**, not hard-coded Assistant/User | Product UX: “Elyra” / “Jim” |
+| K9 | **Glass labels from meta**, not hard-coded Assistant/User | Product UX: “Elyra” / “Developer” |
 | K10 | **No verify_identity step** (unlike create-tool) | Identity is prose + meta, not executable package; gates are social/host, not hash-verify |
 | K11 | **Provisional users** + host `should_name_nudge(meta, moment_id)` on `get_identity`; soft skill nag | Onboarding without hard block; cap is host-computable |
 | K12 | **Identity writes are host builtins**, not sandbox FS | Sandbox cannot reach `data/`; same as ledger tools |
@@ -304,9 +304,9 @@ VERSION_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z_[0-9a-f]{6}$")
   "schema_version": 1,
   "actor": "user",
   "user_id": "operator",
-  "display_name": "Jim",
+  "display_name": "Developer",
   "full_name": "Joseph Bloggs",
-  "goes_by": "Jim",
+  "goes_by": "Developer",
   "real_name_known": true,
   "provisional": false,
   "created_at": "2026-07-20T12:00:00+00:00",
@@ -391,7 +391,7 @@ Optional front-matter is **not** required in v1 (meta.json owns structured field
 #### User `current.md` (seed shape — operator)
 
 ```markdown
-# Operator / Jim
+# Operator / Developer
 
 Primary local user of this Elyra home.
 
@@ -707,8 +707,8 @@ self_digest = self._identity.self_digest()
 
 | Wake situation | USER digest |
 |----------------|-------------|
-| `user_message` / `wait_reply` with `user_id=jim` | Jim’s current profile |
-| `task_ready` for task whose goal/task has `created_in_context.user_id=jim` | Jim’s profile (continuing work *with/for* Jim) |
+| `user_message` / `wait_reply` with `user_id=developer` | Developer’s current profile |
+| `task_ready` for task whose goal/task has `created_in_context.user_id=developer` | Developer’s profile (continuing work *with/for* Developer) |
 | `moment_continue` with no goal/task id, or linked items lack context | **Empty** (`{{USER}}` placeholder / blank) |
 | Autonomous self-drive goal created with null context | **Empty** |
 | Missing/invalid linked user_id | Empty (fail soft) |
@@ -883,7 +883,7 @@ Glass and model share grant file + store.promote; only the entrypoint differs.
 
 ```mermaid
 sequenceDiagram
-  participant U as User Jim
+  participant U as User Developer
   participant G as Glass
   participant W as PresenceWorker
   participant M as Model
@@ -891,10 +891,10 @@ sequenceDiagram
   participant S as UsersStore
 
   U->>G: "Call me Papa Joe; Tim born 2026-04-07"
-  G->>W: POST message user_id=jim
+  G->>W: POST message user_id=developer
   W->>M: orient SELF + USER jim current
   M->>M: load_skill update-identity
-  M->>T: draft_identity actor=user user_id=jim body=… meta_patch goes_by
+  M->>T: draft_identity actor=user user_id=developer body=… meta_patch goes_by
   T->>S: write draft.md + meta
   M->>T: promote_identity actor=user reason="user requested address change"
   T->>T: evaluate_promote_gate medium OK
@@ -989,10 +989,10 @@ Register like ledger tools via `runner.json` → builtin entry points.
 {
   "ok": true,
   "actor": "user",
-  "user_id": "jim",
+  "user_id": "developer",
   "which": "current",
-  "body": "# Jim\n…",
-  "meta": { "goes_by": "Jim", "full_name": "Joseph Bloggs", "…": "…" },
+  "body": "# Developer\n…",
+  "meta": { "goes_by": "Developer", "full_name": "Joseph Bloggs", "…": "…" },
   "has_draft": true,
   "should_name_nudge": false,
   "versions": [
@@ -1255,8 +1255,8 @@ Messages already accept `user_id` in POST body; Glass sends session user instead
 ```python
 # On each goal AND each task at create time (same shape):
 "created_in_context": {
-  "user_id": "jim",           # omitted/null if pure continuous / ctx.user_id is None
-  "goes_by": "Jim",           # snapshot at create; fallback user_id string if no meta
+  "user_id": "developer",           # omitted/null if pure continuous / ctx.user_id is None
+  "goes_by": "Developer",           # snapshot at create; fallback user_id string if no meta
   "moment_id": "…",           # optional from ctx.moment_id
   "source": "tool"            # tool | api | migrate
 }
@@ -1264,7 +1264,7 @@ Messages already accept `user_id` in POST body; Glass sends session user instead
 
 **Null is expected, not a bug:** `ToolContext.user_id` comes from `_user_id_from_wake` **without** inventing operator. Continuous / timer / task_ready moments often have `ctx.user_id is None` → new create_goal/create_task leave `created_in_context` absent or null. Do not invent operator provenance for pure work.
 
-**Relation to orient USER (K19):** if a goal was created during a social moment with Jim’s context, later `task_ready` injects Jim’s profile via ledger link even though `ctx.user_id` is still None on that work moment. Provenance on the ledger is the durable signal; orient USER is derived from it for linked work wakes only.
+**Relation to orient USER (K19):** if a goal was created during a social moment with Developer’s context, later `task_ready` injects Developer’s profile via ledger link even though `ctx.user_id` is still None on that work moment. Provenance on the ledger is the durable signal; orient USER is derived from it for linked work wakes only.
 
 #### `GoalsStore` signatures
 
@@ -1412,7 +1412,7 @@ On promote (under store lock):
 | Seed | Action |
 |------|--------|
 | `prompts/seeds/identity/self.md` | Keep short narrative; ensure copies to **`current.md`** |
-| `prompts/seeds/users/operator/profile.md` | Seed → **`current.md`** + meta `goes_by: Operator` (dogfood may rename Jim) |
+| `prompts/seeds/users/operator/profile.md` | Seed → **`current.md`** + meta `goes_by: Operator` (dogfood may rename Developer) |
 | Legacy `SEED_V1` migrate | Step 3 above on resolved live path only |
 
 ### Goals migration
@@ -1427,7 +1427,7 @@ Existing goals without `created_in_context` remain valid (`null`/absent). No bac
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ Elyra · glass                    [Jim ▾]  continuous …       │
+│ Elyra · glass                    [Developer ▾]  continuous …       │
 │                               user switcher                  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -1461,7 +1461,7 @@ function actorLabel(message) {
 // meta chip: actorLabel(m) instead of raw role string
 ```
 
-**Message attribution ready:** keep storing `user_id` on every user row (already); assistant rows may store `user_id` of addressee (speak already has user_id) for future multi-party — show optional “to Jim” only if ≠ session (defer UI polish).
+**Message attribution ready:** keep storing `user_id` on every user row (already); assistant rows may store `user_id` of addressee (speak already has user_id) for future multi-party — show optional “to Developer” only if ≠ session (defer UI polish).
 
 ### Identity panel
 
@@ -1473,7 +1473,7 @@ function actorLabel(message) {
 │ └─────────────────────────────────────────────────────────┘ │
 │ Draft (if any): [Show]   Operator: [Mint grant] [Promote]   │
 │                                                             │
-│ Users · session: Jim                                        │
+│ Users · session: Developer                                        │
 │ [operator] [jim] [guest_3 provisional] [+ New]              │
 │ ┌ selected user current ──────────────────────────────────┐ │
 │ │ meta: goes_by, full_name, real_name_known               │ │
@@ -1501,7 +1501,7 @@ function actorLabel(message) {
 
 1. **New user (locked):** **API/Glass only** — `POST /api/users` / New guest. No `create_if_missing` on tools in v1 (preserves K1).
 
-2. **User discovery (K16):** Model has **no** list-users tool. Discovery UX is the Glass session switcher. Skills state clearly: **only update the active session user** unless the operator promotes another profile via Glass admin. Updating Sam while session is Jim requires switching session to Sam (or Glass promote with `identity_promote_any_user`).
+2. **User discovery (K16):** Model has **no** list-users tool. Discovery UX is the Glass session switcher. Skills state clearly: **only update the active session user** unless the operator promotes another profile via Glass admin. Updating Sam while session is Developer requires switching session to Sam (or Glass promote with `identity_promote_any_user`).
 
 3. **Name unknown:** `real_name_known: false`, provisional `goes_by` (“friend”, “guest”, typed name).
 
@@ -1593,7 +1593,7 @@ def should_name_nudge(meta: Mapping[str, Any], moment_id: str, *, max_nudges: in
 
 | Pros | Cons |
 |------|------|
-| Simple | Loses “continuing Jim’s task” orient context when provenance exists |
+| Simple | Loses “continuing Developer’s task” orient context when provenance exists |
 
 **Reject as sole policy:** step 2 of K19 (linked goal/task context) is required when present; empty only when autonomous / unlinked.
 
@@ -1730,20 +1730,20 @@ Resolved as Key Decisions (K5b, K13–K19) or locked text above. Remaining:
 ### Integration
 
 - Worker rebuild_outer after user promote shows new USER text mid-next-moment (social).
-- `task_ready` for Jim-context goal injects Jim USER even if Glass session is operator.
+- `task_ready` for Developer-context goal injects Developer USER even if Glass session is operator.
 - Autonomous continuous: USER empty; SELF still present.
 - Speak + message labels use meta display names via API session payload (independent of orient USER).
 
 ### Dogfood checklist (operator)
 
 1. [ ] Fresh ensure migrates live self + operator without data loss.  
-2. [ ] Glass shows **Elyra** / **Jim** (or Operator) chips, not assistant/user.  
+2. [ ] Glass shows **Elyra** / **Developer** (or Operator) chips, not assistant/user.  
 3. [ ] Switcher: create guest “Sam” (goes_by only; server mints `sam` or collision suffix), send message as Sam, USER digest provisional.  
-4. [ ] **While session remains Sam**, ask Elyra to update goes_by; draft then promote; next message label updates (K16 — do not switch to Jim mid-test).  
+4. [ ] **While session remains Sam**, ask Elyra to update goes_by; draft then promote; next message label updates (K16 — do not switch to Developer mid-test).  
 5. [ ] Ask Elyra to revise SELF; confirm draft does **not** change Identity panel current until grant+promote.  
 6. [ ] Mint grant; promote self; orient/self panel updates; previous in versions.  
-7. [ ] Create goal while session=Jim; goals.json has `created_in_context.user_id`.  
-8. [ ] With continuous on: `task_ready`/continue on that Jim goal shows **Jim** in USER (not operator, not empty).  
+7. [ ] Create goal while session=Developer; goals.json has `created_in_context.user_id`.  
+8. [ ] With continuous on: `task_ready`/continue on that Developer goal shows **Developer** in USER (not operator, not empty).  
 9. [ ] Autonomous work (no linked context): USER empty — not operator profile.  
 10. [ ] Full reset: identity + all users + versions preserved; chat/goals cleared.  
 11. [ ] Provisional user: `get_identity` reports `should_name_nudge`; after one ask + `record_name_nudge`, same moment returns false.  
@@ -1808,7 +1808,7 @@ Six mergeable units on `grok-improvement` (collapsed from a 10-deep chain). Each
 | **Title** | goals: created_in_context on shared ledger |
 | **Files** | `elyra/goals/store.py`, `elyra/tools/builtin/ledger.py`, `tools/bundled/create_goal/schema.json`, `create_task/schema.json`, `elyra/loop/orient_slice.py`, `elyra/identity/orient_user.py` (or presence helper), `elyra/presence/worker.py`, `tests/test_goals.py`, orient-user tests |
 | **Deps** | Soft: PR1 for `display_label`; **PR2** for resolver shell |
-| **Description** | Goal **and** task fields; tools set context only when `ctx.user_id` non-null; continuous create → null tests; orient shows `· goes_by` when present. **Wire `_created_in_context_user_from_wake`** so `task_ready` / continue with linked ids inject that user’s profile. Tests: Jim-context task_ready → Jim USER; unlinked continue → empty. Parallelizable with PR3. |
+| **Description** | Goal **and** task fields; tools set context only when `ctx.user_id` non-null; continuous create → null tests; orient shows `· goes_by` when present. **Wire `_created_in_context_user_from_wake`** so `task_ready` / continue with linked ids inject that user’s profile. Tests: Developer-context task_ready → Developer USER; unlinked continue → empty. Parallelizable with PR3. |
 
 ### PR5 — HTTP + Glass session / labels / identity panel
 

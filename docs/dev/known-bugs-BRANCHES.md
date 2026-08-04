@@ -4,7 +4,7 @@
 |-------|--------|
 | **Class** | DEV (archive-leaning) |
 | **Status** | Archive |
-| **Audience** | Jamie + Grok Build |
+| **Audience** | Developer + Grok Build |
 | **Normative?** | No — not tip law; historical fix-branch map only |
 | **Last verified** | 2026-08-04 |
 
