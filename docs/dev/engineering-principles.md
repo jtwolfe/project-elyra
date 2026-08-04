@@ -1,7 +1,7 @@
 # Engineering principles
 
 How we build Elyra. Applies from the first module.  
-**What the system does:** [stretch-1.md](../stretch-1.md), [overview.md](../overview.md).  
+**What the system does:** [stretch-1.md](../state/stretch-1.md), [overview.md](../state/overview.md).  
 **This doc:** how we structure and ship code without re-growing bloat.
 
 ---
@@ -95,7 +95,7 @@ Confidence over coverage percentage.
 - No multi-page prompt strings buried in Python.  
 - Catalog short; full skill body on load.  
 - create-tool / create-skill must produce the **same formats** as hand-written packages (dogfood).  
-- Fail-closed: drafts not callable; verify before promote ([tools-and-skills.md](../tools-and-skills.md)).
+- Fail-closed: drafts not callable; verify before promote ([tools-and-skills.md](../state/tools-and-skills.md)).
 
 ---
 
@@ -138,7 +138,7 @@ New env vars only if they cannot live in config, are documented, tested, and sta
 | **Errors** | Typed/explicit failure reasons to the model and to glass; no silent swallow |
 | **Concurrency** | Single do-loop worker; interjections into the current moment, not a second mind |
 | **Deps** | Pin consciously; Python 3.12 aligned with prior Elyra unless we document a change |
-| **Docs** | Code follows [stretch-1.md](../stretch-1.md); if behaviour changes, update the contract in the same change |
+| **Docs** | Code follows [stretch-1.md](../state/stretch-1.md); if behaviour changes, update the contract in the same change |
 
 ---
 
@@ -167,7 +167,7 @@ Every bit of product work after the v0.1 board rework must fall within this stru
 |-------|-----------|
 | Tip / branch / promote / pins | [branch-law.md](branch-law.md) |
 | Operating pin convention (manual now; live on v0.1) | [operating-pins.md](operating-pins.md) |
-| Package + Projects judgment playbook | skill `github-workflow` · [tools-and-skills.md](../tools-and-skills.md) |
+| Package + Projects judgment playbook | skill `github-workflow` · [tools-and-skills.md](../state/tools-and-skills.md) |
 | Packaging priority labels | Exactly one of `v0.1-gate` \| `backlog` \| `research` on every open issue (see design-v0.1-ready-board-recategorization.md) |
 
 ### Branch law (short)
@@ -214,4 +214,4 @@ Even when the operator asks via Grok Build for a “quick fix,” prefer: inspec
 | 8 | Done | Tests + boundaries + docs with the change |
 | 9 | Development structure | Issue inspect/update → typed branch from `working` → board honesty |
 
-These principles are how we avoid another 12k-line cycle file and another flag lattice. Product shape stays in [stretch-1.md](../stretch-1.md); this doc keeps the code honest.
+These principles are how we avoid another 12k-line cycle file and another flag lattice. Product shape stays in [stretch-1.md](../state/stretch-1.md); this doc keeps the code honest.

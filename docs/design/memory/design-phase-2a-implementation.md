@@ -737,7 +737,7 @@ retained — KD-A9 / KD-A19).
 
 ### Skill vs tools (product shape)
 
-Aligned with [tools-and-skills.md](../../tools-and-skills.md):
+Aligned with [tools-and-skills.md](../../state/tools-and-skills.md):
 
 | Piece | Form |
 |-------|------|
@@ -1171,7 +1171,7 @@ Phase 1 temporal  ──done──► Phase 2 semantic (+ rectification)
 - [design-phase-3-procedural.md](design-phase-3-procedural.md) — weights later  
 - [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) — §3.5 activities  
 - [design-database-choices.md](design-database-choices.md) — `graph.py` interface rule  
-- [tools-and-skills.md](../../tools-and-skills.md) — skill vs tool split  
+- [tools-and-skills.md](../../state/tools-and-skills.md) — skill vs tool split  
 - Code: `elyra/memory/{store,types,meal,tokens,index,ladder,temporal,inspect,config}.py`, `elyra/presence/worker.py`, `elyra/runtime/api.py`, `elyra/runtime/web/*`, `elyra/tools/builtin/skills_tools.py`, `elyra/skills/catalog.py`
 
 ---
