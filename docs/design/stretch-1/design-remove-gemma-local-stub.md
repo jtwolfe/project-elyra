@@ -2,11 +2,12 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Product** | project-elyra |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Branch base** | `grok-improvement` |
 | **Date** | 2026-07-26 |
-| **Status** | Engineer-ready (rev 3; approved) |
+| **Status** | Shipped |
 | **Authors** | design pass (Grok Build) |
 | **Implementation docs freeze** | Do **not** bulk-edit existing `docs/` corpus in this pass |
 
@@ -637,22 +638,22 @@ No `.pill-llama` CSS class exists today (id-only); renaming id is sufficient.
 | Path | Classification | Notes after this work |
 |------|----------------|------------------------|
 | `docs/inference.md` | **Superseded / historical** | llama.cpp + Gemma 4; README labels “do not follow for setup” |
-| `docs/design-gemma-sampling-hygiene-staged.md` | **Historical freeze** | Hygiene code remains |
+| `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` | **Historical freeze** | Hygiene code remains |
 | `docs/live-eval.md` | **Superseded procedure (Gemma stages)** | Protocol idea reusable |
 | `docs/stretch-1.md` | **Historical done-when** | Gemma checkbox true at Stretch 1 ship |
-| `docs/design-stretch-1-implementation.md` | **Historical** | Assumed local llama default |
-| `docs/design-tool-thrash-recovery.md` | **Historical evidence** | Policies remain |
-| `docs/design-continuous-work-orient-ledger-reset.md` | **Historical motivation** | Policies remain |
-| `docs/design-post-skill-commitment.md` | **Historical** | Gemma residual wording |
+| `docs/design/stretch-1/design-stretch-1-implementation.md` | **Historical** | Assumed local llama default |
+| `docs/design/stretch-1/design-tool-thrash-recovery.md` | **Historical evidence** | Policies remain |
+| `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md` | **Historical motivation** | Policies remain |
+| `docs/design/stretch-1/design-post-skill-commitment.md` | **Historical** | Gemma residual wording |
 | `docs/project-status-pass.md` | **Partially stale** | Future status pass only |
 | `docs/README.md` | **Stale reading order** | Future status pass |
 | `docs/dev/engineering-principles.md` | **Mostly valid** | Serialize single-slot local HTTP (conceptually) |
 | `docs/tools-and-skills.md` / `time-and-identity.md` | **Mostly valid** | Historical Gemma wording |
 | `docs/grok-improvement-plan/*` | **Active direction** | Aligns with this design |
-| `docs/design-glass-aurimago-gold-polish.md` | **Historical UI freeze** | `pill-llama` snippet |
+| `docs/design/glass/design-glass-aurimago-gold-polish.md` | **Historical UI freeze** | `pill-llama` snippet |
 | Root `README.md` | **Update in this pass** | not under docs/ freeze |
 
-Optional: land `docs/design-remove-gemma-local-stub.md` as **one new** file when implementing.
+Optional: land `docs/design/stretch-1/design-remove-gemma-local-stub.md` as **one new** file when implementing.
 
 ---
 
@@ -749,7 +750,7 @@ Posture print: drop `llama:`; show `chat: ready|stub|local_not_implemented` as a
 
 ## Rollout Plan
 
-1. Land design (optional `docs/design-remove-gemma-local-stub.md`).
+1. Land design (optional `docs/design/stretch-1/design-remove-gemma-local-stub.md`).
 2. Stacked PRs on `grok-improvement` (PR Plan below) — **green after each**.
 3. Dogfood: `elyra start` (Grok); `elyra start --stub-llm` (UI).
 4. Final product-tree `rg` clean (docs/ exempt).
@@ -908,7 +909,7 @@ pytest tests/test_api_glass.py tests/test_api_routing.py -q
 - Root `README.md`: Grok-first; historical freeze labels; status field rename note; no `--no-llama`; **retain `pytest -m llm` substring** per §4.2 (or edit `test_readme_documents_llm_marker_and_donewhen` same PR).
 - Do **not** change `CONTEXT_WINDOW_TOKENS` value (stretch1 `test_context_ceiling_vs_sliding_defaults`); comment scrub only if still needed.
 - `scripts/setup_venv.sh`.
-- Optional: `docs/design-remove-gemma-local-stub.md`.
+- Optional: `docs/design/stretch-1/design-remove-gemma-local-stub.md`.
 - `scripts/live_eval/README.md` (scripts allowed): fail-closed note.
 - Final product-tree grep (docs/ may still match):
 

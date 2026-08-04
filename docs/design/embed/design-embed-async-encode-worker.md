@@ -2,16 +2,17 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Continuous encode / `feature/embed-async` |
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-03 |
-| **Status** | **Implemented** (stack PR1–PR5 on `feature/embed-async` lineage) — code + architecture docs; residual packaging/Tensile for #82 stays Open; live busy dogfood pending |
+| **Status** | Shipped |
 | **Primary issue** | [#82](https://github.com/jtwolfe/project-elyra/issues/82) `BUG-mem-gpu-01` (product continuous-encode path only; **not** full close) |
 | **Topic branch** | `feature/embed-async` (from `working`) |
 | **PR base** | `working` (integration tip; house branch law) |
 | **Related** | #80 Phase 2 semantic; #103/#105 traverse (depend on ready vectors); #107 truncation (orthogonal) |
-| **Architecture** | [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) §3 invariant 1 (continuous single-owner) |
-| **Bug evidence** | [known-bugs.md](known-bugs.md) **BUG-mem-gpu-01** product continuous-encode checklist |
+| **Architecture** | [stretch-2/architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) §3 invariant 1 (continuous single-owner) |
+| **Bug evidence** | [known-bugs.md](../../known-bugs.md) **BUG-mem-gpu-01** product continuous-encode checklist |
 
 ---
 

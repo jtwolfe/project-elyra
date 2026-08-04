@@ -2,15 +2,16 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Functionalization of Phase 1 `grok_build` host instrument after live dogfood failure |
 | **Author** | Design (Grok Build subagent) |
 | **Date** | 2026-08-03 |
-| **Status** | Draft (revised post-review) |
+| **Status** | Draft / Active |
 | **Product** | project-elyra |
 | **Tracks** | Issue #109 follow-on; live dogfood job `fdaf572ce9454bc299b2e246330e4d8f` |
 | **Stack base (normative)** | `feature/grok-build-tool` (~`407e4af`) |
 | **Completion tip (normative)** | `feature/grok-build-tool` (merge-down / restack; **not** `main`, not house `working` tip law change) |
-| **Related** | [docs/design-grok-build-tool.md](docs/design-grok-build-tool.md), [docs/dev/branch-law.md](dev/branch-law.md), [docs/grok-build-dogfood.md](docs/grok-build-dogfood.md), [docs/grok-build-headless-spike.md](docs/grok-build-headless-spike.md), Grok 0.2.118 user-guide `02-authentication.md` |
+| **Related** | [docs/design/grok-build/design-grok-build-tool.md](design-grok-build-tool.md), [docs/dev/branch-law.md](../../dev/branch-law.md), [docs/grok-build-dogfood.md](../../grok-build-dogfood.md), [docs/design/grok-build/grok-build-headless-spike.md](grok-build-headless-spike.md), Grok 0.2.118 user-guide `02-authentication.md` |
 | **Revised** | 2026-08-03 (review a7f29241; auth-classifier false-positive gate) |
 
 ---
@@ -81,7 +82,7 @@ Against Grok **0.2.118**:
 | Same seed with **expired** external token + provider in config | Grok **re-runs provider** (`ExternalBinary` refresh chain); success; **no refresh_token** written back |
 | `XAI_API_KEY=<oauth access>` | Works for short prompt, but env-visible; not mid-run mint path |
 
-**Auth root cause (precise):** Grok 0.2.118 headless **requires an existing session credential** for `-p` to proceed. `auth_provider_command` is used for **refresh of an existing ExternalBinary session** (and is advertised for interactive login flows), **not** as a cold-start mint when `auth.json` is missing. **PE Phase 1 design** (`docs/design-grok-build-tool.md` KD5/KD5b and “equivalently `GROK_AUTH_PROVIDER_COMMAND`”) assumed provider-only cold-start under isolated home would authenticate headless; that assumption is false for 0.2.118. Grok’s own user-guide describes external providers primarily for non-browser login and refresh rather than a hard promise that headless `-p` always auto-runs the provider when `auth.json` is absent. Config multi-arg `sh -c` is fine once a session exists.
+**Auth root cause (precise):** Grok 0.2.118 headless **requires an existing session credential** for `-p` to proceed. `auth_provider_command` is used for **refresh of an existing ExternalBinary session** (and is advertised for interactive login flows), **not** as a cold-start mint when `auth.json` is missing. **PE Phase 1 design** (`docs/design/grok-build/design-grok-build-tool.md` KD5/KD5b and “equivalently `GROK_AUTH_PROVIDER_COMMAND`”) assumed provider-only cold-start under isolated home would authenticate headless; that assumption is false for 0.2.118. Grok’s own user-guide describes external providers primarily for non-browser login and refresh rather than a hard promise that headless `-p` always auto-runs the provider when `auth.json` is absent. Config multi-arg `sh -c` is fine once a session exists.
 
 **Zombie root cause (precise):** `spawn_grok` uses `Popen` + `start_new_session=True` and drops the handle; the PE process **remains parent** of the session-leader pid (verified: live ppid). On exit without `waitpid`, the child is a zombie. Linux `kill(pid, 0)` succeeds on zombies, so reaper/GC think the job is still running until wall timeout (up to **7200s** for implement). Z-state detection alone finalizes meta but **does not free the pid table entry** — `waitpid` is required to reap.
 
@@ -126,7 +127,7 @@ Against Grok **0.2.118**:
 
 | ID | Decision | Rationale |
 |----|----------|-----------|
-| **KD-F1** | **Stack base = `feature/grok-build-tool`; completion tip = `feature/grok-build-tool`** | User-normative for this workstream; does not redefine [branch-law.md](dev/branch-law.md) house `working` tip. Prefer short-lived `fix/gb-*` / `feature/gb-*` branches, stacked, then fold into the feature tip. |
+| **KD-F1** | **Stack base = `feature/grok-build-tool`; completion tip = `feature/grok-build-tool`** | User-normative for this workstream; does not redefine [branch-law.md](../../dev/branch-law.md) house `working` tip. Prefer short-lived `fix/gb-*` / `feature/gb-*` branches, stacked, then fold into the feature tip. |
 | **KD-F2** | **Cold-start auth = seed access-only `GROK_HOME/auth.json` (ExternalBinary shape) + keep live `auth_provider_command`** | Empirically required on Grok 0.2.118: provider alone does not authenticate headless `-p`. Seeding access-only session unblocks cold start; provider handles mid-run refresh without PE refresh_token. Preserves KD4/KD5b spirit. |
 | **KD-F3** | **`auth_mode` for seeded session = `external`** (not `oidc` / `oauth`) | `external` routes refresh through `auth_provider_command` (`ExternalBinary` chain). `oidc` without refresh_token is fragile for multi-hour modes. Valid Grok enum includes `grok`, `web_login`, `oidc`, `external`, … |
 | **KD-F4** | **Never seed `refresh_token`; never set `XAI_API_KEY` from OAuth access as the primary path** | Refresh stays in PE `data/secrets` only. `XAI_API_KEY` works as a short-path hack but is env-visible (`/proc/.../environ`), skips Grok session semantics, and is a weaker mid-run story. Documented as rejected alternative. |
@@ -752,7 +753,7 @@ If a **later** dogfood burn still shows PE thrash on relative cwd, a follow-on P
 |------|--------|
 | `docs/tools-and-skills.md` | Remove “Phase 1 not in surface”; state callable on feature tip with dogfood caveats |
 | `docs/grok-build-dogfood.md` | Note auth seed + zombie fixes; pin Grok 0.2.118; keep D3/D6 PR8 gate; require D1 on advanced feature tip before PR8 discussion |
-| `docs/design-grok-build-tool.md` | Optional short “Post-dogfood errata” pointer to this design (or leave Phase 1 doc historical and land this as sibling) |
+| `docs/design/grok-build/design-grok-build-tool.md` | Optional short “Post-dogfood errata” pointer to this design (or leave Phase 1 doc historical and land this as sibling) |
 | `docs/known-bugs.md` / `known-bugs-BRANCHES.md` | Optional entries for residual execute_plan base-branch prose risk; deep_research experimental |
 
 ### 5. Dogfood / smoke path
@@ -960,10 +961,10 @@ feature/grok-build-tool          ← stack base AND completion tip
 
 ## References
 
-- Phase 1 design: `docs/design-grok-build-tool.md` (KD4, KD5, KD5b, KD11, KD16) — PE assumed provider cold-start under isolated `GROK_HOME`
+- Phase 1 design: `docs/design/grok-build/design-grok-build-tool.md` (KD4, KD5, KD5b, KD11, KD16) — PE assumed provider cold-start under isolated `GROK_HOME`
 - Branch law (house): `docs/dev/branch-law.md` — `working` integration tip; **this workstream tip is `feature/grok-build-tool`**
 - Dogfood: `docs/grok-build-dogfood.md`
-- Headless spike: `docs/grok-build-headless-spike.md`
+- Headless spike: `docs/design/grok-build/grok-build-headless-spike.md`
 - Code: `elyra/instrument/{auth_handoff,auth_provider,process,jobs,reaper,result}.py`, `elyra/tools/builtin/grok_build.py`, `elyra/secrets/inject.py`, `elyra/llm/{xai_oauth,auth}.py`
 - Live failure: `data/runtime/grok_build/fdaf572ce9454bc299b2e246330e4d8f/` (meta, stdout/stderr, unified.jsonl, zombie pid 155488; verified)
 - Grok 0.2.118: `~/.grok/docs/user-guide/02-authentication.md` (external provider stdout/refresh contract)
@@ -1015,7 +1016,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 | **Title** | `docs: grok_build dogfood truth + tools-and-skills surface` |
 | **Base branch** | stack tip after PR-C (or base if docs-only parallel) |
 | **Branch name** | `fix/gb-dogfood-docs` |
-| **Files / components** | `docs/tools-and-skills.md`, `docs/grok-build-dogfood.md`, optional `docs/known-bugs.md`, `tests/test_live_grok_build.py` checklist comments, optional pointer from `docs/design-grok-build-tool.md` |
+| **Files / components** | `docs/tools-and-skills.md`, `docs/grok-build-dogfood.md`, optional `docs/known-bugs.md`, `tests/test_live_grok_build.py` checklist comments, optional pointer from `docs/design/grok-build/design-grok-build-tool.md` |
 | **Dependencies** | Prefer after A–C so docs match behavior |
 | **Description** | Remove stale “not in surface” prose; document auth seed + zombie/finalize fixes; pin Grok 0.2.118; restate dogfood gates (D1 required on advanced tip before PR8 discussion; D3/D6 still PR8 later and operator/product-owned after D1; D7 experimental). **No** `scripts/smoke_grok_build_auth.py` — checklist-only. |
 

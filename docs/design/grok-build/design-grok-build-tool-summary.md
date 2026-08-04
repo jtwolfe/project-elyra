@@ -1,9 +1,17 @@
 # Summary: Elyra Grok Build instrument design
 
+| Field | Value |
+|-------|--------|
+| **Class** | DESIGN |
+| **Status** | Active summary |
+| **Audience** | Implementers |
+| **Full design** | [design-grok-build-tool.md](design-grok-build-tool.md) |
+
+
 **Full design:** [design-grok-build-tool.md](design-grok-build-tool.md)  
 **Date:** 2026-08-01 (revised post-review + re-review cf9024a3)  
 **Branch context:** `feature/grok-build-tool` · Issue #109 · GI Phase 1  
-**Tip law:** [dev/branch-law.md](dev/branch-law.md) (`working` integration tip)  
+**Tip law:** [dev/branch-law.md](../../dev/branch-law.md) (`working` integration tip)  
 
 
 ## What was produced
@@ -60,7 +68,7 @@ Overview · Background · Goals/Non-goals · **Key Decisions (KD1–KD14)** · P
 
 ## Post-approval
 
-Land the design at **`docs/design-grok-build-tool.md`** (called out in PR0). Create **`working`** early as integration tip for execute-plan stacks.
+Land the design at **`docs/design/grok-build/design-grok-build-tool.md`** (called out in PR0). Create **`working`** early as integration tip for execute-plan stacks.
 
 ### Final wire note
 - Reaper **must** share PresenceWorker’s **one** `WakeQueue` instance (Supervisor injects); private reaper queue is incorrect and would drop completion wakes.

@@ -2,14 +2,15 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Engineer-ready implementation plan (execute-plan contract) |
 | **Author** | Systems architecture (Grok Build subagent) |
 | **Date** | 2026-07-27 |
-| **Status** | Implemented (PRs 1–9) — operator docs in [tools-and-skills.md](tools-and-skills.md); revised post-review 2026-07-27 |
+| **Status** | Shipped |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` @ `deba40b` (capability-growth design v2) |
-| **Source of truth** | `docs/design-capability-growth-search-browse-vcs-secrets.md` (product design v2) |
-| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `prompts/system.md` |
+| **Source of truth** | `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md` (product design v2) |
+| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `prompts/system.md` |
 | **Parallel pattern** | Identity draft → promote + versions; create-tool draft → verify → promote |
 
 ---
@@ -921,7 +922,7 @@ Migration note for dogfood homes: after PR1, re-promoting a local tool **archive
 
 ## References
 
-- Product design: `docs/design-capability-growth-search-browse-vcs-secrets.md`
+- Product design: `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md`
 - Tree: `elyra/tools/promote.py`, `verify.py`, `runner.py`, `guest_exec.py`, `registry.py`, `builtin/growth.py`, `identity/layout.py`, `llm/auth.py`, `runtime/api.py`, `settings.py`, `config.py`
 - `docs/tools-and-skills.md`
 - ddgs PyPI; Playwright a11y snapshot patterns; Python keyring (optional)
@@ -1305,7 +1306,7 @@ flowchart TB
 | `docs/tools-and-skills.md` | Full layout, promote archive semantics, new tool groups, skills, secrets, extras install |
 | `docs/project-status-pass.md` | Capability status lines if file tracks ship state |
 | `README.md` | Optional extras install snippet |
-| `docs/design-capability-growth-search-browse-vcs-secrets.md` | Status note: implemented via PRs (optional) |
+| `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md` | Status note: implemented via PRs (optional) |
 
 #### Acceptance
 
@@ -1349,4 +1350,4 @@ flowchart TB
 
 ---
 
-*End of implementation plan. Product strategy remains `docs/design-capability-growth-search-browse-vcs-secrets.md`; this document is the execute-plan contract only.*
+*End of implementation plan. Product strategy remains `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md`; this document is the execute-plan contract only.*

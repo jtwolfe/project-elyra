@@ -8,9 +8,9 @@ in CI).
 
 Historical protocol (3-attempt rule, A/B modes, P0 exit): **`docs/live-eval.md`**
 (historical freeze — do not treat as active setup). Design stages + Adaptive
-Execution Protocol: `docs/design-gemma-sampling-hygiene-staged.md` (historical).
+Execution Protocol: `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` (historical).
 Ship knobs inventory: `docs/inference.md` (historical freeze). Continuous design:
-`docs/design-continuous-work-orient-ledger-reset.md`.
+`docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md`.
 
 ## Layout
 

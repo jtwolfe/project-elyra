@@ -10,7 +10,7 @@
 | **Branch** | `grok-improvement` (PRs base + merge here; not `main` until later) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` (Stretch 1) |
 | **Port source** | `/home/jim/Workspace/aurimago/project-elyra2` (`elyra/sandbox/*`, `sandboxes/sandbox0/`) |
-| **Related** | `docs/grok-improvement-plan/`, `docs/tools-and-skills.md`, `docs/stretch-1.md`, `docs/design-tool-thrash-recovery.md`, elyra2 `docs/plans/workspace-isolation/DESIGN.md` |
+| **Related** | `docs/grok-improvement-plan/`, `docs/tools-and-skills.md`, `docs/stretch-1.md`, `docs/design/stretch-1/design-tool-thrash-recovery.md`, elyra2 `docs/plans/workspace-isolation/DESIGN.md` |
 
 ---
 
@@ -20,7 +20,7 @@ Phase 0 delivered a working xAI/Grok provider path (auth, model select, usage me
 
 - `sandbox_python` / `sandbox_shell` return `runner_not_implemented` (`elyra/tools/runner.py`).
 - The thin sandbox is a **path jail under `data/sandbox/`** with **same-UID host `run`** — not a container, not network-isolated, and not a rich guest Python environment (`elyra/sandbox/sandbox.py`).
-- Live create-tool sessions thrash: empty sandbox views, host-path fishing via `run`, repeated `read_file` / hollow `install_tool_draft` (documented in `docs/design-tool-thrash-recovery.md`).
+- Live create-tool sessions thrash: empty sandbox views, host-path fishing via `run`, repeated `read_file` / hollow `install_tool_draft` (documented in `docs/design/stretch-1/design-tool-thrash-recovery.md`).
 
 This plan ports the **warm microsandbox (MSB) `sandbox0`** architecture from elyra2 into Stretch 1, wires real guest runners, keeps FS tools honest against the **same host tree**, and leaves **H6 live tool-creation smoke operator-owned**. It does **not** open Phase 1 `grok_build`, Phase 3 memory, or MC Stage C; MC Stage B may follow after H-series green.
 
@@ -909,7 +909,7 @@ Continuous default OFF throughout
 - Runners: `elyra/tools/runner.py`, `elyra/tools/verify.py`, `elyra/tools/registry.py`
 - Presence: `elyra/presence/worker.py` (`_ensure_sandbox`, `_build_tool_context`)
 - Supervisor: `elyra/runtime/supervisor.py`
-- Thrash: `elyra/loop/tool_thrash_policy.py`, `docs/design-tool-thrash-recovery.md`
+- Thrash: `elyra/loop/tool_thrash_policy.py`, `docs/design/stretch-1/design-tool-thrash-recovery.md`
 - Plan folder: `docs/grok-improvement-plan/{README,phase-0,phase-0-execution,metacognition}.md`
 - Port: `/home/jim/Workspace/aurimago/project-elyra2/elyra/sandbox/*`, `sandboxes/sandbox0/`, `docs/plans/workspace-isolation/DESIGN.md`, `docs/tools-runtime.md`
 - External: [microsandbox docs](https://docs.microsandbox.dev/)

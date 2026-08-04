@@ -1,6 +1,6 @@
 # Inference — llama.cpp (Vulkan) + Gemma 4
 
-> **Historical freeze — do not follow for product setup.** The shipped product path is **xAI Grok** with a week ledger + SuperGrok pool pacing. Operator notes + dogfood checklist: [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md). Full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md).
+> **Historical freeze — do not follow for product setup.** The shipped product path is **xAI Grok** with a week ledger + SuperGrok pool pacing. Operator notes + dogfood checklist: [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md). Full design: [design-usage-tracking-supergrok-pacing.md](design/usage/design-usage-tracking-supergrok-pacing.md).
 
 Port from **project-elyra2**. Do not invent a new stack.
 
@@ -86,7 +86,7 @@ Client: `http://127.0.0.1:8080/v1/chat/completions` (tools + reasoning). Long re
 ## Ship knobs (as-shipped, Stages 1–5)
 
 Product path after the Gemma sampling / hygiene / tool-speak initiative.
-Design plan: [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md).
+Design plan: [design-gemma-sampling-hygiene-staged.md](design/stretch-1/design-gemma-sampling-hygiene-staged.md).
 Live gates: [live-eval.md](live-eval.md).
 
 ### Failure modes (must stay separate)
@@ -210,7 +210,7 @@ Root README **Testing** links both. Markers: `@pytest.mark.llm` in `tests/test_d
 
 ### Continuous work (opt-in)
 
-Continuous work toggle is **default OFF** and does not change ship sampling knobs above. Live scenarios `S-cont-speak-only`, `S-cont-tools`, `S-cont-task-ready-prefer` exercise multi-moment policy under continuous ON (see [live-eval.md](live-eval.md)); re-run `S-social` / `S-tools` / `S-mono` with continuous OFF as the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md).
+Continuous work toggle is **default OFF** and does not change ship sampling knobs above. Live scenarios `S-cont-speak-only`, `S-cont-tools`, `S-cont-task-ready-prefer` exercise multi-moment policy under continuous ON (see [live-eval.md](live-eval.md)); re-run `S-social` / `S-tools` / `S-mono` with continuous OFF as the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design/stretch-1/design-continuous-work-orient-ledger-reset.md).
 
 ## Non-goals
 

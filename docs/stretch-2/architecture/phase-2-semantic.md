@@ -5,7 +5,7 @@
 **Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
 **Design (planning):** [design-phase-2-semantic.md](../design-phase-2-semantic.md), [design-phase-2-implementation.md](../design-phase-2-implementation.md) (historical ship stack)
 **Rectification design (normative for R1–R5):** [design-phase-2-rectification.md](../design-phase-2-rectification.md)
-**Continuous encode (normative for drain/worker/gate):** [design-embed-async-encode-worker.md](../../design-embed-async-encode-worker.md) (KD-E1–E18)
+**Continuous encode (normative for drain/worker/gate):** [design-embed-async-encode-worker.md](../../design/embed/design-embed-async-encode-worker.md) (KD-E1–E18)
 **Runtime contract:** [design-nemotron-runtime.md](../design-nemotron-runtime.md)
 **Spikes:** [architecture/spikes/lance-emb-migration.md](spikes/lance-emb-migration.md), [architecture/spikes/nemotron-runtime.md](spikes/nemotron-runtime.md)
 **Meal sketch:** [design-context-meal-composition.md](../design-context-meal-composition.md)
@@ -279,7 +279,7 @@ Unchanged from Phase 1 — ladder, range, walks, episodic meal fill. Ladder **do
 Normative rules operators and later phases must preserve. Phase 1 invariants still apply; Phase 2 adds:
 
 1. **Corpus encode is continuous background under a single owner (KD-E1 / KD-E7 / KD-E10).**  
-   Never run full atom→vector encode on the hop / `promote_beat` / mid-`rebuild_outer` path (enqueue-only; KD-E2). Default product drain is a presence-owned **`EncodeWorker`** (`encode_owner=worker`) that makes progress **while PE is up**, including busy moments, under `encode_max_ms_per_tick` / `encode_max_items_per_tick`. **`encode_owner ∈ {none, idle, worker}`** — only one drain owner at a time; idle path no-ops when owner=`worker` (including restart gaps). Idle-only drain is **operator rollback only** (`encode_worker_enabled=false` → owner=`idle`), not the product default and not a permanent fallback after worker death. Lookup (meal / graph / API free-text) uses a **warm** embedder under **`EmbedderGate`** with **lookup > bulk** between atoms (never mid-forward kill). Design: [design-embed-async-encode-worker.md](../../design-embed-async-encode-worker.md).
+   Never run full atom→vector encode on the hop / `promote_beat` / mid-`rebuild_outer` path (enqueue-only; KD-E2). Default product drain is a presence-owned **`EncodeWorker`** (`encode_owner=worker`) that makes progress **while PE is up**, including busy moments, under `encode_max_ms_per_tick` / `encode_max_items_per_tick`. **`encode_owner ∈ {none, idle, worker}`** — only one drain owner at a time; idle path no-ops when owner=`worker` (including restart gaps). Idle-only drain is **operator rollback only** (`encode_worker_enabled=false` → owner=`idle`), not the product default and not a permanent fallback after worker death. Lookup (meal / graph / API free-text) uses a **warm** embedder under **`EmbedderGate`** with **lookup > bulk** between atoms (never mid-forward kill). Design: [design-embed-async-encode-worker.md](../../design/embed/design-embed-async-encode-worker.md).
 
 2. **Meal semantic select has a hard timeout.**  
    Entire query encode + ANN + pack must finish within `semantic_select_max_ms` (default 50). On exceed → empty semantic channel + `semantic_omitted_reason=timeout`. Never block the hop unbounded.
@@ -523,7 +523,7 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unava
 | [design-phase-2-rectification.md](../design-phase-2-rectification.md) | **Normative fix plan** KD-R* + PR-R1–R6 (product-intent recovery) |
 | [design-phase-2-implementation.md](../design-phase-2-implementation.md) | Historical implementation design, KDs, PR plan (PR1–PR9) |
 | [design-phase-2-semantic.md](../design-phase-2-semantic.md) | Short phase outline (points here + implementation + rectification) |
-| [design-embed-async-encode-worker.md](../../design-embed-async-encode-worker.md) | **Normative continuous encode** — EncodeWorker, EmbedderGate, single-owner, KD-E1–E18 |
+| [design-embed-async-encode-worker.md](../../design/embed/design-embed-async-encode-worker.md) | **Normative continuous encode** — EncodeWorker, EmbedderGate, single-owner, KD-E1–E18 |
 | [design-nemotron-runtime.md](../design-nemotron-runtime.md) | Portable encode contract; Gate B checklist |
 | [spikes/lance-emb-migration.md](spikes/lance-emb-migration.md) | Lance emb migration spike (Gate A) |
 | [spikes/nemotron-runtime.md](spikes/nemotron-runtime.md) | Nemotron runtime spike notes |

@@ -4,7 +4,7 @@ Stage go/no-go for Gemma sampling, channel hygiene, and tool/speak reliability.
 **Not** a substitute for hermetic pytest or `@pytest.mark.llm` smoke — those ship with code; this gates generation quality under the full product path.
 
 Design (normative stages, rubric, adaptive protocol):
-[design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md).  
+[design-gemma-sampling-hygiene-staged.md](design/stretch-1/design-gemma-sampling-hygiene-staged.md).  
 Ship knobs: [inference.md](inference.md).  
 Harness package: `scripts/live_eval/` (see also its [README](../scripts/live_eval/README.md)).
 
@@ -57,7 +57,7 @@ scripts/live_eval/
 | `S-tools` | Tool then speak | `List the sandbox directory with list_dir, then greet me via speak.` |
 | `S-mono` | Monologue / flood stress | `Think carefully about how you would organize the sandbox, then tell me your plan via speak. Prefer tools over prose-only.` |
 
-**Continuous ON** — multi-moment / policy guards (design [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) §Eval Plan). Harness `PATCH /api/continuous` before the user message. **Not CI-gated** (GPU live only); hermetic YAML parse lives in `tests/test_live_eval_scenarios.py`.
+**Continuous ON** — multi-moment / policy guards (design [design-continuous-work-orient-ledger-reset.md](design/stretch-1/design-continuous-work-orient-ledger-reset.md) §Eval Plan). Harness `PATCH /api/continuous` before the user message. **Not CI-gated** (GPU live only); hermetic YAML parse lives in `tests/test_live_eval_scenarios.py`.
 
 | ID | Intent | Expect (operator score) |
 |----|--------|-------------------------|
@@ -243,14 +243,14 @@ Continuous work (in-moment work-continue HOST + gated outer `moment_continue`) i
 
 Policy gates (speak-only no outer continue, prefer pending `task_ready`, flood majority, etc.) are hermetically covered in `tests/test_continuous_policy.py` and presence finalize tests. Live `S-cont-*` scenarios exercise the product path with a real model.
 
-Design: [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md).
+Design: [design-continuous-work-orient-ledger-reset.md](design/stretch-1/design-continuous-work-orient-ledger-reset.md).
 
 ---
 
 ## See also
 
 - [inference.md](inference.md) — ship knobs, hygiene, RC policy, P0 summary
-- [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) — full staged plan + adaptive protocol
-- [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) — continuous / orient / ledger / reset design + eval plan
+- [design-gemma-sampling-hygiene-staged.md](design/stretch-1/design-gemma-sampling-hygiene-staged.md) — full staged plan + adaptive protocol
+- [design-continuous-work-orient-ledger-reset.md](design/stretch-1/design-continuous-work-orient-ledger-reset.md) — continuous / orient / ledger / reset design + eval plan
 - `scripts/live_eval/logs/stage-0.md` … `stage-5.md` — executed Stage Logs
 - Root README **Testing** — links into this protocol

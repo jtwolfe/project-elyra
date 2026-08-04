@@ -2,7 +2,7 @@
 
 **Runtime freeze:** [stretch-1.md](stretch-1.md). This page is the **life-shell** rules for self/other and time.
 
-**Design (shipped layout + tools):** [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) — draft→promote, gates, work-origin USER (K13/K19), Glass multi-user prep.
+**Design (shipped layout + tools):** [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) — draft→promote, gates, work-origin USER (K13/K19), Glass multi-user prep.
 
 ---
 
@@ -73,7 +73,7 @@ Prefer updating **`goes_by`** and relationship prose over thrashing **`full_name
 | **Self** | Hard — operator one-time grant (Glass mint + Promote is primary; model needs real `grant_token`) |
 | **User** | Medium — social context + reason + target matches **session** user (Glass admin may promote other profiles) |
 
-Model path updates the **active session user** only (no list-users tool in v1). Details and schemas: [tools-and-skills.md](tools-and-skills.md); full design: [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md).
+Model path updates the **active session user** only (no list-users tool in v1). Details and schemas: [tools-and-skills.md](tools-and-skills.md); full design: [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md).
 
 ---
 

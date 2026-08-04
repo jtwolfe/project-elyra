@@ -17,7 +17,7 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 
 **Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
 **Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
-**DEV process law** lives under [dev/](dev/). Other class folders still mostly pre-move paths until later PRs.
+**DEV** process law lives under [dev/](dev/). **Root DESIGN** files live under [design/](design/) topic folders (PR2). stretch-2 designs / GI phases still pre-move until PR2b/PR2c; STATE/GOAL physical moves later.
 
 **Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
 
@@ -103,17 +103,18 @@ Full status-indexed catalog: **[design/README.md](design/README.md)**.
 | Cluster | Start | Notes |
 |---------|-------|-------|
 | **Reorg (#121)** | [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) | This taxonomy; Active |
-| Stretch 1 stack | [design-stretch-1-implementation.md](design-stretch-1-implementation.md) | Shipped; + continuous-work, post-skill, thrash, remove-gemma |
-| Capability growth | [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) | Product design + [implementation plan](design-capability-growth-implementation-plan.md) |
-| Grok Build | [design-grok-build-tool.md](design-grok-build-tool.md) | Host instrument ([summary](design-grok-build-tool-summary.md)) |
-| Identity / glass | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) · [design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md) | Multi-user prep; multimodal next stack |
-| Usage / OAuth | [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md) · [design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md) | Pacing design; browser OIDC |
-| Board | [design-v0.1-ready-board-recategorization.md](design-v0.1-ready-board-recategorization.md) | v0.1-ready board ops |
-| Stretch 2 memory | [stretch-2/](stretch-2/) `design-*.md` | Phase designs + meal composition (DESIGN only) |
-| GI phases / harness | [grok-improvement-plan/](grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition, harness-sandbox-fitness |
-| Embed / ROCm design | [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md) · [radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md](radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md) | Async encode; ROCm smoke design |
+| Stretch 1 stack | [design/stretch-1/](design/stretch-1/) | Shipped; + continuous-work, post-skill, thrash, remove-gemma |
+| Capability growth | [design/capability/](design/capability/) | Product design + implementation plan |
+| Grok Build | [design/grok-build/](design/grok-build/) | Host instrument (+ summary, functionalization, headless spike) |
+| Identity / glass | [design/identity/](design/identity/) · [design/glass/](design/glass/) | Multi-user prep; multimodal next stack |
+| Usage / OAuth | [design/usage/](design/usage/) | Pacing design; browser OIDC |
+| Board | [design/board/](design/board/) | v0.1-ready board ops |
+| Embed | [design/embed/](design/embed/) | Async EncodeWorker (residuals open) |
+| Stretch 2 memory | [stretch-2/](stretch-2/) `design-*.md` | Phase designs + meal (→ PR2b) |
+| GI phases / harness | [grok-improvement-plan/](grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition, harness (→ PR2c) |
+| ROCm design | [radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md](radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md) | ROCm smoke design (→ PR2c) |
 
-**Superseded freeze (do not follow for setup):** [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md).
+**Superseded freeze (do not follow for setup):** [design/stretch-1/design-gemma-sampling-hygiene-staged.md](design/stretch-1/design-gemma-sampling-hygiene-staged.md).
 
 ---
 

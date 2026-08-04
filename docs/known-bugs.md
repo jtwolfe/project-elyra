@@ -231,7 +231,7 @@ Same class can apply without restart if a long wait expires while glass still sh
 | **Severity now** | Med (operator trust + dogfood pacing; hard-stop override papers over pain) |
 | **Severity later** | High if memory / continuous work increases Completions spend without honest pacing |
 | **Area** | `elyra/llm/usage.py`, credits poll, Glass usage rail + Status card, settings (`UsageSettings`) |
-| **Design** | [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md); operator notes in [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) |
+| **Design** | [design-usage-tracking-supergrok-pacing.md](design/usage/design-usage-tracking-supergrok-pacing.md); operator notes in [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) |
 | **Dogfood** | Ongoing operator report (2026-07-27): *“definitely better but still not what I’m after”* |
 
 ### Symptom
@@ -899,7 +899,7 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | **Severity later** | High when product default-on wants durable multi-device embed (CUDA / modern ROCm / CPU) + encode during live moments under meal budgets |
 | **Area** | `elyra/memory/embed/runtime.py`, `embed/queue.py`, `embed/gate.py`, `embed/worker.py`, presence encode ownership, moment/meal/API gated encode, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |
 | **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; prior observation was idle-only drain (starvation under busy). **2026-08-03** — continuous encode stack (PR1–PR4) lands product drain path; architecture + this checklist updated (PR5). **2026-08-04** — #82 closed with #114+#115 split (board packaging hygiene). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
-| **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md) + [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md); **not** Phase 2 rectification core (KD-R10). Packaging residual → **#115**; busy dogfood → **#114**; continuous-encode product path is KD-E17 evidence only |
+| **Ownership** | Gate B + [design-nemotron-runtime.md](stretch-2/design-nemotron-runtime.md) + [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md); **not** Phase 2 rectification core (KD-R10). Packaging residual → **#115**; busy dogfood → **#114**; continuous-encode product path is KD-E17 evidence only |
 
 ### Symptom
 
@@ -915,7 +915,7 @@ Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product pa
 
 **Productization target (feature, tracked here so it is not lost):** keep a **generic modern** device story for operators; treat **Radeon VII / gfx906** as a **non-standard dev** profile, not the template for “all AMD.”
 
-**Continuous encode (product path — code shipped, dogfood pending):** corpus drain is the PE process’s background encode job while up (when `semantic_enabled` + `embed_enabled`), with **lookup priority** for meal/graph/API free-text via `EmbedderGate`. Design: [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md). Architecture invariant: [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) §3 invariant 1. **Honesty (KD-E17 / KD5 packaging split):** continuous-encode **code** evidence alone did **not** close packaging or live dogfood — umbrella #82 closed **only** after successors **#114** (busy dogfood) + **#115** (packaging matrix) were opened under #111.
+**Continuous encode (product path — code shipped, dogfood pending):** corpus drain is the PE process’s background encode job while up (when `semantic_enabled` + `embed_enabled`), with **lookup priority** for meal/graph/API free-text via `EmbedderGate`. Design: [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md). Architecture invariant: [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) §3 invariant 1. **Honesty (KD-E17 / KD5 packaging split):** continuous-encode **code** evidence alone did **not** close packaging or live dogfood — umbrella #82 closed **only** after successors **#114** (busy dogfood) + **#115** (packaging matrix) were opened under #111.
 
 ### Device matrix (desired product shape)
 
@@ -930,7 +930,7 @@ Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product pa
 
 ### Product continuous-encode path (code evidence — umbrella #82 closed with split)
 
-Shipped on embed-async stack (2026-08-03), design [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md):
+Shipped on embed-async stack (2026-08-03), design [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md):
 
 | Slice | Status | Notes |
 |-------|--------|--------|
@@ -991,10 +991,10 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 ### Related
 
 - **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
-- [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md) — continuous EncodeWorker + gate (product continuous-encode path).
+- [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md) — continuous EncodeWorker + gate (product continuous-encode path).
 - [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) — corpus encode single-owner invariant (replaces idle-only product law).
 - [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions, portability notes; residuals **#114** / **#115**.
-- [design-v0.1-ready-board-recategorization.md](design-v0.1-ready-board-recategorization.md) — KD5/KD11 close policy for #82 → C6a+C6.
+- [design-v0.1-ready-board-recategorization.md](design/board/design-v0.1-ready-board-recategorization.md) — KD5/KD11 close policy for #82 → C6a+C6.
 - [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii-dev/STACK-INVENTORY.md) — post-switch inventory / A5 status.
 - [radeon-vii-dev/scripts/00_inject_gfx906_tensile.py](radeon-vii-dev/scripts/00_inject_gfx906_tensile.py) — **dev-only** gfx906 path, not generic AMD.
 - Project setup today: [docs/README.md](README.md) / `scripts/setup_venv.sh` — to grow into multi-backend setup (ongoing).

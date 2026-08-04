@@ -2,13 +2,14 @@
 
 | Field | Value |
 |-------|-------|
+| **Class** | DESIGN |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-22 |
-| **Status** | Draft — ready for implementation (review issues addressed) |
+| **Status** | Shipped / historical |
 | **Product** | project-elyra (main; continuous work shipped) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Live ref** | Operator dogfood moment id `bbb468c0-5d8e-4162-acef-464bbe01b64a` (not a repo fixture; may be absent under `data/moments/`) |
-| **Prior art** | `docs/design-continuous-work-orient-ledger-reset.md`, `docs/design-gemma-sampling-hygiene-staged.md` |
+| **Prior art** | `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md`, `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` |
 
 ---
 
@@ -738,7 +739,7 @@ No new metrics backend required for Stretch 1.
 - `skills/bundled/*/SKILL.md`
 - `tools/bundled/{load_skill,install_skill,install_tool_draft,verify_tool,promote_tool}/`
 - Tests: `tests/test_doloop.py`, `tests/test_skills_catalog.py`, `tests/test_create_tool_gates.py`, `tests/test_continuous_policy.py`, `tests/test_prompts_loader.py`
-- Prior designs: `docs/design-continuous-work-orient-ledger-reset.md` (K7/K8 HOST family), `docs/design-gemma-sampling-hygiene-staged.md` (tool_choice discipline)
+- Prior designs: `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md` (K7/K8 HOST family), `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` (tool_choice discipline)
 
 ---
 

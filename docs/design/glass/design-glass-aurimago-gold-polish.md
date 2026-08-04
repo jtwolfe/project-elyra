@@ -2,10 +2,11 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Product** | project-elyra (Stretch 1 glass) |
 | **Author** | _TBD_ |
 | **Date** | 2026-07-26 |
-| **Status** | Draft |
+| **Status** | Shipped |
 | **Branch base** | `grok-improvement` |
 | **Scope** | Visual/UX polish of glass only — **no** identity model changes, no multi-user protocol work |
 | **Primary files** | `elyra/runtime/web/style.css`, `index.html`, `app.js` |
@@ -28,9 +29,9 @@ Glass lives at:
 
 | File | Role |
 |------|------|
-| [`elyra/runtime/web/style.css`](elyra/runtime/web/style.css) (~1765 lines) | Full visual system via `:root` tokens + many blue hardcodes |
-| [`elyra/runtime/web/index.html`](elyra/runtime/web/index.html) (~432 lines) | Shell markup; **no font imports** today |
-| [`elyra/runtime/web/app.js`](elyra/runtime/web/app.js) (~2498 lines) | Behavior; minimal JS for this polish |
+| [`elyra/runtime/web/style.css`](../../../elyra/runtime/web/style.css) (~1765 lines) | Full visual system via `:root` tokens + many blue hardcodes |
+| [`elyra/runtime/web/index.html`](../../../elyra/runtime/web/index.html) (~432 lines) | Shell markup; **no font imports** today |
+| [`elyra/runtime/web/app.js`](../../../elyra/runtime/web/app.js) (~2498 lines) | Behavior; minimal JS for this polish |
 
 Current `:root` (cool console):
 

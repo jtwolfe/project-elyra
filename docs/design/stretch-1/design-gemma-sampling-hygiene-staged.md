@@ -2,12 +2,16 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Author** | Execution owner: implementing engineer for this initiative (owns Stage Logs + gate decisions) |
 | **Date** | 2026-07-21 |
-| **Status** | Draft |
+| **Status** | Superseded / Freeze |
 | **Product** | project-elyra (greenfield Stretch 1 on `main`) |
 | **Prior art** | `aurimago/project-elyra2` (hygiene, sampling profiles, step ingress) |
 | **Stack** | Gemma-4-12B-OBLITERATED + llama-server `--jinja --reasoning on --reasoning-format auto`, `-c 86000` |
+
+> **Status: Superseded / Freeze** — do not follow for product setup.
+> Successor: [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md). Prefer code on `working`.
 
 ---
 

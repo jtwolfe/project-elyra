@@ -2,15 +2,16 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Review, update, and recategorize Project Elyra issues & board items for v0.1 packaging |
 | **Author** | design skill (Elyra) |
 | **Date** | 2026-08-04 |
-| **Status** | Approved (design consensus; board ops pending) (revised post-review 2026-08-04) |
+| **Status** | Active |
 | **Product** | project-elyra |
 | **Repo** | [jtwolfe/project-elyra](https://github.com/jtwolfe/project-elyra) |
 | **Project** | [#2 Project Elyra — Autopoiesis Commons](https://github.com/users/jtwolfe/projects/2) (`PVT_kwHOACTi484Be2el`) |
-| **Landing path** | `docs/design-v0.1-ready-board-recategorization.md` (PR0) |
-| **Related** | [docs/dev/branch-law.md](dev/branch-law.md), [docs/dev/development-governance.md](dev/development-governance.md), [docs/promotion-discussion/README.md](promotion-discussion/README.md), [docs/known-bugs.md](known-bugs.md), [docs/grok-improvement-plan/README.md](grok-improvement-plan/README.md), [docs/design-embed-async-encode-worker.md](design-embed-async-encode-worker.md), [docs/design-grok-build-tool.md](design-grok-build-tool.md) |
+| **Landing path** | `docs/design/board/design-v0.1-ready-board-recategorization.md` (PR0) |
+| **Related** | [docs/dev/branch-law.md](../../dev/branch-law.md), [docs/dev/development-governance.md](../../dev/development-governance.md), [docs/promotion-discussion/README.md](../../promotion-discussion/README.md), [docs/known-bugs.md](../../known-bugs.md), [docs/grok-improvement-plan/README.md](../../grok-improvement-plan/README.md), [docs/design/embed/design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md), [docs/design/grok-build/design-grok-build-tool.md](../grok-build/design-grok-build-tool.md) |
 | **Inventory source** | `/tmp/grok-1000/board-inventory-e3b74dd3.md` (2026-08-04 live snapshot) |
 | **Integration tip** | `working` (normative; see branch-law) |
 
@@ -35,8 +36,8 @@ This design specifies a **conservative, ordered board-hygiene programme**: (1) i
 | Issue labels today | GitHub defaults + `fixed`, `known-bug`, domain: `glass`, `memory`, `usage`, `wake`, `media` |
 | Open issues | **25** (#59–#109 range; listed in § Per-issue triage matrix) |
 | Board items | **55** total: In Progress 7, Todo 19, Status null/`?` 12, Deferred 1, Done 16 |
-| Integration tip | **`working`** per [docs/dev/branch-law.md](dev/branch-law.md); stacks land on `working`, not auto-`main` |
-| Encode path | Continuous EncodeWorker **code** shipped on `feature/embed-async` lineage ([docs/design-embed-async-encode-worker.md](design-embed-async-encode-worker.md)); **live busy dogfood pending**; packaging/Tensile/device matrix still Open — known-bugs: continuous-encode evidence alone does **not** close #82 |
+| Integration tip | **`working`** per [docs/dev/branch-law.md](../../dev/branch-law.md); stacks land on `working`, not auto-`main` |
+| Encode path | Continuous EncodeWorker **code** shipped on `feature/embed-async` lineage ([docs/design/embed/design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md)); **live busy dogfood pending**; packaging/Tensile/device matrix still Open — known-bugs: continuous-encode evidence alone does **not** close #82 |
 | `deep_research` | Still **`DEEP_RESEARCH_EXPERIMENTAL=True`** / fail-closed `mode_experimental` — not a v0.1 gate |
 
 ### Pain points
@@ -50,7 +51,7 @@ This design specifies a **conservative, ordered board-hygiene programme**: (1) i
 
 ### Why now
 
-[docs/promotion-discussion/README.md](promotion-discussion/README.md) already defines v0.1 as *instrument + dogfooded memory path + process gym*, not all research phases closed. Stage 1 governance ([dev/development-governance.md](dev/development-governance.md)) made the Project board the planning surface — but without labels, epic shape, and timeline fields, the gym cannot schedule a packaging cut. This design is the **process PR stack** that makes the board honest and day-executable.
+[docs/promotion-discussion/README.md](../../promotion-discussion/README.md) already defines v0.1 as *instrument + dogfooded memory path + process gym*, not all research phases closed. Stage 1 governance ([dev/development-governance.md](../../dev/development-governance.md)) made the Project board the planning surface — but without labels, epic shape, and timeline fields, the gym cannot schedule a packaging cut. This design is the **process PR stack** that makes the board honest and day-executable.
 
 ---
 
@@ -66,7 +67,7 @@ This design specifies a **conservative, ordered board-hygiene programme**: (1) i
 6. Honest status/body updates for largely-shipped work (#109 body residual framing, #63/#80 status honesty, Branch FF draft Done).
 7. Prefer **convert high-value drafts → issues**; mark absorbed/stale drafts Done; research drafts → Deferred + `research`.
 8. Document **Execution SOP** with rollback and an ordered **PR Plan** of independently reviewable ops/docs steps.
-9. Land this design under `docs/design-v0.1-ready-board-recategorization.md` via a docs PR against `working`.
+9. Land this design under `docs/design/board/design-v0.1-ready-board-recategorization.md` via a docs PR against `working`.
 
 ### Non-goals
 
@@ -95,7 +96,7 @@ This design specifies a **conservative, ordered board-hygiene programme**: (1) i
 | **KD5** | **Close #82 only with two named successors** under the v0.1 epic as `v0.1-gate`: **(C6a)** EncodeWorker busy-drain / continuous-encode **live dogfood** checklist; **(C6)** GPU/env/Tensile **packaging matrix**. Code-path shipped ≠ dogfood done; never close without both issue numbers in the close comment. PR6 known-bugs rewrite must match this split (not a silent policy flip) | Aligns operator close intent with known-bugs + embed-async honesty; avoids silent loss of busy-drain dogfood residual |
 | **KD5b** | **Always parent residual gate issues under the v0.1 epic** (#65, #63, #80, #108, #109, C1, C3, C6, C6a) — no “optional parent / tracks-only” for packaging gates | Sub-issue progress bar stays honest; operators have one rule |
 | **KD6** | **`deep_research` not scheduled** for v0.1; leave experimental; **not in C4/#109 acceptance** | Explicit operator constraint; avoids false packaging claims |
-| **KD7** | **Branch law unchanged** — `main` ← `working` ← `feature/*`; stack/fold to `working`; no auto-`main` | Normative [docs/dev/branch-law.md](dev/branch-law.md); board ops must not invent a tip change |
+| **KD7** | **Branch law unchanged** — `main` ← `working` ← `feature/*`; stack/fold to `working`; no auto-`main` | Normative [docs/dev/branch-law.md](../../dev/branch-law.md); board ops must not invent a tip change |
 | **KD8** | **Drafts: convert high-value → issues; absorbed → Done; research → Deferred + `research`** | Issues get numbers, parents, labels; drafts stop being the only home for packaging work |
 | **KD9** | **Honest status over aspirational In Progress** — force #59/#86 → Todo (packaging week defaults); residual dogfood gates → Todo unless actively worked that day; #109 stays Todo with body rewrite | Board credibility is a packaging asset; live IP set must shrink after Day 2 |
 | **KD10** | **No silent close of residual product work** — residual dogfood gets a **named** checkpoint or stays open under `backlog`/`v0.1-gate` with updated body | Process hygiene ≠ product amnesia; KD5 implements this for #82 |
@@ -281,7 +282,7 @@ Stage C MC package; GI Phase 2 full self-mod continuity; claiming “all known-b
 ## References
 - docs/dev/branch-law.md
 - docs/promotion-discussion/README.md
-- docs/design-v0.1-ready-board-recategorization.md
+- docs/design/board/design-v0.1-ready-board-recategorization.md
 ```
 
 #### Acceptance criteria (epic-level)
@@ -501,7 +502,7 @@ gantt
 
 - [ ] Operator has `gh` auth with repo + project scope for `jtwolfe/project-elyra` and user project #2
 - [ ] Design approved or explicitly “execute draft”
-- [ ] Integration tip understanding: work branches → `working` ([docs/dev/branch-law.md](dev/branch-law.md))
+- [ ] Integration tip understanding: work branches → `working` ([docs/dev/branch-law.md](../../dev/branch-law.md))
 - [ ] Snapshot inventory saved (copy of board item-list JSON) for rollback reference
 
 #### Ordered checklist
@@ -547,7 +548,7 @@ Do **not** run the R1 hard gate until steps 5–8 complete. Mid-batch R1 is info
 
 ### What shipped (code)
 Product **continuous encode path** (EncodeWorker / busy-period drain) **code** has shipped
-on the `feature/embed-async` lineage; see `docs/design-embed-async-encode-worker.md`.
+on the `feature/embed-async` lineage; see `docs/design/embed/design-embed-async-encode-worker.md`.
 This is **not** a claim that live busy dogfood is signed off.
 
 ### Why close (scope split)
@@ -623,7 +624,7 @@ No product runtime API changes. Operator / GitHub surfaces only:
 | Project #2 fields | +Start date (DATE), +Target date (DATE) |
 | Project #2 views | +Roadmap near horizon (bound dates), +Table packaging gates, +Table backlog/research, +Deferred board |
 | Issues | New epic + **C6a + C6** successors; draft conversions; comments/bodies; always-parent gates |
-| Docs | `docs/design-v0.1-ready-board-recategorization.md`; PR6 known-bugs #82 → C6a+C6 |
+| Docs | `docs/design/board/design-v0.1-ready-board-recategorization.md`; PR6 known-bugs #82 → C6a+C6 |
 
 #### Packaging matrix (checked; apply with `set_packaging_label` only)
 
@@ -798,14 +799,14 @@ Feature flags: N/A (process). Staged rollout = day plan above.
 ## References
 
 - Live inventory: `/tmp/grok-1000/board-inventory-e3b74dd3.md` (2026-08-04)
-- [docs/dev/branch-law.md](dev/branch-law.md) — `working` / `main` / operating pin
-- [docs/dev/development-governance.md](dev/development-governance.md) — Stage ladder, Project board as planning surface
-- [docs/promotion-discussion/README.md](promotion-discussion/README.md) — v0.1 definition
-- [docs/known-bugs.md](known-bugs.md) — BUG index / #59 epic
-- [docs/grok-improvement-plan/README.md](grok-improvement-plan/README.md) — GI phases; deep_research not Phase 1 gate
-- [docs/design-embed-async-encode-worker.md](design-embed-async-encode-worker.md) — EncodeWorker code shipped; live busy dogfood + packaging residual
-- [docs/design-grok-build-tool.md](design-grok-build-tool.md) — KD16 deep_research experimental
-- [docs/grok-build-dogfood.md](grok-build-dogfood.md) — dogfood checklist including D7 experimental
+- [docs/dev/branch-law.md](../../dev/branch-law.md) — `working` / `main` / operating pin
+- [docs/dev/development-governance.md](../../dev/development-governance.md) — Stage ladder, Project board as planning surface
+- [docs/promotion-discussion/README.md](../../promotion-discussion/README.md) — v0.1 definition
+- [docs/known-bugs.md](../../known-bugs.md) — BUG index / #59 epic
+- [docs/grok-improvement-plan/README.md](../../grok-improvement-plan/README.md) — GI phases; deep_research not Phase 1 gate
+- [docs/design/embed/design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md) — EncodeWorker code shipped; live busy dogfood + packaging residual
+- [docs/design/grok-build/design-grok-build-tool.md](../grok-build/design-grok-build-tool.md) — KD16 deep_research experimental
+- [docs/grok-build-dogfood.md](../../grok-build-dogfood.md) — dogfood checklist including D7 experimental
 - Project: https://github.com/users/jtwolfe/projects/2
 
 ---
@@ -821,7 +822,7 @@ Process work is split into **docs PRs** (land on `working` via short-lived `feat
 | Field | Value |
 |-------|--------|
 | **Title** | `docs: v0.1-ready board recategorization design` |
-| **Files / surfaces** | `docs/design-v0.1-ready-board-recategorization.md` (this document); optional one-line link from `docs/promotion-discussion/README.md` index |
+| **Files / surfaces** | `docs/design/board/design-v0.1-ready-board-recategorization.md` (this document); optional one-line link from `docs/promotion-discussion/README.md` index |
 | **Dependencies** | None |
 | **Description** | Land approved design on `working`. No board mutations. Base PR on `working` per branch-law. |
 

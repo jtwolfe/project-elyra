@@ -2,13 +2,14 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Capability growth: search, browse, package VCS, secrets, workflow skills |
 | **Author** | Design (Grok) + research/refinement pass |
 | **Date** | 2026-07-27 |
-| **Status** | Implemented via execute-plan PRs 1–9 on capability-growth branches (product design v2 frozen; operator catalog: [tools-and-skills.md](tools-and-skills.md)) |
+| **Status** | Shipped |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` |
-| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `docs/grok-improvement-plan/harness-sandbox-fitness.md`, `prompts/system.md` |
+| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `docs/grok-improvement-plan/harness-sandbox-fitness.md`, `prompts/system.md` |
 | **Parallel pattern** | Identity draft → promote + versions; create-tool draft → verify → promote |
 
 ---
@@ -554,7 +555,7 @@ flowchart TB
 ## References
 
 - Tree: `elyra/tools/promote.py` (`refuses_overwrite_local`), `verify.py`, `runner.py`, `guest_exec.py`, `builtin/growth.py`, `identity/layout.py` (`mint_version_id`, GC 50)
-- `docs/tools-and-skills.md`, `docs/design-identity-self-other-multi-user.md`
+- `docs/tools-and-skills.md`, `docs/design/identity/design-identity-self-other-multi-user.md`
 - `ddgs` PyPI / metasearch API (unofficial; backend volatility)
 - Playwright agent/MCP accessibility snapshot + ref interaction patterns
 - Python `keyring` OS credential backends (optional)

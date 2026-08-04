@@ -2,10 +2,11 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Product** | project-elyra |
 | **Author** | Grok Build design pass |
 | **Date** | 2026-07-26 |
-| **Status** | Engineer-ready (rev2; approved) |
+| **Status** | Active |
 | **Branch base** | `grok-improvement` (tip includes remove-Gemma stack; product default xAI Grok) |
 | **Primary surfaces** | Glass (`elyra/runtime/web/*`), API (`elyra/runtime/api.py`), messages, speak transport, sandbox mounts, xAI client |
 | **Related designs** | Glass Aurimago polish, remove-Gemma, Stretch 1, continuous work / reset |

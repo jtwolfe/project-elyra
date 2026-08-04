@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Capability integrity: run cap, web_search cleanup, browser dual-backend intent, sandbox packages, moments tape, task soft guidance |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-27 |
@@ -10,8 +11,8 @@
 | **Branch** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Dogfood refs** | Moments `be49e0ef`, `9aa82c11`, `d0440043` (post capability-growth merge) |
-| **Related** | [dev/engineering-principles.md](dev/engineering-principles.md), [harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md), [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [stage-b-mc.md](grok-improvement-plan/stage-b-mc.md), [tools-and-skills.md](tools-and-skills.md) |
-| **Durable path** | `docs/design-capability-integrity-run-search-browser-sandbox.md` |
+| **Related** | [dev/engineering-principles.md](../../dev/engineering-principles.md), [harness-sandbox-fitness.md](../../grok-improvement-plan/harness-sandbox-fitness.md), [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [stage-b-mc.md](../../grok-improvement-plan/stage-b-mc.md), [tools-and-skills.md](../../tools-and-skills.md) |
+| **Durable path** | `docs/design/capability/design-capability-integrity-run-search-browser-sandbox.md` |
 | **Guest browser** | **Out of implementation scope here** — dual-backend *intent* + host fix (PR6a) only; guest path = separate design after spike |
 
 ---

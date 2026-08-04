@@ -2,11 +2,12 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | In-browser xAI OIDC login (device-code + optional PKCE) |
 | **Author** | Design (Grok Build subagent) |
 | **Date** | 2026-07-30 |
 | **Revised** | 2026-07-30 (review 39845e5b) |
-| **Status** | Proposed — implement via ordered PRs below |
+| **Status** | Active |
 | **Product** | project-elyra |
 | **Branch context** | `grok-improv-radeonvii` product tip; Autopoiesis Commons gym |
 | **Related** | `elyra/llm/auth.py`, `elyra/llm/client.py` (`set_bearer_token`), `elyra/secrets/*`, `elyra/runtime/provider_runtime.py`, `elyra/runtime/api.py`, Glass Status provider card, OpenClaw `xai-oauth` (primary protocol reference), `docs/grok-improvement-plan/phase-0.md` |

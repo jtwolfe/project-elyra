@@ -4,7 +4,7 @@
 |-------|--------|
 | **Audience** | Operators dogfooding Elyra on SuperGrok / Grok Build |
 | **Status** | Operator-facing summary (code stack lands via usage-tracking PRs) |
-| **Full design** | [`docs/design-usage-tracking-supergrok-pacing.md`](../design-usage-tracking-supergrok-pacing.md) |
+| **Full design** | [`docs/design/usage/design-usage-tracking-supergrok-pacing.md`](../design/usage/design-usage-tracking-supergrok-pacing.md) |
 
 Short product notes for Glass, `usage.json`, and live smoke. **Do not treat this as the implementation spec** — formulas, schema, and PR stack live in the full design.
 
@@ -89,7 +89,7 @@ Run with a real SuperGrok / Grok Build session (`elyra start`, provider xai, cre
 - [ ] **Burst formula:** burst text moves with overshoot — remaining = `max(0, BurstMax − over)` — not a stuck full bucket after spend spikes.
 - [ ] **Non-blocking status:** Status panel stays responsive; billing poll must not hitch `GET /api/status` for multi-second waits.
 
-Pass = all boxes green for the week you care about. Live smoke is **operator-owned** (not a CI gate). Full design test matrix and settings defaults: [design-usage-tracking-supergrok-pacing.md](../design-usage-tracking-supergrok-pacing.md).
+Pass = all boxes green for the week you care about. Live smoke is **operator-owned** (not a CI gate). Full design test matrix and settings defaults: [design-usage-tracking-supergrok-pacing.md](../design/usage/design-usage-tracking-supergrok-pacing.md).
 
 ### Example toml (optional knobs)
 
@@ -113,7 +113,7 @@ credits_poll_enabled = true
 
 | Doc | Role |
 |-----|------|
-| [design-usage-tracking-supergrok-pacing.md](../design-usage-tracking-supergrok-pacing.md) | Full design (schema, algorithms, PR stack, KD table) |
+| [design-usage-tracking-supergrok-pacing.md](../design/usage/design-usage-tracking-supergrok-pacing.md) | Full design (schema, algorithms, PR stack, KD table) |
 | [phase-0.md](phase-0.md) | Original Phase 0 usage meter concept |
 | [phase-0-execution.md](phase-0-execution.md) | Phase 0 execution + earlier live smoke |
 | Root [README.md](../../README.md) | Product path: xAI Grok + usage meter |

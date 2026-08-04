@@ -3,9 +3,9 @@
 **Freeze for runtime shape:** [stretch-1.md](stretch-1.md).  
 This page: **formats**, **base catalog**, **package VCS**, **capability-growth families** (search, browser, secrets, git/gh), **dogfood**, **create-tool safety**, **identity tools/skills**.
 
-Identity store design (layout, gates, work-origin USER): [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) · life-shell rules: [time-and-identity.md](time-and-identity.md).
+Identity store design (layout, gates, work-origin USER): [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) · life-shell rules: [time-and-identity.md](time-and-identity.md).
 
-**Capability growth (shipped on this branch):** product design [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) · execute-plan contract [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md).
+**Capability growth (shipped on this branch):** product design [design-capability-growth-search-browse-vcs-secrets.md](design/capability/design-capability-growth-search-browse-vcs-secrets.md) · execute-plan contract [design-capability-growth-implementation-plan.md](design/capability/design-capability-growth-implementation-plan.md).
 
 ---
 
@@ -115,7 +115,7 @@ create-tool → tools/drafts/ (not callable; host-only; not visible via sandbox 
 
 **Sandbox tree honesty:** product FS root is `{ELYRA_HOME}/sandboxes/sandbox0/` (guest `/workspace` when isolation is on). Sandbox `tools/` holds **staged runtime copies** (plus `.stage` / `.verify`) — not host `tools/drafts/`. Growth tools own drafts/promote on the host.
 
-**Guest package stage gate:** when isolation is on, `sandbox_python` / `sandbox_shell` packages stage into `sandboxes/sandbox0/tools/<name>/` for guest exec. Staging is **content-hash stage-once** (marker `.elyra_stage.json`): re-stage only when package bytes change; refresh is in-place (no top-level rename thrash on every call). Guest path-missing after one force retry surfaces as `guest_module_missing` (not bare `guest_nonzero_exit`). Soft skill manners prefer richer single calls when possible; legitimate multi-call batches (different args) rely on this hard gate, not thrash policy. Design: [design-guest-package-stage-reliability.md](design-guest-package-stage-reliability.md).
+**Guest package stage gate:** when isolation is on, `sandbox_python` / `sandbox_shell` packages stage into `sandboxes/sandbox0/tools/<name>/` for guest exec. Staging is **content-hash stage-once** (marker `.elyra_stage.json`): re-stage only when package bytes change; refresh is in-place (no top-level rename thrash on every call). Guest path-missing after one force retry surfaces as `guest_module_missing` (not bare `guest_nonzero_exit`). Soft skill manners prefer richer single calls when possible; legitimate multi-call batches (different args) rely on this hard gate, not thrash policy. Design: [design-guest-package-stage-reliability.md](design/capability/design-guest-package-stage-reliability.md).
 
 ### Lifecycle (skills)
 
@@ -134,7 +134,7 @@ Skill promote gates: `SKILL.md` present, frontmatter `name` + `description`, siz
 
 ## Package VCS (archive-on-promote)
 
-Identity-aligned recovery for **local** tool and skill packages. Design detail: [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) §1–2.
+Identity-aligned recovery for **local** tool and skill packages. Design detail: [design-capability-growth-implementation-plan.md](design/capability/design-capability-growth-implementation-plan.md) §1–2.
 
 ### Semantics
 
@@ -368,8 +368,8 @@ Phase 1 `grok_build` **is in the callable surface on the feature branch** (`feat
 | **cwd** | Host-absolute path under the VCS jail (see TOOL.md / skills). Guest-relative paths fail `not_a_repo`. |
 | **Dogfood** | Operator checklist [grok-build-dogfood.md](grok-build-dogfood.md). **D1 required** on advanced feature tip before any PR8 discussion. **D3/D6** remain PR8 / H-spine gates (operator later). **D7** experimental. **No** dedicated smoke script — checklist only. |
 
-Design (Phase 1): [design-grok-build-tool.md](design-grok-build-tool.md) · summary [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md).  
-Post-dogfood functionalization (auth seed + zombie/finalize): [design-grok-build-functionalization.md](design-grok-build-functionalization.md).  
+Design (Phase 1): [design-grok-build-tool.md](design/grok-build/design-grok-build-tool.md) · summary [design-grok-build-tool-summary.md](design/grok-build/design-grok-build-tool-summary.md).  
+Post-dogfood functionalization (auth seed + zombie/finalize): [design-grok-build-functionalization.md](design/grok-build/design-grok-build-functionalization.md).  
 Branch / tip law: [dev/branch-law.md](dev/branch-law.md) (`working` remains house integration tip for broader product land).  
 Operating pin (manual): [dev/operating-pins.md](dev/operating-pins.md).  
 Development structure (issue + branch): [dev/engineering-principles.md](dev/engineering-principles.md) §9 — Grok Build and `github-workflow` always recommend inspect → issue update/create → short-lived branch from `working` → work → board update.
@@ -439,11 +439,11 @@ Cumulative procedure for the full program (product design + implementation plan 
 
 | Doc | Role |
 |-----|------|
-| [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) | Product design (v2): search, browser, package VCS, secrets, workflow skills |
-| [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) | Execute-plan PR DAG, normative promote algorithm, security gates |
-| [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity draft/promote + multi-user prep (parallel version culture) |
+| [design-capability-growth-search-browse-vcs-secrets.md](design/capability/design-capability-growth-search-browse-vcs-secrets.md) | Product design (v2): search, browser, package VCS, secrets, workflow skills |
+| [design-capability-growth-implementation-plan.md](design/capability/design-capability-growth-implementation-plan.md) | Execute-plan PR DAG, normative promote algorithm, security gates |
+| [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) | Identity draft/promote + multi-user prep (parallel version culture) |
 | [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md) | Sandbox runners, isolation, honesty |
-| [design-guest-package-stage-reliability.md](design-guest-package-stage-reliability.md) | Content-hash stage-once gate, in-place restage, `guest_module_missing` |
+| [design-guest-package-stage-reliability.md](design/capability/design-guest-package-stage-reliability.md) | Content-hash stage-once gate, in-place restage, `guest_module_missing` |
 | [stretch-1.md](stretch-1.md) | Runtime freeze for Stretch 1 shape |
 
 ---

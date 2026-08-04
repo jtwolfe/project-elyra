@@ -168,7 +168,7 @@ Formats: [tools-and-skills.md](tools-and-skills.md).
 
 Default **OFF**. When enabled (Glass / `PATCH /api/continuous`), presence may inject a budgeted in-moment work-continue HOST and, after finalize with non-speak progress + open work, enqueue a gated `moment_continue` wake. Prefer *pending* `task_ready` only — never re-arm ready tasks. Distinct from time-idle continue (`continue_policy.py`).
 
-Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md).
+Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design/stretch-1/design-continuous-work-orient-ledger-reset.md).
 
 ---
 

@@ -4,7 +4,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 **Taxonomy:** [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) (Active) — hub-first, non-destructive.  
 **Hub:** [docs/README.md](../README.md) four-class index.  
-**Paths below are current** until PR2 / PR2b / PR2c `git mv`s files under `docs/design/<topic>/`. Do not treat this folder as the only DESIGN home yet.
+**Layout:** root `docs/design-*.md` landed under `docs/design/<topic>/` (PR2). stretch-2 designs → PR2b; GI / harness / design-rocm → PR2c.
 
 | Status | Meaning |
 |--------|---------|
@@ -24,31 +24,82 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 ---
 
-## Root `docs/design-*.md` (flat — move in PR2)
+## stretch-1/
 
-| Doc | Status (assessed) | Topic (target) |
-|-----|-------------------|----------------|
-| [design-stretch-1-implementation.md](../design-stretch-1-implementation.md) | Shipped | stretch-1 |
-| [design-continuous-work-orient-ledger-reset.md](../design-continuous-work-orient-ledger-reset.md) | Shipped (mostly) | stretch-1 |
-| [design-post-skill-commitment.md](../design-post-skill-commitment.md) | Shipped / historical | stretch-1 |
-| [design-tool-thrash-recovery.md](../design-tool-thrash-recovery.md) | Shipped / historical | stretch-1 |
-| [design-gemma-sampling-hygiene-staged.md](../design-gemma-sampling-hygiene-staged.md) | **Superseded / Freeze** | stretch-1 |
-| [design-remove-gemma-local-stub.md](../design-remove-gemma-local-stub.md) | Shipped | stretch-1 |
-| [design-identity-self-other-multi-user.md](../design-identity-self-other-multi-user.md) | Shipped | identity |
-| [design-glass-aurimago-gold-polish.md](../design-glass-aurimago-gold-polish.md) | Shipped | glass |
-| [design-glass-multimodal-attachments.md](../design-glass-multimodal-attachments.md) | Active / next stack | glass |
-| [design-capability-growth-search-browse-vcs-secrets.md](../design-capability-growth-search-browse-vcs-secrets.md) | Shipped | capability |
-| [design-capability-growth-implementation-plan.md](../design-capability-growth-implementation-plan.md) | Shipped | capability |
-| [design-capability-integrity-run-search-browser-sandbox.md](../design-capability-integrity-run-search-browser-sandbox.md) | Draft/shipped mix | capability |
-| [design-guest-package-stage-reliability.md](../design-guest-package-stage-reliability.md) | Draft/shipped mix | capability |
-| [design-usage-tracking-supergrok-pacing.md](../design-usage-tracking-supergrok-pacing.md) | Shipped-ish | usage |
-| [design-xai-oauth-browser-login.md](../design-xai-oauth-browser-login.md) | Proposed / Active | usage |
-| [design-grok-build-tool.md](../design-grok-build-tool.md) | Active / implemented stack | grok-build |
-| [design-grok-build-tool-summary.md](../design-grok-build-tool-summary.md) | Active summary | grok-build |
-| [design-grok-build-functionalization.md](../design-grok-build-functionalization.md) | Draft / Active | grok-build |
-| [grok-build-headless-spike.md](../grok-build-headless-spike.md) | Spike | grok-build |
-| [design-embed-async-encode-worker.md](../design-embed-async-encode-worker.md) | Implemented (residuals open) | embed |
-| [design-v0.1-ready-board-recategorization.md](../design-v0.1-ready-board-recategorization.md) | Approved / board ops | board |
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-stretch-1-implementation.md](stretch-1/design-stretch-1-implementation.md) | Shipped | Stretch 1 design + PR plan |
+| [design-continuous-work-orient-ledger-reset.md](stretch-1/design-continuous-work-orient-ledger-reset.md) | Shipped (mostly) | Continuous work + orient/ledger + reset |
+| [design-post-skill-commitment.md](stretch-1/design-post-skill-commitment.md) | Shipped / historical | Post-skill commitment |
+| [design-tool-thrash-recovery.md](stretch-1/design-tool-thrash-recovery.md) | Shipped / historical | Tool thrash recovery |
+| [design-gemma-sampling-hygiene-staged.md](stretch-1/design-gemma-sampling-hygiene-staged.md) | **Superseded / Freeze** | Do not follow for setup; superseded by remove-gemma |
+| [design-remove-gemma-local-stub.md](stretch-1/design-remove-gemma-local-stub.md) | Shipped | Remove llama.cpp/Gemma path; stub `provider=local` |
+
+---
+
+## identity/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-identity-self-other-multi-user.md](identity/design-identity-self-other-multi-user.md) | Shipped | Identity + multi-user prep |
+
+---
+
+## glass/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-glass-aurimago-gold-polish.md](glass/design-glass-aurimago-gold-polish.md) | Shipped | Glass gold theme polish |
+| [design-glass-multimodal-attachments.md](glass/design-glass-multimodal-attachments.md) | Active / next stack | STT/TTS, durable attachments, Grok vision |
+
+---
+
+## capability/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-capability-growth-search-browse-vcs-secrets.md](capability/design-capability-growth-search-browse-vcs-secrets.md) | Shipped | Product design (search, browse, VCS, secrets) |
+| [design-capability-growth-implementation-plan.md](capability/design-capability-growth-implementation-plan.md) | Shipped | Execute-plan PR DAG + promote algorithm |
+| [design-capability-integrity-run-search-browser-sandbox.md](capability/design-capability-integrity-run-search-browser-sandbox.md) | Draft/shipped mix | Integrity stack |
+| [design-guest-package-stage-reliability.md](capability/design-guest-package-stage-reliability.md) | Draft/shipped mix | Guest package stage-once gate |
+
+Harness full design still at [../grok-improvement-plan/harness-sandbox-fitness.md](../grok-improvement-plan/harness-sandbox-fitness.md) until **PR2c**.
+
+---
+
+## grok-build/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-grok-build-tool.md](grok-build/design-grok-build-tool.md) | Active / implemented stack | Host instrument design |
+| [design-grok-build-tool-summary.md](grok-build/design-grok-build-tool-summary.md) | Active summary | Short summary of full design |
+| [design-grok-build-functionalization.md](grok-build/design-grok-build-functionalization.md) | Draft / Active | Auth seed + zombie/finalize honesty |
+| [grok-build-headless-spike.md](grok-build/grok-build-headless-spike.md) | Spike | deep_research / human-gate spike (D7) |
+
+---
+
+## usage/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-usage-tracking-supergrok-pacing.md](usage/design-usage-tracking-supergrok-pacing.md) | Shipped-ish | Usage ledger + SuperGrok pacing |
+| [design-xai-oauth-browser-login.md](usage/design-xai-oauth-browser-login.md) | Proposed / Active | In-browser xAI OIDC login |
+
+---
+
+## board/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-v0.1-ready-board-recategorization.md](board/design-v0.1-ready-board-recategorization.md) | Approved / board ops | v0.1-ready board recategorization |
+
+---
+
+## embed/
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-embed-async-encode-worker.md](embed/design-embed-async-encode-worker.md) | Implemented (residuals open) | EncodeWorker + EmbedderGate continuous encode |
 
 ---
 

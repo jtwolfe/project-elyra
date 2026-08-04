@@ -884,7 +884,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 - [docs/dev/engineering-principles.md](../dev/engineering-principles.md) §9 development structure
 - [docs/dev/branch-law.md](../dev/branch-law.md), [docs/dev/operating-pins.md](../dev/operating-pins.md)
 - [docs/stretch-2/README.md](../stretch-2/README.md) — architecture vs design split precedent
-- [docs/design-remove-gemma-local-stub.md](../design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
+- [docs/design/stretch-1/design-remove-gemma-local-stub.md](stretch-1/design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
 - [docs/lance-debug1/README.md](../lance-debug1/README.md) — sealed investigation pattern
 - [docs/archive/README.md](../archive/README.md) — existing archive pattern
 - `tests/test_stretch1_donewhen.py` — content path pins for `docs/stretch-1.md`, `docs/inference.md`

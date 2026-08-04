@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Guest package stage reliability (stage-once / content-hash gate, in-place restage, reactive retry, verify smoke load) |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-27 |
@@ -10,8 +11,8 @@
 | **Branch** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Dogfood refs** | Moment `afce4e4d-678f-4ed5-b0e9-e50106709021` (calculator ×7 batch); same class as earlier local `web_search` guest flakes |
-| **Related** | [harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md) (KD10 stage-copy, single-writer, atomic stage), [design-capability-integrity-run-search-browser-sandbox.md](design-capability-integrity-run-search-browser-sandbox.md) (web_search local-delete pattern), [design-tool-thrash-recovery.md](design-tool-thrash-recovery.md), [create-tool/SKILL.md](../skills/bundled/create-tool/SKILL.md), [tools-and-skills.md](tools-and-skills.md) |
-| **Durable path** | `docs/design-guest-package-stage-reliability.md` |
+| **Related** | [harness-sandbox-fitness.md](../../grok-improvement-plan/harness-sandbox-fitness.md) (KD10 stage-copy, single-writer, atomic stage), [design-capability-integrity-run-search-browser-sandbox.md](design-capability-integrity-run-search-browser-sandbox.md) (web_search local-delete pattern), [design-tool-thrash-recovery.md](../stretch-1/design-tool-thrash-recovery.md), [create-tool/SKILL.md](../../../skills/bundled/create-tool/SKILL.md), [tools-and-skills.md](../../tools-and-skills.md) |
+| **Durable path** | `docs/design/capability/design-guest-package-stage-reliability.md` |
 | **Out of scope** | Guest browser; converting all tools to host builtins; product-default `tool_choice=required` |
 
 ---
@@ -642,7 +643,7 @@ PR1+PR2 may combine if small; **PR3 must not land while force still rename-swaps
 - `elyra/sandbox/paths.py` — `MOUNT_SPEC` tools RW bind
 - `elyra/sandbox/client_msb.py` — volume binds from `MOUNT_SPEC`
 - `docs/grok-improvement-plan/harness-sandbox-fitness.md` — KD10 stage-copy, single-writer, atomic stage, KD19–21
-- `docs/design-capability-integrity-run-search-browser-sandbox.md` — web_search local delete pattern
+- `docs/design/capability/design-capability-integrity-run-search-browser-sandbox.md` — web_search local delete pattern
 - `skills/bundled/create-tool/SKILL.md` — sandbox_python defaults
 - Moment tape: `data/moments/afce4e4d-678f-4ed5-b0e9-e50106709021.jsonl` hops 13–14
 - Tests: `tests/test_sandbox_runners.py` (stage atomic, fake guest), `tests/test_create_tool_gates.py`, `tests/test_package_vcs.py` (content_hash)

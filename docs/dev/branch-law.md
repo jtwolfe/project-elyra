@@ -4,7 +4,7 @@
 |-------|--------|
 | **Status** | Normative tip law for Project Elyra development |
 | **Created** | 2026-08-01 (PR0 — Grok Build design stack) |
-| **Related** | [design-grok-build-tool.md](../design-grok-build-tool.md), [development-governance.md](development-governance.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [engineering-principles.md](engineering-principles.md) (§9 development structure), [operating-pins.md](operating-pins.md) (manual pin convention) |
+| **Related** | [design-grok-build-tool.md](../design/grok-build/design-grok-build-tool.md), [development-governance.md](development-governance.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [engineering-principles.md](engineering-principles.md) (§9 development structure), [operating-pins.md](operating-pins.md) (manual pin convention) |
 
 This document is the **current** branch / tip law. Where older prose still says `grok-improvement` is the integration tip, **this file wins**.
 
@@ -139,4 +139,4 @@ git push -u origin working
 - [operating-pins.md](operating-pins.md) is the pin-record companion to this tip law.
 - [grok-improvement-plan/README.md](../grok-improvement-plan/README.md) historical branch tables remain for Phase 0 context; the banner there points here.
 - [development-governance.md](development-governance.md) multi-party governance remains valid; tip law is this file.
-- Full Grok Build instrument design: [design-grok-build-tool.md](../design-grok-build-tool.md).
+- Full Grok Build instrument design: [design-grok-build-tool.md](../design/grok-build/design-grok-build-tool.md).

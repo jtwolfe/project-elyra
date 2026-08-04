@@ -16,9 +16,9 @@ and pure **validate** dry-runs. Full mode spawns (prompt/design/… ) stay
 **No** dedicated smoke script; checklist only.
 
 Dogfood matrix D1–D13 (normative design table):
-  docs/design-grok-build-tool.md § "Dogfood matrix / acceptance"
+  docs/design/grok-build/design-grok-build-tool.md § "Dogfood matrix / acceptance"
 Functionalization (auth seed + zombie/finalize, Grok 0.2.118):
-  docs/design-grok-build-functionalization.md
+  docs/design/grok-build/design-grok-build-functionalization.md
 
   D1  mode=prompt “summarize README” in repo
       → ok summary; no token leakage in result.json
@@ -39,7 +39,7 @@ Functionalization (auth seed + zombie/finalize, Grok 0.2.118):
         stack base working (or documented residual); presence free during run
   D7  mode=deep_research  **experimental only** until PR0a signs
       → only after PR0a: strategy (1)/(2) green; or honest mode_experimental
-        if not enabled. See docs/grok-build-headless-spike.md (PR0a) and
+        if not enabled. See docs/design/grok-build/grok-build-headless-spike.md (PR0a) and
         design KD16 — do not claim completed from background-ack alone.
   D8  Usage  (preferred with D1)
       → headless-shaped usage recorded via adapter; hard-stop prevents launch

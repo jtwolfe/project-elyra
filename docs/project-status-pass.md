@@ -102,8 +102,8 @@ Promote gi → main             ── OPERATOR SIGN-OFF
 
 - [stretch-1.md](stretch-1.md), [dev/engineering-principles.md](dev/engineering-principles.md)
 - [tools-and-skills.md](tools-and-skills.md), [time-and-identity.md](time-and-identity.md) (identity draft/promote + capability-growth catalog/dogfood)
-- Design docs for recent work: [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md), [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md)
-- Capability growth: [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) (package VCS, search, browser, secrets, git/gh, judgment skills — see tools-and-skills dogfood checklist)
+- Design docs for recent work: [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md), [design-glass-aurimago-gold-polish.md](design/glass/design-glass-aurimago-gold-polish.md)
+- Capability growth: [design-capability-growth-search-browse-vcs-secrets.md](design/capability/design-capability-growth-search-browse-vcs-secrets.md), [design-capability-growth-implementation-plan.md](design/capability/design-capability-growth-implementation-plan.md) (package VCS, search, browser, secrets, git/gh, judgment skills — see tools-and-skills dogfood checklist)
 - Phase 0 / H-series designs (good history; implemented)
 
 ### Stale or misleading (cleanup candidates)
@@ -250,8 +250,8 @@ That workflow should feel like a **skill + ledger pattern**, not a second mind. 
 | [overview.md](overview.md) | Glossary / big picture |
 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok phases (refresh status) |
 | [metacognition.md](grok-improvement-plan/metacognition.md) / [stage-b-mc.md](grok-improvement-plan/stage-b-mc.md) | Soft Decide / Stage B |
-| [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep |
-| [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold polish |
+| [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) | Identity + multi-user prep |
+| [design-glass-aurimago-gold-polish.md](design/glass/design-glass-aurimago-gold-polish.md) | Glass gold polish |
 | [memory-atoms.pdf](memory-atoms.pdf) | Phase 3 memory thesis |
 | [dev/engineering-principles.md](dev/engineering-principles.md) | How we write code |
 
@@ -273,7 +273,7 @@ Elyra is a **working teammate runtime on Grok**, with soft metacognition and a r
 
 ## Grok Build instrument (2026-08-01)
 
-- Design: [design-grok-build-tool.md](design-grok-build-tool.md) (approved)
+- Design: [design-grok-build-tool.md](design/grok-build/design-grok-build-tool.md) (approved)
 - Branch law: [dev/branch-law.md](dev/branch-law.md) — integration tip **`working`**
 - Implementation stack: `feature/gb-3b3094ab-pr0`…`pr8` (execute-plan 3b3094ab)
 - Status: code landed on feature stack; dogfood D1–D13 operator-run before operating pin move

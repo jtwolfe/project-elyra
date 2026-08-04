@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Stretch 1 runtime completion |
 | **Author** | _(implementer)_ |
 | **Date** | 2026-07-21 |

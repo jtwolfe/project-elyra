@@ -2,16 +2,17 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Phase 1 `grok_build` host instrument — full mode surface |
 | **Author** | Design (Grok Build subagent) |
 | **Date** | 2026-08-01 |
-| **Status** | **Approved for implementation** (landed PR0; revised post-review) |
+| **Status** | Active |
 | **Product** | project-elyra |
 | **Tracks** | Issue #109; GI Phase 1 |
 | **Branch** | `feature/grok-build-tool` (off `main`; land stack into `working` once created, else `main`) |
-| **Related** | [dev/branch-law.md](dev/branch-law.md), [dev/engineering-principles.md](dev/engineering-principles.md), [tools-and-skills.md](tools-and-skills.md), [design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md), [dev/development-governance.md](dev/development-governance.md), [grok-improvement-plan/README.md](grok-improvement-plan/README.md), `elyra/secrets/inject.py`, `elyra/llm/xai_oauth.py` |
+| **Related** | [dev/branch-law.md](../../dev/branch-law.md), [dev/engineering-principles.md](../../dev/engineering-principles.md), [tools-and-skills.md](../../tools-and-skills.md), [design-xai-oauth-browser-login.md](../usage/design-xai-oauth-browser-login.md), [dev/development-governance.md](../../dev/development-governance.md), [grok-improvement-plan/README.md](../../grok-improvement-plan/README.md), `elyra/secrets/inject.py`, `elyra/llm/xai_oauth.py` |
 | **Revised** | 2026-08-01 (review cf9024a3; re-review; shared WakeQueue mandatory) |
-| **Landing path (post-approval)** | `docs/design-grok-build-tool.md` |
+| **Landing path (post-approval)** | `docs/design/grok-build/design-grok-build-tool.md` |
 
 ---
 
@@ -104,7 +105,7 @@ MVP-only (e.g. `prompt` alone) would teach the wrong API surface and force a sec
 | **KD11** | **Any mode with default timeout > 15 min defaults to async job**; only `prompt` (and explicit `async=false` debug) is sync-by-default. Supervisor-owned **job reaper** finalizes runs | Presence worker is single-threaded; must not block for hours |
 | **KD12** | **Branch law migration in PR0**: `working` supersedes `grok-improvement`; create `working` early; **PR0 includes github-workflow tip-only skill edit** + GI README banner (mode/async skill text stays PR5) | Avoid thrash during PR1–PR4 window |
 | **KD13** | **`pr_babysit` deferred** (document only) | Optional; Graphite-biased; not required for Phase 1 dogfood |
-| **KD14** | **Feature work from `feature/grok-build-tool`**; design doc lands as `docs/design-grok-build-tool.md` after approval | Issue #109; reviewable stack |
+| **KD14** | **Feature work from `feature/grok-build-tool`**; design doc lands as `docs/design/grok-build/design-grok-build-tool.md` after approval | Issue #109; reviewable stack |
 | **KD15** | **Headless human-gate policy**: inject rules forbidding interactive wait; on unresolved human need return `status=needs_human` + artifacts (exit 0 path for PE) | TUI ask tools have no operator in PE headless |
 | **KD16** | **`deep_research` is experimental until PR0a spike** documents headless exit/workflow contract; may soft-fail `mode_experimental` | Not a bundled skill; Grok-native async workflow |
 | **KD17** | **Artifact harvest**: PE-controlled output paths in `run_dir/artifacts/` via prompt suffix + parse + scratch scan fallback | Design/review write under TMP by default |
@@ -986,7 +987,7 @@ default_use_graphite = false
 log_retention_days = 14
 ```
 
-v1 hardcodes defaults in `modes.py` / `jobs.py` (`ensure_grok_build_runtime`, retention constants). Add `elyra.toml` keys only on second-install pain — avoid env var sprawl ([dev/engineering-principles.md](dev/engineering-principles.md) §5).
+v1 hardcodes defaults in `modes.py` / `jobs.py` (`ensure_grok_build_runtime`, retention constants). Add `elyra.toml` keys only on second-install pain — avoid env var sprawl ([dev/engineering-principles.md](../../dev/engineering-principles.md) §5).
 
 ### Glass / status
 
@@ -1211,7 +1212,7 @@ PR0–PR1 (docs + pure modules) can start immediately. PR4 full registration wai
 - `tools/bundled/web_search/*` — package layout exemplar
 - `skills/bundled/github-workflow/SKILL.md`, `do-work`, `plan-work`, `review-work`
 - `docs/dev/engineering-principles.md`, `docs/tools-and-skills.md`
-- `docs/design-xai-oauth-browser-login.md` (inject plane for this tool)
+- `docs/design/usage/design-xai-oauth-browser-login.md` (inject plane for this tool)
 - `docs/dev/development-governance.md`
 - `docs/grok-improvement-plan/README.md` (Phase 1)
 - Host Grok skills: `~/.grok/bundled/skills/{design,implement,execute-plan,review,pr-babysit}`
@@ -1228,7 +1229,7 @@ Realistic incremental stack on **`feature/grok-build-tool`**. Each PR independen
 | Field | Content |
 |-------|---------|
 | **Title** | `docs: grok_build design + branch law; skill tip working (not grok-improvement)` |
-| **Files** | `docs/design-grok-build-tool.md`; `docs/dev/branch-law.md`; promotion + **GI README supersession banner**; `docs/tools-and-skills.md` note; **`skills/bundled/github-workflow/SKILL.md` tip-only edit**; **`tests/test_github_workflow.py` needle updates for `working`**; issue #109 |
+| **Files** | `docs/design/grok-build/design-grok-build-tool.md`; `docs/dev/branch-law.md`; promotion + **GI README supersession banner**; `docs/tools-and-skills.md` note; **`skills/bundled/github-workflow/SKILL.md` tip-only edit**; **`tests/test_github_workflow.py` needle updates for `working`**; issue #109 |
 | **Depends on** | none |
 | **Description** | Land approved design; normative `working` tip; migration from `grok-improvement`; **skill body tip law so live PE stops teaching grok-improvement during PR1–PR4**. No runtime tool code. Operator creates/pushes `working`. Mode/async skill sections remain PR5. |
 
@@ -1237,7 +1238,7 @@ Realistic incremental stack on **`feature/grok-build-tool`**. Each PR independen
 | Field | Content |
 |-------|---------|
 | **Title** | `docs: grok_build headless spike (deep_research + design human-gate notes)` |
-| **Files** | spike notes section in design or `docs/grok-build-headless-spike.md`; checklist for operator runs |
+| **Files** | spike notes section in design or `docs/design/grok-build/grok-build-headless-spike.md`; checklist for operator runs |
 | **Depends on** | PR0 |
 | **Description** | Record exit timing/JSON for `/deep-research` and observe design needs-user-input under `--always-approve`. Sign strategy (1)/(2)/(3). Blocks enabling deep_research beyond `mode_experimental`. |
 

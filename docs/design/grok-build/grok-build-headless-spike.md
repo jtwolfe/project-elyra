@@ -2,12 +2,15 @@
 
 | Field | Value |
 |-------|--------|
-| **Status** | Spike notes — **not signed** for enabling `deep_research` beyond experimental |
+| **Class** | DESIGN |
+| **Status** | Spike |
 | **Date** | 2026-08-01 |
 | **Branch / PR** | `feature/gb-*-pr0a` · PR0a |
 | **Parent design** | [design-grok-build-tool.md](design-grok-build-tool.md) — **[KD16](design-grok-build-tool.md)** (`deep_research` experimental until this spike) · **[KD15](design-grok-build-tool.md)** (headless human-gate) |
 | **Host binary used for local probe** | `/home/jim/.grok/bin/grok` → `grok-0.2.118-linux-x86_64` |
 | **Host docs** | `~/.grok/docs/user-guide/14-headless-mode.md`, `04-slash-commands.md` |
+
+> **Status: Spike** — exploration / archive-leaning; not signed for enabling `deep_research` beyond experimental.
 
 **Purpose:** document how to run headless spikes for `/deep-research` exit timing and `/design` human-gate behavior; record strategy options for PE `grok_build` integration; **block enabling `deep_research` beyond `mode_experimental` until an operator signs this spike.**
 

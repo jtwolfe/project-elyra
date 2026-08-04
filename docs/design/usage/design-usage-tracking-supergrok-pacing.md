@@ -2,15 +2,16 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Usage tracking + SuperGrok weekly pacing (keep hard-stop override) |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-27 |
-| **Status** | Draft (review issues addressed) |
+| **Status** | Shipped |
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Real goal** | Align Elyra metering with SuperGrok’s **unified weekly pool**, replace pure linear day/hour hard gates with **week-cumulative ledger + pace-aware throttle + burst**, keep **hard_stop_override** |
-| **Related docs** | [`docs/grok-improvement-plan/phase-0.md`](docs/grok-improvement-plan/phase-0.md), [`docs/grok-improvement-plan/phase-0-execution.md`](docs/grok-improvement-plan/phase-0-execution.md), [`docs/dev/engineering-principles.md`](dev/engineering-principles.md) |
+| **Related docs** | [`docs/grok-improvement-plan/phase-0.md`](../../grok-improvement-plan/phase-0.md), [`docs/grok-improvement-plan/phase-0-execution.md`](../../grok-improvement-plan/phase-0-execution.md), [`docs/dev/engineering-principles.md`](../../dev/engineering-principles.md) |
 | **Primary code today** | `elyra/llm/usage.py`, `elyra/llm/client.py` (`UsageGatedChatClient`), `elyra/llm/auth.py`, `elyra/settings.py` (`UsageSettings`), `elyra/runtime/provider_runtime.py`, `elyra/runtime/api.py`, `elyra/runtime/web/{app.js,index.html}` |
 | **Billing probe** | Externally validated 2026-07-27 against live `auth.json` (field names not yet in-repo fixtures) |
 
@@ -91,13 +92,13 @@ flowchart LR
 
 ### Current architecture (verified in tree)
 
-**Meter** — [`elyra/llm/usage.py`](elyra/llm/usage.py):
+**Meter** — [`elyra/llm/usage.py`](../../../elyra/llm/usage.py):
 
 - `TokenUsage` / `parse_token_usage` (prompt / completion / total / reasoning; **no** `cached_tokens` yet).
 - `UsageMeter`: ISO `week_id` (`YYYY-Www`), `day_id`, `hour_id`; counters; atomic `usage.json`; `hard_stop_override` default **false** on missing/corrupt.
 - Hard stop precedence today: **week > day > hour** when used ≥ limit.
 - `compute_limits`: day = week//7, hour = day//blocks — **pure linear partition**.
-- `weekly_allowed_fraction` is **informational only** ([`UsageSettings`](elyra/settings.py) docstring; tests assert it does not affect math).
+- `weekly_allowed_fraction` is **informational only** ([`UsageSettings`](../../../elyra/settings.py) docstring; tests assert it does not affect math).
 
 **Gate path:**
 
@@ -126,13 +127,13 @@ Key files:
 
 | File | Role |
 |------|------|
-| [`elyra/llm/usage.py`](elyra/llm/usage.py) | Meter + snapshot + override (never imports client) |
-| [`elyra/llm/client.py`](elyra/llm/client.py) `UsageGatedChatClient` | Pre-call refuse → `UsageHardStopError`; post-success `record` |
-| [`elyra/runtime/provider_runtime.py`](elyra/runtime/provider_runtime.py) | `usage_status_block`, `can_open_model_moment`, rebuild stack |
-| [`elyra/runtime/api.py`](elyra/runtime/api.py) | `PATCH /api/usage` `{hard_stop_override: bool}` only |
-| [`elyra/runtime/web/app.js`](elyra/runtime/web/app.js) | Usage bars, banner, override toggle |
-| [`elyra/llm/auth.py`](elyra/llm/auth.py) | Load/resolve grok_build bearer (no refresh, no billing) |
-| [`elyra/loop/doloop.py`](elyra/loop/doloop.py) | `UsageHardStopError` → `STOP_POLICY` / `usage_hard_stop:…` |
+| [`elyra/llm/usage.py`](../../../elyra/llm/usage.py) | Meter + snapshot + override (never imports client) |
+| [`elyra/llm/client.py`](../../../elyra/llm/client.py) `UsageGatedChatClient` | Pre-call refuse → `UsageHardStopError`; post-success `record` |
+| [`elyra/runtime/provider_runtime.py`](../../../elyra/runtime/provider_runtime.py) | `usage_status_block`, `can_open_model_moment`, rebuild stack |
+| [`elyra/runtime/api.py`](../../../elyra/runtime/api.py) | `PATCH /api/usage` `{hard_stop_override: bool}` only |
+| [`elyra/runtime/web/app.js`](../../../elyra/runtime/web/app.js) | Usage bars, banner, override toggle |
+| [`elyra/llm/auth.py`](../../../elyra/llm/auth.py) | Load/resolve grok_build bearer (no refresh, no billing) |
+| [`elyra/loop/doloop.py`](../../../elyra/loop/doloop.py) | `UsageHardStopError` → `STOP_POLICY` / `usage_hard_stop:…` |
 | Live dogfood | `data/runtime/usage.json` already at multi-million tokens with day hard-stop + override ON |
 | `data/runtime/glass_session.json` | `{ "user_id": "…" }` only — **not** a usage session UUID |
 
