@@ -4,7 +4,7 @@
 |-------|--------|
 | **Status** | Normative tip law for Project Elyra development |
 | **Created** | 2026-08-01 (PR0 — Grok Build design stack) |
-| **Related** | [design-grok-build-tool.md](design-grok-build-tool.md), [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md), [grok-improvement-plan/README.md](grok-improvement-plan/README.md), [engineering-principles.md](engineering-principles.md) |
+| **Related** | [design-grok-build-tool.md](design-grok-build-tool.md), [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md), [grok-improvement-plan/README.md](grok-improvement-plan/README.md), [engineering-principles.md](engineering-principles.md) (§9 development structure), [operating-pins.md](operating-pins.md) (manual pin convention) |
 
 This document is the **current** branch / tip law. Where older prose still says `grok-improvement` is the integration tip, **this file wins**.
 
@@ -63,6 +63,7 @@ Promote **`working` → `main`** only when:
 - One **human-moved SHA** (file, note, or lightweight tag) records what each live instance actually runs.
 - Later: PE-assisted move + **grant** — still explicit, never silent tip-follow.
 - Pin ≠ tip: `working` can move daily; pins move on deliberate promote + restart.
+- **Manual convention (C3):** [operating-pins.md](operating-pins.md) — lightweight per-instance record now; **goal:** pin becomes live on `main` promote + **v0.1** cut; git tag reviewed at v0.1 creation (do not create the tag from tip hygiene alone).
 
 ---
 
@@ -133,7 +134,9 @@ git push -u origin working
 
 ## Skills and docs alignment
 
-- Bundled skill `github-workflow` teaches **`working`** as the house integration tip (tip-only; mode/async instrument rails land with the tool).
+- Bundled skill `github-workflow` teaches **`working`** as the house integration tip (tip-only; mode/async instrument rails land with the tool) and the **before-any-change** issue + branch workflow.
+- [engineering-principles.md](engineering-principles.md) §9 folds branch-law + issue/board hygiene into engineering practice (including Grok Build recommendations).
+- [operating-pins.md](operating-pins.md) is the pin-record companion to this tip law.
 - [grok-improvement-plan/README.md](grok-improvement-plan/README.md) historical branch tables remain for Phase 0 context; the banner there points here.
 - [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md) multi-party governance remains valid; tip law is this file.
 - Full Grok Build instrument design: [design-grok-build-tool.md](design-grok-build-tool.md).

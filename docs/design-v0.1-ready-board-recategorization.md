@@ -946,4 +946,17 @@ flowchart TD
 
 ---
 
+## Day 3–4 execution log (2026-08-04)
+
+Historical design above remains Days 0–2 intent. **Authoritative v0.1 claim** after operator lock is on **#112** / epic **#111** (expanded dogfood-ready product cut — not packaging-only).
+
+| Day | What landed |
+|-----|-------------|
+| **Day 3** | Exit criteria rewritten on #112 from human lock (UI polish, Phase 3 functional experimental, multi-user/group chat, meal construction, edges; procedural polish → v0.2). Engineering principles §9 development structure; `github-workflow` + tools-and-skills before-any-change workflow; #65 tip map body. Product gate umbrellas C10–C14 created/elevated under #111. |
+| **Day 4** | Manual operating pin convention: `docs/operating-pins.md`; #113 done when convention accepted; goal = live pin on `main` promote + v0.1; tag reviewed at v0.1 creation — no automation, no tag now. |
+
+Design non-goal “Reopen Stretch 2 Phase 3 / stays Deferred” is **superseded for packaging claim only**: Phase 3 is **in claim as functional experimental** (C11); **procedural learning polish** remains **v0.2** / research.
+
+---
+
 *End of design document.*

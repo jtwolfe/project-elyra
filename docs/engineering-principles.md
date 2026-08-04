@@ -153,6 +153,50 @@ A change is done when:
 5. Prompts/skills/tools on disk if AI-facing  
 6. Config defaults work without a forest of env vars  
 7. Stretch 1 non-goals still hold  
+8. Issue + board hygiene completed for the change (see §9) when the work is tracked work  
+
+---
+
+## 9. Development structure (branch + issue hygiene)
+
+Every bit of product work after the v0.1 board rework must fall within this structure — including work the operator asks for via Grok Build. Agents and humans **recommend and follow** the same workflow; do not invent a parallel tip or silent board.
+
+### Normative pointers
+
+| Topic | Authority |
+|-------|-----------|
+| Tip / branch / promote / pins | [branch-law.md](branch-law.md) |
+| Operating pin convention (manual now; live on v0.1) | [operating-pins.md](operating-pins.md) |
+| Package + Projects judgment playbook | skill `github-workflow` · [tools-and-skills.md](tools-and-skills.md) |
+| Packaging priority labels | Exactly one of `v0.1-gate` \| `backlog` \| `research` on every open issue (see design-v0.1-ready-board-recategorization.md) |
+
+### Branch law (short)
+
+| Rule | Detail |
+|------|--------|
+| Integration tip | **`working`** — base for feature / fix / execute-plan / self-mod work |
+| PR base | Open PRs against **`working`**, not `main` |
+| Stable | **`main`** — promote from `working` only with full suite + noise review + human approve |
+| Short-lived branches | `feature/*`, `fix/*`, `self/*`, `exec/*` / `execute-plan/*` — delete after merge |
+| Never | Commit directly to `main`/`working` without explicit human request; force-push either; auto-merge to `main`; silent operating-pin move |
+
+### Before any change (issue + branch workflow)
+
+Grok Build, `github-workflow`, and human operators should **always** recommend this sequence for multi-step repo work:
+
+1. **Inspect issues** — search open issues / Project #2 for an existing home; read body and packaging label.
+2. **Update or create** — update the issue (scope, residual framing, acceptance); create a new issue if none fits. Apply packaging label with the triad recipe (remove `v0.1-gate`/`backlog`/`research` then add exactly one). Parent under the right epic when it is a packaging gate.
+3. **Branch type** — short-lived branch from current `working` (`feature/…`, `fix/…`, etc.). Prefer worktree isolation for multi-file work.
+4. **Work** — implement; tests; docs with the change. Do not pile unrelated edits on tip branches.
+5. **Update issue / board** — status honesty (Todo / In Progress / Done / Deferred), dates if gated, close only when acceptance is met or a **named successor** owns residual work. Comment evidence without secrets.
+
+Even when the operator asks via Grok Build for a “quick fix,” prefer: inspect → issue update/create if required → typed branch → work → board update. Skip only trivial one-line ops the human explicitly scopes as untracked.
+
+### After board rework
+
+- Packaging-critical path lives under epic **#111** (`v0.1-ready: packaging & dogfood checkpoints`) and exit criteria **#112**.
+- Do not re-grow long-lived personal tips; restack stale stacks onto `working` (branch-law ~10-day rule).
+- Tip map honesty: document `working` / `main` / operating pin; do not teach superseded `grok-improvement` as the integration tip.
 
 ---
 
@@ -168,5 +212,6 @@ A change is done when:
 | 6 | Language / stretch | No jargon debt; no Stretch 2 smuggled early |
 | 7 | Reliability | Serialize LLM; honest tool errors; single worker |
 | 8 | Done | Tests + boundaries + docs with the change |
+| 9 | Development structure | Issue inspect/update → typed branch from `working` → board honesty |
 
 These principles are how we avoid another 12k-line cycle file and another flag lattice. Product shape stays in [stretch-1.md](stretch-1.md); this doc keeps the code honest.
