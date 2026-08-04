@@ -836,7 +836,7 @@ No open OQs remain for v1 implementation.
 
 - Issue [#82](https://github.com/jtwolfe/project-elyra/issues/82) / `docs/known-bugs.md` **BUG-mem-gpu-01**
 - `docs/stretch-2/architecture/phase-2-semantic.md` — encode/queue/meal invariants
-- `docs/stretch-2/design-nemotron-runtime.md` / spikes
+- `docs/design/memory/design-nemotron-runtime.md` / spikes
 - `docs/radeon-vii-dev/NOTES-DOGFOOD.md`, `STACK-INVENTORY.md`
 - `docs/dev/branch-law.md` — PRs base `working`
 - Code: `elyra/memory/embed/queue.py`, `runtime.py`, `encode.py`; `elyra/presence/worker.py`; `elyra/memory/promote.py`; `elyra/memory/meal.py`; `elyra/memory/graph.py`; `elyra/runtime/api.py` (free-text encode); `elyra/runtime/supervisor.py` (`shutdown`); `elyra/memory/lance_store.py`; `elyra/memory/index.py`; `elyra/memory/config.py`; `elyra/memory/store.py` protocol

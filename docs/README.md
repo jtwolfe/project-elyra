@@ -17,7 +17,7 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 
 **Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
 **Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
-**DEV** process law lives under [dev/](dev/). **Root DESIGN** files live under [design/](design/) topic folders (PR2). stretch-2 designs / GI phases still pre-move until PR2b/PR2c; STATE/GOAL physical moves later.
+**DEV** process law lives under [dev/](dev/). **DESIGN** files live under [design/](design/) topic folders (PR2) including [design/memory/](design/memory/) (PR2b stretch-2 designs). GI phases / harness / design-rocm still pre-move until PR2c; STATE/GOAL physical moves later.
 
 **Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
 
@@ -110,7 +110,7 @@ Full status-indexed catalog: **[design/README.md](design/README.md)**.
 | Usage / OAuth | [design/usage/](design/usage/) | Pacing design; browser OIDC |
 | Board | [design/board/](design/board/) | v0.1-ready board ops |
 | Embed | [design/embed/](design/embed/) | Async EncodeWorker (residuals open) |
-| Stretch 2 memory | [stretch-2/](stretch-2/) `design-*.md` | Phase designs + meal (→ PR2b) |
+| Stretch 2 memory | [design/memory/](design/memory/) | Phase designs + meal + spikes (PR2b); arch manuals still under stretch-2/ until PR4 |
 | GI phases / harness | [grok-improvement-plan/](grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition, harness (→ PR2c) |
 | ROCm design | [radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md](radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md) | ROCm smoke design (→ PR2c) |
 

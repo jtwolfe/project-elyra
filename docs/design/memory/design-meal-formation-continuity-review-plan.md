@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Executable **review methodology** (inspection + fault isolation; not product implementation) |
 | **Product** | project-elyra |
 | **Author** | Grok Build (design); execution owner TBD (memory / presence engineer + operator dogfood host) |

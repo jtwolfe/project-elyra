@@ -263,11 +263,11 @@ Even with a good outer meal, `enforce_in_turn_budget` can drop/compress oldest c
 
 Normative draft for **instance continuity** (glass-tail + sticky directed keep + path matrix):
 
-→ [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](../stretch-2/design-instance-continuity-glass-tail-directed-keep.md)
+→ [`docs/design/memory/design-instance-continuity-glass-tail-directed-keep.md`](../design/memory/design-instance-continuity-glass-tail-directed-keep.md)
 
 Review methodology (execute next):
 
-→ [`docs/stretch-2/design-meal-formation-continuity-review-plan.md`](../stretch-2/design-meal-formation-continuity-review-plan.md)
+→ [`docs/design/memory/design-meal-formation-continuity-review-plan.md`](../design/memory/design-meal-formation-continuity-review-plan.md)
 
 Issue: [#93](https://github.com/jtwolfe/project-elyra/issues/93). Next: run the review plan → write continuity review report → refine draft → implement.
 
@@ -336,7 +336,7 @@ Defaults from `MemorySettings` / `split_memory_budget_v3`:
 
 **With directed_keep active** (semantic on): sem 12% + keep 8% + epi 18% = 38% supports → temporal starts at 62%, still above 55% floor.
 
-**Illustrative design doc** ([design-context-meal-composition.md](../stretch-2/design-context-meal-composition.md)) used ~40–50% temporal / ~10%+ episodic / ~10–15% semantic / ~10% keep — **non-normative**. Code is the law for product: **≥55% temporal floor on residual**, supports smaller.
+**Illustrative design doc** ([design-context-meal-composition.md](../design/memory/design-context-meal-composition.md)) used ~40–50% temporal / ~10%+ episodic / ~10–15% semantic / ~10% keep — **non-normative**. Code is the law for product: **≥55% temporal floor on residual**, supports smaller.
 
 ### 5.4 Episodic internal split
 
@@ -403,7 +403,7 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 | In-turn chain budget | `elyra/loop/doloop.py` — `enforce_in_turn_budget` |
 | Loop knobs | `elyra/settings.py` — `LoopSettings` |
 | Model window | `elyra/llm/constants.py` — `MODEL_CONTEXT_WINDOW_TOKENS` |
-| Design fractions (illustrative) | `docs/stretch-2/design-context-meal-composition.md` |
+| Design fractions (illustrative) | `docs/design/memory/design-context-meal-composition.md` |
 | GPU / start Elyra | `docs/radeon-vii-dev/README.md` |
 | Known open bugs | `docs/known-bugs.md` |
 

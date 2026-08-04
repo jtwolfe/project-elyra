@@ -1,6 +1,7 @@
 # Phase 2a — Directed Traversal
 
-**Status:** Intent sketch — **superseded for implementation** by [design-phase-2a-implementation.md](design-phase-2a-implementation.md). **Code shipped** PR-A1–A5 (2026-07-29); architecture: [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md). Flags default **off**; operator dogfood pending.
+**Class:** DESIGN
+**Status:** Intent sketch — **superseded for implementation** by [design-phase-2a-implementation.md](design-phase-2a-implementation.md). **Code shipped** PR-A1–A5 (2026-07-29); architecture: [architecture/phase-2a-directed-traversal.md](../../stretch-2/architecture/phase-2a-directed-traversal.md). Flags default **off**; operator dogfood pending.
 **Depends on:** Phase 1 + Phase 2 rectified seeds (prefer smoke before full multi-hop dogfood)
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 **Meal channel:** [design-context-meal-composition.md](design-context-meal-composition.md) (directed-keep)
@@ -36,5 +37,5 @@ Confirmed keeps reference **existing durable atoms** and may enter the meal via 
 - [x] Expand → inspect/preview → keep/discard cycle tested (PR-A1–A4)
 - [x] Temporary session cannot enter summary refresh / ladder (session-only KD-A1)
 - [x] Meal labels distinguish directed-keep summary + atoms; omit reasons honest
-- [x] Architecture note: [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md)
+- [x] Architecture note: [architecture/phase-2a-directed-traversal.md](../../stretch-2/architecture/phase-2a-directed-traversal.md)
 - [ ] Operator smoke dogfood (flags on) before product default-on

@@ -2,8 +2,9 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Status** | Implementation landed (portable runtime); **Gate B measurements pending** operator dogfood |
-| **Related** | [`design-nemotron-runtime.md`](../../design-nemotron-runtime.md), [`design-phase-2-implementation.md`](../../design-phase-2-implementation.md) PR8 |
+| **Related** | [`design-nemotron-runtime.md`](../design-nemotron-runtime.md), [`design-phase-2-implementation.md`](../design-phase-2-implementation.md) PR8 |
 | **Code** | `elyra/memory/embed/runtime.py`, `encode.py`; optional extra `elyra[memory-embed]` |
 | **Date** | 2026-07-28 |
 

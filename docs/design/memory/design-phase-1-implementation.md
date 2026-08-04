@@ -2,15 +2,16 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Implementation-ready design + plan |
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
 | **Date** | 2026-07-28 |
-| **Status** | **Done** (2026-07-28) — PR1–PR9 shipped; see [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md), residual [design-phase-1-remaining-pr8-pr9.md](design-phase-1-remaining-pr8-pr9.md), [README.md](README.md) close-out + [known-bugs.md](../known-bugs.md) caveats |
+| **Status** | **Done** (2026-07-28) — PR1–PR9 shipped; see [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md), residual [design-phase-1-remaining-pr8-pr9.md](design-phase-1-remaining-pr8-pr9.md), [README.md](../../stretch-2/README.md) close-out + [known-bugs.md](../../known-bugs.md) caveats |
 | **Branch** | `grok-improvement-memory` (planning); runtime product work typically lands via `grok-improvement` |
-| **Philosophy** | [`docs/memory-atoms.pdf`](../docs/memory-atoms.pdf) |
-| **Baseline** | [`docs/stretch-2/inspiration-activity-model-and-storage.md`](../docs/stretch-2/inspiration-activity-model-and-storage.md) |
-| **Prior sketches** | [`design-phase-1-temporal.md`](../docs/stretch-2/design-phase-1-temporal.md), [`design-context-meal-composition.md`](../docs/stretch-2/design-context-meal-composition.md), [`design-database-choices.md`](../docs/stretch-2/design-database-choices.md) |
+| **Philosophy** | [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) |
+| **Baseline** | [`docs/stretch-2/inspiration-activity-model-and-storage.md`](inspiration-activity-model-and-storage.md) |
+| **Prior sketches** | [`design-phase-1-temporal.md`](design-phase-1-temporal.md), [`design-context-meal-composition.md`](design-context-meal-composition.md), [`design-database-choices.md`](design-database-choices.md) |
 
 This document **supersedes the short phase outline** for implementation purposes. Where it resolves open questions from `design-phase-1-temporal.md`, the resolutions appear under **Key Decisions** with rationale. Soft influences from `philosophical-soft-guidance.md` inform judgment only; they are not deliverables.
 
@@ -1168,7 +1169,7 @@ Regression: existing `test_loop_context.py` / `test_doloop.py` remain green with
 
 ### Concept-mapping architecture note (done obligation)
 
-**Shipped:** [`docs/stretch-2/architecture/phase-1-temporal.md`](architecture/phase-1-temporal.md) containing:
+**Shipped:** [`docs/stretch-2/architecture/phase-1-temporal.md`](../../stretch-2/architecture/phase-1-temporal.md) containing:
 
 1. **Structure map**
 

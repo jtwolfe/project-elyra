@@ -3,13 +3,13 @@
 **Status:** **Product-intent rectified (code)** — Phase 2 ship **PR1–PR9** (2026-07-28) + **rectification PR-R1–R5** (2026-07-29) + **continuous encode** stack (embed-async PR1–PR4, 2026-08-03). Plumbing and product path match locked intent (joint-primary via joint-for-single + repair, `auto` channel, Lance-native main search, honest meal/Vectors, **background corpus drain while PE runs**). **Operator smoke dogfood verification is still pending** before calling Phase 2 product-complete or flipping defaults. Flags: `semantic_enabled` / `embed_enabled` / `parcels_enabled` **off**.
 **Package:** `elyra/memory/` (`embed/`, `index.py`, `parcel.py`; meal + Lance extensions; glass Vectors APIs)
 **Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
-**Design (planning):** [design-phase-2-semantic.md](../design-phase-2-semantic.md), [design-phase-2-implementation.md](../design-phase-2-implementation.md) (historical ship stack)
-**Rectification design (normative for R1–R5):** [design-phase-2-rectification.md](../design-phase-2-rectification.md)
+**Design (planning):** [design-phase-2-semantic.md](../../design/memory/design-phase-2-semantic.md), [design-phase-2-implementation.md](../../design/memory/design-phase-2-implementation.md) (historical ship stack)
+**Rectification design (normative for R1–R5):** [design-phase-2-rectification.md](../../design/memory/design-phase-2-rectification.md)
 **Continuous encode (normative for drain/worker/gate):** [design-embed-async-encode-worker.md](../../design/embed/design-embed-async-encode-worker.md) (KD-E1–E18)
-**Runtime contract:** [design-nemotron-runtime.md](../design-nemotron-runtime.md)
-**Spikes:** [architecture/spikes/lance-emb-migration.md](spikes/lance-emb-migration.md), [architecture/spikes/nemotron-runtime.md](spikes/nemotron-runtime.md)
-**Meal sketch:** [design-context-meal-composition.md](../design-context-meal-composition.md)
-**Baseline activities:** [inspiration-activity-model-and-storage.md](../inspiration-activity-model-and-storage.md) §3
+**Runtime contract:** [design-nemotron-runtime.md](../../design/memory/design-nemotron-runtime.md)
+**Spikes:** [architecture/spikes/lance-emb-migration.md](../../design/memory/spikes/lance-emb-migration.md), [architecture/spikes/nemotron-runtime.md](../../design/memory/spikes/nemotron-runtime.md)
+**Meal sketch:** [design-context-meal-composition.md](../../design/memory/design-context-meal-composition.md)
+**Baseline activities:** [inspiration-activity-model-and-storage.md](../../design/memory/inspiration-activity-model-and-storage.md) §3
 **Phase 1 manual:** [architecture/phase-1-temporal.md](phase-1-temporal.md)
 **Program status:** [stretch-2 README](../README.md) Phase 2 close-out
 **Bugs:** [known-bugs.md](../../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open — packaging/Tensile; product continuous-encode path shipped)
@@ -211,7 +211,7 @@ Rollback: `semantic_enabled=false` empties the channel immediately; `embed_enabl
 
 ## 2. Activity map (§3 inspiration)
 
-Which [§3 activities](../inspiration-activity-model-and-storage.md) are live after Phase 2. Phase 1 rows remain; semantic rows supersede the Phase 1 “No — Phase 2” stubs.
+Which [§3 activities](../../design/memory/inspiration-activity-model-and-storage.md) are live after Phase 2. Phase 1 rows remain; semantic rows supersede the Phase 1 “No — Phase 2” stubs.
 
 ### 3.1 Write / ingest (delta)
 
@@ -520,18 +520,18 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unava
 
 | Document | Role |
 |----------|------|
-| [design-phase-2-rectification.md](../design-phase-2-rectification.md) | **Normative fix plan** KD-R* + PR-R1–R6 (product-intent recovery) |
-| [design-phase-2-implementation.md](../design-phase-2-implementation.md) | Historical implementation design, KDs, PR plan (PR1–PR9) |
-| [design-phase-2-semantic.md](../design-phase-2-semantic.md) | Short phase outline (points here + implementation + rectification) |
+| [design-phase-2-rectification.md](../../design/memory/design-phase-2-rectification.md) | **Normative fix plan** KD-R* + PR-R1–R6 (product-intent recovery) |
+| [design-phase-2-implementation.md](../../design/memory/design-phase-2-implementation.md) | Historical implementation design, KDs, PR plan (PR1–PR9) |
+| [design-phase-2-semantic.md](../../design/memory/design-phase-2-semantic.md) | Short phase outline (points here + implementation + rectification) |
 | [design-embed-async-encode-worker.md](../../design/embed/design-embed-async-encode-worker.md) | **Normative continuous encode** — EncodeWorker, EmbedderGate, single-owner, KD-E1–E18 |
-| [design-nemotron-runtime.md](../design-nemotron-runtime.md) | Portable encode contract; Gate B checklist |
-| [spikes/lance-emb-migration.md](spikes/lance-emb-migration.md) | Lance emb migration spike (Gate A) |
-| [spikes/nemotron-runtime.md](spikes/nemotron-runtime.md) | Nemotron runtime spike notes |
-| [design-database-choices.md](../design-database-choices.md) | Lance ANN, interface rule |
-| [design-context-meal-composition.md](../design-context-meal-composition.md) | Supporting channel + cut order |
+| [design-nemotron-runtime.md](../../design/memory/design-nemotron-runtime.md) | Portable encode contract; Gate B checklist |
+| [spikes/lance-emb-migration.md](../../design/memory/spikes/lance-emb-migration.md) | Lance emb migration spike (Gate A) |
+| [spikes/nemotron-runtime.md](../../design/memory/spikes/nemotron-runtime.md) | Nemotron runtime spike notes |
+| [design-database-choices.md](../../design/memory/design-database-choices.md) | Lance ANN, interface rule |
+| [design-context-meal-composition.md](../../design/memory/design-context-meal-composition.md) | Supporting channel + cut order |
 | [architecture/phase-1-temporal.md](phase-1-temporal.md) | Phase 1 shipped manual |
-| [design-phase-2a-directed-traversal.md](../design-phase-2a-directed-traversal.md) | Phase 2a boundary (Graph) — needs **rectified seeds** |
-| [inspiration-activity-model-and-storage.md](../inspiration-activity-model-and-storage.md) | §3 activity baseline |
+| [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) | Phase 2a boundary (Graph) — needs **rectified seeds** |
+| [inspiration-activity-model-and-storage.md](../../design/memory/inspiration-activity-model-and-storage.md) | §3 activity baseline |
 | [philosophical-soft-guidance.md](../philosophical-soft-guidance.md) | Judgment influences only |
 | [known-bugs.md](../../known-bugs.md) | **BUG-mem-p2-01**, **BUG-mem-gpu-01** |
 
@@ -545,7 +545,7 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 |------|------|
 | **Operator smoke dogfood** | Enable `backend=lance` + embed/semantic flags; verify neighbors/meal/repair on live corpus (code rectification landed; verification pending) |
 | **Continuous encode dogfood** | Busy create→ready; `drain_ok_total` during multi-minute work; meal/API under text bulk; worker death resume; embed off→on — see **BUG-mem-gpu-01** product-path checklist (does **not** close packaging) |
-| **Gate B / default-on** | Dogfood mock → Nemotron → optional default-on; flip only after operator sign-off ([design-nemotron-runtime.md](../design-nemotron-runtime.md)) |
+| **Gate B / default-on** | Dogfood mock → Nemotron → optional default-on; flip only after operator sign-off ([design-nemotron-runtime.md](../../design/memory/design-nemotron-runtime.md)) |
 | **BUG-mem-gpu-01** | Packaging / Tensile / multi-device matrix still Open; continuous encode **code path** shipped (worker + gate) |
 | **Optional 2D projection** | Non-gate polish for Vectors tab (KD18) |
 | **Phase 2a** | Directed traversal → **Graph** tab — **after** rectified semantic seeds |

@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Implementation-ready design + plan |
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
@@ -10,17 +11,17 @@
 | **Review** | Design-doc review loop approved — **0 open issues**; operator accepted all OQ defaults (2026-07-28) |
 | **Branch** | `grok-improvement-memory` |
 | **Depends on** | Phase 1 **Done** (2026-07-28): atoms, promote, ladder, meal, Lance optional, glass Memory stubs |
-| **Philosophy** | [`docs/memory-atoms.pdf`](../memory-atoms.pdf) |
+| **Philosophy** | [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) |
 | **Baseline** | [`inspiration-activity-model-and-storage.md`](inspiration-activity-model-and-storage.md) |
 | **Prior sketches** | [`design-phase-2-semantic.md`](design-phase-2-semantic.md), [`design-nemotron-runtime.md`](design-nemotron-runtime.md), [`design-database-choices.md`](design-database-choices.md), [`design-context-meal-composition.md`](design-context-meal-composition.md) |
-| **Phase 1 patterns** | [`design-phase-1-implementation.md`](design-phase-1-implementation.md), [`architecture/phase-1-temporal.md`](architecture/phase-1-temporal.md) |
+| **Phase 1 patterns** | [`design-phase-1-implementation.md`](design-phase-1-implementation.md), [`architecture/phase-1-temporal.md`](../../stretch-2/architecture/phase-1-temporal.md) |
 | **Boundary** | Phase 2a directed traversal is **out of scope** ([`design-phase-2a-directed-traversal.md`](design-phase-2a-directed-traversal.md)) |
 
-> **Historical:** this document is the Phase 2 **PR1–PR9** ship design. Product-path rectification (joint-for-single, `auto` channel, Lance-native search, meal/Vectors honesty) is owned by **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — do not rewrite this file for R1–R5 behaviour; update [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) instead.
+> **Historical:** this document is the Phase 2 **PR1–PR9** ship design. Product-path rectification (joint-for-single, `auto` channel, Lance-native search, meal/Vectors honesty) is owned by **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — do not rewrite this file for R1–R5 behaviour; update [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) instead.
 
 This document **supersedes the short Phase 2 outline** (`design-phase-2-semantic.md`) for the original implementation stack. Where it resolves open questions from that sketch and the Nemotron runtime note, resolutions appear under **Key Decisions** with rationale. Soft influences from `philosophical-soft-guidance.md` inform judgment only; they are not deliverables.
 
-Deferred polish bugs in [`docs/known-bugs.md`](../known-bugs.md) (glass beautify, system prompt soften, status bugs, etc.) are **not** Phase 2 scope unless they block semantic work.
+Deferred polish bugs in [`docs/known-bugs.md`](../../known-bugs.md) (glass beautify, system prompt soften, status bugs, etc.) are **not** Phase 2 scope unless they block semantic work.
 
 ---
 

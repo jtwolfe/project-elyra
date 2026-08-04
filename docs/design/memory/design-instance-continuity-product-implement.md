@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Product implement design + PR plan (execute-plan contract) |
 | **Product** | project-elyra |
 | **Date** | 2026-07-30 |
@@ -11,12 +12,12 @@
 | **Design tip / branch base** | `design/BUG-meal-03-93-instance-continuity` @ `38d6830` |
 | **Code facts SHA** | Symbol lines verified at design tip **`38d6830`**. Report inspection SHA `7ebf50b` is **ancestor evidence** for fault isolation, not an alternate product base. |
 | **Critical branch rule** | **Every product implementation branch is created FROM** `design/BUG-meal-03-93-instance-continuity` (not bare `main`). Stack: feature branches off design tip → dogfood → merge design branch (or stacked PRs) → main after testing. |
-| **Product draft** | [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md) (**Ready for implement plan**) |
-| **Prior sketch** | [`docs/stretch-2/design-instance-continuity-implement-plan.md`](docs/stretch-2/design-instance-continuity-implement-plan.md) — this document **refines and supersedes** that sketch with code-level specificity |
-| **Review report** | [`docs/stretch-2/meal-continuity-review/REPORT.md`](docs/stretch-2/meal-continuity-review/REPORT.md) (S0 done) |
-| **Edge matrix** | [`docs/stretch-2/meal-continuity-review/EDGE-MATRIX.md`](docs/stretch-2/meal-continuity-review/EDGE-MATRIX.md) |
-| **Code-path map** | [`docs/stretch-2/meal-continuity-review/CODE-PATH-MAP.md`](docs/stretch-2/meal-continuity-review/CODE-PATH-MAP.md) |
-| **Evidence** | [`docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/`](docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/) |
+| **Product draft** | [`docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`](design-instance-continuity-glass-tail-directed-keep.md) (**Ready for implement plan**) |
+| **Prior sketch** | [`docs/stretch-2/design-instance-continuity-implement-plan.md`](design-instance-continuity-implement-plan.md) — this document **refines and supersedes** that sketch with code-level specificity |
+| **Review report** | [`docs/stretch-2/meal-continuity-review/REPORT.md`](../../stretch-2/meal-continuity-review/REPORT.md) (S0 done) |
+| **Edge matrix** | [`docs/stretch-2/meal-continuity-review/EDGE-MATRIX.md`](../../stretch-2/meal-continuity-review/EDGE-MATRIX.md) |
+| **Code-path map** | [`docs/stretch-2/meal-continuity-review/CODE-PATH-MAP.md`](../../stretch-2/meal-continuity-review/CODE-PATH-MAP.md) |
+| **Evidence** | [`docs/stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/`](../../stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/) |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
 | **Repo landing path (recommended)** | `docs/stretch-2/design-instance-continuity-product-implement.md` (supersede pointer in implement-plan sketch) |
 

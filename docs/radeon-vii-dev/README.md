@@ -170,7 +170,7 @@ Do **not** run the switch or smokes while presence/pytest are using this venv fo
 |-----|-----|
 | `docs/known-bugs.md` **BUG-mem-gpu-01** | Bug stays Open; dogfood evidence only |
 | `elyra/memory/embed/runtime.py` | Product probe / Nemotron / device map |
-| `docs/stretch-2/design-nemotron-runtime.md` | Nemotron runtime design |
+| `docs/design/memory/design-nemotron-runtime.md` | Nemotron runtime design |
 | Design §PR plan | PR1 docs → PR2 scripts → PR3 freezes → PR4 NOTES |
 
 ---

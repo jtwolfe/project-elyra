@@ -1,5 +1,6 @@
 # Design: Omni-Embed-Nemotron runtime (portable encoding)
 
+**Class:** DESIGN
 **Status:** Design draft (Phase 2 dependency; not required for Phase 1)
 **Branch:** `grok-improvement-memory`
 **Related:** [design-phase-2-semantic.md](design-phase-2-semantic.md), [design-database-choices.md](design-database-choices.md), [design-context-meal-composition.md](design-context-meal-composition.md)

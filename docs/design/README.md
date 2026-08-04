@@ -4,7 +4,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 **Taxonomy:** [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) (Active) — hub-first, non-destructive.  
 **Hub:** [docs/README.md](../README.md) four-class index.  
-**Layout:** root `docs/design-*.md` landed under `docs/design/<topic>/` (PR2). stretch-2 designs → PR2b; GI / harness / design-rocm → PR2c.
+**Layout:** root `docs/design-*.md` landed under `docs/design/<topic>/` (PR2). stretch-2 designs under `memory/` (PR2b); GI / harness / design-rocm → PR2c.
 
 | Status | Meaning |
 |--------|---------|
@@ -103,33 +103,32 @@ Harness full design still at [../grok-improvement-plan/harness-sandbox-fitness.m
 
 ---
 
-## stretch-2 designs + spikes (current paths — move in PR2b)
+## memory/
 
-Architecture manuals under `stretch-2/architecture/phase-*.md` are **STATE** (not listed here). Spikes and `design-*` are DESIGN.  
-Status assessed for catalog routing; formal banners land with PR2b moves.
+Stretch-2 memory designs (PR2b / KD4). Architecture manuals remain under `docs/stretch-2/architecture/` until **PR4** (STATE).
 
-| Doc | Status (assessed) | Notes |
-|-----|-------------------|-------|
-| [design-phase-1-temporal.md](../stretch-2/design-phase-1-temporal.md) | Shipped | Phase 1 design |
-| [design-phase-1-implementation.md](../stretch-2/design-phase-1-implementation.md) | Shipped | Phase 1 PR plan |
-| [design-phase-1-remaining-pr8-pr9.md](../stretch-2/design-phase-1-remaining-pr8-pr9.md) | Shipped | Phase 1 residual |
-| [design-phase-2-semantic.md](../stretch-2/design-phase-2-semantic.md) | Shipped (code; dogfood pending) | Phase 2 design |
-| [design-phase-2-implementation.md](../stretch-2/design-phase-2-implementation.md) | Shipped (code; dogfood pending) | Phase 2 PR plan |
-| [design-phase-2-rectification.md](../stretch-2/design-phase-2-rectification.md) | Shipped | Phase 2 rectification |
-| [design-phase-2a-directed-traversal.md](../stretch-2/design-phase-2a-directed-traversal.md) | Shipped (code; dogfood pending) | Phase 2a design |
-| [design-phase-2a-implementation.md](../stretch-2/design-phase-2a-implementation.md) | Shipped (code; dogfood pending) | Phase 2a PR plan |
-| [design-phase-3-procedural.md](../stretch-2/design-phase-3-procedural.md) | Draft / experimental | Phase 3 design |
-| [design-context-meal-composition.md](../stretch-2/design-context-meal-composition.md) | Provisional / Active | Meal design only (not STATE) |
-| [design-database-choices.md](../stretch-2/design-database-choices.md) | Shipped / planning baseline | Storage choices |
-| [design-nemotron-runtime.md](../stretch-2/design-nemotron-runtime.md) | Shipped-ish | Embed runtime |
-| [design-episodic-summary-ladder-llm.md](../stretch-2/design-episodic-summary-ladder-llm.md) | Active / design | Summary ladder |
-| [design-instance-continuity-glass-tail-directed-keep.md](../stretch-2/design-instance-continuity-glass-tail-directed-keep.md) | Active | Continuity design |
-| [design-instance-continuity-implement-plan.md](../stretch-2/design-instance-continuity-implement-plan.md) | Active | Continuity plan |
-| [design-instance-continuity-product-implement.md](../stretch-2/design-instance-continuity-product-implement.md) | Active | Continuity product |
-| [design-meal-formation-continuity-review-plan.md](../stretch-2/design-meal-formation-continuity-review-plan.md) | Active / plan | Meal review plan |
-| [inspiration-activity-model-and-storage.md](../stretch-2/inspiration-activity-model-and-storage.md) | Planning baseline | DESIGN, not short GOAL |
-| [architecture/spikes/lance-emb-migration.md](../stretch-2/architecture/spikes/lance-emb-migration.md) | Spike | Pre-ship spike |
-| [architecture/spikes/nemotron-runtime.md](../stretch-2/architecture/spikes/nemotron-runtime.md) | Spike | Pre-ship spike |
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-phase-1-temporal.md](memory/design-phase-1-temporal.md) | Shipped | Phase 1 design |
+| [design-phase-1-implementation.md](memory/design-phase-1-implementation.md) | Shipped | Phase 1 PR plan |
+| [design-phase-1-remaining-pr8-pr9.md](memory/design-phase-1-remaining-pr8-pr9.md) | Shipped | Phase 1 residual |
+| [design-phase-2-semantic.md](memory/design-phase-2-semantic.md) | Shipped (code; dogfood pending) | Phase 2 design |
+| [design-phase-2-implementation.md](memory/design-phase-2-implementation.md) | Shipped (code; dogfood pending) | Phase 2 PR plan |
+| [design-phase-2-rectification.md](memory/design-phase-2-rectification.md) | Shipped | Phase 2 rectification |
+| [design-phase-2a-directed-traversal.md](memory/design-phase-2a-directed-traversal.md) | Shipped (code; dogfood pending) | Phase 2a design |
+| [design-phase-2a-implementation.md](memory/design-phase-2a-implementation.md) | Shipped (code; dogfood pending) | Phase 2a PR plan |
+| [design-phase-3-procedural.md](memory/design-phase-3-procedural.md) | Draft / experimental | Phase 3 design |
+| [design-context-meal-composition.md](memory/design-context-meal-composition.md) | Provisional / Active | Meal design only (not STATE; KD14) |
+| [design-database-choices.md](memory/design-database-choices.md) | Shipped / planning baseline | Storage choices |
+| [design-nemotron-runtime.md](memory/design-nemotron-runtime.md) | Shipped-ish | Embed runtime |
+| [design-episodic-summary-ladder-llm.md](memory/design-episodic-summary-ladder-llm.md) | Active / design | Summary ladder |
+| [design-instance-continuity-glass-tail-directed-keep.md](memory/design-instance-continuity-glass-tail-directed-keep.md) | Active | Continuity design |
+| [design-instance-continuity-implement-plan.md](memory/design-instance-continuity-implement-plan.md) | Active | Continuity plan |
+| [design-instance-continuity-product-implement.md](memory/design-instance-continuity-product-implement.md) | Active | Continuity product |
+| [design-meal-formation-continuity-review-plan.md](memory/design-meal-formation-continuity-review-plan.md) | Active / plan | Meal review plan |
+| [inspiration-activity-model-and-storage.md](memory/inspiration-activity-model-and-storage.md) | Planning baseline | DESIGN, not short GOAL |
+| [spikes/lance-emb-migration.md](memory/spikes/lance-emb-migration.md) | Spike | Pre-ship spike |
+| [spikes/nemotron-runtime.md](memory/spikes/nemotron-runtime.md) | Spike | Pre-ship spike |
 
 ---
 

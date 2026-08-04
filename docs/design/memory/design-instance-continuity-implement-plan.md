@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Engineer-ready product implement plan (execute-plan contract) |
 | **Product** | project-elyra |
 | **Date** | 2026-07-30 |
@@ -9,10 +10,10 @@
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` |
 | **Bug id** | `BUG-meal-03` |
 | **Refined product draft** | [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md) (**Ready for implement plan**) |
-| **Review report** | [meal-continuity-review/REPORT.md](meal-continuity-review/REPORT.md) (S0 done) |
+| **Review report** | [meal-continuity-review/REPORT.md](../../stretch-2/meal-continuity-review/REPORT.md) (S0 done) |
 | **Review method** | [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) |
-| **Evidence** | [meal-continuity-review/evidence/sa9b-e6d460f2/](meal-continuity-review/evidence/sa9b-e6d460f2/) |
-| **Code-path map** | [meal-continuity-review/CODE-PATH-MAP.md](meal-continuity-review/CODE-PATH-MAP.md) |
+| **Evidence** | [meal-continuity-review/evidence/sa9b-e6d460f2/](../../stretch-2/meal-continuity-review/evidence/sa9b-e6d460f2/) |
+| **Code-path map** | [meal-continuity-review/CODE-PATH-MAP.md](../../stretch-2/meal-continuity-review/CODE-PATH-MAP.md) |
 | **Depends on** | Memory meal active; meal budget fraction shipped (#91); Phase 2a directed_keep channel exists |
 | **Adjacent** | [#68](https://github.com/jtwolfe/project-elyra/issues/68) wake-02; [#92](https://github.com/jtwolfe/project-elyra/issues/92) LLM summaries (bulb, not tip) |
 

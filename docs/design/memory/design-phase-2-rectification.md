@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Phase 2 product-intent rectification (code fix design) |
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
@@ -9,10 +10,10 @@
 | **Status** | **Implemented (PR-R1–R5 code)** — docs closeout PR-R6; operator OQs resolved 2026-07-29 (revision R2 + OQ lock) |
 | **Branch** | `grok-improvement-memory` |
 | **Depends on** | Phase 2 execute-plan stack shipped (PR1–PR9, 2026-07-28); Phase 1 Done |
-| **Program status** | [README.md](README.md) Phase 2 close-out — **code rectified (R1–R5)**; operator smoke dogfood pending before product-complete / default-on |
-| **Bug trackers** | [known-bugs.md](../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open — hardware) |
+| **Program status** | [README.md](../../stretch-2/README.md) Phase 2 close-out — **code rectified (R1–R5)**; operator smoke dogfood pending before product-complete / default-on |
+| **Bug trackers** | [known-bugs.md](../../known-bugs.md) **BUG-mem-p2-01** (fixed in code / residual dogfood), **BUG-mem-gpu-01** (open — hardware) |
 | **Historical design** | [design-phase-2-implementation.md](design-phase-2-implementation.md) — do **not** rewrite; this doc owns the fix plan |
-| **Architecture (as shipped + rectified)** | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — updated in PR-R6 |
+| **Architecture (as shipped + rectified)** | [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) — updated in PR-R6 |
 | **Boundary** | **Not** Phase 2a ([design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md)); **not** Phase 3 ([design-phase-3-procedural.md](design-phase-3-procedural.md)) |
 | **Revision** | R2 + OQ lock (2026-07-29) — review issues closed; operator OQ-R1/R4/R6 resolved |
 
@@ -32,10 +33,10 @@ This document plans the **code rectification** only: restore locked product inte
 
 ### Why rectify now
 
-- [README Phase 2 honesty](README.md) marks Phase 2 **Partial / rectification needed** — “execute-plan complete ≠ product target.”
+- [README Phase 2 honesty](../../stretch-2/README.md) marks Phase 2 **Partial / rectification needed** — “execute-plan complete ≠ product target.”
 - **BUG-mem-p2-01** records live dogfood: `vectors_ready≈32`, neighbors `channel=joint` → 0 hits; `channel=text` → real cosine hits; meal channels episodic+temporal only; `ann_index_built=false`, `search_mode=full`, `last_optimize=null`.
 - Phase **2a** directed traversal depends on **rectified seeds**; shipping 2a on empty joint search amplifies noise (README working rule 8).
-- Architecture manual claims of full Lance ANN / joint-primary meal are **partially aspirational** until this pass ([architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) honesty banner).
+- Architecture manual claims of full Lance ANN / joint-primary meal are **partially aspirational** until this pass ([architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) honesty banner).
 
 ### Current state (code truth, 2026-07-29)
 
@@ -441,7 +442,7 @@ def search_vectors(
     """
 ```
 
-Implementation sketch (lancedb 0.20.x, aligned with [spikes/lance-emb-migration.md](architecture/spikes/lance-emb-migration.md)):
+Implementation sketch (lancedb 0.20.x, aligned with [spikes/lance-emb-migration.md](spikes/lance-emb-migration.md)):
 
 1. Assert channel ∈ CHANNEL_SET (concrete). Unknown / schema missing → `[]`.
 2. If no non-null vectors for column (count cache) → `[]` immediately.
@@ -857,8 +858,8 @@ flowchart LR
 
 During implement, operators need to find this plan. **PR-R1** (or a tiny stacked docs commit) should add one-liner pointers:
 
-- [README.md](README.md) Phase 2 honesty “Rectification” row → `design-phase-2-rectification.md` (status Draft / in progress)
-- [known-bugs.md](../known-bugs.md) BUG-mem-p2-01 “Fix ownership” → same link
+- [README.md](../../stretch-2/README.md) Phase 2 honesty “Rectification” row → `design-phase-2-rectification.md` (status Draft / in progress)
+- [known-bugs.md](../../known-bugs.md) BUG-mem-p2-01 “Fix ownership” → same link
 
 Full architecture re-verify and Done status remain **PR-R6**.
 
@@ -932,28 +933,28 @@ Operator locks **2026-07-29**. No further forks for implement.
 
 | When | Doc | Update |
 |------|-----|--------|
-| **PR-R1 (or tiny docs commit)** | [README.md](README.md), [known-bugs.md](../known-bugs.md) | One-liner: rectification plan = `design-phase-2-rectification.md` (Draft / in progress) |
-| **PR-R6** | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | Remove fixed aspirational caveats; document KD-R1–R15; Lance-native; channel auto; repair; omit reasons; health fields; score formula |
-| **PR-R6** | [README.md](README.md) | Phase 2 status after dogfood truth; next steps Gate B → 2a |
+| **PR-R1 (or tiny docs commit)** | [README.md](../../stretch-2/README.md), [known-bugs.md](../../known-bugs.md) | One-liner: rectification plan = `design-phase-2-rectification.md` (Draft / in progress) |
+| **PR-R6** | [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) | Remove fixed aspirational caveats; document KD-R1–R15; Lance-native; channel auto; repair; omit reasons; health fields; score formula |
+| **PR-R6** | [README.md](../../stretch-2/README.md) | Phase 2 status after dogfood truth; next steps Gate B → 2a |
 | **PR-R6** | [design-phase-2-semantic.md](design-phase-2-semantic.md) | Honesty banner → rectification design landed |
 | **PR-R6** | [design-phase-2-implementation.md](design-phase-2-implementation.md) | Historical; one-line pointer only |
-| **PR-R6** | [known-bugs.md](../known-bugs.md) **BUG-mem-p2-01** | Fixed / residual with commit; GPU bug open |
+| **PR-R6** | [known-bugs.md](../../known-bugs.md) **BUG-mem-p2-01** | Fixed / residual with commit; GPU bug open |
 | **PR-R6** | Activity map | Confirm filtered search + meal semantic under dogfood truth |
 
 ---
 
 ## References
 
-- [docs/stretch-2/README.md](README.md) — program honesty, next steps order
-- [docs/known-bugs.md](../known-bugs.md) — BUG-mem-p2-01, BUG-mem-gpu-01
-- [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — shipped map
+- [docs/stretch-2/README.md](../../stretch-2/README.md) — program honesty, next steps order
+- [docs/known-bugs.md](../../known-bugs.md) — BUG-mem-p2-01, BUG-mem-gpu-01
+- [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) — shipped map
 - [design-phase-2-implementation.md](design-phase-2-implementation.md) — historical KDs / PR1–9
 - [design-phase-2-semantic.md](design-phase-2-semantic.md) — short sketch
 - [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) — boundary
 - [design-phase-3-procedural.md](design-phase-3-procedural.md) — boundary / terminology
 - [design-database-choices.md](design-database-choices.md) — Lance ANN policy
 - [design-nemotron-runtime.md](design-nemotron-runtime.md) — Gate B
-- [architecture/spikes/lance-emb-migration.md](architecture/spikes/lance-emb-migration.md) — Lance APIs
+- [architecture/spikes/lance-emb-migration.md](spikes/lance-emb-migration.md) — Lance APIs
 - Code: `elyra/memory/index.py`, `lance_store.py`, `meal.py`, `embed/mock.py`, `embed/runtime.py`, `embed/types.py`, `inspect.py`, `config.py`, `elyra/settings.py`, `presence/worker.py`, `runtime/api.py`, `runtime/web/app.js`
 
 ---

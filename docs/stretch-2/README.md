@@ -2,9 +2,11 @@
 
 **Branch:** `grok-improvement-memory` (from `main`)
 **Philosophy:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
-**Planning baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
+**Planning baseline:** [inspiration-activity-model-and-storage.md](../design/memory/inspiration-activity-model-and-storage.md)
 **Soft conceptual guidance:** [philosophical-soft-guidance.md](philosophical-soft-guidance.md) (influences only — not phase goals)
-**Context meal (provisional):** [design-context-meal-composition.md](design-context-meal-composition.md)
+**Context meal (provisional):** [design-context-meal-composition.md](../design/memory/design-context-meal-composition.md)
+
+> **Docs reorg (PR2b / #121):** phase `design-*.md`, inspiration baseline, and architecture **spikes** live under [docs/design/memory/](../design/memory/). **Architecture manuals** (`architecture/phase-*.md`) stay here until PR4 (STATE). Full DESIGN catalog: [docs/design/README.md](../design/README.md).
 
 ## Goal
 
@@ -26,10 +28,10 @@ For a system this conceptual, “docs updated when behaviour changes” is not e
 
 1. What was implemented (types, tables, APIs, jobs).
 2. How those structures map to essay concepts (atom, context, edge kinds, summary/consolidation, trajectory, temporary vs durable context).
-3. Which activities from the [inspiration activity model](inspiration-activity-model-and-storage.md) are live vs background.
+3. Which activities from the [inspiration activity model](../design/memory/inspiration-activity-model-and-storage.md) are live vs background.
 4. Invariants and failure behaviour.
 
-Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage as **influence on judgment**, not as deliverables. [Context meal composition](design-context-meal-composition.md) describes labeled packages and slide-off — percentages remain provisional and flexible under test.
+Design docs (`design-*.md`) guide implementation. **Architecture manuals** (under `architecture/` as they are written) describe what actually shipped. The inspiration doc is the baseline constraints file, not the final manual. [Philosophical soft guidance](philosophical-soft-guidance.md) records research lineage as **influence on judgment**, not as deliverables. [Context meal composition](../design/memory/design-context-meal-composition.md) describes labeled packages and slide-off — percentages remain provisional and flexible under test.
 
 Other principle reminders:
 
@@ -53,7 +55,7 @@ Other principle reminders:
 
 **Phase 2a — Directed traversal:** model-managed walk; **temporary** until confirmed; keeps enter meal via directed-keep channel only.
 
-Composition, dedup, labels, slide-off, re-gather: [design-context-meal-composition.md](design-context-meal-composition.md).
+Composition, dedup, labels, slide-off, re-gather: [design-context-meal-composition.md](../design/memory/design-context-meal-composition.md).
 
 ---
 
@@ -93,9 +95,9 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | Glass **Vectors** tab | Live + honest (PR7 + PR-R5) — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
 | Glass **Graph** tab | **Live (Phase 2a PR-A5)** — [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md); was stub in Phase 2 |
 | Nemotron / GPU | Runtime landed (PR8); **BUG-mem-gpu-01** open (ROCm / device); Gate B before product default-on |
-| Default-on semantic | Only after rectified dogfood + Gate B + operator sign-off ([design-nemotron-runtime.md](design-nemotron-runtime.md)) |
+| Default-on semantic | Only after rectified dogfood + Gate B + operator sign-off ([design-nemotron-runtime.md](../design/memory/design-nemotron-runtime.md)) |
 
-**Docs:** [design-phase-2-rectification.md](design-phase-2-rectification.md) (normative fix plan), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped + rectified map), [design-phase-2-implementation.md](design-phase-2-implementation.md) (historical PR1–PR9), [known-bugs.md](../known-bugs.md) (**BUG-mem-p2-01**, **BUG-mem-gpu-01**).
+**Docs:** [design-phase-2-rectification.md](../design/memory/design-phase-2-rectification.md) (normative fix plan), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) (shipped + rectified map), [design-phase-2-implementation.md](../design/memory/design-phase-2-implementation.md) (historical PR1–PR9), [known-bugs.md](../known-bugs.md) (**BUG-mem-p2-01**, **BUG-mem-gpu-01**).
 
 ### Phase 2a close-out (updated 2026-07-29)
 
@@ -126,7 +128,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | Default-on traversal | Only after dogfood + operator sign-off |
 | Phase 3 | Success-path weights later — not 2a |
 
-**Docs:** [design-phase-2a-implementation.md](design-phase-2a-implementation.md) (normative design + KD-A*), [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) (shipped map), [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) (intent sketch).
+**Docs:** [design-phase-2a-implementation.md](../design/memory/design-phase-2a-implementation.md) (normative design + KD-A*), [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) (shipped map), [design-phase-2a-directed-traversal.md](../design/memory/design-phase-2a-directed-traversal.md) (intent sketch).
 
 ### Phase 1 close-out (2026-07-28)
 
@@ -149,7 +151,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 ## Storage direction (summary)
 
-Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** for optional Cypher over the same tables; **reified hyperedges**. Full rationale and limitations: [design-database-choices.md](design-database-choices.md).
+Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** for optional Cypher over the same tables; **reified hyperedges**. Full rationale and limitations: [design-database-choices.md](../design/memory/design-database-choices.md).
 
 ---
 
@@ -157,27 +159,27 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 
 | Document | Role |
 |----------|------|
-| [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
+| [inspiration-activity-model-and-storage.md](../design/memory/inspiration-activity-model-and-storage.md) | **Baseline inspiration** — activities, logical data prototype, storage requirements, doc obligations |
 | [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | **Soft guidance** — IIT/sheaf/holographic and reconstructive influences; not goals |
-| [design-context-meal-composition.md](design-context-meal-composition.md) | **Provisional meal** — open moment vs episodic, slide-off, labels, dedup, re-gather |
-| [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md) | **Refined product draft** instance continuity for #93 — glass-tail + sticky directed keep + path parity (Ready for implement plan) |
-| [design-instance-continuity-implement-plan.md](design-instance-continuity-implement-plan.md) | **Implement plan** for #93 — ordered product PRs S1–S6 (glass-tail → framing → sticky keep → merge → nudge → graph UX defer) |
-| [`design-instance-continuity-product-implement.md`](design-instance-continuity-product-implement.md) | **Product implement design** for #93 (glass-tail, framing, sticky keep, semantic seed) — Ready to execute |
-| [design-meal-formation-continuity-review-plan.md](design-meal-formation-continuity-review-plan.md) | **Executable review methodology** (inspection + fault isolation) refining the #93 draft — not product code |
+| [design-context-meal-composition.md](../design/memory/design-context-meal-composition.md) | **Provisional meal** — open moment vs episodic, slide-off, labels, dedup, re-gather |
+| [design-instance-continuity-glass-tail-directed-keep.md](../design/memory/design-instance-continuity-glass-tail-directed-keep.md) | **Refined product draft** instance continuity for #93 — glass-tail + sticky directed keep + path parity (Ready for implement plan) |
+| [design-instance-continuity-implement-plan.md](../design/memory/design-instance-continuity-implement-plan.md) | **Implement plan** for #93 — ordered product PRs S1–S6 (glass-tail → framing → sticky keep → merge → nudge → graph UX defer) |
+| [`design-instance-continuity-product-implement.md`](../design/memory/design-instance-continuity-product-implement.md) | **Product implement design** for #93 (glass-tail, framing, sticky keep, semantic seed) — Ready to execute |
+| [design-meal-formation-continuity-review-plan.md](../design/memory/design-meal-formation-continuity-review-plan.md) | **Executable review methodology** (inspection + fault isolation) refining the #93 draft — not product code |
 | [meal-continuity-review/REPORT.md](meal-continuity-review/REPORT.md) | **Review report** (S0 done) — fault isolation B1/B12 co-primary; B5+B5b; evidence sa9b |
-| [design-database-choices.md](design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
-| [design-nemotron-runtime.md](design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
-| [design-phase-1-temporal.md](design-phase-1-temporal.md) | Phase 1 design (short outline) |
-| [design-phase-1-implementation.md](design-phase-1-implementation.md) | Phase 1 implementation design + key decisions |
+| [design-database-choices.md](../design/memory/design-database-choices.md) | Storage decision, limitations, ANN policy, interface rule |
+| [design-nemotron-runtime.md](../design/memory/design-nemotron-runtime.md) | Portable Omni-Embed-Nemotron load/encode contract (Phase 2) |
+| [design-phase-1-temporal.md](../design/memory/design-phase-1-temporal.md) | Phase 1 design (short outline) |
+| [design-phase-1-implementation.md](../design/memory/design-phase-1-implementation.md) | Phase 1 implementation design + key decisions |
 | [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) | **Phase 1 architecture manual** (shipped: structure ↔ essay, activities, invariants) |
-| [design-phase-2-semantic.md](design-phase-2-semantic.md) | Phase 2 short sketch (points at implementation + rectification + architecture) |
-| [design-phase-2-implementation.md](design-phase-2-implementation.md) | **Historical** Phase 2 implementation design + PR plan (PR1–PR9) |
-| [design-phase-2-rectification.md](design-phase-2-rectification.md) | **Phase 2 product-path rectification** design + PR-R1–R6 |
+| [design-phase-2-semantic.md](../design/memory/design-phase-2-semantic.md) | Phase 2 short sketch (points at implementation + rectification + architecture) |
+| [design-phase-2-implementation.md](../design/memory/design-phase-2-implementation.md) | **Historical** Phase 2 implementation design + PR plan (PR1–PR9) |
+| [design-phase-2-rectification.md](../design/memory/design-phase-2-rectification.md) | **Phase 2 product-path rectification** design + PR-R1–R6 |
 | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped + rectified: structure ↔ essay, activities, invariants) |
-| [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) | Phase 2a intent sketch (points at implementation + architecture) |
-| [design-phase-2a-implementation.md](design-phase-2a-implementation.md) | **Normative** Phase 2a implementation design + PR-A1–A6 |
+| [design-phase-2a-directed-traversal.md](../design/memory/design-phase-2a-directed-traversal.md) | Phase 2a intent sketch (points at implementation + architecture) |
+| [design-phase-2a-implementation.md](../design/memory/design-phase-2a-implementation.md) | **Normative** Phase 2a implementation design + PR-A1–A6 |
 | [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) | **Phase 2a architecture manual** (shipped: structure ↔ essay, activities, invariants) |
-| [design-phase-3-procedural.md](design-phase-3-procedural.md) | Phase 3 design |
+| [design-phase-3-procedural.md](../design/memory/design-phase-3-procedural.md) | Phase 3 design |
 | `architecture/` | **Detailed post-implement manuals** mapping code ↔ philosophy (Phase 1 + Phase 2 + Phase 2a shipped) |
 
 All Stretch 2 planning docs live under **`docs/stretch-2/`** only.
@@ -207,14 +209,14 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 4. Promote to `main` only after operator sign-off and live smoke.
 5. Prefer clarifying the philosophy mapping over clever storage tricks that obscure it.
 6. Use [philosophical-soft-guidance.md](philosophical-soft-guidance.md) for judgment calls; do not expand phase scope from it.
-7. Treat [design-context-meal-composition.md](design-context-meal-composition.md) as the living sketch for meal budgets; refine with measurements and flex.
+7. Treat [design-context-meal-composition.md](../design/memory/design-context-meal-composition.md) as the living sketch for meal budgets; refine with measurements and flex.
 
 ---
 
 ## Next steps
 
-1. **Smoke dogfood Phase 2 rectification** (flags on, `backend=lance`): neighbors/meal under `auto`, joint repair completes, rebuild notes honest — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md), [design-phase-2-rectification.md](design-phase-2-rectification.md).
+1. **Smoke dogfood Phase 2 rectification** (flags on, `backend=lance`): neighbors/meal under `auto`, joint repair completes, rebuild notes honest — [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md), [design-phase-2-rectification.md](../design/memory/design-phase-2-rectification.md).
 2. **Smoke dogfood Phase 2a** (flags on): structural walk on JSONL; full multi-hop with Lance + semantic seeds; finish → glass considered/kept → next meal directed_keep — [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md).
-3. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on of semantic — [design-nemotron-runtime.md](design-nemotron-runtime.md).
+3. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on of semantic — [design-nemotron-runtime.md](../design/memory/design-nemotron-runtime.md).
 4. **Phase 3** procedural / success-path evaluation-first (uses edges/sessions from 2a).
 5. Keep architecture manuals updated when behaviour changes. Do not claim 2a product-complete on empty joint search or without dogfood.

@@ -1,5 +1,6 @@
 # Design: Database & Index Choices
 
+**Class:** DESIGN
 **Status:** Preliminary decision (Spike-validated before Phase 2 locks)
 **Branch:** `grok-improvement-memory`
 **Depends on:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)

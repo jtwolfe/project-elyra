@@ -1,8 +1,9 @@
 # Design: Context meal composition & in-moment slide-off
 
+**Class:** DESIGN
 **Status:** Provisional design (percentages illustrative, not normative)
 **Branch:** `grok-improvement-memory`
-**Related:** [design-phase-1-temporal.md](design-phase-1-temporal.md), [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md), [philosophical-soft-guidance.md](philosophical-soft-guidance.md)
+**Related:** [design-phase-1-temporal.md](design-phase-1-temporal.md), [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md), [philosophical-soft-guidance.md](../../stretch-2/philosophical-soft-guidance.md)
 
 ## Purpose
 

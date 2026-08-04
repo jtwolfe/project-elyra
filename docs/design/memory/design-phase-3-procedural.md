@@ -1,5 +1,6 @@
 # Phase 3 — Procedural / Success-Path Memory
 
+**Class:** DESIGN
 **Status:** Design draft (highest care)
 **Depends on:** Phases 1–2a stable enough to record real trajectories
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)

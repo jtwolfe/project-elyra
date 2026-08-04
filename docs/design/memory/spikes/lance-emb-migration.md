@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Spike** | Gate A (merge gate for PR3) |
 | **Pinned dep** | `lancedb>=0.20,<0.21` (`elyra[memory-lance]`) |
 | **Measured on** | lancedb **0.20.0** + pyarrow **24.x** (API inspection; connect may segfault on unsupported Python builds — CI/default stays jsonl) |

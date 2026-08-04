@@ -2,14 +2,15 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Residual execute-plan for Phase 1 follow-ons only |
 | **Product** | project-elyra |
 | **Date** | 2026-07-28 |
 | **Status** | **Done** (PR8 + PR9 shipped; Phase 1 operator-complete) |
 | **Branch** | `grok-improvement-memory` |
 | **Parent design** | [design-phase-1-implementation.md](design-phase-1-implementation.md) (full Phase 1 design; **PR1–PR7 shipped**) |
-| **Architecture** | [architecture/phase-1-temporal.md](architecture/phase-1-temporal.md) |
-| **Close-out** | [README.md](README.md) § Phase 1 close-out — bug caveats in [known-bugs.md](../known-bugs.md) |
+| **Architecture** | [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md) |
+| **Close-out** | [README.md](../../stretch-2/README.md) § Phase 1 close-out — bug caveats in [known-bugs.md](../../known-bugs.md) |
 
 ## Overview
 

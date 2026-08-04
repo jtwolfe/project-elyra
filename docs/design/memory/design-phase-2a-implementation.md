@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Implementation-ready design + PR plan |
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
@@ -9,11 +10,11 @@
 | **Status** | **Ready for `/execute-plan`** (2026-07-29) — OQ-A1–A7 operator-locked; design R2 |
 | **Branch** | `grok-improvement-memory` |
 | **Depends on** | Phase 1 **Done**; Phase 2 code rectified (PR-R1–R5) with **rectified seeds** (vector ANN + temporal neighbourhood). Operator smoke dogfood of Phase 2 preferred before default-on of 2a, not a hard code gate for PR-A1 types. |
-| **Philosophy** | [`docs/memory-atoms.pdf`](../memory-atoms.pdf) |
+| **Philosophy** | [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) |
 | **Baseline** | [`inspiration-activity-model-and-storage.md`](inspiration-activity-model-and-storage.md) |
 | **Prior sketch** | [`design-phase-2a-directed-traversal.md`](design-phase-2a-directed-traversal.md) — **superseded for implementation by this doc** |
 | **Meal channel** | [`design-context-meal-composition.md`](design-context-meal-composition.md) (directed-keep) |
-| **Seeds / Phase 2** | [`architecture/phase-2-semantic.md`](architecture/phase-2-semantic.md), [`design-phase-2-rectification.md`](design-phase-2-rectification.md) |
+| **Seeds / Phase 2** | [`architecture/phase-2-semantic.md`](../../stretch-2/architecture/phase-2-semantic.md), [`design-phase-2-rectification.md`](design-phase-2-rectification.md) |
 | **Boundary** | Phase 3 procedural weights later ([`design-phase-3-procedural.md`](design-phase-3-procedural.md)); not 2a core |
 | **Storage** | [`design-database-choices.md`](design-database-choices.md) — graph behind `elyra/memory/graph.py` |
 
@@ -736,7 +737,7 @@ retained — KD-A9 / KD-A19).
 
 ### Skill vs tools (product shape)
 
-Aligned with [tools-and-skills.md](../tools-and-skills.md):
+Aligned with [tools-and-skills.md](../../tools-and-skills.md):
 
 | Piece | Form |
 |-------|------|
@@ -1163,14 +1164,14 @@ Phase 1 temporal  ──done──► Phase 2 semantic (+ rectification)
 ## References
 
 - [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) — intent sketch (superseded for implement)  
-- [README.md](README.md) — program status / next steps  
+- [README.md](../../stretch-2/README.md) — program status / next steps  
 - [design-phase-2-rectification.md](design-phase-2-rectification.md) — rectified seeds  
-- [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — shipped semantic  
+- [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) — shipped semantic  
 - [design-context-meal-composition.md](design-context-meal-composition.md) — directed-keep channel  
 - [design-phase-3-procedural.md](design-phase-3-procedural.md) — weights later  
 - [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) — §3.5 activities  
 - [design-database-choices.md](design-database-choices.md) — `graph.py` interface rule  
-- [tools-and-skills.md](../tools-and-skills.md) — skill vs tool split  
+- [tools-and-skills.md](../../tools-and-skills.md) — skill vs tool split  
 - Code: `elyra/memory/{store,types,meal,tokens,index,ladder,temporal,inspect,config}.py`, `elyra/presence/worker.py`, `elyra/runtime/api.py`, `elyra/runtime/web/*`, `elyra/tools/builtin/skills_tools.py`, `elyra/skills/catalog.py`
 
 ---

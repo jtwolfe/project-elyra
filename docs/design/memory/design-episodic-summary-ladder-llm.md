@@ -2,6 +2,7 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Status** | Design (normative for `#92` / BUG-meal-02) |
 | **Issue** | [#92](https://github.com/jtwolfe/project-elyra/issues/92) — `BUG-meal-02` |
 | **Integration branch** | `feature/92` (base `main` @ ~`66d7782`) |

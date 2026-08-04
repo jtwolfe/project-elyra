@@ -7,7 +7,7 @@
 | **Revision** | 3 — post-swap pytest `-m "not gpu"`; uncommitted elyra.toml pin; H12 pin-before-uninstall |
 | **Audience** | Senior engineers / operator (LuxPrimata) |
 | **Branch** | `grok-improv-radeonvii` |
-| **Related** | [`docs/radeon-vii-dev/STACK-INVENTORY.md`](docs/radeon-vii-dev/STACK-INVENTORY.md), [`docs/known-bugs.md`](docs/known-bugs.md) **BUG-mem-gpu-01**, [`docs/stretch-2/design-nemotron-runtime.md`](docs/stretch-2/design-nemotron-runtime.md), [`docs/stretch-2/architecture/spikes/nemotron-runtime.md`](docs/stretch-2/architecture/spikes/nemotron-runtime.md), product path [`elyra/memory/embed/runtime.py`](elyra/memory/embed/runtime.py), operator [`elyra.toml`](elyra.toml) |
+| **Related** | [`docs/radeon-vii-dev/STACK-INVENTORY.md`](docs/radeon-vii-dev/STACK-INVENTORY.md), [`docs/known-bugs.md`](docs/known-bugs.md) **BUG-mem-gpu-01**, [`docs/design/memory/design-nemotron-runtime.md`](docs/design/memory/design-nemotron-runtime.md), [`docs/design/memory/spikes/nemotron-runtime.md`](docs/design/memory/spikes/nemotron-runtime.md), product path [`elyra/memory/embed/runtime.py`](elyra/memory/embed/runtime.py), operator [`elyra.toml`](elyra.toml) |
 | **Host** | Arch/Omarchy LuxPrimata; Radeon VII **gfx906**; host ROCm **7.2.4** Tier A |
 | **Scope phase** | Dev-focused: venv HIP torch + standalone encode smoke. **Not** full meal/presence/worker integration as *acceptance*. **Note:** operator `elyra.toml` already enables nemotron+auto — ROCm swap **will arm product path** unless pinned (see §3.0). |
 

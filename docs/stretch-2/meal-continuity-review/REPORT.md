@@ -4,8 +4,8 @@
 |-------|--------|
 | **Document** | Fault isolation report (inspection only; no product meal behavior changes) |
 | **Issue** | [#93](https://github.com/jtwolfe/project-elyra/issues/93) — `BUG-meal-03` |
-| **Review plan** | [`../design-meal-formation-continuity-review-plan.md`](../design-meal-formation-continuity-review-plan.md) |
-| **Product draft** | [`../design-instance-continuity-glass-tail-directed-keep.md`](../design-instance-continuity-glass-tail-directed-keep.md) |
+| **Review plan** | [`../../design/memory/design-meal-formation-continuity-review-plan.md`](../../design/memory/design-meal-formation-continuity-review-plan.md) |
+| **Product draft** | [`../../design/memory/design-instance-continuity-glass-tail-directed-keep.md`](../../design/memory/design-instance-continuity-glass-tail-directed-keep.md) |
 | **Date** | 2026-07-30 |
 | **Worktree code** | SHA `7ebf50b` (symbols/lines as read) |
 | **Dogfood data** | `/home/jim/Workspace/project-elyra/data` (read-only) |
@@ -391,7 +391,7 @@ Do **not** ship S3 before S1 while wait_reply social still tip-smashes.
 
 ## 6. DRAFT-EXTENSIONS
 
-Proposed refinements to `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md` (apply in PR-R4; **not** applied in this PR).
+Proposed refinements to `docs/design/memory/design-instance-continuity-glass-tail-directed-keep.md` (apply in PR-R4; **not** applied in this PR).
 
 ### 6.1 §5 Glass-tail placement
 

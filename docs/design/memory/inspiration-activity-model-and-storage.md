@@ -1,16 +1,17 @@
 # Inspiration — Activity Model, Data Prototype & Storage Requirements
 
+**Class:** DESIGN
 **Status:** Foundational inspiration (not the final architecture manual)
 **Branch:** `grok-improvement-memory`
-**Philosophy source:** [memory-atoms.pdf](../memory-atoms.pdf) — *What is wrong with my memory?*
-**Soft conceptual influences:** [philosophical-soft-guidance.md](philosophical-soft-guidance.md) (not requirements)
+**Philosophy source:** [memory-atoms.pdf](../../memory-atoms.pdf) — *What is wrong with my memory?*
+**Soft conceptual influences:** [philosophical-soft-guidance.md](../../stretch-2/philosophical-soft-guidance.md) (not requirements)
 **Meal composition (provisional):** [design-context-meal-composition.md](design-context-meal-composition.md)
 
 This document records the **preliminary system activity model**, a **logical data prototype**, and **refined database requirements** developed during Stretch 2 planning. It is intentionally an *inspiration* and *constraint* document: implementation work must produce a larger, more detailed set of architecture docs that explain **how concrete structures map back to the concepts in the essay** (atoms, context, felt signal, weave of edges, patterns/shadows, consolidation).
 
 Do not treat this file as the complete design. Treat it as the baseline that later phase manuals must refine, not abandon without reason.
 
-For research lineage and soft judgment aids (IIT/Φ as possible *later* patch-health thinking, sheaf-like local context patches, holographic reconstructability, constructive recall), see [philosophical-soft-guidance.md](philosophical-soft-guidance.md). Those ideas **influence reasoning**; they are not storage requirements and do not turn the lists below into phase commitments beyond what phase design docs state.
+For research lineage and soft judgment aids (IIT/Φ as possible *later* patch-health thinking, sheaf-like local context patches, holographic reconstructability, constructive recall), see [philosophical-soft-guidance.md](../../stretch-2/philosophical-soft-guidance.md). Those ideas **influence reasoning**; they are not storage requirements and do not turn the lists below into phase commitments beyond what phase design docs state.
 
 ---
 
@@ -257,7 +258,7 @@ Design docs may stay speculative; **architecture/** manuals must describe what w
 
 - Update this inspiration doc when the activity model or requirements materially change.
 - Do not delete historical rationale; append a short “Superseded decisions” section if direction shifts.
-- Phase architecture manuals may be more specific; they should link back here and to [memory-atoms.pdf](../memory-atoms.pdf).
+- Phase architecture manuals may be more specific; they should link back here and to [memory-atoms.pdf](../../memory-atoms.pdf).
 - Soft guidance may evolve without changing storage requirements; keep the boundary clear.
 
 ---

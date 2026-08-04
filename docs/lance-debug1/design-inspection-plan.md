@@ -1012,7 +1012,7 @@ If **P01** establishes H1a+H1b high-confidence and **P02** establishes H2 (proce
 | `elyra/runtime/api.py` | `_get_memory_*` glass endpoints |
 | `docs/known-bugs.md` | BUG-wake-02, BUG-mem-gpu-01 |
 | `docs/stretch-2/architecture/phase-2-semantic.md` | Semantic architecture (reference only) |
-| `docs/stretch-2/architecture/spikes/lance-emb-migration.md` | Migration also uses `to_arrow` |
+| `docs/design/memory/spikes/lance-emb-migration.md` | Migration also uses `to_arrow` |
 | `pyproject.toml` | `lancedb>=0.20,<0.21` |
 
 ---

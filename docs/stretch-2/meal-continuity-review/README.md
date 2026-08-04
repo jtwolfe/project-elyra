@@ -3,8 +3,8 @@
 | Field | Value |
 |-------|--------|
 | **Bug** | `BUG-meal-03` / [#93](https://github.com/jtwolfe/project-elyra/issues/93) |
-| **Review plan** | [`../design-meal-formation-continuity-review-plan.md`](../design-meal-formation-continuity-review-plan.md) |
-| **Product draft refined by this report** | [`../design-instance-continuity-glass-tail-directed-keep.md`](../design-instance-continuity-glass-tail-directed-keep.md) |
+| **Review plan** | [`../../design/memory/design-meal-formation-continuity-review-plan.md`](../../design/memory/design-meal-formation-continuity-review-plan.md) |
+| **Product draft refined by this report** | [`../../design/memory/design-instance-continuity-glass-tail-directed-keep.md`](../../design/memory/design-instance-continuity-glass-tail-directed-keep.md) |
 | **Date** | 2026-07-30 |
 | **Scope** | WP1–WP2 executed (static SA-1…SA-9b + offline recompose). WP3 live **skipped** (host API down). |
 | **Product code** | **Unchanged** — documentation / evidence only |
