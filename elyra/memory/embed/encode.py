@@ -148,29 +148,27 @@ def resolve_one_media(
     path_s: str | None = None
 
     # Product path: content-addressed blob (extensionless) — KD-M14.
+    # Prefer blob_path(sha) when att is already loaded to avoid a second get()
+    # via resolve_blob_path (thin helper remains for external callers).
     if att is not None:
-        resolve_blob = getattr(media_store, "resolve_blob_path", None)
-        if callable(resolve_blob):
+        sha = getattr(att, "sha256", None) or ""
+        blob_path_fn = getattr(media_store, "blob_path", None)
+        if callable(blob_path_fn) and sha:
             try:
-                p = resolve_blob(mid)
-                if p is not None:
-                    p_path = Path(p)
-                    if p_path.is_file():
-                        path_s = str(p_path)
-                        if size is None:
-                            size = _file_size(path_s)
+                p = Path(blob_path_fn(sha))
+                if p.is_file():
+                    path_s = str(p)
             except (TypeError, ValueError, OSError):
                 pass
         if path_s is None:
-            sha = getattr(att, "sha256", None) or ""
-            blob_path_fn = getattr(media_store, "blob_path", None)
-            if callable(blob_path_fn) and sha:
+            resolve_blob = getattr(media_store, "resolve_blob_path", None)
+            if callable(resolve_blob):
                 try:
-                    p = Path(blob_path_fn(sha))
-                    if p.is_file():
-                        path_s = str(p)
-                        if size is None:
-                            size = _file_size(path_s)
+                    p = resolve_blob(mid)
+                    if p is not None:
+                        p_path = Path(p)
+                        if p_path.is_file():
+                            path_s = str(p_path)
                 except (TypeError, ValueError, OSError):
                     pass
         # Legacy fields on doubles that still put path on the attachment.
@@ -178,8 +176,6 @@ def resolve_one_media(
             legacy = getattr(att, "path", None) or getattr(att, "local_path", None)
             if legacy and Path(str(legacy)).is_file():
                 path_s = str(legacy)
-                if size is None:
-                    size = _file_size(path_s)
 
     # Test doubles / legacy: path_for / resolve_path without Attachment meta.
     if path_s is None:
@@ -193,8 +189,13 @@ def resolve_one_media(
                 p = None
             if p and Path(str(p)).is_file():
                 path_s = str(p)
-                if size is None:
-                    size = _file_size(path_s)
+
+    # KD-M22: when a filesystem path is known, re-stat and take max with meta
+    # so under-reported att.byte_size cannot bypass the encode cap.
+    if path_s is not None:
+        file_sz = _file_size(path_s)
+        if file_sz is not None:
+            size = max(size if size is not None else 0, file_sz)
 
     # KD-M22: size-check BEFORE any full read_bytes.
     if size is not None and max_bytes > 0 and size > max_bytes:
@@ -212,6 +213,14 @@ def resolve_one_media(
     if modality is None and kind in ("image", "audio", "video"):
         modality = kind
     if modality is None:
+        # path_for-only doubles with no hit: no attachment record and no path
+        # → no_path (not unknown_type). Product get→None is already :missing.
+        if att is None and path_s is None:
+            return {
+                "modality": None,
+                "input": None,
+                "skipped": f"{mid}:no_path",
+            }
         return {
             "modality": None,
             "input": None,

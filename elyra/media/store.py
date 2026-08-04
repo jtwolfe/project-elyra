@@ -231,7 +231,9 @@ class MediaStore:
         """Return blob filesystem path when meta + blob exist; else None.
 
         Thin helper for encode resolve (KD-M14): consumers should not invent
-        path fields on Attachment.
+        path fields on Attachment. Callers that already hold an Attachment
+        should use ``blob_path(att.sha256)`` directly to avoid a second
+        ``get`` (encode's ``resolve_one_media`` does this).
         """
         att = self.get(att_id)
         if att is None or not att.sha256:

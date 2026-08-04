@@ -2,6 +2,14 @@
 
 Hermetic tests use a real MediaStore + tiny PNG fixture — not path_for doubles
 alone. Path-for doubles remain covered in test_memory_embed_nemotron.py.
+
+Skip-reason tokens (contract for drain meta + neighbors):
+  {mid}:missing       — store.get returned None
+  {mid}:no_path       — no resolvable blob path/bytes (incl. path_for miss)
+  {mid}:unknown_type  — attachment present but modality not in matrix
+  {mid}:oversize_bytes:{n}
+  {mid}:channel_full:{modality}
+  {mid}:error         — get/read raised (or empty att_id → ``:error``)
 """
 
 from __future__ import annotations
@@ -155,7 +163,7 @@ def test_oversize_skips_without_read_bytes(media_store: MediaStore, monkeypatch)
 
     monkeypatch.setattr(media_store, "read_bytes", _spy_read)
 
-    # Also hide blob path so a naive impl might fall through to read_bytes.
+    # Hide blob path so a naive impl might fall through to read_bytes.
     monkeypatch.setattr(
         media_store,
         "resolve_blob_path",
@@ -174,19 +182,97 @@ def test_oversize_skips_without_read_bytes(media_store: MediaStore, monkeypatch)
     assert calls == [], "read_bytes must not run when size exceeds max_bytes"
 
 
-def test_oversize_via_blob_stat_skips(media_store: MediaStore, tmp_path: Path):
-    """Size from filesystem stat on blob path also enforces cap without encode."""
-    # Build a store entry then rely on real byte_size from put.
+def test_oversize_via_blob_stat_when_meta_size_missing(
+    media_store: MediaStore, monkeypatch
+):
+    """Size filled only via filesystem stat on blob path enforces cap (KD-M22)."""
     data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
     att = media_store.put_bytes(data, filename="mid.png", mime="image/png")
     assert att.byte_size == len(data)
+    # Clear meta size so resolve must re-stat the blob path.
+    monkeypatch.setattr(att, "byte_size", None)
+    real_get = media_store.get
+
+    def _get(aid: str):
+        got = real_get(aid)
+        if got is not None and got.id == att.id:
+            return att
+        return got
+
+    monkeypatch.setattr(media_store, "get", _get)
+
+    calls: list[str] = []
+    real_read = media_store.read_bytes
+
+    def _spy_read(aid: str) -> bytes:
+        calls.append(aid)
+        return real_read(aid)
+
+    monkeypatch.setattr(media_store, "read_bytes", _spy_read)
+
+    one = resolve_one_media(media_store, att.id, max_bytes=50)
+    assert one["modality"] is None
+    assert one["input"] is None
+    assert one["skipped"] == f"{att.id}:oversize_bytes:{len(data)}"
+    assert calls == []
+
+
+def test_oversize_underreported_meta_still_stats_path(
+    media_store: MediaStore, monkeypatch
+):
+    """Under-reported att.byte_size cannot bypass cap when blob path exists."""
+    data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
+    att = media_store.put_bytes(data, filename="lie.png", mime="image/png")
+    # Meta claims 10 bytes; real file is ~208.
+    monkeypatch.setattr(att, "byte_size", 10)
+    real_get = media_store.get
+
+    def _get(aid: str):
+        got = real_get(aid)
+        if got is not None and got.id == att.id:
+            return att
+        return got
+
+    monkeypatch.setattr(media_store, "get", _get)
+
+    calls: list[str] = []
+    real_read = media_store.read_bytes
+
+    def _spy_read(aid: str) -> bytes:
+        calls.append(aid)
+        return real_read(aid)
+
+    monkeypatch.setattr(media_store, "read_bytes", _spy_read)
+
+    one = resolve_one_media(media_store, att.id, max_bytes=50)
+    assert one["skipped"] == f"{att.id}:oversize_bytes:{len(data)}"
+    assert one["input"] is None
+    assert calls == []
+
+
+def test_oversize_real_store_path_visible_no_read(media_store: MediaStore, monkeypatch):
+    """Product path still present: oversize skip without read_bytes spy empty."""
+    data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 200
+    att = media_store.put_bytes(data, filename="vis.png", mime="image/png")
+    assert media_store.blob_path(att.sha256).is_file()
+
+    calls: list[str] = []
+    real_read = media_store.read_bytes
+
+    def _spy_read(aid: str) -> bytes:
+        calls.append(aid)
+        return real_read(aid)
+
+    monkeypatch.setattr(media_store, "read_bytes", _spy_read)
+
     out = resolve_media_inputs(_obs(media_ids=(att.id,)), media_store, max_bytes=50)
     assert out["image"] is None
-    assert any("oversize_bytes" in s for s in out["skipped"])
+    assert any(f"{att.id}:oversize_bytes:" in s for s in out["skipped"])
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
-# Missing / unknown / channel_full / bytes fallback
+# Missing / unknown / channel_full / bytes fallback / errors
 # ---------------------------------------------------------------------------
 
 
@@ -221,6 +307,7 @@ def test_channel_full_keeps_first_image(media_store: MediaStore):
     )
     out = resolve_media_inputs(_obs(media_ids=(a1.id, a2.id)), media_store)
     assert out["image"] is not None
+    assert Path(out["image"]).resolve() == media_store.blob_path(a1.sha256).resolve()
     assert any(f"{a2.id}:channel_full:image" == s for s in out["skipped"])
 
 
@@ -283,6 +370,18 @@ def test_path_for_double_still_works(tmp_path: Path):
     assert out["skipped"] == []
 
 
+def test_path_for_missing_is_no_path_not_unknown_type():
+    """path_for-only miss → no_path (not unknown_type diagnostic)."""
+
+    class _Store:
+        def path_for(self, mid: str) -> str | None:
+            return None
+
+    one = resolve_one_media(_Store(), "m_gone")
+    assert one["skipped"] == "m_gone:no_path"
+    assert one["modality"] is None
+
+
 def test_kind_soft_fallback_when_mime_ambiguous(tmp_path: Path):
     """kind in (image,audio,video) soft-fallback when mime/ext unknown."""
 
@@ -315,3 +414,59 @@ def test_empty_media_ids_and_none_store():
     out2 = resolve_media_inputs(_obs(media_ids=("x",)), None)
     assert out2["image"] is None
     assert out2["skipped"] == []
+
+
+def test_empty_att_id_is_error_token():
+    one = resolve_one_media(object(), "")
+    assert one["skipped"] == ":error"
+    assert one["modality"] is None
+    assert one["input"] is None
+
+
+def test_get_raising_is_error_token():
+    class _Boom:
+        def get(self, mid: str):
+            raise RuntimeError("meta corrupt")
+
+    one = resolve_one_media(_Boom(), "m1")
+    assert one["skipped"] == "m1:error"
+
+
+def test_read_bytes_generic_error_is_error_token():
+    class _Att:
+        mime = "image/png"
+        filename = "x.png"
+        kind = "image"
+        byte_size = 4
+        sha256 = ""
+        path = None
+        local_path = None
+
+    class _Store:
+        def get(self, mid: str):
+            return _Att()
+
+        def read_bytes(self, mid: str) -> bytes:
+            raise OSError("disk failed")
+
+    one = resolve_one_media(_Store(), "m1")
+    assert one["skipped"] == "m1:error"
+
+
+def test_meta_present_no_path_no_read_bytes_is_no_path():
+    class _Att:
+        mime = "image/png"
+        filename = "x.png"
+        kind = "image"
+        byte_size = 4
+        sha256 = ""
+        path = None
+        local_path = None
+
+    class _Store:
+        def get(self, mid: str):
+            return _Att()
+
+    one = resolve_one_media(_Store(), "m1")
+    assert one["skipped"] == "m1:no_path"
+    assert one["modality"] is None
