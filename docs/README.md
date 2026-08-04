@@ -3,67 +3,45 @@
 Communal digital teammate. Thin **do-loop** harness (**Stretch 1 shipped**), deeper **memory** later (Stretch 2).  
 Grok Build for loop/tools/skills ideas — not as the product skin.
 
-## Read in this order
+## Four-class hub
 
-| # | Doc | Role |
-|---|-----|------|
-| 0 | **[project-status-pass.md](project-status-pass.md)** | **Where we are now** — shipped vs not, doc drift, small prep before Grok Build / memory, self-improve chat seed |
-| 1 | **[stretch-1.md](stretch-1.md)** | **Runtime contract** — how Stretch 1 runs + done-when |
-| 2 | **[design-stretch-1-implementation.md](design-stretch-1-implementation.md)** | **Implementation design + PR plan** (historical; Stretch 1 shipped) |
-| 3 | **[engineering-principles.md](engineering-principles.md)** | **How we write code** — modules, tests, config, dogfood |
-| 4 | [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
-| 5 | [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, package VCS, search/browser/secrets/git·gh, dogfood checklist, create-tool safety |
-| 5a | [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) | **Capability growth product design** (search, browse, package VCS, secrets, workflow skills) |
-| 5b | [design-capability-growth-implementation-plan.md](design-capability-growth-implementation-plan.md) | **Capability growth execute-plan** (PR DAG, promote algorithm, acceptance) |
-| 6 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
-| 7 | [inference.md](inference.md) | llama.cpp / Vulkan / Gemma; `-c` vs sliding ~24k; **ship knobs** (temp 0.6, top_p/k, budget, hygiene, RC re-feed, hop-0 speak pin) |
-| 8 | [live-eval.md](live-eval.md) | Live 3-attempt qualitative protocol; how to run `scripts/live_eval`; A/B failure modes; continuous `S-cont-*` |
-| 9 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phases (Phase 0–3); **refresh status if it lags code** |
-| 9a | [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | **Operator notes:** SuperGrok pool vs Elyra ledger, burst, override, dogfood checklist (full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md)) |
-| 9b | **[branch-law.md](branch-law.md)** | **Normative tip law** — `working` integration tip; promote → `main`; operating pin; tags; stale stacks |
-| 9b′ | **[operating-pins.md](operating-pins.md)** | **Manual operating pin convention** (C3) — per-instance SHA record now; live pin goal on `main` promote + **v0.1**; tag reviewed at v0.1 creation (no silent tip-follow) |
-| 9c | [design-grok-build-tool.md](design-grok-build-tool.md) | Phase 1 `grok_build` host instrument design (tool not shipped yet; summary: [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md)) |
-| 10 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep (shipped on gi) |
-| 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
-| 12 | [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) | Staged sampling / hygiene (**superseded** by remove-gemma design; freeze body) |
-| 13 | [design-continuous-work-orient-ledger-reset.md](design-continuous-work-orient-ledger-reset.md) | Continuous work + orient/ledger + full reset (mostly shipped) |
-| 14 | [design-remove-gemma-local-stub.md](design-remove-gemma-local-stub.md) | Remove llama.cpp/Gemma path; stub `provider=local` (**shipped on gi**) |
-| 15 | **[design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md)** | **Next stack:** glass STT/TTS, durable attachments in/out, RO sandbox media, Grok vision/Files |
-| 16 | [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog (wake storms, usage pacing, glass polish, chat math, soften system prompt post-memory) |
-| 16a | **[promotion-discussion/README.md](promotion-discussion/README.md)** | **v0.1 promotion / gym** — pillars, meal/context, Phase 3 defer; **[governance](promotion-discussion/development-governance.md)** multi-party + operating pin ladder |
-| 16b | **[design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md)** | **In-browser xAI OIDC login** (device-code; secrets; live rebind; future grok_build access) |
-| 17 | **[stretch-2/README.md](stretch-2/README.md)** | **Stretch 2 memory** — **Phase 1 done** (caveats in known-bugs); Phase 2/2a code done (dogfood pending); Phase 3 experimental |
-| 17a | [stretch-2/inspiration-activity-model-and-storage.md](stretch-2/inspiration-activity-model-and-storage.md) | Activity model, data prototype, storage requirements |
-| 17b | [stretch-2/design-context-meal-composition.md](stretch-2/design-context-meal-composition.md) | Provisional labeled meal + slide-off |
-| 17c | [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (not goals) |
+Documents are organised by **class** (audience + role), not chronology. Prefer **code on `working`** over stale prose.
 
-**Conflict rule:** [stretch-1.md](stretch-1.md) wins for Stretch 1 runtime. Prefer **code on `working`** (integration tip; see [branch-law.md](branch-law.md)) over stale phase README status lines. Historical branch `grok-improvement` is **superseded** as tip law.  
-**Superseded (do not follow for setup):** [inference.md](inference.md), [live-eval.md](live-eval.md) Gemma/llama steps, and [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md) are historical freezes — freeze bodies stay until a docs modernization pass rewrites them.  
-**Archive:** longer research notes under [archive/](archive/) (not freeze). Memory essay: [memory-atoms.pdf](memory-atoms.pdf).
+| Class | Audience | For | Index |
+|-------|----------|-----|-------|
+| **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits | [state/README.md](state/README.md) (stub → current paths) |
+| **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why* | [goal/README.md](goal/README.md) (stub → current paths) |
+| **DESIGN / PLAN** | Implementers | Designs, PR plans, freezes (history kept) | [design/README.md](design/README.md) |
+| **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) (stub → current paths) |
+| **Archive / investigations** | Archaeology | Superseded freezes, sealed bags | [archive/](archive/) · islands below |
 
-## Stance (short)
+**Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
+**Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; mass `git mv` in later PRs).  
+**Paths in this hub are current locations** — files have not all moved into class folders yet.
 
-- **One mind**, continuous presence, single worker  
-- **Moment = one do-loop** (tools until stop) — not one tool hop  
-- **Skills = how, tools = do, goals = what, self/users = who**  
-- **Self ≠ user** (separate stores)  
-- **Voice = `speak` tool** (with transport feedback)  
-- **No language debt** — no “organs” cast; skills/tools/host jobs only  
-- **Dogfood** — created tools/skills use the same formats as builtins  
-- **Memory graph later** — Stretch 1 only emits moments + linear tapes; Stretch 2 planning on `grok-improvement-memory`  
+**Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([branch-law.md](branch-law.md)).
 
-## Stretch 1 vs Stretch 2
+---
 
-| Stretch 1 (shipped) | Stretch 2 (planning on `grok-improvement-memory`) |
-|---------------------|--------------------------------------------------|
-| Presence, wake queue, do-loops | Atomized memory; moments as groups of atoms |
-| Skills + tools + create-tool (fail-closed, PR13) | Rolling summary ladder; labeled context meal |
-| Sliding context meal | Temporal + episodic + later semantic/procedural channels |
-| Grok product path on gi | LanceDB direction; Nemotron embed runtime (Phase 2) |
+## STATE — living product behaviour
 
-Start at [stretch-2/README.md](stretch-2/README.md).
+| Doc | Role |
+|-----|------|
+| Root [README.md](../README.md) | Best operator entry — vision, harness, run, honest limits |
+| [stretch-1.md](stretch-1.md) | **Runtime contract** — how Stretch 1 runs + done-when (still law) |
+| [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
+| [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, VCS, search/browser/secrets, dogfood checklist |
+| [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
+| [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog |
+| [grok-build-dogfood.md](grok-build-dogfood.md) | Operator checklist for current Grok Build instrument |
+| [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | Operator notes: SuperGrok pool vs ledger, burst, override |
+| [stretch-2/README.md](stretch-2/README.md) | Memory phase honesty — Phase 1 done; 2/2a code done (dogfood pending); Phase 3 experimental |
+| [stretch-2/architecture/phase-1-temporal.md](stretch-2/architecture/phase-1-temporal.md) | As-implemented temporal memory manual |
+| [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) | As-implemented semantic memory manual |
+| [stretch-2/architecture/phase-2a-directed-traversal.md](stretch-2/architecture/phase-2a-directed-traversal.md) | As-implemented directed traversal manual |
+| [radeon-vii-dev/README.md](radeon-vii-dev/README.md) | Radeon VII / ROCm dogfood start path (+ NOTES / VENV / STACK) |
 
-## Run
+### Run
 
 ```bash
 ./scripts/setup_venv.sh && source .venv/bin/activate
@@ -84,12 +62,12 @@ elyra start --stub-llm   # stub LLM + UI (hermetic)
 
 **New terminal (everyday):** `cd` to repo → `source .venv/bin/activate` → `elyra start` → UI `http://127.0.0.1:8787/`.
 
-**Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): see **[radeon-vii-dev/README.md](radeon-vii-dev/README.md)** § *New terminal session — start Elyra*.
+**Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): [radeon-vii-dev/README.md](radeon-vii-dev/README.md) § *New terminal session — start Elyra*.
 
-Sandbox fitness (MSB, runners, honesty): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
+Sandbox fitness (full H1–H6 design+plan — DESIGN class): [grok-improvement-plan/harness-sandbox-fitness.md](grok-improvement-plan/harness-sandbox-fitness.md).  
 Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
 
-## Tests
+### Tests
 
 ```bash
 pytest -m 'not llm'   # default pack
@@ -100,8 +78,95 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 ```
 
 Done-when map: root [README.md](../README.md) testing section and `tests/test_stretch1_donewhen.py`.  
-Live protocol: [live-eval.md](live-eval.md). Ship knobs: [inference.md](inference.md).
+Live protocol (historical Gemma stages — freeze): [live-eval.md](live-eval.md). Ship knobs freeze: [inference.md](inference.md).
+
+---
+
+## GOAL — product direction (short north stars)
+
+| Doc | Role |
+|-----|------|
+| [promotion-discussion/README.md](promotion-discussion/README.md) | **v0.1 promotion / gym** — pillars, meal/context, Phase 3 defer (long form; short claim lands in PR3) |
+| [stretch-2/README.md](stretch-2/README.md) | Stretch 2 phase goals + status tables (also STATE honesty) |
+| [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (explicit non-deliverable) |
+| [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phase map (Phase 0–3); refresh if it lags code |
+| [memory-atoms.pdf](memory-atoms.pdf) | Philosophy reference (GOAL + STATE) |
+
+GOAL stays **short** when new pages are added (PR3); full designs stay under DESIGN.
+
+---
+
+## DESIGN / PLAN — implementers
+
+Full status-indexed catalog: **[design/README.md](design/README.md)**.
+
+| Cluster | Start | Notes |
+|---------|-------|-------|
+| **Reorg (#121)** | [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) | This taxonomy; Active |
+| Stretch 1 stack | [design-stretch-1-implementation.md](design-stretch-1-implementation.md) | Shipped; + continuous-work, post-skill, thrash, remove-gemma |
+| Capability growth | [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md) | Product design + [implementation plan](design-capability-growth-implementation-plan.md) |
+| Grok Build | [design-grok-build-tool.md](design-grok-build-tool.md) | Host instrument ([summary](design-grok-build-tool-summary.md)) |
+| Identity / glass | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) · [design-glass-multimodal-attachments.md](design-glass-multimodal-attachments.md) | Multi-user prep; multimodal next stack |
+| Usage / OAuth | [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md) · [design-xai-oauth-browser-login.md](design-xai-oauth-browser-login.md) | Pacing design; browser OIDC |
+| Board | [design-v0.1-ready-board-recategorization.md](design-v0.1-ready-board-recategorization.md) | v0.1-ready board ops |
+| Stretch 2 memory | [stretch-2/](stretch-2/) `design-*.md` | Phase designs + meal composition (DESIGN only) |
+| GI phases / harness | [grok-improvement-plan/](grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition, harness-sandbox-fitness |
+| Embed / ROCm design | [design-embed-async-encode-worker.md](design-embed-async-encode-worker.md) · [radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md](radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md) | Async encode; ROCm smoke design |
+
+**Superseded freeze (do not follow for setup):** [design-gemma-sampling-hygiene-staged.md](design-gemma-sampling-hygiene-staged.md).
+
+---
+
+## DEV — how we work
+
+| Doc | Role |
+|-----|------|
+| [engineering-principles.md](engineering-principles.md) | How we write code — modules, tests, config, dogfood |
+| [branch-law.md](branch-law.md) | **Normative tip law** — `working` integration tip; promote → `main`; pins; tags |
+| [operating-pins.md](operating-pins.md) | Manual operating pin convention (C3) |
+| [promotion-discussion/development-governance.md](promotion-discussion/development-governance.md) | Multi-party governance + operating pin ladder |
+| [known-bugs-BRANCHES.md](known-bugs-BRANCHES.md) | Historical fix-branch map (archive-leaning; not tip law) |
+
+---
+
+## Archive / investigations
+
+| Path | Role |
+|------|------|
+| [archive/](archive/) | Early research notes (reflection-*); expand criteria in later PR |
+| [project-status-pass.md](project-status-pass.md) | Stale status snapshot (archive-candidate; tip names lag) |
+| [inference.md](inference.md) | **Freeze** — Gemma/llama setup; not product path |
+| [live-eval.md](live-eval.md) | **Freeze** — live 3-attempt protocol (Gemma stages historical) |
+| [lance-debug1/](lance-debug1/) | Sealed forensic investigation (product fix outside bag) |
+| [stretch-2/meal-continuity-review/](stretch-2/meal-continuity-review/) | Meal continuity investigation package |
+| [radeon-vii-dev/freezes/](radeon-vii-dev/freezes/) | HW / pip freezes (not operator start path) |
+
+---
+
+## Stance (short)
+
+- **One mind**, continuous presence, single worker  
+- **Moment = one do-loop** (tools until stop) — not one tool hop  
+- **Skills = how, tools = do, goals = what, self/users = who**  
+- **Self ≠ user** (separate stores)  
+- **Voice = `speak` tool** (with transport feedback)  
+- **No language debt** — no “organs” cast; skills/tools/host jobs only  
+- **Dogfood** — created tools/skills use the same formats as builtins  
+- **Memory graph later** — Stretch 1 only emits moments + linear tapes; Stretch 2 planning on historical `grok-improvement-memory`
+
+## Stretch 1 vs Stretch 2
+
+| Stretch 1 (shipped) | Stretch 2 (memory) |
+|---------------------|--------------------|
+| Presence, wake queue, do-loops | Atomized memory; moments as groups of atoms |
+| Skills + tools + create-tool (fail-closed) | Rolling summary ladder; labeled context meal |
+| Sliding context meal | Temporal + episodic + later semantic/procedural channels |
+| Grok product path | LanceDB direction; Nemotron embed runtime (Phase 2) |
+
+Start at [stretch-2/README.md](stretch-2/README.md). Runtime law: [stretch-1.md](stretch-1.md).
 
 ## Status
 
-**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([branch-law.md](branch-law.md)); promote to **`main`** with full suite. Product work that lived on historical **`grok-improvement`** (Grok-by-default Phase 0, sandbox fitness, Stage B soft MC, identity draft/promote, multi-user prep, gold glass) should land / restack onto **`working`** — see [project-status-pass.md](project-status-pass.md). **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).
+**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([branch-law.md](branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).
+
+Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — Phase 0 hub (this file); physical class folders in later PRs.
