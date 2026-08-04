@@ -21,6 +21,7 @@ Grok Build for loop/tools/skills ideas — not as the product skin.
 | 9 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phases (Phase 0–3); **refresh status if it lags code** |
 | 9a | [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | **Operator notes:** SuperGrok pool vs Elyra ledger, burst, override, dogfood checklist (full design: [design-usage-tracking-supergrok-pacing.md](design-usage-tracking-supergrok-pacing.md)) |
 | 9b | **[branch-law.md](branch-law.md)** | **Normative tip law** — `working` integration tip; promote → `main`; operating pin; tags; stale stacks |
+| 9b′ | **[operating-pins.md](operating-pins.md)** | **Manual operating pin convention** (C3) — per-instance SHA record now; live pin goal on `main` promote + **v0.1**; tag reviewed at v0.1 creation (no silent tip-follow) |
 | 9c | [design-grok-build-tool.md](design-grok-build-tool.md) | Phase 1 `grok_build` host instrument design (tool not shipped yet; summary: [design-grok-build-tool-summary.md](design-grok-build-tool-summary.md)) |
 | 10 | [design-identity-self-other-multi-user.md](design-identity-self-other-multi-user.md) | Identity + multi-user prep (shipped on gi) |
 | 11 | [design-glass-aurimago-gold-polish.md](design-glass-aurimago-gold-polish.md) | Glass gold theme polish (shipped on gi) |
