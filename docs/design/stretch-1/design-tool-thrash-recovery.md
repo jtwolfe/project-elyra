@@ -9,7 +9,7 @@
 | **Product** | project-elyra (main; continuous work + skill-commit shipped) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Live refs** | Moment `cbbb29b9-7b08-4e3c-8bc0-8400d5c57521` (Create Search Tool thrash); outer re-wake `9d95001c-2b5f-46f6-a067-c912c1b961c9` |
-| **Prior art** | `docs/design/stretch-1/design-post-skill-commitment.md`, `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md`, `docs/dev/engineering-principles.md`, `docs/stretch-1.md` |
+| **Prior art** | `docs/design/stretch-1/design-post-skill-commitment.md`, `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md`, `docs/dev/engineering-principles.md`, `docs/state/stretch-1.md` |
 
 ---
 
@@ -1153,11 +1153,11 @@ PR1 (A) ──► PR2 (B + K15) ──► PR3 (lessons)
 | Doc | Why |
 |-----|-----|
 | [`docs/dev/engineering-principles.md`](../../dev/engineering-principles.md) | Modular packages; tests as feature; defaults over flags; prefer deleting recovery lattices; honest tool errors |
-| [`docs/stretch-1.md`](../../stretch-1.md) | Single worker; do-loop; speak-only; skills on load; hop not main stop law |
+| [`docs/state/stretch-1.md`](../../state/stretch-1.md) | Single worker; do-loop; speak-only; skills on load; hop not main stop law |
 | [`docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md`](design-continuous-work-orient-ledger-reset.md) | work_continue HOST; moment_continue; tools_ran definition; flood gates |
 | [`docs/design/stretch-1/design-post-skill-commitment.md`](design-post-skill-commitment.md) | Free-text order; skill_commit pure policy pattern; playbook framing |
 | [`docs/inference.md`](../../inference.md) | Gemma-4-12B local; sliding meal; generation headroom |
-| [`docs/tools-and-skills.md`](../../tools-and-skills.md) | create-tool fail-closed; drafts not callable |
+| [`docs/state/tools-and-skills.md`](../../state/tools-and-skills.md) | create-tool fail-closed; drafts not callable |
 | [`docs/live-eval.md`](../../live-eval.md) | Eval harness for dogfood cells |
 | Code: `elyra/loop/doloop.py` | Free-text inject; tool batch; serialize_tool_result |
 | Code: `elyra/loop/skill_commit_policy.py` | Peer pure policy shape |

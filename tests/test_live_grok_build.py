@@ -12,7 +12,7 @@ Enable skeletons (still no heavy Grok spend by default)::
 
 Default tests only exercise **discover** (``find_grok_binary`` / bundled seed)
 and pure **validate** dry-runs. Full mode spawns (prompt/design/… ) stay
-**operator checklist** work — see ``docs/grok-build-dogfood.md``.
+**operator checklist** work — see ``docs/state/grok-build-dogfood.md``.
 **No** dedicated smoke script; checklist only.
 
 Dogfood matrix D1–D13 (normative design table):

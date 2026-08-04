@@ -91,7 +91,7 @@ elyra start (supervisor)
 | **Sandbox** | Host tree `sandboxes/sandbox0/`; guest exec when isolation on (default) |
 | **Glass UI** | Chat, wait choices, goals, moments, memory, tools, identity, status |
 
-Inference notes, meal budget, and SuperGrok pacing: [docs/inference.md](docs/inference.md) (historical freeze for *setup*—use this README + current start path), [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md), [docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md](docs/grok-improvement-plan/usage-tracking-supergrok-pacing.md).
+Inference notes, meal budget, and SuperGrok pacing: [docs/inference.md](docs/inference.md) (historical freeze for *setup*—use this README + current start path), [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md), [docs/state/usage-and-pacing.md](docs/state/usage-and-pacing.md). Architecture map: [docs/state/architecture.md](docs/state/architecture.md).
 
 Memory philosophy reference: [docs/memory-atoms.pdf](docs/memory-atoms.pdf) (*What is wrong with my memory?*).
 
@@ -185,7 +185,7 @@ python -c "import playwright; print('browser extra OK')"    # after .[browser]
 ./scripts/setup-microsandbox.sh --doctor-only
 ```
 
-Catalog, dogfood checklist, secrets/git notes: [docs/tools-and-skills.md](docs/tools-and-skills.md).
+Catalog, dogfood checklist, secrets/git notes: [docs/state/tools-and-skills.md](docs/state/tools-and-skills.md).
 
 ---
 
@@ -243,7 +243,9 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 
 ### Stretch 1 done-when regression
 
-`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests. See [docs/stretch-1.md](docs/stretch-1.md).
+`tests/test_stretch1_donewhen.py` maps freeze **Done when** claims → covering tests. See [docs/state/stretch-1.md](docs/state/stretch-1.md).
+
+create-tool / create-skill fail-closed is covered by **PR13** gates in `tests/test_create_tool_gates.py` (not deferred hardening).
 
 ---
 
@@ -252,12 +254,13 @@ python scripts/live_eval/run_stage.py --stage 0 --all-scenarios --tries 3
 | Doc | Role |
 |-----|------|
 | [docs/project-status-pass.md](docs/project-status-pass.md) | Status snapshot (may lag code—prefer recent issues/board) |
-| [docs/stretch-1.md](docs/stretch-1.md) | Runtime contract + done-when |
-| [docs/stretch-2/README.md](docs/stretch-2/README.md) | Memory / Stretch 2 index |
+| [docs/state/architecture.md](docs/state/architecture.md) | As-implemented architecture map |
+| [docs/state/stretch-1.md](docs/state/stretch-1.md) | Runtime contract + done-when |
+| [docs/state/memory/README.md](docs/state/memory/README.md) | Memory / Stretch 2 index |
 | [docs/dev/engineering-principles.md](docs/dev/engineering-principles.md) | How we build |
-| [docs/overview.md](docs/overview.md) | Glossary |
-| [docs/time-and-identity.md](docs/time-and-identity.md) | Self ≠ user; draft/promote |
-| [docs/tools-and-skills.md](docs/tools-and-skills.md) | Packages, search/browser/secrets/git·gh, dogfood checklist |
+| [docs/state/overview.md](docs/state/overview.md) | Glossary |
+| [docs/state/time-and-identity.md](docs/state/time-and-identity.md) | Self ≠ user; draft/promote |
+| [docs/state/tools-and-skills.md](docs/state/tools-and-skills.md) | Packages, search/browser/secrets/git·gh, dogfood checklist |
 | [docs/memory-atoms.pdf](docs/memory-atoms.pdf) | Memory philosophy (*What is wrong with my memory?*) |
 | [docs/grok-improvement-plan/README.md](docs/grok-improvement-plan/README.md) | Grok migration / dogfood phases |
 | [docs/README.md](docs/README.md) | Full index |

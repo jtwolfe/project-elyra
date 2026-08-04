@@ -80,7 +80,7 @@ Do not scatter raw Lance or Cypher calls through `loop/` or `presence/`.
 - [ ] Edge table + 2-hop expand (Python and, if available, Cypher)
 - [ ] Simulate continuous append + index optimize behaviour
 - [ ] Confirm wheel install on operator Linux (and CI CPU)
-- [ ] Record results under `docs/stretch-2/architecture/` or a spike note linked from this file
+- [ ] Record results under `docs/state/memory/architecture/` or a spike note linked from this file
 
 ## Relation to Phase 1 PR8 / glass Memory page
 

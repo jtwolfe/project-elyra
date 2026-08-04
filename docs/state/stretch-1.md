@@ -1,5 +1,12 @@
 # Stretch 1 — runtime contract
 
+| Field | Value |
+|-------|--------|
+| **Class** | STATE |
+| **Status** | **Shipped** (still law for behaviour) |
+| **Path** | `docs/state/stretch-1.md` (basename kept; #121 PR4) |
+| **Prefer** | Code on `working` if conflict |
+
 **Status:** **Shipped.** Build freeze still law for behaviour; implementers use this as the runtime contract.  
 **Supersedes** archive notes and older wording on hop caps, pre-stage skills, or fused wake/goals.
 
@@ -121,13 +128,13 @@ Queue order (simple bands): user/interjection > wait timeout > timer > task read
 - **Drafts vs staged tools:** host `tools/drafts/` is growth-tool-only (not visible via sandbox FS). Sandbox `tools/` holds staged runtime copies for promoted/bundled packages and verify (`.verify/`); not the draft tree.
 - Simple storage (jsonl/sqlite): moments, beats, goals, users, wakes — **migratable to Lance later**.
 - No Stretch 2 graph schema in Stretch 1.
-- Isolation design + install: [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md); operator doctor: `scripts/setup-microsandbox.sh`.
+- Isolation design + install: [design/capability/harness-sandbox-fitness.md](../design/capability/harness-sandbox-fitness.md); operator doctor: `scripts/setup-microsandbox.sh`.
 
 ---
 
 ## 8. Inference
 
-Details: [inference.md](inference.md).
+Details: [inference.md](../inference.md).
 
 - Gemma 4 Q4 + llama.cpp **Vulkan** from elyra2 `model/` (symlink OK).  
 - Server may use large `-c` (elyra2 used **86000**); that is **KV ceiling**, not every-prompt size.  
@@ -168,7 +175,7 @@ Formats: [tools-and-skills.md](tools-and-skills.md).
 
 Default **OFF**. When enabled (Glass / `PATCH /api/continuous`), presence may inject a budgeted in-moment work-continue HOST and, after finalize with non-speak progress + open work, enqueue a gated `moment_continue` wake. Prefer *pending* `task_ready` only — never re-arm ready tasks. Distinct from time-idle continue (`continue_policy.py`).
 
-Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](design/stretch-1/design-continuous-work-orient-ledger-reset.md).
+Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](../design/stretch-1/design-continuous-work-orient-ledger-reset.md).
 
 ---
 

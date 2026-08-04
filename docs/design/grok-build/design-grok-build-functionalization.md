@@ -11,7 +11,7 @@
 | **Tracks** | Issue #109 follow-on; live dogfood job `fdaf572ce9454bc299b2e246330e4d8f` |
 | **Stack base (normative)** | `feature/grok-build-tool` (~`407e4af`) |
 | **Completion tip (normative)** | `feature/grok-build-tool` (merge-down / restack; **not** `main`, not house `working` tip law change) |
-| **Related** | [docs/design/grok-build/design-grok-build-tool.md](design-grok-build-tool.md), [docs/dev/branch-law.md](../../dev/branch-law.md), [docs/grok-build-dogfood.md](../../grok-build-dogfood.md), [docs/design/grok-build/grok-build-headless-spike.md](grok-build-headless-spike.md), Grok 0.2.118 user-guide `02-authentication.md` |
+| **Related** | [docs/design/grok-build/design-grok-build-tool.md](design-grok-build-tool.md), [docs/dev/branch-law.md](../../dev/branch-law.md), [docs/state/grok-build-dogfood.md](../../state/grok-build-dogfood.md), [docs/design/grok-build/grok-build-headless-spike.md](grok-build-headless-spike.md), Grok 0.2.118 user-guide `02-authentication.md` |
 | **Revised** | 2026-08-03 (review a7f29241; auth-classifier false-positive gate) |
 
 ---
@@ -41,8 +41,8 @@ The failing implement job (`fdaf572ce9454bc299b2e246330e4d8f`) exposed three tig
 | Finalize status | `resolve_status_from_harvest`: `exit_code not in (0, None)` → failed; **`None` treated like success** | `result.py` |
 | Async redaction | Sync `_finalize_sync` passes `known_values`; reaper `finalize_job` calls **never** pass `known_values` | `grok_build.py`, `reaper.py` |
 | deep_research | `DEEP_RESEARCH_EXPERIMENTAL = True` → fail-closed `mode_experimental` | `modes.py` |
-| Dogfood | D1–D13 all unchecked; D3+D6 gate PR8 → `working` (later) | `docs/grok-build-dogfood.md` |
-| Catalog docs | `docs/tools-and-skills.md` still says Phase 1 not in surface | Stale |
+| Dogfood | D1–D13 all unchecked; D3+D6 gate PR8 → `working` (later) | `docs/state/grok-build-dogfood.md` |
+| Catalog docs | `docs/state/tools-and-skills.md` still says Phase 1 not in surface | Stale |
 
 ### Live dogfood failure (2026-08-03, job `fdaf572ce9454bc299b2e246330e4d8f`)
 
@@ -751,10 +751,10 @@ If a **later** dogfood burn still shows PE thrash on relative cwd, a follow-on P
 
 | Doc | Update |
 |------|--------|
-| `docs/tools-and-skills.md` | Remove “Phase 1 not in surface”; state callable on feature tip with dogfood caveats |
-| `docs/grok-build-dogfood.md` | Note auth seed + zombie fixes; pin Grok 0.2.118; keep D3/D6 PR8 gate; require D1 on advanced feature tip before PR8 discussion |
+| `docs/state/tools-and-skills.md` | Remove “Phase 1 not in surface”; state callable on feature tip with dogfood caveats |
+| `docs/state/grok-build-dogfood.md` | Note auth seed + zombie fixes; pin Grok 0.2.118; keep D3/D6 PR8 gate; require D1 on advanced feature tip before PR8 discussion |
 | `docs/design/grok-build/design-grok-build-tool.md` | Optional short “Post-dogfood errata” pointer to this design (or leave Phase 1 doc historical and land this as sibling) |
-| `docs/known-bugs.md` / `known-bugs-BRANCHES.md` | Optional entries for residual execute_plan base-branch prose risk; deep_research experimental |
+| `docs/state/known-bugs.md` / `known-bugs-BRANCHES.md` | Optional entries for residual execute_plan base-branch prose risk; deep_research experimental |
 
 ### 5. Dogfood / smoke path
 
@@ -913,7 +913,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 
 1. ~~Single mint vs double mint?~~ **Resolved: KD-F13** — single `ensure_fresh_access`; pass both fields into seed.
 2. ~~ISO format?~~ **Resolved: KD-F18** — `YYYY-MM-DDTHH:MM:SSZ` via existing oauth helpers.
-3. ~~Smoke script vs dogfood checklist?~~ **Resolved (operator decision):** **dogfood checklist only**. Do **not** ship `scripts/smoke_grok_build_auth.py` (or equivalent) in this workstream unless a later explicit request. Operator path = hermetic pytest + `docs/grok-build-dogfood.md` / live checklist (D1 on advanced tip).
+3. ~~Smoke script vs dogfood checklist?~~ **Resolved (operator decision):** **dogfood checklist only**. Do **not** ship `scripts/smoke_grok_build_auth.py` (or equivalent) in this workstream unless a later explicit request. Operator path = hermetic pytest + `docs/state/grok-build-dogfood.md` / live checklist (D1 on advanced tip).
 4. ~~Optional cwd resolver in PR-C?~~ **Resolved: deferred** (§3.3).
 5. ~~Who owns D3/D6 H-spine dogfood after tip lands?~~ **Resolved (operator decision):** **Operator / product later**. D3/D6 remain **out of this design’s hard gate**; schedule only after D1 is green on the advanced `feature/grok-build-tool` tip. Not a deliverable of PR-A–E.
 
@@ -928,7 +928,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 | Reaper classify + redaction + death finalize | `elyra/instrument/reaper.py` (`classify_instrument_failure` may live here or `result.py`), `tests/test_instrument_reaper.py` |
 | Harvest status interaction | `elyra/instrument/result.py` only if needed; prefer death-path exit_code discipline |
 | Skills / TOOL | `tools/bundled/grok_build/TOOL.md`, `skills/bundled/self-improve/SKILL.md`, `skills/bundled/github-workflow/SKILL.md` |
-| Docs | `docs/tools-and-skills.md`, `docs/grok-build-dogfood.md`, optional known-bugs |
+| Docs | `docs/state/tools-and-skills.md`, `docs/state/grok-build-dogfood.md`, optional known-bugs |
 | Live notes | `tests/test_live_grok_build.py` comments for D1 path |
 
 ### 14. Test plan (summary)
@@ -963,7 +963,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 
 - Phase 1 design: `docs/design/grok-build/design-grok-build-tool.md` (KD4, KD5, KD5b, KD11, KD16) — PE assumed provider cold-start under isolated `GROK_HOME`
 - Branch law (house): `docs/dev/branch-law.md` — `working` integration tip; **this workstream tip is `feature/grok-build-tool`**
-- Dogfood: `docs/grok-build-dogfood.md`
+- Dogfood: `docs/state/grok-build-dogfood.md`
 - Headless spike: `docs/design/grok-build/grok-build-headless-spike.md`
 - Code: `elyra/instrument/{auth_handoff,auth_provider,process,jobs,reaper,result}.py`, `elyra/tools/builtin/grok_build.py`, `elyra/secrets/inject.py`, `elyra/llm/{xai_oauth,auth}.py`
 - Live failure: `data/runtime/grok_build/fdaf572ce9454bc299b2e246330e4d8f/` (meta, stdout/stderr, unified.jsonl, zombie pid 155488; verified)
@@ -1016,7 +1016,7 @@ feature/grok-build-tool          ← stack base AND completion tip
 | **Title** | `docs: grok_build dogfood truth + tools-and-skills surface` |
 | **Base branch** | stack tip after PR-C (or base if docs-only parallel) |
 | **Branch name** | `fix/gb-dogfood-docs` |
-| **Files / components** | `docs/tools-and-skills.md`, `docs/grok-build-dogfood.md`, optional `docs/known-bugs.md`, `tests/test_live_grok_build.py` checklist comments, optional pointer from `docs/design/grok-build/design-grok-build-tool.md` |
+| **Files / components** | `docs/state/tools-and-skills.md`, `docs/state/grok-build-dogfood.md`, optional `docs/state/known-bugs.md`, `tests/test_live_grok_build.py` checklist comments, optional pointer from `docs/design/grok-build/design-grok-build-tool.md` |
 | **Dependencies** | Prefer after A–C so docs match behavior |
 | **Description** | Remove stale “not in surface” prose; document auth seed + zombie/finalize fixes; pin Grok 0.2.118; restate dogfood gates (D1 required on advanced tip before PR8 discussion; D3/D6 still PR8 later and operator/product-owned after D1; D7 experimental). **No** `scripts/smoke_grok_build_auth.py` — checklist-only. |
 

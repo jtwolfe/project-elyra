@@ -62,7 +62,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 | [design-capability-growth-implementation-plan.md](capability/design-capability-growth-implementation-plan.md) | Shipped | Execute-plan PR DAG + promote algorithm |
 | [design-capability-integrity-run-search-browser-sandbox.md](capability/design-capability-integrity-run-search-browser-sandbox.md) | Draft/shipped mix | Integrity stack |
 | [design-guest-package-stage-reliability.md](capability/design-guest-package-stage-reliability.md) | Draft/shipped mix | Guest package stage-once gate |
-| [harness-sandbox-fitness.md](capability/harness-sandbox-fitness.md) | **Shipped** | Full H1–H6 design+plan (KD14; short STATE checklist extract in PR4) |
+| [harness-sandbox-fitness.md](capability/harness-sandbox-fitness.md) | **Shipped** | Full H1–H6 design+plan (KD14; short STATE checklist: [sandbox-fitness-checklist.md](../state/sandbox-fitness-checklist.md)) |
 
 ---
 
@@ -104,7 +104,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 ## memory/
 
-Stretch-2 memory designs (PR2b / KD4). Architecture manuals remain under `docs/stretch-2/architecture/` until **PR4** (STATE).
+Stretch-2 memory designs (PR2b / KD4). Architecture manuals: [docs/state/memory/architecture/](../state/memory/architecture/) (PR4 STATE).
 
 | Doc | Status | Notes |
 |-----|--------|-------|
@@ -133,7 +133,7 @@ Stretch-2 memory designs (PR2b / KD4). Architecture manuals remain under `docs/s
 
 ## grok-improvement-plan/ (phase designs — PR2c)
 
-GI README (short phase map / history) stays under [../grok-improvement-plan/README.md](../grok-improvement-plan/README.md). Operator usage notes stay STATE until PR4: [usage-tracking-supergrok-pacing.md](../grok-improvement-plan/usage-tracking-supergrok-pacing.md).
+GI README (short phase map / history) stays under [../grok-improvement-plan/README.md](../grok-improvement-plan/README.md). Operator usage notes: [usage-and-pacing.md](../state/usage-and-pacing.md).
 
 | Doc | Status | Notes |
 |-----|--------|-------|

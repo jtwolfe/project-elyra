@@ -883,7 +883,7 @@ Each PR: independently reviewable; base `working` (or stack on previous). Branch
 - Root [README.md](../../README.md) — best current STATE entry
 - [docs/dev/engineering-principles.md](../dev/engineering-principles.md) §9 development structure
 - [docs/dev/branch-law.md](../dev/branch-law.md), [docs/dev/operating-pins.md](../dev/operating-pins.md)
-- [docs/stretch-2/README.md](../stretch-2/README.md) — architecture vs design split precedent
+- [docs/state/memory/README.md](../state/memory/README.md) — architecture vs design split precedent (STATE after PR4)
 - [docs/design/stretch-1/design-remove-gemma-local-stub.md](stretch-1/design-remove-gemma-local-stub.md) — freeze non-edit precedent + inventory table
 - [docs/lance-debug1/README.md](../lance-debug1/README.md) — sealed investigation pattern
 - [docs/archive/README.md](../archive/README.md) — existing archive pattern

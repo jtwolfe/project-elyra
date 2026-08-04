@@ -14,14 +14,14 @@
 | **Philosophy** | [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) |
 | **Baseline** | [`inspiration-activity-model-and-storage.md`](inspiration-activity-model-and-storage.md) |
 | **Prior sketches** | [`design-phase-2-semantic.md`](design-phase-2-semantic.md), [`design-nemotron-runtime.md`](design-nemotron-runtime.md), [`design-database-choices.md`](design-database-choices.md), [`design-context-meal-composition.md`](design-context-meal-composition.md) |
-| **Phase 1 patterns** | [`design-phase-1-implementation.md`](design-phase-1-implementation.md), [`architecture/phase-1-temporal.md`](../../stretch-2/architecture/phase-1-temporal.md) |
+| **Phase 1 patterns** | [`design-phase-1-implementation.md`](design-phase-1-implementation.md), [`architecture/phase-1-temporal.md`](../../state/memory/architecture/phase-1-temporal.md) |
 | **Boundary** | Phase 2a directed traversal is **out of scope** ([`design-phase-2a-directed-traversal.md`](design-phase-2a-directed-traversal.md)) |
 
-> **Historical:** this document is the Phase 2 **PR1–PR9** ship design. Product-path rectification (joint-for-single, `auto` channel, Lance-native search, meal/Vectors honesty) is owned by **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — do not rewrite this file for R1–R5 behaviour; update [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) instead.
+> **Historical:** this document is the Phase 2 **PR1–PR9** ship design. Product-path rectification (joint-for-single, `auto` channel, Lance-native search, meal/Vectors honesty) is owned by **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — do not rewrite this file for R1–R5 behaviour; update [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md) instead.
 
 This document **supersedes the short Phase 2 outline** (`design-phase-2-semantic.md`) for the original implementation stack. Where it resolves open questions from that sketch and the Nemotron runtime note, resolutions appear under **Key Decisions** with rationale. Soft influences from `philosophical-soft-guidance.md` inform judgment only; they are not deliverables.
 
-Deferred polish bugs in [`docs/known-bugs.md`](../../known-bugs.md) (glass beautify, system prompt soften, status bugs, etc.) are **not** Phase 2 scope unless they block semantic work.
+Deferred polish bugs in [`docs/state/known-bugs.md`](../../state/known-bugs.md) (glass beautify, system prompt soften, status bugs, etc.) are **not** Phase 2 scope unless they block semantic work.
 
 ---
 
@@ -100,7 +100,7 @@ The essay’s associative weave is not temporal sequence. Semantic memory should
 6. **Meal semantic channel**: budgeted; cut supports before spine; dedup by `atom_id`.
 7. **Async encode**: never blocks do-loop; queue; graceful omit if model unavailable.
 8. **Vectors glass tab** — encode status, neighbor inspect, simple projection optional; not theater scatter without data.
-9. **Architecture note** `docs/stretch-2/architecture/phase-2-semantic.md` (structure + activity map + invariants + failure modes).
+9. **Architecture note** `docs/state/memory/architecture/phase-2-semantic.md` (structure + activity map + invariants + failure modes).
 10. **Phase 1 regression**: flags off / mock missing → identical temporal/episodic behaviour.
 
 ### Non-goals (Phase 2)
@@ -210,7 +210,7 @@ tests/
   # optional:
   test_memory_embed_nemotron.py     # @pytest.mark.gpu / memory_embed
 
-docs/stretch-2/architecture/
+docs/state/memory/architecture/
   phase-2-semantic.md               # post-ship concept map (done criterion)
   spikes/                           # optional spike notes (Nemotron, ANN freshness)
 ```
@@ -359,7 +359,7 @@ Today `LanceMemoryStore._upsert_row` builds a **scalar-only** row via `_row_for_
 
 Operator dogfood already has Phase 1 Lance tables under `data/memory/lance/` with fixed `_STRING_COLS` schema and **no** additive migration code today.
 
-1. **Pre-PR3 spike note (merge gate for PR3):** under `docs/stretch-2/architecture/spikes/lance-emb-migration.md` name the exact LanceDB API for pinned `lancedb>=0.20,<0.21` (e.g. `table.add_columns` / schema evolve / recreate+copy), open-time steps, and measured behaviour on a copy of dogfood data.
+1. **Pre-PR3 spike note (merge gate for PR3):** under `docs/state/memory/architecture/spikes/lance-emb-migration.md` name the exact LanceDB API for pinned `lancedb>=0.20,<0.21` (e.g. `table.add_columns` / schema evolve / recreate+copy), open-time steps, and measured behaviour on a copy of dogfood data.
 2. **Open-time migration algorithm (normative skeleton; spike fills API names):**
    1. Connect to `lance/`; open `atoms` if present.
    2. Inspect schema; if all emb columns present and `meta.json.vector_schema_version >= 1` → continue.
@@ -1022,7 +1022,7 @@ Graph tab remains stub (`phase: "2a"`).
 
 ### Spike checklist
 
-Record under `docs/stretch-2/architecture/spikes/` (or linked notes).
+Record under `docs/state/memory/architecture/spikes/` (or linked notes).
 
 #### Gate A — before **PR3 merge** (Lance emb migration)
 
@@ -1030,7 +1030,7 @@ Record under `docs/stretch-2/architecture/spikes/` (or linked notes).
 - [ ] Open Phase 1 table fixture → migrate → round-trip scalar atoms unchanged
 - [ ] Prove scalar `put_atom`/`update_links` **preserve** emb columns after vectors written
 - [ ] Fail-closed path: migration error → index not ok; scalar store still usable when possible
-- [ ] Write `docs/stretch-2/architecture/spikes/lance-emb-migration.md`
+- [ ] Write `docs/state/memory/architecture/spikes/lance-emb-migration.md`
 
 #### Gate B — before **default-on** (`semantic_enabled=true` as product default)
 
@@ -1151,7 +1151,7 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests remain skip-i
 
 ### Architecture note obligation (done criterion)
 
-Ship `docs/stretch-2/architecture/phase-2-semantic.md` containing:
+Ship `docs/state/memory/architecture/phase-2-semantic.md` containing:
 
 1. **Structure map** — EmbeddingSet, ANN, parcels, semantic meal ↔ essay terms.
 2. **Activity map** — §3.1 multi-embeddings, §3.4 semantic activities live vs not.
@@ -1275,14 +1275,14 @@ All items below are **Resolved (operator 2026-07-28 — accept defaults)**. No f
 ## References
 
 - `docs/memory-atoms.pdf` — philosophy
-- `docs/stretch-2/README.md` — phase overview, Phase 1 close-out
+- `docs/state/memory/README.md` — phase overview, Phase 1 close-out
 - `docs/stretch-2/inspiration-activity-model-and-storage.md` — activities §3.4 + logical emb_* columns
 - `docs/stretch-2/design-phase-2-semantic.md` — short Phase 2 sketch
 - `docs/stretch-2/design-nemotron-runtime.md` — portable encode contract
 - `docs/stretch-2/design-database-choices.md` — Lance ANN, interface rule, freshness
 - `docs/stretch-2/design-context-meal-composition.md` — supporting channel + cut order
 - `docs/stretch-2/design-phase-1-implementation.md` — patterns, PR packaging, KDs
-- `docs/stretch-2/architecture/phase-1-temporal.md` — shipped Phase 1
+- `docs/state/memory/architecture/phase-1-temporal.md` — shipped Phase 1
 - `docs/stretch-2/design-phase-2a-directed-traversal.md` — boundary
 - `docs/dev/engineering-principles.md` — modularity, tests, config
 - Code: `elyra/memory/*`, `elyra/presence/worker.py`, `elyra/settings.py`, `elyra/runtime/api.py`, `elyra/runtime/web/*`, `tests/test_memory_*`
@@ -1332,7 +1332,7 @@ Ordered stack for `/execute-plan`. Each PR independently reviewable; defaults ke
 |-------|--------|
 | **Title** | `feat(memory): Lance emb columns, migration, EmbeddingIndex` |
 | **Depends on** | PR2 (`list_atoms` already present); **Gate A migration spike note must land with or before this PR** |
-| **Files** | `elyra/memory/lance_store.py` (migration, preserve emb on scalar upsert, `upsert_vectors`), `elyra/memory/index.py`, `elyra/memory/jsonl_store.py` (health vectors=false only if needed), `docs/stretch-2/architecture/spikes/lance-emb-migration.md`, `tests/test_memory_index.py`, extend `test_memory_store_lance.py` |
+| **Files** | `elyra/memory/lance_store.py` (migration, preserve emb on scalar upsert, `upsert_vectors`), `elyra/memory/index.py`, `elyra/memory/jsonl_store.py` (health vectors=false only if needed), `docs/state/memory/architecture/spikes/lance-emb-migration.md`, `tests/test_memory_index.py`, extend `test_memory_store_lance.py` |
 | **Description** | Additive schema migration for existing Phase 1 tables; `meta.json` `vector_schema_version`; dedicated vector upsert; **acceptance: encode → promote link prev → prev vectors intact**; filtered search primitives; `NullEmbeddingIndex` / `MemoryEmbeddingIndex` for CI. `ready` means index has vectors. No meal channel yet. |
 
 ### PR4 — ANN freshness policy + optimize job
@@ -1377,7 +1377,7 @@ Ordered stack for `/execute-plan`. Each PR independently reviewable; defaults ke
 |-------|--------|
 | **Title** | `feat(memory): Omni-Embed-Nemotron portable runtime` |
 | **Depends on** | PR1–PR2 only (can land **in parallel** with PR3–PR7 once Nemotron spike allows); Gate B before default-on |
-| **Files** | `elyra/memory/embed/runtime.py`, `encode.py` (full media matrix), `pyproject.toml` (`memory-embed` extra), optional `tests/test_memory_embed_nemotron.py` (`@pytest.mark.gpu`), spike note under `docs/stretch-2/architecture/spikes/` |
+| **Files** | `elyra/memory/embed/runtime.py`, `encode.py` (full media matrix), `pyproject.toml` (`memory-embed` extra), optional `tests/test_memory_embed_nemotron.py` (`@pytest.mark.gpu`), spike note under `docs/state/memory/architecture/spikes/` |
 | **Description** | Device select CUDA/ROCm/CPU; load pinned model; wire `embed_backend=nemotron`. Graceful fail → mock/unavailable. **Does not** flip default flags on. Dogfood B (vectors fill offline) needs PR3–4 + this PR before quality meal dogfood. |
 
 ### PR9 — Architecture note + program docs
@@ -1386,7 +1386,7 @@ Ordered stack for `/execute-plan`. Each PR independently reviewable; defaults ke
 |-------|--------|
 | **Title** | `docs(memory): Phase 2 semantic architecture note` |
 | **Depends on** | PR6–PR7 (APIs stable); PR8 if Nemotron landed, else document mock-first |
-| **Files** | `docs/stretch-2/architecture/phase-2-semantic.md`, light `docs/stretch-2/README.md` status, pointer from `design-phase-2-semantic.md` |
+| **Files** | `docs/state/memory/architecture/phase-2-semantic.md`, light `docs/state/memory/README.md` status, pointer from `design-phase-2-semantic.md` |
 | **Description** | Structure/activity maps, invariants (preserve emb, select timeout, hooks), failure modes, glossary, freshness + migration as shipped. Satisfies Stretch 2 documentation obligation. |
 
 ### Packaging vs Stretch 2 phases

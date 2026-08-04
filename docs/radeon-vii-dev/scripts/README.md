@@ -2,7 +2,7 @@
 
 **Purpose:** Prove HIP torch + gfx906 matmul + Nemotron encode **outside** the presence worker, encode queue, and meal path.  
 **Design:** [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) §4  
-**Runbook:** [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md)
+**Runbook:** [VENV-ROCM-SWITCH.md](../../state/radeon-vii/VENV-ROCM-SWITCH.md)
 
 **Status:** Scripts present (`00` / `01` / `02` / `03` / `_common.py`). On LuxPrimata after ROCm venv + **gfx906 Tensile inject**, A1–A7 green (2026-07-29). On cu130 (pre-swap) they **fail closed** (exit 2).
 
@@ -184,7 +184,7 @@ from elyra.memory.embed.types import EMBED_DIM  # 2048
 
 | Doc | Why |
 |-----|-----|
-| [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md) | Install/purge/rollback before scripts matter |
+| [VENV-ROCM-SWITCH.md](../../state/radeon-vii/VENV-ROCM-SWITCH.md) | Install/purge/rollback before scripts matter |
 | [freezes/README.md](../freezes/README.md) | Host freezes after A1–A5 |
 | design §4.3 / G1–G9 | Normative assert table |
 | BUG-mem-gpu-01 | Partial evidence only; bug stays Open |

@@ -212,7 +212,7 @@ docs/lance-debug1/
 └── BUG-DOSSIER.md                     # Final consolidated bug description (exit artifact)
 ```
 
-**Isolation rule:** nothing under `docs/lance-debug1/` is a stretch-2 architecture normative doc. Optional footer in `README.md` may link *to* `docs/stretch-2/architecture/phase-2-semantic.md` and `docs/known-bugs.md` for context; stretch-2 docs are not updated until a deliberate promotion PR after the dossier is accepted.
+**Isolation rule:** nothing under `docs/lance-debug1/` is a stretch-2 architecture normative doc. Optional footer in `README.md` may link *to* `docs/state/memory/architecture/phase-2-semantic.md` and `docs/state/known-bugs.md` for context; stretch-2 docs are not updated until a deliberate promotion PR after the dossier is accepted.
 
 ### Quarantine layout (mandatory for store open)
 
@@ -1010,8 +1010,8 @@ If **P01** establishes H1a+H1b high-confidence and **P02** establishes H2 (proce
 | `elyra/memory/promote.py` | Sequential weave `_link_and_put` |
 | `elyra/presence/worker.py` | `_ensure_memory_store`, encode hooks |
 | `elyra/runtime/api.py` | `_get_memory_*` glass endpoints |
-| `docs/known-bugs.md` | BUG-wake-02, BUG-mem-gpu-01 |
-| `docs/stretch-2/architecture/phase-2-semantic.md` | Semantic architecture (reference only) |
+| `docs/state/known-bugs.md` | BUG-wake-02, BUG-mem-gpu-01 |
+| `docs/state/memory/architecture/phase-2-semantic.md` | Semantic architecture (reference only) |
 | `docs/design/memory/spikes/lance-emb-migration.md` | Migration also uses `to_arrow` |
 | `pyproject.toml` | `lancedb>=0.20,<0.21` |
 

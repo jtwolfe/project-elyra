@@ -42,7 +42,7 @@ This document proposes a **lowest-effort-first, adaptive procedural plan**: **pu
 | Social no-speak | `doloop.NO_SPEAK_NUDGE` + `social_wake` | One host nudge, then `no_tools` |
 | Live LLM tests | `@pytest.mark.llm` in `tests/test_doloop.py`, `tests/test_llm_client_tools.py` | Smoke only; often pin `tool_choice` + `temperature=0.1`, `reasoning=False` |
 
-Contract reminders from Stretch 1 (`docs/stretch-1.md` §3): store reasoning on the moment tape; **default no resend after the multi-tool chain ends**; **in-turn tool hops keep RC if the provider requires it** for continuous sampling; user-visible never.
+Contract reminders from Stretch 1 (`docs/state/stretch-1.md` §3): store reasoning on the moment tape; **default no resend after the multi-tool chain ends**; **in-turn tool hops keep RC if the provider requires it** for continuous sampling; user-visible never.
 
 Inference defaults (`docs/inference.md`): temp ~0.2 “until tuned”; Gemma card truncation and elyra2 class temps were never applied to greenfield.
 
@@ -869,7 +869,7 @@ No new metrics backend required for P0; structured logs + moment tape suffice.
 - `elyra/settings.py` — loop knobs (no LLM sampling section yet)
 - `skills/bundled/talk/SKILL.md` — social speak rules
 - `tools/bundled/speak/TOOL.md` — glass write contract
-- `docs/inference.md`, `docs/stretch-1.md` §3, `docs/dev/engineering-principles.md`
+- `docs/inference.md`, `docs/state/stretch-1.md` §3, `docs/dev/engineering-principles.md`
 - `tests/test_doloop.py`, `tests/test_llm_client_tools.py` — `@pytest.mark.llm` smokes
 
 ### Prior art (aurimago/project-elyra2)

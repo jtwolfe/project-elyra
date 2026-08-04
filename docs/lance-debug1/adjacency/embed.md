@@ -47,7 +47,7 @@ Default dogfood expectation: **disconfirmed**.
 | Missing atoms on disk full APIs | **not** explained by H11 |
 | Thin seeds + slow expand | both can co-exist; different root classes |
 
-Cross-link: `docs/known-bugs.md` **BUG-mem-gpu-01**. Do not re-home GPU fix into lance-debug1.
+Cross-link: `docs/state/known-bugs.md` **BUG-mem-gpu-01**. Do not re-home GPU fix into lance-debug1.
 
 ## Knobs (reference)
 

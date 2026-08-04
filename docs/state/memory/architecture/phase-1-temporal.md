@@ -2,11 +2,11 @@
 
 **Status:** **Done** (2026-07-28) — Phase 1 operator-complete on `grok-improvement-memory` (PR1–PR9). Defaults: `memory.enabled` / `write_atoms` **on**. Deferred glass/prompt polish: [known-bugs.md](../../known-bugs.md).
 **Package:** `elyra/memory/`
-**Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
-**Design (planning):** [design-phase-1-temporal.md](../../design/memory/design-phase-1-temporal.md), [design-phase-1-implementation.md](../../design/memory/design-phase-1-implementation.md)
-**Residual stack (closed):** [design-phase-1-remaining-pr8-pr9.md](../../design/memory/design-phase-1-remaining-pr8-pr9.md)
-**Meal sketch:** [design-context-meal-composition.md](../../design/memory/design-context-meal-composition.md)
-**Baseline activities:** [inspiration-activity-model-and-storage.md](../../design/memory/inspiration-activity-model-and-storage.md) §3
+**Philosophy:** [memory-atoms.pdf](../../../memory-atoms.pdf)
+**Design (planning):** [design-phase-1-temporal.md](../../../design/memory/design-phase-1-temporal.md), [design-phase-1-implementation.md](../../../design/memory/design-phase-1-implementation.md)
+**Residual stack (closed):** [design-phase-1-remaining-pr8-pr9.md](../../../design/memory/design-phase-1-remaining-pr8-pr9.md)
+**Meal sketch:** [design-context-meal-composition.md](../../../design/memory/design-context-meal-composition.md)
+**Baseline activities:** [inspiration-activity-model-and-storage.md](../../../design/memory/inspiration-activity-model-and-storage.md) §3
 **Program status:** [stretch-2 README](../README.md) Phase 1 close-out
 
 This is the **post-implement concept-mapping manual** for Phase 1. It describes what shipped, how code maps to essay concepts, which activities are live, and how the system fails. It is not a re-statement of the design PR stack plan.
@@ -122,7 +122,7 @@ Defaults: write path + memory meal both on. Rollback: set `enabled=false` (glass
 
 ## 2. Activity map (§3 inspiration)
 
-Which [§3 activities](../../design/memory/inspiration-activity-model-and-storage.md) are live after Phase 1.
+Which [§3 activities](../../../design/memory/inspiration-activity-model-and-storage.md) are live after Phase 1.
 
 ### 3.1 Write / ingest
 
@@ -337,12 +337,12 @@ Budget: residual after system+orient split by `episodic_fraction` (default 0.20)
 
 | Document | Role |
 |----------|------|
-| [design-phase-1-implementation.md](../../design/memory/design-phase-1-implementation.md) | Implementation design, key decisions, promote rules R1–R10 |
-| [design-phase-1-temporal.md](../../design/memory/design-phase-1-temporal.md) | Short phase outline (superseded for implement detail) |
-| [design-context-meal-composition.md](../../design/memory/design-context-meal-composition.md) | Meal channels, slide-off, re-gather sketch |
-| [design-database-choices.md](../../design/memory/design-database-choices.md) | Future Lance path; Protocol boundary |
-| [inspiration-activity-model-and-storage.md](../../design/memory/inspiration-activity-model-and-storage.md) | §3 activity baseline |
-| [philosophical-soft-guidance.md](../philosophical-soft-guidance.md) | Judgment influences only |
+| [design-phase-1-implementation.md](../../../design/memory/design-phase-1-implementation.md) | Implementation design, key decisions, promote rules R1–R10 |
+| [design-phase-1-temporal.md](../../../design/memory/design-phase-1-temporal.md) | Short phase outline (superseded for implement detail) |
+| [design-context-meal-composition.md](../../../design/memory/design-context-meal-composition.md) | Meal channels, slide-off, re-gather sketch |
+| [design-database-choices.md](../../../design/memory/design-database-choices.md) | Future Lance path; Protocol boundary |
+| [inspiration-activity-model-and-storage.md](../../../design/memory/inspiration-activity-model-and-storage.md) | §3 activity baseline |
+| [philosophical-soft-guidance.md](../../../stretch-2/philosophical-soft-guidance.md) | Judgment influences only |
 
 When behaviour changes, update **this** architecture note (and activity map) as part of done — design docs stay historical unless a decision is revised.
 
@@ -350,7 +350,7 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 
 ## 10. Follow-on packaging (PR8 / PR9 → Phase 2)
 
-Normative product sequence after Phase 1 core (detail in [design-phase-1-implementation.md](../../design/memory/design-phase-1-implementation.md) PR Plan):
+Normative product sequence after Phase 1 core (detail in [design-phase-1-implementation.md](../../../design/memory/design-phase-1-implementation.md) PR Plan):
 
 | Work | Role |
 |------|------|

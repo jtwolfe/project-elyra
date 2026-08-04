@@ -14,7 +14,7 @@
 | **Baseline** | [`inspiration-activity-model-and-storage.md`](inspiration-activity-model-and-storage.md) |
 | **Prior sketch** | [`design-phase-2a-directed-traversal.md`](design-phase-2a-directed-traversal.md) — **superseded for implementation by this doc** |
 | **Meal channel** | [`design-context-meal-composition.md`](design-context-meal-composition.md) (directed-keep) |
-| **Seeds / Phase 2** | [`architecture/phase-2-semantic.md`](../../stretch-2/architecture/phase-2-semantic.md), [`design-phase-2-rectification.md`](design-phase-2-rectification.md) |
+| **Seeds / Phase 2** | [`architecture/phase-2-semantic.md`](../../state/memory/architecture/phase-2-semantic.md), [`design-phase-2-rectification.md`](design-phase-2-rectification.md) |
 | **Boundary** | Phase 3 procedural weights later ([`design-phase-3-procedural.md`](design-phase-3-procedural.md)); not 2a core |
 | **Storage** | [`design-database-choices.md`](design-database-choices.md) — graph behind `elyra/memory/graph.py` |
 
@@ -1134,7 +1134,7 @@ Operator locks **2026-07-29**. No further forks for implement — all recommende
 - [ ] Tools + inspect + skill playbook (sharp description); flags default off; flags-off golden parity  
 - [ ] Glass POST fail-closed when flags off (parity with tools)  
 - [ ] Edge weight v1 + parent reverse algorithm + Phase 3 extension no-op documented  
-- [ ] Architecture note `docs/stretch-2/architecture/phase-2a-directed-traversal.md` with structure/activity/invariants/failure maps  
+- [ ] Architecture note `docs/state/memory/architecture/phase-2a-directed-traversal.md` with structure/activity/invariants/failure maps  
 - [ ] README Phase 2a status updated; sketch concept map = session-only (no “temporary flag” atoms)  
 - [ ] Dogfood path documented (Lance + semantic for full hops; JSONL structural-only)
 
@@ -1164,9 +1164,9 @@ Phase 1 temporal  ──done──► Phase 2 semantic (+ rectification)
 ## References
 
 - [design-phase-2a-directed-traversal.md](design-phase-2a-directed-traversal.md) — intent sketch (superseded for implement)  
-- [README.md](../../stretch-2/README.md) — program status / next steps  
+- [README.md](../../state/memory/README.md) — program status / next steps  
 - [design-phase-2-rectification.md](design-phase-2-rectification.md) — rectified seeds  
-- [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) — shipped semantic  
+- [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md) — shipped semantic  
 - [design-context-meal-composition.md](design-context-meal-composition.md) — directed-keep channel  
 - [design-phase-3-procedural.md](design-phase-3-procedural.md) — weights later  
 - [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md) — §3.5 activities  
@@ -1235,7 +1235,7 @@ Ordered, independently reviewable/mergeable PRs. Flags remain default **off** un
 |-------|--------|
 | **Title** | `docs(memory): Phase 2a directed traversal architecture note` |
 | **Depends on** | PR-A3–A5 APIs stable |
-| **Files** | `docs/stretch-2/architecture/phase-2a-directed-traversal.md` (new), `docs/stretch-2/README.md` status, pointer updates on sketch + meal doc if needed |
+| **Files** | `docs/state/memory/architecture/phase-2a-directed-traversal.md` (new), `docs/state/memory/README.md` status, pointer updates on sketch + meal doc if needed |
 | **Description** | Structure/activity maps, invariants (session hygiene, ladder isolation, KD-A9/A16/A18), failure modes, glossary, concept mapping as shipped. Update intent sketch concept map to **TraversalSession / no temp Atom rows** (drop “temporary flag”). Satisfies Stretch 2 documentation obligation. |
 
 ### Packaging vs Stretch 2 phases

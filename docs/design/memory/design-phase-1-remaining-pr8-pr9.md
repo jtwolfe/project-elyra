@@ -9,8 +9,8 @@
 | **Status** | **Done** (PR8 + PR9 shipped; Phase 1 operator-complete) |
 | **Branch** | `grok-improvement-memory` |
 | **Parent design** | [design-phase-1-implementation.md](design-phase-1-implementation.md) (full Phase 1 design; **PR1–PR7 shipped**) |
-| **Architecture** | [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md) |
-| **Close-out** | [README.md](../../stretch-2/README.md) § Phase 1 close-out — bug caveats in [known-bugs.md](../../known-bugs.md) |
+| **Architecture** | [architecture/phase-1-temporal.md](../../state/memory/architecture/phase-1-temporal.md) |
+| **Close-out** | [README.md](../../state/memory/README.md) § Phase 1 close-out — bug caveats in [known-bugs.md](../../state/known-bugs.md) |
 
 ## Overview
 

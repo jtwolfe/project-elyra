@@ -9,7 +9,7 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 
 | Class | Audience | For | Index |
 |-------|----------|-----|-------|
-| **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits | [state/README.md](state/README.md) (stub → current paths) |
+| **STATE** | Operators / users | As-implemented behaviour, run/deploy, honest limits | [state/README.md](state/README.md) |
 | **GOAL** | Product direction | North stars, phase goals, v0.1 claim — *what* / *why* | [goal/README.md](goal/README.md) (stub → current paths) |
 | **DESIGN / PLAN** | Implementers | Designs, PR plans, freezes (history kept) | [design/README.md](design/README.md) |
 | **DEV** | Jamie + Grok Build | Engineering principles, branch-law, pins, governance | [dev/README.md](dev/README.md) |
@@ -17,7 +17,7 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 
 **Taxonomy status:** partial until engineering-principles docs rules land (**PR6** of [#121](https://github.com/jtwolfe/project-elyra/issues/121)).  
 **Design of this reorg:** [design/docs-reorg-taxonomy.md](design/docs-reorg-taxonomy.md) (hub-first; phased `git mv`).  
-**DEV** process law lives under [dev/](dev/). **DESIGN** under [design/](design/) topic folders (PR2), including [design/memory/](design/memory/) (PR2b stretch-2 designs) and GI/harness/design-rocm (PR2c). STATE physical moves later (PR4).
+**DEV** process law lives under [dev/](dev/). **DESIGN** under [design/](design/) topic folders (PR2 + PR2b/PR2c). **STATE** living ops under [state/](state/) (PR4) — architecture map + runtime/memory/ops moves.
 
 **Conflict rule:** code on `working` > STATE > GOAL prose. DESIGN freezes are archaeology unless Status is Active. DEV wins for tip/branch/pin law ([dev/branch-law.md](dev/branch-law.md)).
 
@@ -25,21 +25,23 @@ Documents are organised by **class** (audience + role), not chronology. Prefer *
 
 ## STATE — living product behaviour
 
+Index: **[state/README.md](state/README.md)**.
+
 | Doc | Role |
 |-----|------|
 | Root [README.md](../README.md) | Best operator entry — vision, harness, run, honest limits |
-| [stretch-1.md](stretch-1.md) | **Runtime contract** — how Stretch 1 runs + done-when (still law) |
-| [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
-| [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, VCS, search/browser/secrets, dogfood checklist |
-| [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
-| [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog |
-| [grok-build-dogfood.md](grok-build-dogfood.md) | Operator checklist for current Grok Build instrument |
-| [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) | Operator notes: SuperGrok pool vs ledger, burst, override |
-| [stretch-2/README.md](stretch-2/README.md) | Memory phase honesty — Phase 1 done; 2/2a code done (dogfood pending); Phase 3 experimental |
-| [stretch-2/architecture/phase-1-temporal.md](stretch-2/architecture/phase-1-temporal.md) | As-implemented temporal memory manual |
-| [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) | As-implemented semantic memory manual |
-| [stretch-2/architecture/phase-2a-directed-traversal.md](stretch-2/architecture/phase-2a-directed-traversal.md) | As-implemented directed traversal manual |
-| [radeon-vii-dev/README.md](radeon-vii-dev/README.md) | Radeon VII / ROCm dogfood start path (+ NOTES / VENV / STACK) |
+| [state/architecture.md](state/architecture.md) | **As-implemented map** — process topology, `elyra/*` packages, data layout |
+| [state/stretch-1.md](state/stretch-1.md) | **Runtime contract** — how Stretch 1 runs + done-when (still law) |
+| [state/overview.md](state/overview.md) | Big picture, glossary, Stretch 1 vs 2 |
+| [state/tools-and-skills.md](state/tools-and-skills.md) | Packages, base catalog, VCS, search/browser/secrets, dogfood checklist |
+| [state/time-and-identity.md](state/time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
+| [state/known-bugs.md](state/known-bugs.md) | Deferred product bugs / dogfood backlog |
+| [state/grok-build-dogfood.md](state/grok-build-dogfood.md) | Operator checklist for current Grok Build instrument |
+| [state/usage-and-pacing.md](state/usage-and-pacing.md) | Operator notes: SuperGrok pool vs ledger, burst, override |
+| [state/sandbox-fitness-checklist.md](state/sandbox-fitness-checklist.md) | Short operator isolation / create-tool smoke (H6 extract) |
+| [state/memory/README.md](state/memory/README.md) | Memory phase honesty — Phase 1 done; 2/2a code done (dogfood pending); Phase 3 experimental |
+| [state/memory/architecture/](state/memory/architecture/) | As-implemented temporal / semantic / directed-traversal manuals |
+| [state/radeon-vii/README.md](state/radeon-vii/README.md) | Radeon VII / ROCm dogfood start path (+ NOTES / VENV / STACK) |
 
 ### Run
 
@@ -62,10 +64,10 @@ elyra start --stub-llm   # stub LLM + UI (hermetic)
 
 **New terminal (everyday):** `cd` to repo → `source .venv/bin/activate` → `elyra start` → UI `http://127.0.0.1:8787/`.
 
-**Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): [radeon-vii-dev/README.md](radeon-vii-dev/README.md) § *New terminal session — start Elyra*.
+**Radeon VII / LuxPrimata ROCm dogfood** (Tensile inject, `embed_device=rocm`, post-torch recovery): [state/radeon-vii/README.md](state/radeon-vii/README.md) § *New terminal session — start Elyra*.
 
 Sandbox fitness (full H1–H6 design+plan — DESIGN class): [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md).  
-Tools/skills catalog + dogfood checklist: [tools-and-skills.md](tools-and-skills.md).
+Tools/skills catalog + dogfood checklist: [state/tools-and-skills.md](state/tools-and-skills.md). Sandbox smoke: [state/sandbox-fitness-checklist.md](state/sandbox-fitness-checklist.md).
 
 ### Tests
 
@@ -87,8 +89,8 @@ Live protocol (historical Gemma stages — freeze): [live-eval.md](live-eval.md)
 | Doc | Role |
 |-----|------|
 | [promotion-discussion/README.md](promotion-discussion/README.md) | **v0.1 promotion / gym** — pillars, meal/context, Phase 3 defer (long form; short claim lands in PR3) |
-| [stretch-2/README.md](stretch-2/README.md) | Stretch 2 phase goals + status tables (also STATE honesty) |
-| [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (explicit non-deliverable) |
+| [state/memory/README.md](state/memory/README.md) | Stretch 2 phase goals + status tables (also STATE honesty) |
+| [stretch-2/philosophical-soft-guidance.md](stretch-2/philosophical-soft-guidance.md) | Soft conceptual influences (explicit non-deliverable; GOAL move later) |
 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok migration phase map (Phase 0–3); refresh if it lags code |
 | [memory-atoms.pdf](memory-atoms.pdf) | Philosophy reference (GOAL + STATE) |
 
@@ -110,7 +112,7 @@ Full status-indexed catalog: **[design/README.md](design/README.md)**.
 | Usage / OAuth | [design/usage/](design/usage/) | Pacing design; browser OIDC |
 | Board | [design/board/](design/board/) | v0.1-ready board ops |
 | Embed | [design/embed/](design/embed/) | Async EncodeWorker (residuals open) |
-| Stretch 2 memory | [design/memory/](design/memory/) | Phase designs + meal + spikes (PR2b); arch manuals still under stretch-2/ until PR4 |
+| Stretch 2 memory | [design/memory/](design/memory/) | Phase designs + meal + spikes (PR2b); arch manuals under [state/memory/architecture/](state/memory/architecture/) (PR4) |
 | GI phases | [design/grok-improvement-plan/](design/grok-improvement-plan/) | phase-0*, stage-b-mc, metacognition (PR2c) |
 | Harness / sandbox | [design/capability/harness-sandbox-fitness.md](design/capability/harness-sandbox-fitness.md) | Full H1–H6 design+plan (PR2c; Shipped) |
 | ROCm design | [design/memory/design-rocm-venv-gpu-embed-smoke.md](design/memory/design-rocm-venv-gpu-embed-smoke.md) | ROCm smoke design (PR2c) |
@@ -167,10 +169,10 @@ Index: **[dev/README.md](dev/README.md)**.
 | Sliding context meal | Temporal + episodic + later semantic/procedural channels |
 | Grok product path | LanceDB direction; Nemotron embed runtime (Phase 2) |
 
-Start at [stretch-2/README.md](stretch-2/README.md). Runtime law: [stretch-1.md](stretch-1.md).
+Start at [state/memory/README.md](state/memory/README.md). Runtime law: [state/stretch-1.md](state/stretch-1.md).
 
 ## Status
 
-**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([dev/branch-law.md](dev/branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [stretch-2/README.md](stretch-2/README.md).
+**Stretch 1 complete** on the foundation path. Integration tip is **`working`** ([dev/branch-law.md](dev/branch-law.md)); promote to **`main`** with full suite. Historical **`grok-improvement`** is **superseded** as tip law. **`main`** may lag the tip. **Stretch 2 memory** history may still name **`grok-improvement-memory`** — [state/memory/README.md](state/memory/README.md).
 
-Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — Phase 0 hub + **PR1 DEV** (`docs/dev/`); further class folders in later PRs.
+Docs taxonomy reorg: issue [#121](https://github.com/jtwolfe/project-elyra/issues/121) — hub + DEV + DESIGN + **STATE (PR4)** landed; archive/investigations PR5; principles § PR6.

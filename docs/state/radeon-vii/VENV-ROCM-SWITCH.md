@@ -1,7 +1,7 @@
 # Runbook: Project venv CUDA → ROCm 7.2 torch switch
 
 **Audience:** Operator on LuxPrimata  
-**Design:** [design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md) §2–§3  
+**Design:** [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) §2–§3  
 **Inventory:** [STACK-INVENTORY.md](STACK-INVENTORY.md)  
 **Policy:** Python ML libs stay in **project `.venv`** (Python 3.12.8). Host ROCm is system packages only. Never use system Python 3.14 / `python-pytorch-rocm`.
 
@@ -93,7 +93,7 @@ mkdir -p docs/radeon-vii-dev/freezes
 pip freeze > docs/radeon-vii-dev/freezes/pre-rocm-pip-freeze.txt
 ```
 
-**Limitation (normative):** `pip freeze` shows `torch==2.13.0` **without** the `+cu130` local label. Restoring with `pip install -r pre-rocm-pip-freeze.txt` alone will **not** reliably restore a CUDA (or HIP) wheel and may pull a generic/CPU-oriented build. Freezes are for **forensics and non-torch package versions**, not for torch backend restore. See [freezes/README.md](freezes/README.md).
+**Limitation (normative):** `pip freeze` shows `torch==2.13.0` **without** the `+cu130` local label. Restoring with `pip install -r pre-rocm-pip-freeze.txt` alone will **not** reliably restore a CUDA (or HIP) wheel and may pull a generic/CPU-oriented build. Freezes are for **forensics and non-torch package versions**, not for torch backend restore. See [freezes/README.md](../../radeon-vii-dev/freezes/README.md).
 
 ---
 
@@ -221,7 +221,7 @@ Run `02_matmul_smoke.py` (or equivalent). **A5 is a hard process gate:**
   4. Optional **only after documenting 7.2 failure:** try `rocm7.1` / `rocm7.0` indexes as experiment.
   5. Source build deferred; leave BUG open.
 
-A6–A7 (encode + G1–G9) run only after A5 is green — see [scripts/README.md](scripts/README.md).
+A6–A7 (encode + G1–G9) run only after A5 is green — see [scripts/README.md](../../radeon-vii-dev/scripts/README.md).
 
 ---
 

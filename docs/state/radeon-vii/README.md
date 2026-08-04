@@ -3,7 +3,7 @@
 **Branch / train:** `grok-improv-radeonvii`  
 **Host target:** LuxPrimata (AMD Radeon VII, gfx906, host ROCm 7.2.4)  
 **Scope:** Project `.venv` ROCm torch swap + standalone Nemotron encode smoke.  
-**Isolation:** All Radeon-VII notes, freezes, and helpers live under **`docs/radeon-vii-dev/`** only for this phase. No product-tree `dev_shims`.
+**Isolation:** Operator start docs live under **`docs/state/radeon-vii/`**; freezes + scripts remain under **`docs/radeon-vii-dev/`** until investigations PR. No product-tree `dev_shims`.
 
 ---
 
@@ -30,10 +30,10 @@ See [STACK-INVENTORY.md](STACK-INVENTORY.md) for the full hardware/package basel
 | Path | Purpose |
 |------|---------|
 | [STACK-INVENTORY.md](STACK-INVENTORY.md) | Hardware, host ROCm, venv package baseline |
-| [design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md) | Full design (acceptance, G1–G9, KD*, PR plan) — DESIGN class |
+| [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) | Full design (acceptance, G1–G9, KD*, PR plan) — DESIGN class |
 | [VENV-ROCM-SWITCH.md](VENV-ROCM-SWITCH.md) | **Operator runbook** — pin, purge, install, gates, rollback |
-| [freezes/README.md](freezes/README.md) | Freeze artifacts purpose, machine scope, restore limits |
-| [scripts/README.md](scripts/README.md) | Smoke scripts overview (G1–G9, exit codes, prereqs) |
+| [freezes/README.md](../../radeon-vii-dev/freezes/README.md) | Freeze artifacts purpose, machine scope, restore limits |
+| [scripts/README.md](../../radeon-vii-dev/scripts/README.md) | Smoke scripts overview (G1–G9, exit codes, prereqs) |
 | `freezes/*.txt` | Operator freezes (post-swap; LuxPrimata/ROCm-only) |
 | `scripts/01_*.py` … | Standalone probes (land in scripts PR) |
 | [NOTES-DOGFOOD.md](NOTES-DOGFOOD.md) | Switch / inject / A5–A7 dogfood + product-path notes |
@@ -168,7 +168,7 @@ Do **not** run the switch or smokes while presence/pytest are using this venv fo
 
 | Doc | Why |
 |-----|-----|
-| `docs/known-bugs.md` **BUG-mem-gpu-01** | Bug stays Open; dogfood evidence only |
+| `docs/state/known-bugs.md` **BUG-mem-gpu-01** | Bug stays Open; dogfood evidence only |
 | `elyra/memory/embed/runtime.py` | Product probe / Nemotron / device map |
 | `docs/design/memory/design-nemotron-runtime.md` | Nemotron runtime design |
 | Design §PR plan | PR1 docs → PR2 scripts → PR3 freezes → PR4 NOTES |

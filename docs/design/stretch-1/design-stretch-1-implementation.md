@@ -6,9 +6,9 @@
 | **Document** | Stretch 1 runtime completion |
 | **Author** | _(implementer)_ |
 | **Date** | 2026-07-21 |
-| **Status** | **Stretch 1 shipped** (rev 3 design + PR1–PR15); freeze still `docs/stretch-1.md` |
+| **Status** | **Stretch 1 shipped** (rev 3 design + PR1–PR15); freeze still `docs/state/stretch-1.md` |
 | **Product root** | `/home/jim/Workspace/project-elyra` |
-| **Build freeze** | `docs/stretch-1.md` |
+| **Build freeze** | `docs/state/stretch-1.md` |
 | **Supersedes** | Archive research notes under `docs/archive/` (not law) |
 
 ---
@@ -17,7 +17,7 @@
 
 Project Elyra is a greenfield rebuild of a communal digital teammate: always-on **presence**, a **wake queue**, and **moments** that are full multi-hop **do-loops** (model ↔ tools) rather than single-shot chat. The scaffold already runs `elyra start` (llama-server + HTTP API + glass UI + a minimal presence worker that does one completion per user message). Stretch 1 is **not** complete until that worker becomes a real harness with tools, skills, goals/tasks, sandbox, speak/wait, interjections, time-based continue, moment/beat persistence, and fail-closed create-tool/create-skill.
 
-This design specifies the full path from the current **~1.1k LOC** scaffold under `elyra/` (~1123 Python lines) to Stretch 1 “done when” criteria in `docs/stretch-1.md` §11–Done. Stretch 2 (memory hypergraph, opaque sleep, Lance graph) is explicitly out of scope except as migration hooks (JSON-shaped stores, no graph schema). We deliberately **do not** port elyra2’s fat `mind_loop` (~12.6k-line `cycle.py` at `aurimago/project-elyra2/elyra/mind_loop/cycle.py`, organs, dual engines, monologue ceremony).
+This design specifies the full path from the current **~1.1k LOC** scaffold under `elyra/` (~1123 Python lines) to Stretch 1 “done when” criteria in `docs/state/stretch-1.md` §11–Done. Stretch 2 (memory hypergraph, opaque sleep, Lance graph) is explicitly out of scope except as migration hooks (JSON-shaped stores, no graph schema). We deliberately **do not** port elyra2’s fat `mind_loop` (~12.6k-line `cycle.py` at `aurimago/project-elyra2/elyra/mind_loop/cycle.py`, organs, dual engines, monologue ceremony).
 
 ---
 
@@ -1168,11 +1168,11 @@ _(Resolved into Key Decisions: bare content policy, verify hash, no promote forc
 
 ## References
 
-- `/home/jim/Workspace/project-elyra/docs/stretch-1.md`
+- `/home/jim/Workspace/project-elyra/docs/state/stretch-1.md`
 - `/home/jim/Workspace/project-elyra/docs/dev/engineering-principles.md`
-- `/home/jim/Workspace/project-elyra/docs/overview.md`
-- `/home/jim/Workspace/project-elyra/docs/tools-and-skills.md`
-- `/home/jim/Workspace/project-elyra/docs/time-and-identity.md`
+- `/home/jim/Workspace/project-elyra/docs/state/overview.md`
+- `/home/jim/Workspace/project-elyra/docs/state/tools-and-skills.md`
+- `/home/jim/Workspace/project-elyra/docs/state/time-and-identity.md`
 - `/home/jim/Workspace/project-elyra/docs/inference.md`
 - Scaffold: `elyra/runtime/supervisor.py`, `elyra/loop/worker.py`, `elyra/llm/*`, `elyra/messages.py`, `elyra/config.py`, `elyra/runtime/web/*`
 - Prior art pitfalls: `aurimago/project-elyra2/elyra/mind_loop/cycle.py` (12664 lines)
@@ -1325,7 +1325,7 @@ PR11 must not start until **PR7 + PR8\* + PR9 + PR10** (PR10 needs PR2) are merg
 ### PR15 — Done-when checklist and docs
 
 - **Title:** `chore: Stretch 1 done-when checklist and docs`
-- **Files:** README, `docs/stretch-1.md`, inference notes, `tests/test_stretch1_donewhen.py`
+- **Files:** README, `docs/state/stretch-1.md`, inference notes, `tests/test_stretch1_donewhen.py`
 - **Deps:** PR12c, **PR13**, PR14
 - **Changes:** Walk freeze Done list (all checked); **create-tool box requires PR13** (`test_create_tool_gates` + runtime verify/promote — gates already exist, not re-implemented as “hardening”); document `pytest -m llm` / sliding 24k vs `-c`.
 

@@ -10,7 +10,7 @@
 | **Normative?** | No — prefer code on `working` + radeon operator notes when conflict |
 | **Durable path** | `docs/design/memory/design-rocm-venv-gpu-embed-smoke.md` |
 | **Branch** | `grok-improv-radeonvii` |
-| **Related** | [STACK-INVENTORY.md](../../radeon-vii-dev/STACK-INVENTORY.md), [known-bugs.md](../../known-bugs.md) **BUG-mem-gpu-01**, [design-nemotron-runtime.md](design-nemotron-runtime.md), [spikes/nemotron-runtime.md](spikes/nemotron-runtime.md), product path [`elyra/memory/embed/runtime.py`](../../../elyra/memory/embed/runtime.py), operator [`elyra.toml`](../../../elyra.toml) |
+| **Related** | [STACK-INVENTORY.md](../../state/radeon-vii/STACK-INVENTORY.md), [known-bugs.md](../../state/known-bugs.md) **BUG-mem-gpu-01**, [design-nemotron-runtime.md](design-nemotron-runtime.md), [spikes/nemotron-runtime.md](spikes/nemotron-runtime.md), product path [`elyra/memory/embed/runtime.py`](../../../elyra/memory/embed/runtime.py), operator [`elyra.toml`](../../../elyra.toml) |
 | **Host** | Arch/Omarchy LuxPrimata; Radeon VII **gfx906**; host ROCm **7.2.4** Tier A |
 | **Scope phase** | Dev-focused: venv HIP torch + standalone encode smoke. **Not** full meal/presence/worker integration as *acceptance*. **Note:** operator `elyra.toml` already enables nemotron+auto — ROCm swap **will arm product path** unless pinned (see §3.0). |
 
@@ -362,7 +362,7 @@ pip freeze > docs/radeon-vii-dev/freezes/post-rocm-pip-freeze.txt
 | residual `nvidia-*` | **absent** (or only packages ROCm wheel re-pulled intentionally — document if any) |
 | product pin | `elyra.toml` still `embed_device=cpu` (or embed off) until A1–A7 |
 
-Update [STACK-INVENTORY.md](../../radeon-vii-dev/STACK-INVENTORY.md) §3/§6 after success.
+Update [STACK-INVENTORY.md](../../state/radeon-vii/STACK-INVENTORY.md) §3/§6 after success.
 
 #### 3.6b Hard gate A5 before model work
 
@@ -654,10 +654,10 @@ All must pass on LuxPrimata with project `.venv`:
 
 | Doc | Action |
 |-----|--------|
-| `docs/radeon-vii-dev/STACK-INVENTORY.md` | Update after swap |
-| `docs/radeon-vii-dev/VENV-ROCM-SWITCH.md` | Full runbook: §3.0 arming, nvidia purge, exclusive rollback, A5 hard stop |
-| `docs/radeon-vii-dev/NOTES-DOGFOOD.md` | Measurements |
-| `docs/known-bugs.md` **BUG-mem-gpu-01** | Dogfood subsection only; keep **Open** |
+| `docs/state/radeon-vii/STACK-INVENTORY.md` | Update after swap |
+| `docs/state/radeon-vii/VENV-ROCM-SWITCH.md` | Full runbook: §3.0 arming, nvidia purge, exclusive rollback, A5 hard stop |
+| `docs/state/radeon-vii/NOTES-DOGFOOD.md` | Measurements |
+| `docs/state/known-bugs.md` **BUG-mem-gpu-01** | Dogfood subsection only; keep **Open** |
 | Spike Gate B | Check “ROCm attempt…” when smoke passes; record revision if encode succeeds |
 
 #### PR5 / BUG-mem-gpu-01 dogfood template (required fields)
@@ -844,8 +844,8 @@ Product ROCm attn reorder / public `parameter_device` accessor: **out of scope**
 
 | Path | Why |
 |------|-----|
-| `docs/radeon-vii-dev/STACK-INVENTORY.md` | Hardware / baseline |
-| `docs/known-bugs.md` BUG-mem-gpu-01 | Partial evidence only |
+| `docs/state/radeon-vii/STACK-INVENTORY.md` | Hardware / baseline |
+| `docs/state/known-bugs.md` BUG-mem-gpu-01 | Partial evidence only |
 | `elyra/memory/embed/runtime.py` | probe, select, Nemotron, health self-report, `_to_unit_list` cpu |
 | `elyra/memory/embed/types.py` | `EMBED_DIM=2048` |
 | `elyra.toml` | embed already on + auto |

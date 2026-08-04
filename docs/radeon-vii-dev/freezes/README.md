@@ -3,7 +3,7 @@
 **Purpose:** Capture pip package state before and after the project `.venv` CUDA → ROCm torch swap on **LuxPrimata**, for forensics, non-torch version restore, and review evidence.
 
 **Design:** [design-rocm-venv-gpu-embed-smoke.md](../../design/memory/design-rocm-venv-gpu-embed-smoke.md) §3.2, §3.9  
-**Runbook:** [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md)
+**Runbook:** [VENV-ROCM-SWITCH.md](../../state/radeon-vii/VENV-ROCM-SWITCH.md)
 
 ---
 
@@ -57,7 +57,7 @@ pip install torch==2.13.0 torchvision==0.28.0 \
 
 CUDA torch will re-pull `nvidia-*` runtime deps as needed. Optionally re-align non-torch pins from `pre-rocm-pip-freeze.txt` **excluding** torch/torchvision lines.
 
-See [VENV-ROCM-SWITCH.md](../VENV-ROCM-SWITCH.md) §11.
+See [VENV-ROCM-SWITCH.md](../../state/radeon-vii/VENV-ROCM-SWITCH.md) §11.
 
 ---
 
@@ -82,7 +82,7 @@ Temporary `embed_device=cpu` (or embed off) during bring-up is **local / uncommi
 4. torchn-rocm7.2-pins.txt                              # document pins used
 ```
 
-Update [STACK-INVENTORY.md](../STACK-INVENTORY.md) when freezes land.
+Update [STACK-INVENTORY.md](../../state/radeon-vii/STACK-INVENTORY.md) when freezes land.
 
 ---
 

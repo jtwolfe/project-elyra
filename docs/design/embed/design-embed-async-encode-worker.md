@@ -11,8 +11,8 @@
 | **Topic branch** | `feature/embed-async` (from `working`) |
 | **PR base** | `working` (integration tip; house branch law) |
 | **Related** | #80 Phase 2 semantic; #103/#105 traverse (depend on ready vectors); #107 truncation (orthogonal) |
-| **Architecture** | [stretch-2/architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md) §3 invariant 1 (continuous single-owner) |
-| **Bug evidence** | [known-bugs.md](../../known-bugs.md) **BUG-mem-gpu-01** product continuous-encode checklist |
+| **Architecture** | [stretch-2/architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md) §3 invariant 1 (continuous single-owner) |
+| **Bug evidence** | [known-bugs.md](../../state/known-bugs.md) **BUG-mem-gpu-01** product continuous-encode checklist |
 
 ---
 
@@ -46,7 +46,7 @@ This design makes **corpus encoding the PE process’s continuous background enc
 
 Idle-only placement is explicit architecture law today:
 
-```267:268:docs/stretch-2/architecture/phase-2-semantic.md
+```267:268:docs/state/memory/architecture/phase-2-semantic.md
 1. **Corpus encode is idle-only.**  
    Never run full atom→vector encode on the hop / `promote_beat` / mid-`rebuild_outer` path. Drain only when not in-moment, outside the presence state lock, under `encode_max_ms_per_tick` / `encode_max_items_per_tick`.
 ```
@@ -62,7 +62,7 @@ Idle-only placement is explicit architecture law today:
                         self._idle_memory_encode()
 ```
 
-That invariant correctly forbids **blocking the hop on bulk encode**. It incorrectly equates “non-blocking hop” with “encode only when no wake is claimed.” Operator dogfood (`docs/known-bugs.md` **BUG-mem-gpu-01**, `docs/radeon-vii-dev/NOTES-DOGFOOD.md`) shows Nemotron can load on ROCm, yet **in-moment / continuous encode is unverified**; under busy work, pending backlog and empty semantic seeds are observed.
+That invariant correctly forbids **blocking the hop on bulk encode**. It incorrectly equates “non-blocking hop” with “encode only when no wake is claimed.” Operator dogfood (`docs/state/known-bugs.md` **BUG-mem-gpu-01**, `docs/state/radeon-vii/NOTES-DOGFOOD.md`) shows Nemotron can load on ROCm, yet **in-moment / continuous encode is unverified**; under busy work, pending backlog and empty semantic seeds are observed.
 
 ### Pain points
 
@@ -834,10 +834,10 @@ No open OQs remain for v1 implementation.
 
 ## References
 
-- Issue [#82](https://github.com/jtwolfe/project-elyra/issues/82) / `docs/known-bugs.md` **BUG-mem-gpu-01**
-- `docs/stretch-2/architecture/phase-2-semantic.md` — encode/queue/meal invariants
+- Issue [#82](https://github.com/jtwolfe/project-elyra/issues/82) / `docs/state/known-bugs.md` **BUG-mem-gpu-01**
+- `docs/state/memory/architecture/phase-2-semantic.md` — encode/queue/meal invariants
 - `docs/design/memory/design-nemotron-runtime.md` / spikes
-- `docs/radeon-vii-dev/NOTES-DOGFOOD.md`, `STACK-INVENTORY.md`
+- `docs/state/radeon-vii/NOTES-DOGFOOD.md`, `STACK-INVENTORY.md`
 - `docs/dev/branch-law.md` — PRs base `working`
 - Code: `elyra/memory/embed/queue.py`, `runtime.py`, `encode.py`; `elyra/presence/worker.py`; `elyra/memory/promote.py`; `elyra/memory/meal.py`; `elyra/memory/graph.py`; `elyra/runtime/api.py` (free-text encode); `elyra/runtime/supervisor.py` (`shutdown`); `elyra/memory/lance_store.py`; `elyra/memory/index.py`; `elyra/memory/config.py`; `elyra/memory/store.py` protocol
 - Pattern prior art: `elyra/instrument/reaper.py` daemon poll thread
@@ -915,7 +915,7 @@ All PRs: **base `working`** (or stack tip on `working`). Topic branch: **`featur
 |-------|--------|
 | **Title** | `docs(embed): continuous encode architecture + BUG-mem-gpu-01 product-path evidence` |
 | **Deps** | PR2–PR4 (or docs after PR2 minimum) |
-| **Files** | `docs/stretch-2/architecture/phase-2-semantic.md` (idle-only → async single-owner); `docs/known-bugs.md` BUG-mem-gpu-01 (product continuous encode checklist; **bug stays Open for packaging**); store protocol note if not in PR2; optional radeon NOTES if dogfood run |
+| **Files** | `docs/state/memory/architecture/phase-2-semantic.md` (idle-only → async single-owner); `docs/state/known-bugs.md` BUG-mem-gpu-01 (product continuous encode checklist; **bug stays Open for packaging**); store protocol note if not in PR2; optional radeon NOTES if dogfood run |
 | **Description** | Normative invariant rewrite; dogfood: busy create→ready; meal under text bulk; worker death resume; embed off→on; **explicitly does not claim full BUG-mem-gpu-01 close**. Criterion: `drain_ok_total` during busy. Fold topic branch to `working` in this PR’s merge or immediate follow-up merge description — **no empty PR6**. |
 
 ### Dependency graph

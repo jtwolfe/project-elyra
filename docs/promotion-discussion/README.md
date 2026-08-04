@@ -5,7 +5,7 @@
 | **Created** | 2026-07-30 |
 | **Goal** | Orient **promotion to a durable v0.1 product cut** + instantiate a **long-term self-improvement gym** (process + GitHub Project), without pretending unfinished dogfood is done |
 | **Branch context** | Product work has lived on `grok-improvement` → `grok-improvement-memory` → `grok-improv-radeonvii`; tips and docs drift — sanitation is part of v0.1. **Live tip law:** **`working`** (see [branch-law.md](../dev/branch-law.md)). |
-| **Status** | Working discussion (not a freeze contract). When it conflicts with Stretch 1 runtime rules, [stretch-1.md](../stretch-1.md) wins |
+| **Status** | Working discussion (not a freeze contract). When it conflicts with Stretch 1 runtime rules, [stretch-1.md](../state/stretch-1.md) wins |
 
 > **Tip supersession:** Normative integration tip is **`working`** (not sole day-to-day use of `main`, and not historical `grok-improvement`). Full tip / promote / pin / tag / stale-stack law: **[docs/dev/branch-law.md](../dev/branch-law.md)**. Multi-party process still lives in [development-governance.md](../dev/development-governance.md).
 
@@ -20,7 +20,7 @@ This folder is the home for **promotion / v0.1** thinking: what we have, what re
 | **[branch-law.md](../dev/branch-law.md)** | **Normative** `working` / `main` / operating pin / tags / short-lived / Graphite default |
 | *(later)* | Exit criteria checklist, milestone seed issues, merge plan |
 
-Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [stretch-2/README.md](../stretch-2/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../known-bugs.md), [radeon-vii-dev/README.md](../radeon-vii-dev/README.md), [branch-law.md](../dev/branch-law.md).
+Related: [project-status-pass.md](../project-status-pass.md) (stale snapshot), [memory/README.md](../state/memory/README.md), [grok-improvement-plan/README.md](../grok-improvement-plan/README.md), [known-bugs.md](../state/known-bugs.md), [radeon-vii/README.md](../state/radeon-vii/README.md), [branch-law.md](../dev/branch-law.md).
 
 **Programme name (working):** *Project Elyra — Autopoiesis Commons* (runtime stays “Elyra”; short label *Autopoiesis Commons* / *Elyra AC* — see [governance §6](../dev/development-governance.md#6-naming--project-identity)).
 
@@ -178,7 +178,7 @@ Not a second mind. Same philosophy as goals/tasks — and, in Colin’s framing,
 
 - Do not auto-merge from the board.  
 - Secrets never in issues.  
-- Machine-specific freezes stay under `docs/radeon-vii-dev/`.  
+- Machine-specific freezes stay under `docs/state/radeon-vii/` (+ freezes/scripts under `docs/radeon-vii-dev/`).  
 - Prefer linking known-bugs IDs and design paths in issue bodies.  
 - Later: Elyra tools for issue CRUD are optional; **human ownership of promote-to-main** remains.
 
@@ -404,8 +404,8 @@ If open-moment temporal exceeds its cap, slide-off drops oldest unprotected open
 | Loop knobs | `elyra/settings.py` — `LoopSettings` |
 | Model window | `elyra/llm/constants.py` — `MODEL_CONTEXT_WINDOW_TOKENS` |
 | Design fractions (illustrative) | `docs/design/memory/design-context-meal-composition.md` |
-| GPU / start Elyra | `docs/radeon-vii-dev/README.md` |
-| Known open bugs | `docs/known-bugs.md` |
+| GPU / start Elyra | `docs/state/radeon-vii/README.md` |
+| Known open bugs | `docs/state/known-bugs.md` |
 
 ---
 

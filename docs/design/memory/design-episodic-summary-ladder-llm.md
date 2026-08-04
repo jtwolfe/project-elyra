@@ -804,7 +804,7 @@ Rules (mirror #93 product stack style):
 
 ### Steps
 
-1. Land design on `feature/92` at `docs/stretch-2/design-episodic-summary-ladder-llm.md`; patch `docs/known-bugs.md` BUG-meal-02 **Design home** → that path (status remains In Progress until DoD).
+1. Land design on `feature/92` at `docs/stretch-2/design-episodic-summary-ladder-llm.md`; patch `docs/state/known-bugs.md` BUG-meal-02 **Design home** → that path (status remains In Progress until DoD).
 2. Cut `fix/BUG-meal-02-92-s1-…` **from `feature/92`**; implement PR-A → merge into `feature/92`.
 3. Repeat for s2–s5 per PR Plan **Branch** fields.
 4. Operator: set `summary_mode=llm` in `elyra.toml` after PR-A on the dogfood host; measure cost 24h.
@@ -877,12 +877,12 @@ Rules (mirror #93 product stack style):
 
 ## References
 
-- Issue [#92](https://github.com/jtwolfe/project-elyra/issues/92) / `docs/known-bugs.md` BUG-meal-02
+- Issue [#92](https://github.com/jtwolfe/project-elyra/issues/92) / `docs/state/known-bugs.md` BUG-meal-02
 - `docs/stretch-2/design-phase-1-implementation.md` § Period summary ladder
 - `docs/stretch-2/design-phase-1-temporal.md`
-- `docs/stretch-2/architecture/phase-1-temporal.md`
+- `docs/state/memory/architecture/phase-1-temporal.md`
 - `docs/stretch-2/design-context-meal-composition.md`
-- `docs/stretch-2/architecture/phase-2a-directed-traversal.md` (edge projection pattern)
+- `docs/state/memory/architecture/phase-2a-directed-traversal.md` (edge projection pattern)
 - Code: `elyra/memory/ladder.py`, `temporal.py`, `types.py`, `config.py`, `meal.py`, `weights.py`, `graph.py`, `elyra/presence/worker.py`
 
 ---
@@ -951,7 +951,7 @@ Order is dependency-respecting. Optional intra-PR-A split (not mandatory): **A0*
 | **Title** | `feat(memory): LLM period summaries + 1h→1y ladder schedule` |
 | **Branch** | `fix/BUG-meal-02-92-s1-ladder-llm-schedule` **from** `feature/92` |
 | **Depends on** | none (first); design file may already be on `feature/92` |
-| **Files (expected)** | `elyra/memory/types.py`, `temporal.py`, `ladder.py` (+ optional `ladder_llm.py` adapter helper), `config.py`, `elyra/settings.py`, `elyra/presence/worker.py`, `tests/test_memory_ladder.py`, `tests/test_memory_types.py`, `tests/test_memory_temporal.py`, settings validation tests, `docs/stretch-2/design-episodic-summary-ladder-llm.md`, `docs/known-bugs.md` (Design home pointer) |
+| **Files (expected)** | `elyra/memory/types.py`, `temporal.py`, `ladder.py` (+ optional `ladder_llm.py` adapter helper), `config.py`, `elyra/settings.py`, `elyra/presence/worker.py`, `tests/test_memory_ladder.py`, `tests/test_memory_types.py`, `tests/test_memory_temporal.py`, settings validation tests, `docs/stretch-2/design-episodic-summary-ladder-llm.md`, `docs/state/known-bugs.md` (Design home pointer) |
 | **Description** | Add `1y` grid; `PERIOD_SCALES_WRITE` / write parent map (`1h→1d`); drop 15m/6h writes; `build_source_pack` / `gap_spans` / `moment_blocks_for_window`; `summary_mode`, two-pass LLM via `SummaryLlm` + ChatClient adapter (`reasoning=False`, hard-stop fallback); hourly `tick` / catch-up (24h/tick); retire finalize-15m to dirty-mark; wire worker idle path; meta honesty (no live is_tip). Keep `refresh_due` as nibble over write scales. Optional A0/A1 split; mergeable when template path + stub LLM tests green. |
 | **Tests** | Window bounds 1y; `parent_scale("1h")=="1d"`; gap in source pack; template path; stub LLM one/two-pass; adapter hard-stop; hourly due; budget stops mid-cascade; no hop-path call. |
 | **Dogfood** | `summary_mode=llm` after hour boundary → readable 1h + 1d tip bodies. |
@@ -999,7 +999,7 @@ Order is dependency-respecting. Optional intra-PR-A split (not mandatory): **A0*
 | **Title** | `test(memory): ladder LLM/cascade suite + status observability` |
 | **Branch** | `fix/BUG-meal-02-92-s5-tests-dogfood` **from** `feature/92` (after s1–s4 merged preferred) |
 | **Depends on** | PR-A–D |
-| **Files** | tests, `worker.py` status block, `docs/known-bugs.md` (mark Fixed when closing), glass inspect optional light meta |
+| **Files** | tests, `worker.py` status block, `docs/state/known-bugs.md` (mark Fixed when closing), glass inspect optional light meta |
 | **Description** | Integration: catch-up 3 missing hours; meter exhaustion; instance-age + provisional enough-tips; status knobs. Close #92 when dogfood sign-off. |
 | **Definition** | Matches Definition of Done checklist. |
 

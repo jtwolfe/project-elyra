@@ -231,7 +231,7 @@ Same class can apply without restart if a long wait expires while glass still sh
 | **Severity now** | Med (operator trust + dogfood pacing; hard-stop override papers over pain) |
 | **Severity later** | High if memory / continuous work increases Completions spend without honest pacing |
 | **Area** | `elyra/llm/usage.py`, credits poll, Glass usage rail + Status card, settings (`UsageSettings`) |
-| **Design** | [design-usage-tracking-supergrok-pacing.md](design/usage/design-usage-tracking-supergrok-pacing.md); operator notes in [grok-improvement-plan/usage-tracking-supergrok-pacing.md](grok-improvement-plan/usage-tracking-supergrok-pacing.md) |
+| **Design** | [design-usage-tracking-supergrok-pacing.md](../design/usage/design-usage-tracking-supergrok-pacing.md); operator notes in [usage-and-pacing.md](usage-and-pacing.md) |
 | **Dogfood** | Ongoing operator report (2026-07-27): *“definitely better but still not what I’m after”* |
 
 ### Symptom
@@ -814,7 +814,7 @@ The fixed **system** block (esp. the leading `# Elyra system` framing and **Hard
 | **Severity later** | High if regressed — 2a seeds and meal semantic go empty again |
 | **Area** | `elyra/memory/embed/*`, `index.py`, `lance_store.py`, `meal.py`, Vectors APIs / glass |
 | **Dogfood** | 2026-07-28 on `grok-improvement-memory`: `vectors_ready≈32`, neighbors `channel=joint` → 0 hits; `channel=text` → real cosine hits; meal channels episodic+temporal only; `ann_index_built=false`, `search_mode=full`, `last_optimize=null` |
-| **Fix ownership** | [design-phase-2-rectification.md](design/memory/design-phase-2-rectification.md) PR-R1–R5; docs closeout PR-R6 |
+| **Fix ownership** | [design-phase-2-rectification.md](../design/memory/design-phase-2-rectification.md) PR-R1–R5; docs closeout PR-R6 |
 
 ### Symptom
 
@@ -834,7 +834,7 @@ Text-only encode → ready + `emb_text` only → search `joint` → 0 main hits;
 | **PR-R4** | Lance-native main search; small-N `full_lance` |
 | **PR-R5** | Vectors channel auto/toggle + honest empty/rebuild UX |
 
-Architecture: [architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md). Program: [stretch-2 README](stretch-2/README.md).
+Architecture: [architecture/phase-2-semantic.md](memory/architecture/phase-2-semantic.md). Program: [stretch-2 README](memory/README.md).
 
 ### Residual
 
@@ -853,7 +853,7 @@ Architecture: [architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-
 | **Severity later** | High if regressed — glass / meal / graph / traverse operate on ~10-atom prefix after every restart |
 | **Area** | `elyra/memory/lance_store.py` (`_load`, migrate, promote, empty-check, health dual-count) |
 | **Dogfood** | 2026-07-29 sealed run `docs/lance-debug1/evidence/2026-07-29-run-01/`: `count_rows`/`head`/`to_lance` = **386**; bare `to_arrow` = **10**; process `atom_count` ≈ 10 after open |
-| **Fix ownership** | [design-fix-load-truncation.md](lance-debug1/design-fix-load-truncation.md); inspection dossier [BUG-DOSSIER.md](lance-debug1/BUG-DOSSIER.md); product fix commit `fcb5130` |
+| **Fix ownership** | [design-fix-load-truncation.md](../lance-debug1/design-fix-load-truncation.md); inspection dossier [BUG-DOSSIER.md](../lance-debug1/BUG-DOSSIER.md); product fix commit `fcb5130` |
 
 ### Symptom
 
@@ -873,7 +873,7 @@ Bare `lancedb.Table.to_arrow()` on **0.20.x** is a **default-limit query of ~10 
 | **Health** | Open-store dual-count: `disk_atom_count`, `atom_count_parity` |
 | **Tests** | Reopen N=25; Phase-1 migrate N=15; FakeTable `head`; materialize unit paths |
 
-Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-load-truncation.md). Package status: [lance-debug1/README.md](lance-debug1/README.md).
+Design: [lance-debug1/design-fix-load-truncation.md](../lance-debug1/design-fix-load-truncation.md). Package status: [lance-debug1/README.md](../lance-debug1/README.md).
 
 ### Residual / operator note
 
@@ -898,8 +898,8 @@ Design: [lance-debug1/design-fix-load-truncation.md](lance-debug1/design-fix-loa
 | **Severity now** | Med — **standalone** GPU encode works after Tensile inject; product **continuous encode code path shipped** (EncodeWorker + gate); **live operator dogfood of busy drain still pending** (#114); packaging/Tensile residual open (#115); wheel reinstall loses inject |
 | **Severity later** | High when product default-on wants durable multi-device embed (CUDA / modern ROCm / CPU) + encode during live moments under meal budgets |
 | **Area** | `elyra/memory/embed/runtime.py`, `embed/queue.py`, `embed/gate.py`, `embed/worker.py`, presence encode ownership, moment/meal/API gated encode, device select (`embed_device`), ROCm/CUDA wheels, operator setup (project-wide + optional Radeon VII dev path) |
-| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; prior observation was idle-only drain (starvation under busy). **2026-08-03** — continuous encode stack (PR1–PR4) lands product drain path; architecture + this checklist updated (PR5). **2026-08-04** — #82 closed with #114+#115 split (board packaging hygiene). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) |
-| **Ownership** | Gate B + [design-nemotron-runtime.md](design/memory/design-nemotron-runtime.md) + [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md); **not** Phase 2 rectification core (KD-R10). Packaging residual → **#115**; busy dogfood → **#114**; continuous-encode product path is KD-E17 evidence only |
+| **Dogfood** | 2026-07-28 — CPU. **2026-07-29 AM** — A5 FAIL (no gfx906 Tensile). **2026-07-29 PM** — Tensile inject → A1–A7 **PASS** (`03` / `cuda:0`). Later same day: local `embed_device=rocm`; model **loads** on GPU at presence start; prior observation was idle-only drain (starvation under busy). **2026-08-03** — continuous encode stack (PR1–PR4) lands product drain path; architecture + this checklist updated (PR5). **2026-08-04** — #82 closed with #114+#115 split (board packaging hygiene). Ops: [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii/NOTES-DOGFOOD.md) |
+| **Ownership** | Gate B + [design-nemotron-runtime.md](../design/memory/design-nemotron-runtime.md) + [design-embed-async-encode-worker.md](../design/embed/design-embed-async-encode-worker.md); **not** Phase 2 rectification core (KD-R10). Packaging residual → **#115**; busy dogfood → **#114**; continuous-encode product path is KD-E17 evidence only |
 
 ### Symptom
 
@@ -915,7 +915,7 @@ Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product pa
 
 **Productization target (feature, tracked here so it is not lost):** keep a **generic modern** device story for operators; treat **Radeon VII / gfx906** as a **non-standard dev** profile, not the template for “all AMD.”
 
-**Continuous encode (product path — code shipped, dogfood pending):** corpus drain is the PE process’s background encode job while up (when `semantic_enabled` + `embed_enabled`), with **lookup priority** for meal/graph/API free-text via `EmbedderGate`. Design: [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md). Architecture invariant: [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) §3 invariant 1. **Honesty (KD-E17 / KD5 packaging split):** continuous-encode **code** evidence alone did **not** close packaging or live dogfood — umbrella #82 closed **only** after successors **#114** (busy dogfood) + **#115** (packaging matrix) were opened under #111.
+**Continuous encode (product path — code shipped, dogfood pending):** corpus drain is the PE process’s background encode job while up (when `semantic_enabled` + `embed_enabled`), with **lookup priority** for meal/graph/API free-text via `EmbedderGate`. Design: [design-embed-async-encode-worker.md](../design/embed/design-embed-async-encode-worker.md). Architecture invariant: [stretch-2/architecture/phase-2-semantic.md](memory/architecture/phase-2-semantic.md) §3 invariant 1. **Honesty (KD-E17 / KD5 packaging split):** continuous-encode **code** evidence alone did **not** close packaging or live dogfood — umbrella #82 closed **only** after successors **#114** (busy dogfood) + **#115** (packaging matrix) were opened under #111.
 
 ### Device matrix (desired product shape)
 
@@ -930,7 +930,7 @@ Portable encode contract: **CUDA / modern ROCm / CPU** as first-class product pa
 
 ### Product continuous-encode path (code evidence — umbrella #82 closed with split)
 
-Shipped on embed-async stack (2026-08-03), design [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md):
+Shipped on embed-async stack (2026-08-03), design [design-embed-async-encode-worker.md](../design/embed/design-embed-async-encode-worker.md):
 
 | Slice | Status | Notes |
 |-------|--------|--------|
@@ -986,20 +986,20 @@ Use with `backend=lance`, `semantic_enabled` + `embed_enabled` on, and (default)
 | product worker path | local `embed_device=rocm` after inject; **GPU load seen** (2026-07-29); continuous EncodeWorker **code path** (2026-08-03); **operator busy drain dogfood not yet recorded** |
 | Notes | Real GPU load+encode via `03` + `NemotronEmbedder(device="rocm")`. No “product GPU embed fully fixed.” Re-inject after torch reinstall. Continuous encode does not close packaging. |
 
-Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) PR3/PR4 sections. Product-path note: same file PR5 / product follow-on.
+Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii/NOTES-DOGFOOD.md) PR3/PR4 sections. Product-path note: same file PR5 / product follow-on.
 
 ### Related
 
 - **BUG-mem-lance-01** — full load truncation (**Fixed**); not the GPU/embed root. Expand_ms / encode latency remain this bug’s class.
-- [design-embed-async-encode-worker.md](design/embed/design-embed-async-encode-worker.md) — continuous EncodeWorker + gate (product continuous-encode path).
-- [stretch-2/architecture/phase-2-semantic.md](stretch-2/architecture/phase-2-semantic.md) — corpus encode single-owner invariant (replaces idle-only product law).
-- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii-dev/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions, portability notes; residuals **#114** / **#115**.
-- [design-v0.1-ready-board-recategorization.md](design/board/design-v0.1-ready-board-recategorization.md) — KD5/KD11 close policy for #82 → C6a+C6.
-- [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii-dev/STACK-INVENTORY.md) — post-switch inventory / A5 status.
-- [radeon-vii-dev/scripts/00_inject_gfx906_tensile.py](radeon-vii-dev/scripts/00_inject_gfx906_tensile.py) — **dev-only** gfx906 path, not generic AMD.
-- Project setup today: [docs/README.md](README.md) / `scripts/setup_venv.sh` — to grow into multi-backend setup (ongoing).
-- Operator start (LuxPrimata / new terminal): [radeon-vii-dev/README.md](radeon-vii-dev/README.md) § *New terminal session — start Elyra*.
-- v0.1 promotion / gym / meal size & chat-chain notes: [promotion-discussion/README.md](promotion-discussion/README.md).
+- [design-embed-async-encode-worker.md](../design/embed/design-embed-async-encode-worker.md) — continuous EncodeWorker + gate (product continuous-encode path).
+- [stretch-2/architecture/phase-2-semantic.md](memory/architecture/phase-2-semantic.md) — corpus encode single-owner invariant (replaces idle-only product law).
+- [radeon-vii-dev/NOTES-DOGFOOD.md](radeon-vii/NOTES-DOGFOOD.md) — switch, inject, A5/A7 green, product-path open questions, portability notes; residuals **#114** / **#115**.
+- [design-v0.1-ready-board-recategorization.md](../design/board/design-v0.1-ready-board-recategorization.md) — KD5/KD11 close policy for #82 → C6a+C6.
+- [radeon-vii-dev/STACK-INVENTORY.md](radeon-vii/STACK-INVENTORY.md) — post-switch inventory / A5 status.
+- [radeon-vii-dev/scripts/00_inject_gfx906_tensile.py](../radeon-vii-dev/scripts/00_inject_gfx906_tensile.py) — **dev-only** gfx906 path, not generic AMD.
+- Project setup today: [docs/README.md](../README.md) / `scripts/setup_venv.sh` — to grow into multi-backend setup (ongoing).
+- Operator start (LuxPrimata / new terminal): [radeon-vii-dev/README.md](radeon-vii/README.md) § *New terminal session — start Elyra*.
+- v0.1 promotion / gym / meal size & chat-chain notes: [promotion-discussion/README.md](../promotion-discussion/README.md).
 
 ---
 
@@ -1012,7 +1012,7 @@ Earlier same-day failure (pre-inject A5 red): [radeon-vii-dev/NOTES-DOGFOOD.md](
 | **Severity now** | — (resolved) |
 | **Severity later** | Monitor cost/latency at 250k; optional ceiling via override |
 | **Area** | `meal_budget_fraction`, `sliding_input_tokens`, meal compose budget, `in_turn_max_tokens`, glass context rail |
-| **Design home** | [promotion-discussion/README.md](promotion-discussion/README.md) §5.6 |; **product implement:** [`design-instance-continuity-product-implement.md`](design/memory/design-instance-continuity-product-implement.md)
+| **Design home** | [promotion-discussion/README.md](../promotion-discussion/README.md) §5.6 |; **product implement:** [`design-instance-continuity-product-implement.md`](../design/memory/design-instance-continuity-product-implement.md)
 
 ### Goal
 
@@ -1038,7 +1038,7 @@ Step outer meal from **50k** (~10% of 500k window) toward **~250k** (~50%), meas
 | **Severity now** | — (closed) |
 | **Severity later** | — |
 | **Area** | `elyra/memory/ladder.py`, summary atom bodies; residual of closed [#72](https://github.com/jtwolfe/project-elyra/issues/72) |
-| **Design home** | [design/memory/design-episodic-summary-ladder-llm.md](design/memory/design-episodic-summary-ladder-llm.md) |
+| **Design home** | [design/memory/design-episodic-summary-ladder-llm.md](../design/memory/design-episodic-summary-ladder-llm.md) |
 
 ### Goal
 
@@ -1059,10 +1059,10 @@ Shipped on `feature/92` then merged to `main`: write scales `1h→1y`, hourly ca
 | **Severity now** | High for dogfood (chat-amnesic / wrong wait-reply framing when memory meal on) |
 | **Severity later** | High for multi-moment + multi-hour instance memory |
 | **Area** | Memory meal rebuild; glass-tail band; wait/interject/restart paths; directed_keep tray TTL/LRU |
-| **Design home** | [design/memory/design-instance-continuity-glass-tail-directed-keep.md](design/memory/design-instance-continuity-glass-tail-directed-keep.md) (refined from review DRAFT-EXTENSIONS) |
-| **Implement plan** | [design/memory/design-instance-continuity-implement-plan.md](design/memory/design-instance-continuity-implement-plan.md) — ordered product PRs S1 glass-tail → S2 framing dual-write → S3 sticky keep B5+B5b → S4 merge/confirm → S5 recall nudge → S6 graph UX defer |
-| **Review report** | [stretch-2/meal-continuity-review/REPORT.md](stretch-2/meal-continuity-review/REPORT.md) — fault isolation (B1/B12 co-primary; B5+B5b sticky keep dual kill); evidence `meal-continuity-review/evidence/sa9b-e6d460f2/` |
-| **Also** | [design/memory/design-meal-formation-continuity-review-plan.md](design/memory/design-meal-formation-continuity-review-plan.md) (review method; done); [design/memory/design-instance-continuity-implement-plan.md](design/memory/design-instance-continuity-implement-plan.md) (execute-plan); [promotion-discussion/README.md](promotion-discussion/README.md) §4; Phase 2a keep channel |
+| **Design home** | [design/memory/design-instance-continuity-glass-tail-directed-keep.md](../design/memory/design-instance-continuity-glass-tail-directed-keep.md) (refined from review DRAFT-EXTENSIONS) |
+| **Implement plan** | [design/memory/design-instance-continuity-implement-plan.md](../design/memory/design-instance-continuity-implement-plan.md) — ordered product PRs S1 glass-tail → S2 framing dual-write → S3 sticky keep B5+B5b → S4 merge/confirm → S5 recall nudge → S6 graph UX defer |
+| **Review report** | [stretch-2/meal-continuity-review/REPORT.md](../stretch-2/meal-continuity-review/REPORT.md) — fault isolation (B1/B12 co-primary; B5+B5b sticky keep dual kill); evidence `meal-continuity-review/evidence/sa9b-e6d460f2/` |
+| **Also** | [design/memory/design-meal-formation-continuity-review-plan.md](../design/memory/design-meal-formation-continuity-review-plan.md) (review method; done); [design/memory/design-instance-continuity-implement-plan.md](../design/memory/design-instance-continuity-implement-plan.md) (execute-plan); [promotion-discussion/README.md](../promotion-discussion/README.md) §4; Phase 2a keep channel |
 
 ### Goal
 

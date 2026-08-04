@@ -108,7 +108,7 @@ Default expectation: **H6 disconfirmed** — missing ready is explained by atoms
 | `expand_truncated=true` with slow encode | performance adjacency under D |
 | Thin temporal seeds | bucket E / H2 cascade — separate from ms overruns |
 
-Do not require GPU to complete P05. Link `docs/known-bugs.md` **BUG-mem-gpu-01**.
+Do not require GPU to complete P05. Link `docs/state/known-bugs.md` **BUG-mem-gpu-01**.
 
 ## Expected
 

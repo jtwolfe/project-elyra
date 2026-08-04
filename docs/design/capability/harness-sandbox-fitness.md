@@ -7,16 +7,16 @@
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-24 |
 | **Status** | **Shipped** — Implementation complete (H2–H5 code + H6 checklist); live create-tool smoke is **operator-owned** — not claimed green in-repo until executed |
-| **Audience** | Implementers (full design+PR plan); operators use §H6 checklist (short STATE extract in PR4) |
+| **Audience** | Implementers (full design+PR plan); operators use §H6 checklist (short STATE extract: [sandbox-fitness-checklist.md](../../state/sandbox-fitness-checklist.md)) |
 | **Normative?** | No — prefer code on `working` when conflict |
 | **Durable path** | `docs/design/capability/harness-sandbox-fitness.md` |
 | **Codename** | H1–H6 |
 | **Branch (historical)** | `grok-improvement` (tip now **`working`**) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` (Stretch 1) |
 | **Port source** | `/home/jim/Workspace/aurimago/project-elyra2` (`elyra/sandbox/*`, `sandboxes/sandbox0/`) |
-| **Related** | [GI README](../../grok-improvement-plan/README.md), [tools-and-skills.md](../../tools-and-skills.md), [stretch-1.md](../../stretch-1.md), [design-tool-thrash-recovery.md](../stretch-1/design-tool-thrash-recovery.md), elyra2 `docs/plans/workspace-isolation/DESIGN.md` |
+| **Related** | [GI README](../../grok-improvement-plan/README.md), [tools-and-skills.md](../../state/tools-and-skills.md), [stretch-1.md](../../state/stretch-1.md), [design-tool-thrash-recovery.md](../stretch-1/design-tool-thrash-recovery.md), elyra2 `docs/plans/workspace-isolation/DESIGN.md` |
 
-> **Status: Shipped** — full H1–H6 design + PR plan stays DESIGN (KD14). Short operator smoke checklist extract lands under STATE in PR4.
+> **Status: Shipped** — full H1–H6 design + PR plan stays DESIGN (KD14). Short operator smoke checklist: [docs/state/sandbox-fitness-checklist.md](../../state/sandbox-fitness-checklist.md).
 
 ---
 
@@ -589,8 +589,8 @@ Skills already polished; **only residual** items after runners are real:
 | Surface | Honesty update |
 |---------|----------------|
 | `prompts/system.md` | Sandbox = host tree `sandboxes/sandbox0` + guest exec when isolation on; drafts not visible via FS tools; `tools/` under sandbox = staged runtime copies |
-| `docs/tools-and-skills.md` | `sandbox_*` implemented; verify backend; link this plan; host stub only when `ELYRA_SANDBOX=0` |
-| `docs/stretch-1.md` §7 | Replace “one persistent sandbox” path-jail-only wording |
+| `docs/state/tools-and-skills.md` | `sandbox_*` implemented; verify backend; link this plan; host stub only when `ELYRA_SANDBOX=0` |
+| `docs/state/stretch-1.md` §7 | Replace “one persistent sandbox” path-jail-only wording |
 | Bundled tool `TOOL.md` for `run` | Guest-only when isolation on; host `Sandbox.run` only when isolation off |
 | `verify_tool` TOOL.md | Stage path + guest pytest when isolation on; needs `pyenv_ready` |
 | `create-tool` SKILL.md | Lifecycle + `ELYRA_TOOL_ARGS` for shell tools; promoted smoke needs isolation ready; no host-fish; sandbox `tools/` ≠ drafts |

@@ -159,7 +159,7 @@ transformers==5.14.1
 # local labels: torch 2.13.0+rocm7.2, torchvision 0.28.0+rocm7.2, triton-rocm==3.7.1
 ```
 
-Full artifacts: [freezes/](freezes/) (`pre-rocm-*`, `mid-swap-*`, `post-rocm-*`).
+Full artifacts: [freezes/](../../radeon-vii-dev/freezes/) (`pre-rocm-*`, `mid-swap-*`, `post-rocm-*`).
 
 ### torch detail
 

@@ -1054,7 +1054,7 @@ S4 is optional replace after S3; never blocks S5.
 5. S3 only after S1 (hard edge). Prefer S2 path tests already green. S3 **includes merge-on-confirm** + registry tray SoT.
 6. **S4 default waive** — replace-mode only if product-requested; **S5 does not depend on S4**.
 7. S5 after S1+S3 bands; S6 deferred.
-8. Update `docs/known-bugs.md` BUG-meal-03 → Fixed when product ships.
+8. Update `docs/state/known-bugs.md` BUG-meal-03 → Fixed when product ships.
 9. Merge design stack to main after dogfood acceptance.
 
 **Feature flags:** glass-tail can default **on** when memory meal active (tip is correctness, not experiment). Directed keep remains behind existing `directed_keep_enabled` / traversal follow. Tray TTL constants in settings for tune.
@@ -1438,7 +1438,7 @@ Draft §6.7 checklist + merge-on-confirm + registry SoT coherency (survive close
 - [ ] **S6** deferred or separate epic.
 - [ ] Dogfood: wait_reply off-topic answered from tip; sticky pin survives moment boundary.
 - [ ] All product branches based on `design/BUG-meal-03-93-instance-continuity`.
-- [ ] `docs/known-bugs.md` BUG-meal-03 → Fixed when product ships.
+- [ ] `docs/state/known-bugs.md` BUG-meal-03 → Fixed when product ships.
 - [ ] Design stack merged to main after testing.
 
 ---

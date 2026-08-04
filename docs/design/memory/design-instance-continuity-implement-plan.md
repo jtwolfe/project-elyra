@@ -492,7 +492,7 @@ flowchart TB
 |------|--------|
 | Glass Graph UI / `elyra/runtime/web/**` | Tray panel vs last_session (KD-A19 separate) |
 | Traverse tools | pin / drop / list tray |
-| `docs/stretch-2/architecture/` | Post-ship architecture note if needed |
+| `docs/state/memory/architecture/` | Post-ship architecture note if needed |
 
 #### Behavioral delta
 
@@ -571,7 +571,7 @@ Do **not**:
 - [ ] **S5** optional polish after bands; not used to close rockets without S1/S2.
 - [ ] **S6** deferred or separate epic.
 - [ ] Dogfood: wait_reply off-topic question answered from tip; sticky pin survives moment boundary.
-- [ ] `docs/known-bugs.md` BUG-meal-03 updated to Fixed when product ships (separate from this docs-only plan PR).
+- [ ] `docs/state/known-bugs.md` BUG-meal-03 updated to Fixed when product ships (separate from this docs-only plan PR).
 
 ---
 

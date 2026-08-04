@@ -11,7 +11,7 @@
 | **Repo** | [jtwolfe/project-elyra](https://github.com/jtwolfe/project-elyra) |
 | **Project** | [#2 Project Elyra — Autopoiesis Commons](https://github.com/users/jtwolfe/projects/2) (`PVT_kwHOACTi484Be2el`) |
 | **Landing path** | `docs/design/board/design-v0.1-ready-board-recategorization.md` (PR0) |
-| **Related** | [docs/dev/branch-law.md](../../dev/branch-law.md), [docs/dev/development-governance.md](../../dev/development-governance.md), [docs/promotion-discussion/README.md](../../promotion-discussion/README.md), [docs/known-bugs.md](../../known-bugs.md), [docs/grok-improvement-plan/README.md](../../grok-improvement-plan/README.md), [docs/design/embed/design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md), [docs/design/grok-build/design-grok-build-tool.md](../grok-build/design-grok-build-tool.md) |
+| **Related** | [docs/dev/branch-law.md](../../dev/branch-law.md), [docs/dev/development-governance.md](../../dev/development-governance.md), [docs/promotion-discussion/README.md](../../promotion-discussion/README.md), [docs/state/known-bugs.md](../../state/known-bugs.md), [docs/grok-improvement-plan/README.md](../../grok-improvement-plan/README.md), [docs/design/embed/design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md), [docs/design/grok-build/design-grok-build-tool.md](../grok-build/design-grok-build-tool.md) |
 | **Inventory source** | `/tmp/grok-1000/board-inventory-e3b74dd3.md` (2026-08-04 live snapshot) |
 | **Integration tip** | `working` (normative; see branch-law) |
 
@@ -262,7 +262,7 @@ Stage C MC package; GI Phase 2 full self-mod continuity; claiming “all known-b
 - [x] **Not in scope:** enabling non-experimental `deep_research` / flipping
   `DEEP_RESEARCH_EXPERIMENTAL` (see KD6; dogfood D7 remains experimental-only).
 - Residual dogfood = prompt/design/implement/execute_plan/review paths + auth/sandbox
-  as listed in `docs/grok-build-dogfood.md` (excluding D7 enablement).
+  as listed in `docs/state/grok-build-dogfood.md` (excluding D7 enablement).
 
 ## Acceptance criteria
 - [ ] Exit criteria written and operator-agreed (child)
@@ -361,7 +361,7 @@ Legend — **Status action**: board Status field change. **Parent**: link under 
 | **#106** | Context meal taxonomy design | `backlog` | Todo → stay | none | |
 | **#107** | Atom truncation evaluate | `backlog` | Todo → stay | none | |
 | **#108** | Sandbox warm microsandbox 0.6.8 | `v0.1-gate` | Todo → stay | **Always parent** v0.1 epic | Isolation dogfood reliability |
-| **#109** | Design/implement grok_build | `v0.1-gate` | **Stay Todo** (already Todo on board); body rewrite from greenfield → residual dogfood checklist | **Always parent** v0.1 epic (C4) | Not stale IP — stale **body**. Ship surface + residual dogfood (`docs/grok-build-dogfood.md`). **deep_research enablement not in C4 acceptance** |
+| **#109** | Design/implement grok_build | `v0.1-gate` | **Stay Todo** (already Todo on board); body rewrite from greenfield → residual dogfood checklist | **Always parent** v0.1 epic (C4) | Not stale IP — stale **body**. Ship surface + residual dogfood (`docs/state/grok-build-dogfood.md`). **deep_research enablement not in C4 acceptance** |
 
 #### Closed issues in Done column (#60, #66, #70–#78, #81, #84, #87, #91–#93)
 
@@ -466,7 +466,7 @@ Optional later: Iteration field if weekly planning becomes preferred after the p
 | **Day 2** | **Honest status + PR4 atomic #82 split + drafts** | **Open C6a + C6 first**, parent under epic, label `v0.1-gate`, then **close #82** with both numbers; #59/#86 → Todo; #63/#80 → Todo; #109 body residual rewrite; Branch FF + Context meal drafts Done; Deferred research drafts; **R1 audit again** | #82 close event |
 | **Day 3** | **Exit criteria write + branch hygiene map** | C1 write/agree draft exit criteria; #65 tip map (`working`/`main`/pins) | C1, #65 |
 | **Day 4** | **Operating SHA convention** | C3 write convention (file or lightweight tag process per branch-law) | C3 |
-| **Day 5** | **grok_build residual dogfood** | #109 / #63 checklist (`docs/grok-build-dogfood.md`); **not** deep_research enable (not in C4 acceptance) | #109, #63 |
+| **Day 5** | **grok_build residual dogfood** | #109 / #63 checklist (`docs/state/grok-build-dogfood.md`); **not** deep_research enable (not in C4 acceptance) | #109, #63 |
 | **Day 6** | **Memory Phase 2 smoke + busy-drain dogfood start** | #80 Gate B residual **and/or** C6a busy-drain checklist (`drain_ok_total` under continuous wakes) | #80, C6a |
 | **Day 7** | **GPU/env matrix packaging** | C6: device matrix, Tensile/inject ops pointers, CPU soft-fail claim | C6 |
 | **Day 8** | **Sandbox warm path** | #108 repro + fix or packaging waiver in exit criteria | #108 |
@@ -563,7 +563,7 @@ evidence alone does not close the packaging story — we split instead of leavin
 | GPU/env/Tensile packaging matrix + env docs | **#C6** | `v0.1-gate` |
 
 Not claiming “GPU always works without operator setup.” CPU/mock soft-fail remains first-class.
-PR6 will update `docs/known-bugs.md` BUG-mem-gpu-01 index to point at #C6a + #C6 (not a silent policy flip).
+PR6 will update `docs/state/known-bugs.md` BUG-mem-gpu-01 index to point at #C6a + #C6 (not a silent policy flip).
 ```
 
 **Phase C — Day 3+ (checkpoint execution / product slots)**
@@ -802,11 +802,11 @@ Feature flags: N/A (process). Staged rollout = day plan above.
 - [docs/dev/branch-law.md](../../dev/branch-law.md) — `working` / `main` / operating pin
 - [docs/dev/development-governance.md](../../dev/development-governance.md) — Stage ladder, Project board as planning surface
 - [docs/promotion-discussion/README.md](../../promotion-discussion/README.md) — v0.1 definition
-- [docs/known-bugs.md](../../known-bugs.md) — BUG index / #59 epic
+- [docs/state/known-bugs.md](../../state/known-bugs.md) — BUG index / #59 epic
 - [docs/grok-improvement-plan/README.md](../../grok-improvement-plan/README.md) — GI phases; deep_research not Phase 1 gate
 - [docs/design/embed/design-embed-async-encode-worker.md](../embed/design-embed-async-encode-worker.md) — EncodeWorker code shipped; live busy dogfood + packaging residual
 - [docs/design/grok-build/design-grok-build-tool.md](../grok-build/design-grok-build-tool.md) — KD16 deep_research experimental
-- [docs/grok-build-dogfood.md](../../grok-build-dogfood.md) — dogfood checklist including D7 experimental
+- [docs/state/grok-build-dogfood.md](../../state/grok-build-dogfood.md) — dogfood checklist including D7 experimental
 - Project: https://github.com/users/jtwolfe/projects/2
 
 ---
@@ -876,7 +876,7 @@ Process work is split into **docs PRs** (land on `working` via short-lived `feat
 | Field | Value |
 |-------|--------|
 | **Title** | `docs: known-bugs #82 split to C6a+C6 + v0.1 exit criteria pointer` |
-| **Files / surfaces** | `docs/known-bugs.md` BUG-mem-gpu-01 index + short resolution: closed umbrella; residuals C6a (busy dogfood) + C6 (packaging); optional exit criteria stub linking C1 |
+| **Files / surfaces** | `docs/state/known-bugs.md` BUG-mem-gpu-01 index + short resolution: closed umbrella; residuals C6a (busy dogfood) + C6 (packaging); optional exit criteria stub linking C1 |
 | **Dependencies** | PR4/Ops4 (#82 closed, C6a + C6 numbers known) |
 | **Description** | Keep docs index honest with KD5 — not a silent policy flip vs “do not close on encode evidence alone.” Small docs PR to `working`. Do not re-break every bug entry. |
 

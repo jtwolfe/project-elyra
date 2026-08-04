@@ -836,7 +836,7 @@ For N≈400, 5×2048 float32 channels ≈ 400 × 5 × 2048 × 4 ≈ **16 MiB** o
 - [`tests/test_memory_store_lance.py`](tests/test_memory_store_lance.py) — lance suite (extend)
 - [`tests/test_memory_index.py`](tests/test_memory_index.py) — migration recovery fakes (**must gain `head`**)
 - [`pyproject.toml`](pyproject.toml) — `memory-lance = ["lancedb>=0.20,<0.21", "pyarrow>=14"]`
-- [`docs/known-bugs.md`](docs/known-bugs.md) — BUG-wake-02, BUG-mem-gpu-01 adjacency
+- [`docs/state/known-bugs.md`](docs/state/known-bugs.md) — BUG-wake-02, BUG-mem-gpu-01 adjacency
 
 ---
 
@@ -923,7 +923,7 @@ If the branch strongly values bisect, use the split below **with the hard constr
 |-------|--------|
 | **Title** | `docs: close lance load bug (BUG-mem-lance-01) + lance-debug1 status` |
 | **Depends on** | Fix PR / (PR2+PR3) landed |
-| **Files** | `docs/known-bugs.md` (add **BUG-mem-lance-01** Status=Fixed, link design + fix SHAs); `docs/lance-debug1/README.md` (status: inspection complete, **product fix landed** in elyra/memory); optional short note on `BUG-DOSSIER.md` header; optional post-fix evidence note |
+| **Files** | `docs/state/known-bugs.md` (add **BUG-mem-lance-01** Status=Fixed, link design + fix SHAs); `docs/lance-debug1/README.md` (status: inspection complete, **product fix landed** in elyra/memory); optional short note on `BUG-DOSSIER.md` header; optional post-fix evidence note |
 | **Description** | Do not rewrite the sealed evidence bag. Point operators at restart-required fix. Cross-link BUG-wake-02 / BUG-mem-gpu-01 as still-open adjacency. |
 | **Risk** | None (docs) |
 | **Verify** | Doc review only |

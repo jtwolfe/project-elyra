@@ -1,12 +1,12 @@
 # Phase 1 — Temporal / Episodic Memory
 
 **Class:** DESIGN
-**Status:** **Done** (2026-07-28) — PR1–PR9 on `grok-improvement-memory`; `enabled`/`write_atoms` default on; optional Lance; glass Memory page. Deferred polish in [known-bugs.md](../../known-bugs.md). See [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md) and [README.md](../../stretch-2/README.md) Phase 1 close-out.
+**Status:** **Done** (2026-07-28) — PR1–PR9 on `grok-improvement-memory`; `enabled`/`write_atoms` default on; optional Lance; glass Memory page. Deferred polish in [known-bugs.md](../../state/known-bugs.md). See [architecture/phase-1-temporal.md](../../state/memory/architecture/phase-1-temporal.md) and [README.md](../../state/memory/README.md) Phase 1 close-out.
 **Branch:** `grok-improvement-memory`
 **Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md)
 **Meal composition:** [design-context-meal-composition.md](design-context-meal-composition.md)
-**Architecture (shipped):** [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md)
+**Architecture (shipped):** [architecture/phase-1-temporal.md](../../state/memory/architecture/phase-1-temporal.md)
 **Implementation design:** [design-phase-1-implementation.md](design-phase-1-implementation.md)
 
 ## Goal
@@ -38,7 +38,7 @@ See [design-context-meal-composition.md](design-context-meal-composition.md).
 
 ## Concept mapping
 
-**Shipped map:** [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md) (structure map, activity map, invariants, failure modes, glossary, JSONL restart/compaction).
+**Shipped map:** [architecture/phase-1-temporal.md](../../state/memory/architecture/phase-1-temporal.md) (structure map, activity map, invariants, failure modes, glossary, JSONL restart/compaction).
 
 | Essay / planning term | Phase 1 structure |
 |----------------------|-------------------|
@@ -100,7 +100,7 @@ elyra/memory/
 - [x] In-moment slide-off under budget without deleting durable atoms
 - [x] Feature flag or clean fallback if store unavailable
 - [x] Unit + integration tests; **no Nemotron dependency**
-- [x] Architecture note: structure map + activity map for Phase 1 activities → [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md)
+- [x] Architecture note: structure map + activity map for Phase 1 activities → [architecture/phase-1-temporal.md](../../state/memory/architecture/phase-1-temporal.md)
 
 ## Open questions
 

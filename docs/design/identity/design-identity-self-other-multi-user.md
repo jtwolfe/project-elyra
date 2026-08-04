@@ -11,7 +11,7 @@
 | **Branch base** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Real goal** | Improve Elyra’s **sense of self and others**; multi-user UX and collab prep serve that goal |
-| **Related docs** | [`docs/time-and-identity.md`](../../time-and-identity.md), [`docs/tools-and-skills.md`](../../tools-and-skills.md), [`docs/dev/engineering-principles.md`](../../dev/engineering-principles.md), [`prompts/system.md`](../../../prompts/system.md) |
+| **Related docs** | [`docs/state/time-and-identity.md`](../../state/time-and-identity.md), [`docs/state/tools-and-skills.md`](../../state/tools-and-skills.md), [`docs/dev/engineering-principles.md`](../../dev/engineering-principles.md), [`prompts/system.md`](../../../prompts/system.md) |
 | **Parallel pattern** | create-tool draft → verify → promote (skills process, thin tools) |
 
 ---
@@ -37,7 +37,7 @@ This design introduces a **thin, versioned identity system** for both self and u
 
 ### Why this change is needed
 
-Self ≠ user is already **law** (`prompts/system.md`, `docs/time-and-identity.md`). What is missing is a **safe mutation path** and a **living model of others**:
+Self ≠ user is already **law** (`prompts/system.md`, `docs/state/time-and-identity.md`). What is missing is a **safe mutation path** and a **living model of others**:
 
 | Piece today | Path / behaviour | Gap |
 |-------------|------------------|-----|
@@ -1657,8 +1657,8 @@ Follow consolidated **PR Plan** (6 units). Dogfood value after PR2 (tools + gate
 | Tools bundled | three packages only |
 | Glass identity panel | current + versions; labels |
 | Reset | preserves `data/identity/**` and `data/users/**` including drafts/versions/meta |
-| `docs/time-and-identity.md` | Replace patch_* with draft/promote; versioning |
-| `docs/tools-and-skills.md` | Identity tools + skills |
+| `docs/state/time-and-identity.md` | Replace patch_* with draft/promote; versioning |
+| `docs/state/tools-and-skills.md` | Identity tools + skills |
 | Live operator profile | goes_by alignment (dogfood, not necessarily seed) |
 
 ---
@@ -1765,7 +1765,7 @@ Resolved as Key Decisions (K5b, K13–K19) or locked text above. Remaining:
 - `elyra/runtime/reset.py` — preserve identity/users  
 - `elyra/runtime/web/app.js` — `USER_ID`, role chips, identity panel  
 - `elyra/runtime/api.py` — `/api/identity`, `/api/users/<id>`  
-- `docs/time-and-identity.md`, `prompts/system.md`, `prompts/orient.md`  
+- `docs/state/time-and-identity.md`, `prompts/system.md`, `prompts/orient.md`  
 - Sandbox staging: `sandboxes/sandbox0/tmp/identity/SELF_v3_draft.md` (not live)  
 
 ---
@@ -1824,7 +1824,7 @@ Six mergeable units on `grok-improvement` (collapsed from a 10-deep chain). Each
 | | |
 |--|--|
 | **Title** | docs+dogfood: time-and-identity draft/promote; fixes |
-| **Files** | `docs/time-and-identity.md`, `docs/tools-and-skills.md`, `docs/overview.md` as needed; small fix commits from checklist |
+| **Files** | `docs/state/time-and-identity.md`, `docs/state/tools-and-skills.md`, `docs/state/overview.md` as needed; small fix commits from checklist |
 | **Deps** | PR2–5 for accurate names; can draft docs early and merge last |
 | **Description** | Replace patch_*; document **work-origin USER** (K13/K19) not operator fallback; privacy; gates; dogfood items 8–9 (linked vs autonomous USER). |
 

@@ -268,7 +268,7 @@ sequenceDiagram
 - Promotion discussion §4–5: `docs/promotion-discussion/README.md`
 - Meal composition sketch: `docs/stretch-2/design-context-meal-composition.md`
 - Phase 2a keep: `docs/stretch-2/design-phase-2a-implementation.md` (lifetime rules)
-- Known bug: `docs/known-bugs.md` BUG-meal-03
+- Known bug: `docs/state/known-bugs.md` BUG-meal-03
 - Inspection pattern exemplar: `docs/lance-debug1/design-inspection-plan.md`
 
 ### Out of primary review scope
@@ -809,7 +809,7 @@ Because this workstream produces a **report** (not a product feature ship), PRs 
 | Field | Value |
 |-------|--------|
 | **Title** | `docs: meal formation & continuity edge review plan (BUG-meal-03)` |
-| **Files** | **`docs/stretch-2/design-meal-formation-continuity-review-plan.md`** (this document); link from `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md` §12; optional link from `docs/known-bugs.md` BUG-meal-03; `docs/stretch-2/README.md` index entry |
+| **Files** | **`docs/stretch-2/design-meal-formation-continuity-review-plan.md`** (this document); link from `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md` §12; optional link from `docs/state/known-bugs.md` BUG-meal-03; `docs/state/memory/README.md` index entry |
 | **Dependencies** | None |
 | **Effort** | ~0.5 person-day |
 | **Description** | Merge the executable review methodology. No product code. Update continuity draft “Next process step” to point at this plan. |
@@ -851,7 +851,7 @@ Report may merge and unlock continuity-draft OQ locking only if **all** of:
 | Field | Value |
 |-------|--------|
 | **Title** | `docs: refine glass-tail + sticky keep draft from continuity review` |
-| **Files** | `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md` (status → Ready for implement plan; lock OQs; acceptance; cut order; directed_keep tray deltas incl. B5b); `docs/known-bugs.md` status note; promotion-discussion pointer if needed |
+| **Files** | `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md` (status → Ready for implement plan; lock OQs; acceptance; cut order; directed_keep tray deltas incl. B5b); `docs/state/known-bugs.md` status note; promotion-discussion pointer if needed |
 | **Dependencies** | PR-R3 (exit criteria met) |
 | **Effort** | ~0.5 person-day |
 | **Description** | Apply DRAFT-EXTENSIONS from the report. Explicitly improve directed_keep section (persist, TTL/LRU, stop moment-end wipe, **instance tray without moment_id filter**, inspect). Do **not** implement runtime tray yet — document only. |
@@ -905,7 +905,7 @@ flowchart LR
 - Product draft: `docs/stretch-2/design-instance-continuity-glass-tail-directed-keep.md`
 - Meal composition: `docs/stretch-2/design-context-meal-composition.md`
 - Promotion discussion §4–5: `docs/promotion-discussion/README.md`
-- Known bugs BUG-meal-03: `docs/known-bugs.md`
+- Known bugs BUG-meal-03: `docs/state/known-bugs.md`
 - Inspection pattern: `docs/lance-debug1/design-inspection-plan.md`
 - Phase 2a: `docs/stretch-2/design-phase-2a-implementation.md`
 - Code: `elyra/memory/meal.py`, `elyra/memory/tokens.py` (`split_memory_budget_v3`), `elyra/presence/worker.py`, `elyra/loop/doloop.py`, `elyra/loop/context.py`, `elyra/loop/orient_slice.py` (`format_skill_bias`), `elyra/messages.py`, `elyra/memory/promote.py`, `elyra/memory/traverse.py`, `elyra/runtime/api.py`, `elyra/runtime/meal_budget.py`

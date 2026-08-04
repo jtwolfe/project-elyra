@@ -1,22 +1,78 @@
-# STATE (stub index)
+# STATE — living product behaviour
 
-**Pre-move index only.** Files below still live at their current paths — they are **not** yet under `docs/state/`. Physical moves land in PR4 of [#121](https://github.com/jtwolfe/project-elyra/issues/121). Prefer the [docs hub](../README.md).
+| Field | Value |
+|-------|--------|
+| **Class** | STATE |
+| **Audience** | Operators / users |
+| **Role** | As-implemented behaviour, run/deploy, honest limits |
+| **Conflict** | Prefer **code on `working`** over this prose |
+| **Hub** | [docs/README.md](../README.md) |
+| **Root entry** | [README.md](../../README.md) (primary operator onboarding) |
 
-Living product behaviour and operator docs:
+Living docs for **what the product does today**. Designs and PR plans live under [docs/design/](../design/). Process law under [docs/dev/](../dev/). Short north stars under [docs/goal/](../goal/).
 
-| Doc (current path) | Role |
-|--------------------|------|
-| [../stretch-1.md](../stretch-1.md) | Runtime contract |
-| [../overview.md](../overview.md) | Glossary / big picture |
-| [../tools-and-skills.md](../tools-and-skills.md) | Tools, skills, dogfood |
-| [../time-and-identity.md](../time-and-identity.md) | Self/user, time layers |
-| [../known-bugs.md](../known-bugs.md) | Product bug backlog |
-| [../grok-build-dogfood.md](../grok-build-dogfood.md) | Grok Build operator checklist |
-| [../grok-improvement-plan/usage-tracking-supergrok-pacing.md](../grok-improvement-plan/usage-tracking-supergrok-pacing.md) | Usage / SuperGrok pacing (ops) |
-| [../stretch-2/README.md](../stretch-2/README.md) | Memory phase status |
-| [../stretch-2/architecture/phase-1-temporal.md](../stretch-2/architecture/phase-1-temporal.md) | As-implemented temporal manual |
-| [../stretch-2/architecture/phase-2-semantic.md](../stretch-2/architecture/phase-2-semantic.md) | As-implemented semantic manual |
-| [../stretch-2/architecture/phase-2a-directed-traversal.md](../stretch-2/architecture/phase-2a-directed-traversal.md) | As-implemented directed-traversal manual |
-| [../radeon-vii-dev/README.md](../radeon-vii-dev/README.md) | ROCm dogfood start path |
+---
 
-Root [README.md](../../README.md) remains the primary operator entry.
+## Architecture & runtime
+
+| Doc | Role |
+|-----|------|
+| [architecture.md](architecture.md) | **As-implemented map** — process topology, `elyra/*` packages, data layout, limits |
+| [stretch-1.md](stretch-1.md) | **Runtime contract** — presence, moments, do-loop, done-when (basename kept; still law) |
+| [overview.md](overview.md) | Big picture, glossary, Stretch 1 vs 2 |
+| [sandbox-fitness-checklist.md](sandbox-fitness-checklist.md) | Short operator isolation / create-tool smoke (H6 extract) |
+
+## Tools, identity, ops
+
+| Doc | Role |
+|-----|------|
+| [tools-and-skills.md](tools-and-skills.md) | Packages, base catalog, VCS, search/browser/secrets, dogfood checklist |
+| [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
+| [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog |
+| [grok-build-dogfood.md](grok-build-dogfood.md) | Operator checklist for current Grok Build instrument |
+| [usage-and-pacing.md](usage-and-pacing.md) | SuperGrok pool vs Elyra ledger, burst, override |
+
+## Memory (as implemented)
+
+| Doc | Role |
+|-----|------|
+| [memory/README.md](memory/README.md) | Phase honesty — Phase 1 done; 2/2a code done (dogfood pending); Phase 3 experimental |
+| [memory/architecture/phase-1-temporal.md](memory/architecture/phase-1-temporal.md) | Temporal memory manual |
+| [memory/architecture/phase-2-semantic.md](memory/architecture/phase-2-semantic.md) | Semantic memory manual |
+| [memory/architecture/phase-2a-directed-traversal.md](memory/architecture/phase-2a-directed-traversal.md) | Directed traversal manual |
+
+Memory **designs** (not manuals): [docs/design/memory/](../design/memory/).
+
+## Hardware dogfood (ROCm / Radeon VII)
+
+| Doc | Role |
+|-----|------|
+| [radeon-vii/README.md](radeon-vii/README.md) | Operator start path (+ NOTES / VENV / STACK) |
+| [radeon-vii/NOTES-DOGFOOD.md](radeon-vii/NOTES-DOGFOOD.md) | Switch / inject / encode dogfood notes |
+| [radeon-vii/VENV-ROCM-SWITCH.md](radeon-vii/VENV-ROCM-SWITCH.md) | Venv ROCm switch runbook |
+| [radeon-vii/STACK-INVENTORY.md](radeon-vii/STACK-INVENTORY.md) | Stack inventory |
+
+Scripts and freezes still under [docs/radeon-vii-dev/](../radeon-vii-dev/) until archive/investigations PR. ROCm design: [design/memory/design-rocm-venv-gpu-embed-smoke.md](../design/memory/design-rocm-venv-gpu-embed-smoke.md).
+
+---
+
+## Run (quick)
+
+```bash
+./scripts/setup_venv.sh && source .venv/bin/activate
+pip install -e '.[sandbox]'   # optional but needed for guest isolation (default ON)
+./scripts/setup-microsandbox.sh --doctor-only
+
+elyra start              # API + UI (xAI Grok product default)
+# http://127.0.0.1:8787/
+```
+
+Full install matrix and extras: root [README.md](../../README.md). Sandbox smoke: [sandbox-fitness-checklist.md](sandbox-fitness-checklist.md).
+
+## Related freezes (not setup law)
+
+| Path | Note |
+|------|------|
+| [docs/inference.md](../inference.md) | Gemma/llama freeze — product path is Grok + [usage-and-pacing.md](usage-and-pacing.md) |
+| [docs/live-eval.md](../live-eval.md) | Historical live protocol |
+| [docs/lance-debug1/](../lance-debug1/) | Sealed investigation (moves to investigations/ later) |

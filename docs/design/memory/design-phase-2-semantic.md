@@ -5,8 +5,8 @@
 **Depends on:** Phase 1 Done
 **Implementation design (historical PR1–PR9):** [design-phase-2-implementation.md](design-phase-2-implementation.md)
 **Rectification design (landed — normative for product-path fixes):** [design-phase-2-rectification.md](design-phase-2-rectification.md)
-**Architecture note (what shipped + rectified):** [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md)
-**Program status:** [README.md](../../stretch-2/README.md) Phase 2 close-out
+**Architecture note (what shipped + rectified):** [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md)
+**Program status:** [README.md](../../state/memory/README.md) Phase 2 close-out
 **Baseline:** [inspiration-activity-model-and-storage.md](inspiration-activity-model-and-storage.md), [design-database-choices.md](design-database-choices.md)
 **Runtime:** [design-nemotron-runtime.md](design-nemotron-runtime.md)
 **Meal channel:** [design-context-meal-composition.md](design-context-meal-composition.md) (semantic as supporting only)
@@ -17,7 +17,7 @@ This sketch is **superseded for implementation and post-ship mapping** by:
 
 1. **[design-phase-2-implementation.md](design-phase-2-implementation.md)** — historical full design, key decisions, PR plan (PR1–PR9).
 2. **[design-phase-2-rectification.md](design-phase-2-rectification.md)** — product-intent recovery (KD-R*, PR-R1–R6); **landed in code** for R1–R5.
-3. **[architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md)** — structure ↔ essay, activity map, invariants, search/repair/Vectors as shipped + rectified.
+3. **[architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md)** — structure ↔ essay, activity map, invariants, search/repair/Vectors as shipped + rectified.
 
 Prefer those docs over the outline below. The outline remains as a historical short map of intent.
 
@@ -61,7 +61,7 @@ Add **associative / semantic** structure as *supporting* context: “this remind
 - [x] Portable encode path documented and tested (mock in CI; real GPU optional / Gate B)
 - [x] Segmentation + linked retrieval tested (parcels + parcel→parent in meal)
 - [x] ANN freshness policy written and implemented (hybrid buffer + idle optimize)
-- [x] Architecture note: [architecture/phase-2-semantic.md](../../stretch-2/architecture/phase-2-semantic.md)
+- [x] Architecture note: [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md)
 
 ## Open questions
 

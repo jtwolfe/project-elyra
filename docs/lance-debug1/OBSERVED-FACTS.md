@@ -73,7 +73,7 @@
 | **BUG-mem-gpu-01** | ROCm/GPU embed path (adjacent performance; inflates expand_ms) |
 | Semantic expand budget vs CPU Nemotron latency | Adjacent; not root of missing atoms |
 
-See `docs/known-bugs.md` for wake-02 / gpu-01; do not re-home them into this package.
+See `docs/state/known-bugs.md` for wake-02 / gpu-01; do not re-home them into this package.
 
 ---
 

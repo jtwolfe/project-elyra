@@ -9,7 +9,7 @@
 | **Primary mechanism** | Bare `Table.to_arrow()` = default query limit **10** (H1 / H1a / H1b) → thin `_load` (H2) |
 | **Sealed run** | [evidence/2026-07-29-run-01/](evidence/2026-07-29-run-01/) — n_full=**386**, n_arrow=**10**, process=**10** |
 | **Product fix** | [design-fix-load-truncation.md](design-fix-load-truncation.md) → `fcb5130` full-table materialize helper + `_load` / migrate / promote; **restart required** |
-| **Known-bugs** | [BUG-mem-lance-01](../known-bugs.md) **Fixed** (restart required) |
+| **Known-bugs** | [BUG-mem-lance-01](../state/known-bugs.md) **Fixed** (restart required) |
 | **Origin** | `/design` run `ed40fbd4` (2026-07-29); plan `60b09de2` (inspect); plan `1c062b32` (fix + docs) |
 | **Normative inspection design** | [design-inspection-plan.md](design-inspection-plan.md) |
 | **Exit artifact (inspection)** | [BUG-DOSSIER.md](BUG-DOSSIER.md) |
@@ -154,7 +154,7 @@ See [scripts/README.md](scripts/README.md), [REPRO-RECIPES.md](REPRO-RECIPES.md)
 
 ## Related (read-only cross-links)
 
-- `docs/known-bugs.md` — **BUG-mem-lance-01** (Fixed); **BUG-wake-02**, **BUG-mem-gpu-01** (still open adjacency; not Lance row-loss root)
+- `docs/state/known-bugs.md` — **BUG-mem-lance-01** (Fixed); **BUG-wake-02**, **BUG-mem-gpu-01** (still open adjacency; not Lance row-loss root)
 - [design-fix-load-truncation.md](design-fix-load-truncation.md) — product fix design (implemented)
-- `docs/stretch-2/architecture/phase-2-semantic.md` — semantic architecture (reference)
+- `docs/state/memory/architecture/phase-2-semantic.md` — semantic architecture (reference)
 - `docs/design/memory/spikes/lance-emb-migration.md` — historical migration notes (pre-fix `to_arrow` risk)

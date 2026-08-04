@@ -2,10 +2,10 @@
 
 **Status:** **Code shipped (PR-A1–A5, 2026-07-29)** — GraphView, TraversalSession, directed_keep meal channel, traverse tools + skill, Graph glass. **Operator smoke dogfood verification is still pending** before calling Phase 2a product-complete or flipping defaults. Flags: `directed_traversal_enabled` / `directed_keep_enabled` **off** (OQ-A1: keep follows traversal when traversal is on).
 **Package:** `elyra/memory/` (`graph.py`, `weights.py`, `traverse.py`; meal + tokens + inspect extensions; presence registry; tools; glass Graph APIs)
-**Philosophy:** [memory-atoms.pdf](../../memory-atoms.pdf)
-**Design (planning):** [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) (intent sketch), [design-phase-2a-implementation.md](../../design/memory/design-phase-2a-implementation.md) (normative implementation design + KD-A* + PR plan)
-**Meal sketch:** [design-context-meal-composition.md](../../design/memory/design-context-meal-composition.md)
-**Baseline activities:** [inspiration-activity-model-and-storage.md](../../design/memory/inspiration-activity-model-and-storage.md) §3.5
+**Philosophy:** [memory-atoms.pdf](../../../memory-atoms.pdf)
+**Design (planning):** [design-phase-2a-directed-traversal.md](../../../design/memory/design-phase-2a-directed-traversal.md) (intent sketch), [design-phase-2a-implementation.md](../../../design/memory/design-phase-2a-implementation.md) (normative implementation design + KD-A* + PR plan)
+**Meal sketch:** [design-context-meal-composition.md](../../../design/memory/design-context-meal-composition.md)
+**Baseline activities:** [inspiration-activity-model-and-storage.md](../../../design/memory/inspiration-activity-model-and-storage.md) §3.5
 **Prior manuals:** [architecture/phase-1-temporal.md](phase-1-temporal.md), [architecture/phase-2-semantic.md](phase-2-semantic.md)
 **Program status:** [stretch-2 README](../README.md) Phase 2a close-out
 **Seeds:** Phase 2 rectified vector path + Phase 1 temporal spine — prefer operator smoke of Phase 2 before full multi-hop dogfood
@@ -167,7 +167,7 @@ Helpers: `is_directed_traversal_enabled`, `is_directed_keep_enabled` in `config.
 
 ## 2. Activity map (§3 inspiration)
 
-Which [§3 activities](../../design/memory/inspiration-activity-model-and-storage.md) are live after Phase 2a. Phase 1/2 rows remain; directed rows supersede Phase 2 “No — Phase 2a” stubs.
+Which [§3 activities](../../../design/memory/inspiration-activity-model-and-storage.md) are live after Phase 2a. Phase 1/2 rows remain; directed rows supersede Phase 2 “No — Phase 2a” stubs.
 
 ### 3.1–3.4 Write / temporal / meal / semantic
 
@@ -400,16 +400,16 @@ Hermetic CI: **no** torch, **no** GPU, **no** network. Lance tests skip-if-unava
 
 | Document | Role |
 |----------|------|
-| [design-phase-2a-implementation.md](../../design/memory/design-phase-2a-implementation.md) | **Normative** implementation design, KDs, PR plan |
-| [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) | Intent sketch (concept map = session-only) |
+| [design-phase-2a-implementation.md](../../../design/memory/design-phase-2a-implementation.md) | **Normative** implementation design, KDs, PR plan |
+| [design-phase-2a-directed-traversal.md](../../../design/memory/design-phase-2a-directed-traversal.md) | Intent sketch (concept map = session-only) |
 | [architecture/phase-2-semantic.md](phase-2-semantic.md) | Phase 2 seeds + Vectors; Graph was stub until 2a |
 | [architecture/phase-1-temporal.md](phase-1-temporal.md) | Temporal spine + ladder isolation baseline |
-| [design-context-meal-composition.md](../../design/memory/design-context-meal-composition.md) | Directed-keep channel sketch |
-| [design-database-choices.md](../../design/memory/design-database-choices.md) | `graph.py` interface rule; Cypher optional later |
-| [design-phase-3-procedural.md](../../design/memory/design-phase-3-procedural.md) | Success weights later |
-| [inspiration-activity-model-and-storage.md](../../design/memory/inspiration-activity-model-and-storage.md) | §3.5 activity baseline |
+| [design-context-meal-composition.md](../../../design/memory/design-context-meal-composition.md) | Directed-keep channel sketch |
+| [design-database-choices.md](../../../design/memory/design-database-choices.md) | `graph.py` interface rule; Cypher optional later |
+| [design-phase-3-procedural.md](../../../design/memory/design-phase-3-procedural.md) | Success weights later |
+| [inspiration-activity-model-and-storage.md](../../../design/memory/inspiration-activity-model-and-storage.md) | §3.5 activity baseline |
 | [tools-and-skills.md](../../tools-and-skills.md) | Skill vs tool split |
-| [philosophical-soft-guidance.md](../philosophical-soft-guidance.md) | Judgment influences only |
+| [philosophical-soft-guidance.md](../../../stretch-2/philosophical-soft-guidance.md) | Judgment influences only |
 
 When behaviour changes, update **this** architecture note (and activity map) as part of done — historical design docs stay historical unless a decision is revised.
 

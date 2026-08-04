@@ -813,7 +813,7 @@ Small, ordered, independently reviewable. **Max 4 PRs.**
   - `tools/bundled/load_skill/TOOL.md` (+ light pass on install_skill / install_tool_draft / verify_tool / promote_tool)
   - `prompts/system.md`, optionally `prompts/orient.md` — **pointer-only** post-load lines
   - `tests/test_skills_catalog.py` / `tests/test_stretch1_donewhen.py` / `tests/test_prompts_loader.py` — loose phrase asserts
-  - `docs/tools-and-skills.md` — short note on framing + first action
+  - `docs/state/tools-and-skills.md` — short note on framing + first action
 - **Depends on:** none hard; parallel with PR1
 - **Description:** Instruction clarity only. Ordered checklists live in SKILL.md; system/orient point. Single copy-edit pass to avoid four procedures.
 

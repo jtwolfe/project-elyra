@@ -7,7 +7,7 @@
 | **Product** | project-elyra |
 | **Author** | _(design agent)_ |
 | **Date** | 2026-07-28 |
-| **Status** | **Done** (2026-07-28) — PR1–PR9 shipped; see [architecture/phase-1-temporal.md](../../stretch-2/architecture/phase-1-temporal.md), residual [design-phase-1-remaining-pr8-pr9.md](design-phase-1-remaining-pr8-pr9.md), [README.md](../../stretch-2/README.md) close-out + [known-bugs.md](../../known-bugs.md) caveats |
+| **Status** | **Done** (2026-07-28) — PR1–PR9 shipped; see [architecture/phase-1-temporal.md](../../state/memory/architecture/phase-1-temporal.md), residual [design-phase-1-remaining-pr8-pr9.md](design-phase-1-remaining-pr8-pr9.md), [README.md](../../state/memory/README.md) close-out + [known-bugs.md](../../state/known-bugs.md) caveats |
 | **Branch** | `grok-improvement-memory` (planning); runtime product work typically lands via `grok-improvement` |
 | **Philosophy** | [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) |
 | **Baseline** | [`docs/stretch-2/inspiration-activity-model-and-storage.md`](inspiration-activity-model-and-storage.md) |
@@ -66,7 +66,7 @@ The memory-atoms philosophy treats memory as **organized experience** (instances
 - Single presence worker (single-writer friendly).
 - Background jobs never starve the do-loop.
 - Feature-flag / clean fallback if store unavailable.
-- Docs: planning under `docs/stretch-2/`; architecture manuals under `docs/stretch-2/architecture/` when shipping.
+- Docs: planning under `docs/stretch-2/`; architecture manuals under `docs/state/memory/architecture/` when shipping.
 - No Stretch 2 hypergraph / success-path machinery in Phase 1.
 - Align with engineering principles: modular packages, tests as feature, narrow public API, `ELYRA_HOME` defaults.
 
@@ -175,7 +175,7 @@ tests/
   test_memory_context_integration.py
   test_memory_flag_fallback.py
 
-docs/stretch-2/architecture/
+docs/state/memory/architecture/
   phase-1-temporal.md           # post-ship concept map (done criterion)
 ```
 
@@ -1169,7 +1169,7 @@ Regression: existing `test_loop_context.py` / `test_doloop.py` remain green with
 
 ### Concept-mapping architecture note (done obligation)
 
-**Shipped:** [`docs/stretch-2/architecture/phase-1-temporal.md`](../../stretch-2/architecture/phase-1-temporal.md) containing:
+**Shipped:** [`docs/state/memory/architecture/phase-1-temporal.md`](../../state/memory/architecture/phase-1-temporal.md) containing:
 
 1. **Structure map**
 
@@ -1312,15 +1312,15 @@ Regression: existing `test_loop_context.py` / `test_doloop.py` remain green with
 ### References
 
 - `docs/memory-atoms.pdf` — philosophy
-- `docs/stretch-2/README.md` — phase overview, done criteria
+- `docs/state/memory/README.md` — phase overview, done criteria
 - `docs/stretch-2/inspiration-activity-model-and-storage.md` — activities + logical prototype
 - `docs/stretch-2/design-context-meal-composition.md` — meal + slide-off
 - `docs/stretch-2/design-phase-1-temporal.md` — short phase outline
 - `docs/stretch-2/design-database-choices.md` — Lance direction + interface rule
 - `docs/stretch-2/philosophical-soft-guidance.md` — soft influences
 - `docs/dev/engineering-principles.md` — modularity, tests, config
-- `docs/stretch-1.md` — moment = do-loop; sliding meal contract
-- `docs/known-bugs.md` — BUG-wake-01 density risk
+- `docs/state/stretch-1.md` — moment = do-loop; sliding meal contract
+- `docs/state/known-bugs.md` — BUG-wake-01 density risk
 - Code: `elyra/loop/context.py`, `elyra/loop/doloop.py`, `elyra/loop/context_meter.py`, `elyra/moment/store.py`, `elyra/presence/worker.py`, `elyra/settings.py`, `elyra/llm/constants.py`
 
 ---
@@ -1429,7 +1429,7 @@ Ordered stack for `/execute-plan`. Each PR independently reviewable; defaults ke
 |-------|--------|
 | **Title** | `docs(memory): Phase 1 concept-mapping architecture note` |
 | **Depends on** | PR6 (or parallel once APIs stable; must merge before phase “done”) |
-| **Files** | `docs/stretch-2/architecture/phase-1-temporal.md`, light touch `docs/stretch-2/README.md` / `design-phase-1-temporal.md` status pointers |
+| **Files** | `docs/state/memory/architecture/phase-1-temporal.md`, light touch `docs/state/memory/README.md` / `design-phase-1-temporal.md` status pointers |
 | **Description** | Structure map, activity map, invariants, failure modes, glossary, restart/compaction notes. Satisfies Stretch 2 documentation obligation. |
 
 ### PR8 — Lance backend (recommended foundation before Phase 2)

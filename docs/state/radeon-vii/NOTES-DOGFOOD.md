@@ -164,7 +164,7 @@ rocBLAS error: Cannot read .../torch/lib/rocblas/library/TensileLibrary.dat:
 - No attn_impl observation
 - Encode dogfood **re-opens only after A5 is green** (alternate wheel indexes and/or source Tensile with gfx906 — see “Optional next experiments” above)
 
-### Required dogfood template (mirrored → `docs/known-bugs.md`)
+### Required dogfood template (mirrored → `docs/state/known-bugs.md`)
 
 #### Dogfood — venv ROCm smoke (2026-07-29)
 
@@ -211,7 +211,7 @@ Do **not** check Gate B from this session. HIP probe green alone is insufficient
 ### Cross-links
 
 - Full A5 error text: [§ A5 hard stop](#a5-hard-stop--exact-error) above; `freezes/post-rocm-host-stack.txt`
-- Bug entry: [docs/known-bugs.md](../known-bugs.md) **BUG-mem-gpu-01**
+- Bug entry: [docs/state/known-bugs.md](../known-bugs.md) **BUG-mem-gpu-01**
 - Inventory: [STACK-INVENTORY.md](STACK-INVENTORY.md)
 
 ---

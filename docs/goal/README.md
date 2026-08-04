@@ -7,7 +7,7 @@ Product direction (*what* / *why* — keep short; designs stay DESIGN):
 | Doc (current path) | Role |
 |--------------------|------|
 | [../promotion-discussion/README.md](../promotion-discussion/README.md) | v0.1 promotion / gym (long form today) |
-| [../stretch-2/README.md](../stretch-2/README.md) | Stretch 2 phase goals + honesty tables |
+| [../state/memory/README.md](../state/memory/README.md) | Stretch 2 phase goals + honesty tables |
 | [../stretch-2/philosophical-soft-guidance.md](../stretch-2/philosophical-soft-guidance.md) | Soft influences (non-deliverable) |
 | [../grok-improvement-plan/README.md](../grok-improvement-plan/README.md) | Grok migration phase map |
 | [../memory-atoms.pdf](../memory-atoms.pdf) | Philosophy reference |

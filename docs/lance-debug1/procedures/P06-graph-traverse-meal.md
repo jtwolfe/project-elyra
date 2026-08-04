@@ -98,7 +98,7 @@ What it does:
 | Wake-02 is consumer of residual glass + thin meal | wait_timeout steers into haiku from sandbox/glass residue after restart |
 | Wake-02 is **not** cause of missing Lance rows | full APIs still large (H1b); disk has non-haiku corpus |
 
-Link `docs/known-bugs.md` **BUG-wake-02**. File notes under adjacency; **do not** treat as Lance root without R1 (H1a/H1b).
+Link `docs/state/known-bugs.md` **BUG-wake-02**. File notes under adjacency; **do not** treat as Lance root without R1 (H1a/H1b).
 
 ## Pass / fail (hypotheses)
 

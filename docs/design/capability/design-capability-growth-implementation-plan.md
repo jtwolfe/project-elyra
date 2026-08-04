@@ -10,7 +10,7 @@
 | **Product** | project-elyra |
 | **Branch base** | `grok-improvement` @ `deba40b` (capability-growth design v2) |
 | **Source of truth** | `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md` (product design v2) |
-| **Related** | `docs/tools-and-skills.md`, `docs/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `prompts/system.md` |
+| **Related** | `docs/state/tools-and-skills.md`, `docs/state/time-and-identity.md`, `docs/design/identity/design-identity-self-other-multi-user.md`, `docs/project-status-pass.md`, `prompts/system.md` |
 | **Parallel pattern** | Identity draft → promote + versions; create-tool draft → verify → promote |
 
 ---
@@ -187,7 +187,7 @@ flowchart TB
 | `install_tool_draft` / `verify_tool` | same | Unchanged duty |
 | `mint_version_id` | `elyra/identity/layout.py` | `YYYYMMDDTHHMMSSZ_` + 6 hex; `VERSION_GC_LIMIT = 50` (extract to util; re-export) |
 | Tests | `tests/test_create_tool_gates.py` | Covers bundled refuse, force, verify/hash, reload — **no** `refuses_overwrite_local` assert today; PR1 adds re-promote/archive tests |
-| Docs | `docs/tools-and-skills.md` § create-tool safety rule 6 | “Never overwrite … existing promoted packages” — update in PR1 |
+| Docs | `docs/state/tools-and-skills.md` § create-tool safety rule 6 | “Never overwrite … existing promoted packages” — update in PR1 |
 
 #### Target layout
 
@@ -735,7 +735,7 @@ playwright install chromium
 | `elyra/runtime/supervisor.py` | `close_all` on `shutdown()` |
 | `pyproject.toml` | extras |
 | `prompts/system.md` | catalog lines |
-| `docs/tools-and-skills.md` | full program docs (PR9; partial notes allowed earlier) |
+| `docs/state/tools-and-skills.md` | full program docs (PR9; partial notes allowed earlier) |
 
 ### Bundled packages (new tools)
 
@@ -924,7 +924,7 @@ Migration note for dogfood homes: after PR1, re-promoting a local tool **archive
 
 - Product design: `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md`
 - Tree: `elyra/tools/promote.py`, `verify.py`, `runner.py`, `guest_exec.py`, `registry.py`, `builtin/growth.py`, `identity/layout.py`, `llm/auth.py`, `runtime/api.py`, `settings.py`, `config.py`
-- `docs/tools-and-skills.md`
+- `docs/state/tools-and-skills.md`
 - ddgs PyPI; Playwright a11y snapshot patterns; Python keyring (optional)
 
 ---
@@ -999,7 +999,7 @@ flowchart TB
 | `tests/test_create_tool_gates.py` | Keep bundled/force/verify green; no large rewrite |
 | `tests/test_package_vcs.py` | **Create** archive/revert/GC/atomic/lock tests |
 | `tests/test_identity_users.py` (or layout test) | Assert `mint_version_id` still importable from `elyra.identity.layout` |
-| `docs/tools-and-skills.md` | Minimal lifecycle note (full polish PR9) |
+| `docs/state/tools-and-skills.md` | Minimal lifecycle note (full polish PR9) |
 
 #### Behavioral delta
 
@@ -1296,14 +1296,14 @@ flowchart TB
 |-------|---------|
 | **Title** | `docs: tools-and-skills capability growth and dogfood` |
 | **Depends on** | PR8 |
-| **In scope** | `docs/tools-and-skills.md`, dogfood checklist, project-status-pass touch if needed, README optional extras note |
+| **In scope** | `docs/state/tools-and-skills.md`, dogfood checklist, project-status-pass touch if needed, README optional extras note |
 | **Out of scope** | Code changes except docstrings if required |
 
 #### Files
 
 | Path | Action |
 |------|--------|
-| `docs/tools-and-skills.md` | Full layout, promote archive semantics, new tool groups, skills, secrets, extras install |
+| `docs/state/tools-and-skills.md` | Full layout, promote archive semantics, new tool groups, skills, secrets, extras install |
 | `docs/project-status-pass.md` | Capability status lines if file tracks ship state |
 | `README.md` | Optional extras install snippet |
 | `docs/design/capability/design-capability-growth-search-browse-vcs-secrets.md` | Status note: implemented via PRs (optional) |

@@ -2,7 +2,7 @@
 
 > **Integration tip migration (2026-08-01):** The house integration tip is now **`working`**, which **supersedes `grok-improvement`** as current tip law. Prefer feature / execute-plan branches and PR bases off **`working`**; promote `working` → `main` with full suite. Normative detail: **[docs/dev/branch-law.md](../dev/branch-law.md)**. Historical “Branch / Integration branch: `grok-improvement`” prose in this folder remains Phase 0 context only — do not treat it as the live base.
 
-This folder is the **short GI phase map + operator notes**. Phase designs (Phase 0, Stage B MC, harness) live under **DESIGN** after [#121](https://github.com/jtwolfe/project-elyra/issues/121) PR2c; operator usage notes stay here until STATE move (PR4).
+This folder is the **short GI phase map + operator notes**. Phase designs (Phase 0, Stage B MC, harness) live under **DESIGN** after [#121](https://github.com/jtwolfe/project-elyra/issues/121) PR2c; operator usage notes moved to STATE in PR4.
 
 ## Guiding principles
 
@@ -20,7 +20,7 @@ This folder is the **short GI phase map + operator notes**. Phase designs (Phase
 |----------|-------|---------|
 | [phase-0.md](../design/grok-improvement-plan/phase-0.md) | DESIGN | Phase 0 concept + detailed implementation plan (provider, usage meter, defaults, Web UI status contract, success criteria) |
 | [phase-0-execution.md](../design/grok-improvement-plan/phase-0-execution.md) | DESIGN | Phase 0 execution design + operator live smoke checklist |
-| [usage-tracking-supergrok-pacing.md](usage-tracking-supergrok-pacing.md) | STATE (here until PR4) | **Operator notes:** two meters (SuperGrok pool vs Elyra ledger `S`), first-period adoption, burst remaining, override, one-supervisor constraint + **dogfood checklist** |
+| [usage-and-pacing.md](../state/usage-and-pacing.md) | STATE | **Operator notes:** two meters (SuperGrok pool vs Elyra ledger `S`), first-period adoption, burst remaining, override, one-supervisor constraint + **dogfood checklist** |
 | [harness-sandbox-fitness.md](../design/capability/harness-sandbox-fitness.md) | DESIGN | **H1–H6** post–Phase 0 harness / warm microsandbox fitness (design + PR plan + **operator create-tool live smoke checklist** §H6) |
 | [metacognition.md](../design/grok-improvement-plan/metacognition.md) | DESIGN | MC geometry, **hybrid soft Decide / hard policies**, dual with Memory, Stage A→B→C, handover gates, super-future thin-interpreter arc |
 | [stage-b-mc.md](../design/grok-improvement-plan/stage-b-mc.md) | DESIGN | **Stage B / MC-beta implementation plan** for Grok Build (goal, non-goals, file targets, tests, glass dogfood, what to leave alone) |
@@ -72,7 +72,7 @@ Stage B execution: [stage-b-mc.md](../design/grok-improvement-plan/stage-b-mc.md
 ## Status
 
 - **Phase 0**: **Implementation complete** on `grok-improvement` (provider path, credentials, usage meter + hard-stop override, supervisor/CLI defaults, status API, Web UI). Concept + success criteria in [phase-0.md](../design/grok-improvement-plan/phase-0.md); execution design + **live smoke checklist** in [phase-0-execution.md](../design/grok-improvement-plan/phase-0-execution.md). Prompt fitness applied. **Live smoke against xAI is operator-run** — operator reports roughly green; promote `grok-improvement` → `main` remains a separate step when fully signed off.
-- **Usage tracking + SuperGrok pacing**: evolves Phase 0 meter (week ledger + pace/burst + SuperGrok pool poll; hard-stop override kept). Operator short-form + **dogfood checklist**: [usage-tracking-supergrok-pacing.md](usage-tracking-supergrok-pacing.md) (**STATE — leave here for PR4 move**). Full design: [design-usage-tracking-supergrok-pacing.md](../design/usage/design-usage-tracking-supergrok-pacing.md).
+- **Usage tracking + SuperGrok pacing**: evolves Phase 0 meter (week ledger + pace/burst + SuperGrok pool poll; hard-stop override kept). Operator short-form + **dogfood checklist**: [usage-and-pacing.md](../state/usage-and-pacing.md). Full design: [design-usage-tracking-supergrok-pacing.md](../design/usage/design-usage-tracking-supergrok-pacing.md).
 - **H1–H6 Harness / Sandbox Fitness**: **Implementation complete** on `grok-improvement`. Design + **operator create-tool live smoke checklist** in [harness-sandbox-fitness.md](../design/capability/harness-sandbox-fitness.md) §H6. Operator reports tool creation working. Continuous remains default **OFF**. Prefer H-series confidence before or alongside Stage B live dogfood.
 - **Metacognition / Stage B**: **Concept + hybrid ontology + Stage B implementation plan complete** in-repo ([metacognition.md](../design/grok-improvement-plan/metacognition.md), [stage-b-mc.md](../design/grok-improvement-plan/stage-b-mc.md)). Prefer code on `working` for as-implemented soft Decide. Nickname **MC-beta** = Stage B only. Stage C package remains optional and is **not** the default next implementation.
 - **Memory essay**: Operator may place *What is wrong with my memory?* at `docs/memory-atoms.md` as Phase 3 design reference; not a Stage B blocker.

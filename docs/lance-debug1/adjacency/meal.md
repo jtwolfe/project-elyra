@@ -35,7 +35,7 @@ Haiku dominance in Context is a **consumer of thin process + residual**, not pro
 | Wake-02 steers into haiku after restart via residual glass/sandbox/meal | **consumer** of thin memory + other residue |
 | Wake-02 causes missing Lance rows | **false** if H1b full APIs large |
 
-Cross-link: `docs/known-bugs.md` **BUG-wake-02**. Capture wait_timeout moment notes under evidence; do not elevate as Lance root without R1.
+Cross-link: `docs/state/known-bugs.md` **BUG-wake-02**. Capture wait_timeout moment notes under evidence; do not elevate as Lance root without R1.
 
 ## R2 capture
 

@@ -11,7 +11,7 @@
 | **Branch** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Dogfood refs** | Moments `be49e0ef`, `9aa82c11`, `d0440043` (post capability-growth merge) |
-| **Related** | [dev/engineering-principles.md](../../dev/engineering-principles.md), [harness-sandbox-fitness.md](harness-sandbox-fitness.md), [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [stage-b-mc.md](../grok-improvement-plan/stage-b-mc.md), [tools-and-skills.md](../../tools-and-skills.md) |
+| **Related** | [dev/engineering-principles.md](../../dev/engineering-principles.md), [harness-sandbox-fitness.md](harness-sandbox-fitness.md), [design-capability-growth-search-browse-vcs-secrets.md](design-capability-growth-search-browse-vcs-secrets.md), [stage-b-mc.md](../grok-improvement-plan/stage-b-mc.md), [tools-and-skills.md](../../state/tools-and-skills.md) |
 | **Durable path** | `docs/design/capability/design-capability-integrity-run-search-browser-sandbox.md` |
 | **Guest browser** | **Out of implementation scope here** — dual-backend *intent* + host fix (PR6a) only; guest path = separate design after spike |
 
@@ -192,7 +192,7 @@ PRs with no hard deps may land in any order; recommended dogfood value is KD9.
 | Delete tree | `tools/local/web_search/` entire package (TOOL.md, schema, runner, impl, tests) |
 | Leave bundled | Unchanged host builtin |
 | Tests | Assert registry resolves `web_search` to **bundled** source when local absent |
-| Docs | Note in `docs/tools-and-skills.md` / create-tool: do not promote a local tool that **shadows** a critical bundled capability without explicit intent |
+| Docs | Note in `docs/state/tools-and-skills.md` / create-tool: do not promote a local tool that **shadows** a critical bundled capability without explicit intent |
 | Dogfood | After delete: (1) no `tools/local/web_search` under **active** `ELYRA_HOME` (default = project root; if operator uses non-repo home, remove there too); (2) confirm registry source is `bundled` (unit test or log); (3) `web_search` payload uses host shape (no `provider: duckduckgo_lite`) |
 
 **Evidence cleanup.** Staged copies under `sandboxes/sandbox0/tools/` for the local package are optional housekeeping (not in registry for host builtin path).
@@ -911,7 +911,7 @@ Ordered by **recommended dogfood value** (KD9). Each PR is independently reviewa
 | | |
 |--|--|
 | **Title** | fix(tools): remove local web_search so bundled ddgs path wins |
-| **Files / components** | Delete entire `tools/local/web_search/` (incl. tests); `tests/test_web_search.py` or registry test asserting **bundled** source; `docs/tools-and-skills.md` if it references local search; create-tool / promote footgun note if missing |
+| **Files / components** | Delete entire `tools/local/web_search/` (incl. tests); `tests/test_web_search.py` or registry test asserting **bundled** source; `docs/state/tools-and-skills.md` if it references local search; create-tool / promote footgun note if missing |
 | **Depends on** | None |
 | **Description** | Delete sandbox_python DDG Lite override. Dogfood: confirm no package under active `ELYRA_HOME/tools/local/web_search`; registry source `bundled`. |
 

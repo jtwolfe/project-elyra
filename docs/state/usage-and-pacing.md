@@ -6,7 +6,7 @@
 | **Audience** | Operators dogfooding Elyra on SuperGrok / Grok Build |
 | **Status** | Operator-facing summary (code stack lands via usage-tracking PRs) |
 | **Full design** | [`docs/design/usage/design-usage-tracking-supergrok-pacing.md`](../design/usage/design-usage-tracking-supergrok-pacing.md) |
-| **Reorg** | **Leave here for PR4 STATE** — taxonomy targets `docs/state/usage-and-pacing.md` (not moved in PR2c) |
+| **Path** | `docs/state/usage-and-pacing.md` (moved PR4 / #121) |
 
 Short product notes for Glass, `usage.json`, and live smoke. **Do not treat this as the implementation spec** — formulas, schema, and PR stack live in the full design.
 

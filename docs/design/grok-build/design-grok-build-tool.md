@@ -10,7 +10,7 @@
 | **Product** | project-elyra |
 | **Tracks** | Issue #109; GI Phase 1 |
 | **Branch** | `feature/grok-build-tool` (off `main`; land stack into `working` once created, else `main`) |
-| **Related** | [dev/branch-law.md](../../dev/branch-law.md), [dev/engineering-principles.md](../../dev/engineering-principles.md), [tools-and-skills.md](../../tools-and-skills.md), [design-xai-oauth-browser-login.md](../usage/design-xai-oauth-browser-login.md), [dev/development-governance.md](../../dev/development-governance.md), [grok-improvement-plan/README.md](../../grok-improvement-plan/README.md), `elyra/secrets/inject.py`, `elyra/llm/xai_oauth.py` |
+| **Related** | [dev/branch-law.md](../../dev/branch-law.md), [dev/engineering-principles.md](../../dev/engineering-principles.md), [tools-and-skills.md](../../state/tools-and-skills.md), [design-xai-oauth-browser-login.md](../usage/design-xai-oauth-browser-login.md), [dev/development-governance.md](../../dev/development-governance.md), [grok-improvement-plan/README.md](../../grok-improvement-plan/README.md), `elyra/secrets/inject.py`, `elyra/llm/xai_oauth.py` |
 | **Revised** | 2026-08-01 (review cf9024a3; re-review; shared WakeQueue mandatory) |
 | **Landing path (post-approval)** | `docs/design/grok-build/design-grok-build-tool.md` |
 
@@ -36,7 +36,7 @@ Project Elyra already has a durable **person** runtime (presence, moments, goals
 | Registry secret plane | Call-local `secret_env` only for tools in `TOOL_SECRET_REQUIREMENTS` (grant-based named secrets). Guest/host-stub runners **do not merge** `secret_env` into process env. OAuth access is **not** on that path — `grok_build` is host-builtin only and must **never assign** access into `ctx.extras["secret_env"]`. Result redaction uses `known_values` + auth union + **explicit call-local access** for this tool | `elyra/tools/registry.py`, `inject.py` |
 | Builtin pattern | `tools/bundled/<name>/{TOOL.md,schema.json,runner.json}` → `elyra.tools.builtin.*` | e.g. `web_search`, `git_tools`, `gh_tools` |
 | Git/gh instruments | Path-jailed `git_*`; `GH_TOKEN` soft-fail `auth_unavailable` | `elyra/tools/builtin/git_tools.py`, `gh_tools.py`, `elyra/tools/vcs_jail.py` |
-| Skills rails | `github-workflow` already teaches worktrees, Projects, package VCS, grant stops, and “prefer `grok_build` when present” — **tool not shipped** | `skills/bundled/github-workflow/SKILL.md`, `docs/tools-and-skills.md` § “Phase 1 grok_build tool is not in this surface” |
+| Skills rails | `github-workflow` already teaches worktrees, Projects, package VCS, grant stops, and “prefer `grok_build` when present” — **tool not shipped** | `skills/bundled/github-workflow/SKILL.md`, `docs/state/tools-and-skills.md` § “Phase 1 grok_build tool is not in this surface” |
 | Usage meter | Week ledger + SuperGrok pool; PE chat spend recorded | `elyra/llm/usage.py` |
 | Grok CLI on host | Headless `-p` / `--prompt-file` / `--output-format json`; skills as slash commands; Graphite (`gt`) optional | Host `~/.grok/bundled/skills/{design,implement,execute-plan,review,pr-babysit}` |
 
@@ -1211,7 +1211,7 @@ PR0–PR1 (docs + pure modules) can start immediately. PR4 full registration wai
 - `elyra/tools/builtin/search.py`, `git_tools.py`, `gh_tools.py` — host builtin patterns
 - `tools/bundled/web_search/*` — package layout exemplar
 - `skills/bundled/github-workflow/SKILL.md`, `do-work`, `plan-work`, `review-work`
-- `docs/dev/engineering-principles.md`, `docs/tools-and-skills.md`
+- `docs/dev/engineering-principles.md`, `docs/state/tools-and-skills.md`
 - `docs/design/usage/design-xai-oauth-browser-login.md` (inject plane for this tool)
 - `docs/dev/development-governance.md`
 - `docs/grok-improvement-plan/README.md` (Phase 1)
@@ -1229,7 +1229,7 @@ Realistic incremental stack on **`feature/grok-build-tool`**. Each PR independen
 | Field | Content |
 |-------|---------|
 | **Title** | `docs: grok_build design + branch law; skill tip working (not grok-improvement)` |
-| **Files** | `docs/design/grok-build/design-grok-build-tool.md`; `docs/dev/branch-law.md`; promotion + **GI README supersession banner**; `docs/tools-and-skills.md` note; **`skills/bundled/github-workflow/SKILL.md` tip-only edit**; **`tests/test_github_workflow.py` needle updates for `working`**; issue #109 |
+| **Files** | `docs/design/grok-build/design-grok-build-tool.md`; `docs/dev/branch-law.md`; promotion + **GI README supersession banner**; `docs/state/tools-and-skills.md` note; **`skills/bundled/github-workflow/SKILL.md` tip-only edit**; **`tests/test_github_workflow.py` needle updates for `working`**; issue #109 |
 | **Depends on** | none |
 | **Description** | Land approved design; normative `working` tip; migration from `grok-improvement`; **skill body tip law so live PE stops teaching grok-improvement during PR1–PR4**. No runtime tool code. Operator creates/pushes `working`. Mode/async skill sections remain PR5. |
 

@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[1]
 TESTS = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
-# Done-when → primary test modules (docs/stretch-1.md)
+# Done-when → primary test modules (docs/state/stretch-1.md)
 # ---------------------------------------------------------------------------
 
 DONE_WHEN_TEST_MAP: dict[str, tuple[str, ...]] = {
@@ -269,7 +269,7 @@ def test_inference_docs_document_ceiling_vs_sliding() -> None:
 
 
 def test_stretch1_donewhen_checked_in_docs() -> None:
-    stretch = (REPO / "docs" / "stretch-1.md").read_text(encoding="utf-8")
+    stretch = (REPO / "docs" / "state" / "stretch-1.md").read_text(encoding="utf-8")
     # All nine freeze boxes checked
     assert stretch.count("- [x]") >= 9
     assert "- [ ]" not in stretch.split("## Done when")[-1].split("Not required")[0]

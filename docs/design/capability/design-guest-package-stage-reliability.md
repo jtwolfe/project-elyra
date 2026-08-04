@@ -11,7 +11,7 @@
 | **Branch** | `grok-improvement` |
 | **Workspace** | `/home/jim/Workspace/project-elyra` |
 | **Dogfood refs** | Moment `afce4e4d-678f-4ed5-b0e9-e50106709021` (calculator ×7 batch); same class as earlier local `web_search` guest flakes |
-| **Related** | [harness-sandbox-fitness.md](harness-sandbox-fitness.md) (KD10 stage-copy, single-writer, atomic stage), [design-capability-integrity-run-search-browser-sandbox.md](design-capability-integrity-run-search-browser-sandbox.md) (web_search local-delete pattern), [design-tool-thrash-recovery.md](../stretch-1/design-tool-thrash-recovery.md), [create-tool/SKILL.md](../../../skills/bundled/create-tool/SKILL.md), [tools-and-skills.md](../../tools-and-skills.md) |
+| **Related** | [harness-sandbox-fitness.md](harness-sandbox-fitness.md) (KD10 stage-copy, single-writer, atomic stage), [design-capability-integrity-run-search-browser-sandbox.md](design-capability-integrity-run-search-browser-sandbox.md) (web_search local-delete pattern), [design-tool-thrash-recovery.md](../stretch-1/design-tool-thrash-recovery.md), [create-tool/SKILL.md](../../../skills/bundled/create-tool/SKILL.md), [tools-and-skills.md](../../state/tools-and-skills.md) |
 | **Durable path** | `docs/design/capability/design-guest-package-stage-reliability.md` |
 | **Out of scope** | Guest browser; converting all tools to host builtins; product-default `tool_choice=required` |
 
@@ -715,7 +715,7 @@ Ordered mergeable PRs. Numbers match dependency order (KD-G11).
 |-------|--------|
 | **Title** | `skills: prefer single rich tool calls; guest_module_missing manners` |
 | **Depends on** | PR3 (accurate error_reason names); can draft earlier |
-| **Files** | `skills/bundled/create-tool/SKILL.md`; optionally do-work/research skills; `docs/tools-and-skills.md` short note on stage gate |
+| **Files** | `skills/bundled/create-tool/SKILL.md`; optionally do-work/research skills; `docs/state/tools-and-skills.md` short note on stage gate |
 | **Description** | Soft-only: batch args when possible; legitimate multi-arg batches rely on stage gate; on `guest_module_missing` surface once; import side-effect free modules. No HOST inject. No `tool_choice=required`. |
 
 ### PR6 (optional) — Calculator host builtin

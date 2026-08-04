@@ -64,4 +64,4 @@ If it is not one of these, it does not ship as a new subsystem:
 | Sandbox | Isolated work FS |
 
 See [stretch-1.md](stretch-1.md) for how they run.  
-Self ≠ user, work-origin USER inject, draft→promote: [time-and-identity.md](time-and-identity.md) · design: [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md).
+Self ≠ user, work-origin USER inject, draft→promote: [time-and-identity.md](time-and-identity.md) · design: [design-identity-self-other-multi-user.md](../design/identity/design-identity-self-other-multi-user.md).

@@ -640,7 +640,7 @@ No `.pill-llama` CSS class exists today (id-only); renaming id is sufficient.
 | `docs/inference.md` | **Superseded / historical** | llama.cpp + Gemma 4; README labels “do not follow for setup” |
 | `docs/design/stretch-1/design-gemma-sampling-hygiene-staged.md` | **Historical freeze** | Hygiene code remains |
 | `docs/live-eval.md` | **Superseded procedure (Gemma stages)** | Protocol idea reusable |
-| `docs/stretch-1.md` | **Historical done-when** | Gemma checkbox true at Stretch 1 ship |
+| `docs/state/stretch-1.md` | **Historical done-when** | Gemma checkbox true at Stretch 1 ship |
 | `docs/design/stretch-1/design-stretch-1-implementation.md` | **Historical** | Assumed local llama default |
 | `docs/design/stretch-1/design-tool-thrash-recovery.md` | **Historical evidence** | Policies remain |
 | `docs/design/stretch-1/design-continuous-work-orient-ledger-reset.md` | **Historical motivation** | Policies remain |
@@ -648,7 +648,7 @@ No `.pill-llama` CSS class exists today (id-only); renaming id is sufficient.
 | `docs/project-status-pass.md` | **Partially stale** | Future status pass only |
 | `docs/README.md` | **Stale reading order** | Future status pass |
 | `docs/dev/engineering-principles.md` | **Mostly valid** | Serialize single-slot local HTTP (conceptually) |
-| `docs/tools-and-skills.md` / `time-and-identity.md` | **Mostly valid** | Historical Gemma wording |
+| `docs/state/tools-and-skills.md` / `time-and-identity.md` | **Mostly valid** | Historical Gemma wording |
 | `docs/grok-improvement-plan/*` | **Active direction** | Aligns with this design |
 | `docs/design/glass/design-glass-aurimago-gold-polish.md` | **Historical UI freeze** | `pill-llama` snippet |
 | Root `README.md` | **Update in this pass** | not under docs/ freeze |
