@@ -39,4 +39,4 @@ isolation-on `verify_tool`) plus light tool-author libraries (`requests`,
 `httpx`, `beautifulsoup4`, `pyyaml`, `python-dateutil`, `regex`,
 `jinja2`). Not “any PyPI package.” Overlay wipe requires re-bootstrap (minutes).
 
-See `docs/grok-improvement-plan/harness-sandbox-fitness.md`.
+See `docs/design/capability/harness-sandbox-fitness.md`.

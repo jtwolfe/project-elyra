@@ -10,7 +10,7 @@
 | **Status** | Active |
 | **Product** | project-elyra |
 | **Branch context** | `grok-improv-radeonvii` product tip; Autopoiesis Commons gym |
-| **Related** | `elyra/llm/auth.py`, `elyra/llm/client.py` (`set_bearer_token`), `elyra/secrets/*`, `elyra/runtime/provider_runtime.py`, `elyra/runtime/api.py`, Glass Status provider card, OpenClaw `xai-oauth` (primary protocol reference), `docs/grok-improvement-plan/phase-0.md` |
+| **Related** | `elyra/llm/auth.py`, `elyra/llm/client.py` (`set_bearer_token`), `elyra/secrets/*`, `elyra/runtime/provider_runtime.py`, `elyra/runtime/api.py`, Glass Status provider card, OpenClaw `xai-oauth` (primary protocol reference), `docs/design/grok-improvement-plan/phase-0.md` |
 | **Priority** | QoL + foundation for multi-instance and future `grok_build` tool |
 
 ---

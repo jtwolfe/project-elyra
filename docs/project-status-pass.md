@@ -249,7 +249,7 @@ That workflow should feel like a **skill + ledger pattern**, not a second mind. 
 | [stretch-1.md](stretch-1.md) | Stretch 1 runtime contract |
 | [overview.md](overview.md) | Glossary / big picture |
 | [grok-improvement-plan/README.md](grok-improvement-plan/README.md) | Grok phases (refresh status) |
-| [metacognition.md](grok-improvement-plan/metacognition.md) / [stage-b-mc.md](grok-improvement-plan/stage-b-mc.md) | Soft Decide / Stage B |
+| [metacognition.md](design/grok-improvement-plan/metacognition.md) / [stage-b-mc.md](design/grok-improvement-plan/stage-b-mc.md) | Soft Decide / Stage B |
 | [design-identity-self-other-multi-user.md](design/identity/design-identity-self-other-multi-user.md) | Identity + multi-user prep |
 | [design-glass-aurimago-gold-polish.md](design/glass/design-glass-aurimago-gold-polish.md) | Glass gold polish |
 | [memory-atoms.pdf](memory-atoms.pdf) | Phase 3 memory thesis |

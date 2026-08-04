@@ -2,15 +2,21 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Title** | Harness / Sandbox Fitness — warm microsandbox + runner truth for Grok |
 | **Author** | Design (Grok Build) |
 | **Date** | 2026-07-24 |
-| **Status** | **Implementation complete** (H2–H5 code + H6 checklist); live create-tool smoke is **operator-owned** — not claimed green in-repo until executed |
+| **Status** | **Shipped** — Implementation complete (H2–H5 code + H6 checklist); live create-tool smoke is **operator-owned** — not claimed green in-repo until executed |
+| **Audience** | Implementers (full design+PR plan); operators use §H6 checklist (short STATE extract in PR4) |
+| **Normative?** | No — prefer code on `working` when conflict |
+| **Durable path** | `docs/design/capability/harness-sandbox-fitness.md` |
 | **Codename** | H1–H6 |
-| **Branch** | `grok-improvement` (PRs base + merge here; not `main` until later) |
+| **Branch (historical)** | `grok-improvement` (tip now **`working`**) |
 | **Workspace** | `/home/jim/Workspace/project-elyra` (Stretch 1) |
 | **Port source** | `/home/jim/Workspace/aurimago/project-elyra2` (`elyra/sandbox/*`, `sandboxes/sandbox0/`) |
-| **Related** | `docs/grok-improvement-plan/`, `docs/tools-and-skills.md`, `docs/stretch-1.md`, `docs/design/stretch-1/design-tool-thrash-recovery.md`, elyra2 `docs/plans/workspace-isolation/DESIGN.md` |
+| **Related** | [GI README](../../grok-improvement-plan/README.md), [tools-and-skills.md](../../tools-and-skills.md), [stretch-1.md](../../stretch-1.md), [design-tool-thrash-recovery.md](../stretch-1/design-tool-thrash-recovery.md), elyra2 `docs/plans/workspace-isolation/DESIGN.md` |
+
+> **Status: Shipped** — full H1–H6 design + PR plan stays DESIGN (KD14). Short operator smoke checklist extract lands under STATE in PR4.
 
 ---
 
@@ -849,7 +855,7 @@ Alerting: none automated in H-series; operator watches status + logs.
 
 ## Rollout Plan
 
-1. **H1** — This design lands in `docs/grok-improvement-plan/harness-sandbox-fitness.md`.
+1. **H1** — This design lands in `docs/design/capability/harness-sandbox-fitness.md`.
 2. **H2–H5 PRs** — ordered below; all merge to `grok-improvement`.
 3. **Feature flag:** `ELYRA_SANDBOX` (default on for product; off in tests).
 4. **Degraded mode:** chat works; guest tools fail closed with reason.
@@ -910,7 +916,7 @@ Continuous default OFF throughout
 - Presence: `elyra/presence/worker.py` (`_ensure_sandbox`, `_build_tool_context`)
 - Supervisor: `elyra/runtime/supervisor.py`
 - Thrash: `elyra/loop/tool_thrash_policy.py`, `docs/design/stretch-1/design-tool-thrash-recovery.md`
-- Plan folder: `docs/grok-improvement-plan/{README,phase-0,phase-0-execution,metacognition}.md`
+- Plan folder: `docs/grok-improvement-plan/README.md` (index); phase designs under `docs/design/grok-improvement-plan/{phase-0,phase-0-execution,metacognition}.md`
 - Port: `/home/jim/Workspace/aurimago/project-elyra2/elyra/sandbox/*`, `sandboxes/sandbox0/`, `docs/plans/workspace-isolation/DESIGN.md`, `docs/tools-runtime.md`
 - External: [microsandbox docs](https://docs.microsandbox.dev/)
 

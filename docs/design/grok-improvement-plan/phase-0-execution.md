@@ -2,15 +2,21 @@
 
 | Field | Value |
 |-------|--------|
+| **Class** | DESIGN |
 | **Document** | Phase 0 detailed execution plan (Grok path) |
 | **Author** | (implementation) |
 | **Date** | 2026-07-24 |
-| **Status** | Implementation complete (PR stack 1–7) · Live smoke checklist ready for operator (not claimed green in-repo until operator-run against xAI) |
-| **Integration branch** | **`grok-improvement`** (not `main`) |
+| **Status** | Freeze / Shipped — Implementation complete (PR stack 1–7) · Live smoke checklist ready for operator (not claimed green in-repo until operator-run against xAI) |
+| **Audience** | Implementers |
+| **Normative?** | No — prefer code on `working` when conflict |
+| **Durable path** | `docs/design/grok-improvement-plan/phase-0-execution.md` |
+| **Integration branch (historical)** | **`grok-improvement`** (tip now **`working`** — see [branch-law](../../dev/branch-law.md)) |
 | **Work branches** | All PR/feature branches **fork from and stack on** current `grok-improvement` |
 | **Land target** | Every PR is **pushed and merged back into `grok-improvement`**; do **not** merge Phase 0 PRs to `main` until the operator promotes the whole branch later |
-| **Supersedes (execution detail)** | `docs/grok-improvement-plan/phase-0.md` §§10–14 implementation steps (product decisions remain authoritative) |
-| **Audience** | Senior engineers implementing stacked work on `grok-improvement` |
+| **Supersedes (execution detail)** | [phase-0.md](phase-0.md) §§10–14 implementation steps (product decisions remain authoritative) |
+| **Audience (historical)** | Senior engineers implementing stacked work on `grok-improvement` |
+
+> **Status: Freeze / Shipped** — Phase 0 execution archaeology. Prefer code on `working` for as-implemented behaviour.
 
 This document is the **implementable** source of truth for Phase 0: file-level map, interfaces, wire contracts, test plan, and ordered PR slices. Product decisions in the concept docs are treated as fixed.
 
@@ -75,7 +81,7 @@ Phase 0 makes `elyra start` boot by default against **xAI Grok** using the **Gro
 
 ### Why Phase 0 first
 
-Engineering principles (`docs/dev/engineering-principles.md`): modular packages, small units, tests with the feature, defaults first. Concept plan: meter before sophistication; do-loop unchanged; continuous stays OFF.
+Engineering principles (`docs/dev/engineering-principles.md`): modular packages, small units, tests with the feature, defaults first. Concept plan: meter before sophistication; do-loop unchanged; continuous stays OFF. (Path: [engineering-principles.md](../../dev/engineering-principles.md).)
 
 ---
 
@@ -1638,9 +1644,9 @@ DEBUG: billable tokens per completion optional.
 
 ## References
 
-- `docs/grok-improvement-plan/README.md`
-- `docs/grok-improvement-plan/phase-0.md`
-- `docs/grok-improvement-plan/metacognition.md`
+- `docs/grok-improvement-plan/README.md` (GOAL/index — stays in place)
+- `docs/design/grok-improvement-plan/phase-0.md`
+- `docs/design/grok-improvement-plan/metacognition.md`
 - `docs/dev/engineering-principles.md`
 - `scripts/prototype_xai_grok_auth_smoke.py` (default model id + URL join reference)
 - `elyra/llm/client.py`, `elyra/loop/doloop.py` (outer `except Exception`), `elyra/runtime/api.py`, `elyra/loop/continuous_policy.py`
@@ -1720,7 +1726,7 @@ Ordered, independently reviewable slices. **Meter → auth/client → supervisor
 ### PR 8 — Live smoke docs + phase-0 status flip
 
 - **Title:** `docs(grok): Phase 0 smoke checklist + mark complete`
-- **Files:** `docs/grok-improvement-plan/phase-0.md`, `docs/grok-improvement-plan/README.md`, this execution doc status
+- **Files:** `docs/design/grok-improvement-plan/phase-0.md`, `docs/grok-improvement-plan/README.md`, this execution doc status
 - **Dependencies:** PR 5a–7 implementation landed (live smoke remains operator-run)
 - **Description:** Mark Phase 0 **implementation complete**; finalize live smoke checklist (defaults 5M tokens, `grok-4.5`, `grok_build` auth, override path, `--no-llama` non-footgun, local override). **Do not claim live smoke passed** unless actually run against xAI — prefer “implementation complete; live smoke checklist ready for operator.”
 
@@ -1772,4 +1778,4 @@ elyra start
 - Default model **`grok-4.5`** decided; smoke script remains verification artifact.
 - MC naming only.
 
-This document is the execution source of truth at `docs/grok-improvement-plan/phase-0-execution.md`.
+This document is the execution source of truth at `docs/design/grok-improvement-plan/phase-0-execution.md`.

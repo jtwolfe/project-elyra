@@ -1,10 +1,16 @@
 # Stage B Metacognition (MC-beta) — Implementation Plan
 
-**Status:** Ready for Grok Build (docs complete; code not started)  
-**Branch:** `grok-improvement`  
-**Workstream nickname:** **MC-beta** = this Stage B shallow-shape work only  
-**Canonical concept:** [metacognition.md](metacognition.md)  
-**Engineering rules:** [docs/dev/engineering-principles.md](../dev/engineering-principles.md)
+| Field | Value |
+|-------|--------|
+| **Class** | DESIGN |
+| **Status** | Shipped (implementation plan; soft Decide bias/orient landed in code after this plan — prefer `working`) |
+| **Audience** | Implementers |
+| **Normative?** | No — prefer code on `working` when conflict |
+| **Durable path** | `docs/design/grok-improvement-plan/stage-b-mc.md` |
+| **Branch (historical)** | `grok-improvement` (tip now **`working`**) |
+| **Workstream nickname** | **MC-beta** = this Stage B shallow-shape work only |
+| **Canonical concept** | [metacognition.md](metacognition.md) |
+| **Engineering rules** | [engineering-principles.md](../../dev/engineering-principles.md) |
 
 This document is the **handoff plan** for implementing Stage B. It is written so Grok Build (or any implementer) can execute **without** prior chat context. Read [metacognition.md](metacognition.md) first for geometry and hybrid ontology; this file is the ordered, file-level plan.
 
@@ -95,11 +101,11 @@ Long-term direction (Phase 3+ design gravity, not Stage B scope):
 
 Operator design essay *What is wrong with my memory?* (Jamie Moller, 2026-04-28) argues: memory is not a warehouse of facts; it is **organized experience** — **atoms** (instances with content, context, felt signal, connections), **hypergraph** edges with strength, knowledge as **shadows/patterns** across atoms. Forgetting and consolidation keep the graph usable.
 
-**Implication for Stage B:** soft Decide text is pattern-shaped and should stay editable; hard policies are closer to substrate rules that keep handoffs honest. Essay in-repo: [`docs/memory-atoms.pdf`](../memory-atoms.pdf) — Phase 3 reference, not Stage B dependency.
+**Implication for Stage B:** soft Decide text is pattern-shaped and should stay editable; hard policies are closer to substrate rules that keep handoffs honest. Essay in-repo: [`docs/memory-atoms.pdf`](../../memory-atoms.pdf) — Phase 3 reference, not Stage B dependency.
 
 ### 2.6 Engineering principles to respect
 
-From [engineering-principles.md](../dev/engineering-principles.md):
+From [engineering-principles.md](../../dev/engineering-principles.md):
 
 - One job per module; **no god module** named MC that owns speak + continuous + thrash + bias.
 - Small units; pure bias helper testable without presence I/O.

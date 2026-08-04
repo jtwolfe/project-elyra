@@ -4,7 +4,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 
 **Taxonomy:** [docs-reorg-taxonomy.md](docs-reorg-taxonomy.md) (Active) — hub-first, non-destructive.  
 **Hub:** [docs/README.md](../README.md) four-class index.  
-**Layout:** root `docs/design-*.md` landed under `docs/design/<topic>/` (PR2). stretch-2 designs under `memory/` (PR2b); GI / harness / design-rocm → PR2c.
+**Layout:** root designs under `docs/design/<topic>/` (PR2). stretch-2 designs under `memory/` (PR2b). GI phase designs + harness + design-rocm under DESIGN (PR2c).
 
 | Status | Meaning |
 |--------|---------|
@@ -62,8 +62,7 @@ Design documents and PR plans that implement goals. Living catalogue during [#12
 | [design-capability-growth-implementation-plan.md](capability/design-capability-growth-implementation-plan.md) | Shipped | Execute-plan PR DAG + promote algorithm |
 | [design-capability-integrity-run-search-browser-sandbox.md](capability/design-capability-integrity-run-search-browser-sandbox.md) | Draft/shipped mix | Integrity stack |
 | [design-guest-package-stage-reliability.md](capability/design-guest-package-stage-reliability.md) | Draft/shipped mix | Guest package stage-once gate |
-
-Harness full design still at [../grok-improvement-plan/harness-sandbox-fitness.md](../grok-improvement-plan/harness-sandbox-fitness.md) until **PR2c**.
+| [harness-sandbox-fitness.md](capability/harness-sandbox-fitness.md) | **Shipped** | Full H1–H6 design+plan (KD14; short STATE checklist extract in PR4) |
 
 ---
 
@@ -132,18 +131,24 @@ Stretch-2 memory designs (PR2b / KD4). Architecture manuals remain under `docs/s
 
 ---
 
-## GI / harness / ROCm design (current paths — move in PR2c)
+## grok-improvement-plan/ (phase designs — PR2c)
+
+GI README (short phase map / history) stays under [../grok-improvement-plan/README.md](../grok-improvement-plan/README.md). Operator usage notes stay STATE until PR4: [usage-tracking-supergrok-pacing.md](../grok-improvement-plan/usage-tracking-supergrok-pacing.md).
 
 | Doc | Status | Notes |
 |-----|--------|-------|
-| [phase-0.md](../grok-improvement-plan/phase-0.md) | Freeze / DESIGN | GI Phase 0 |
-| [phase-0-execution.md](../grok-improvement-plan/phase-0-execution.md) | Freeze / DESIGN | GI Phase 0 execution |
-| [stage-b-mc.md](../grok-improvement-plan/stage-b-mc.md) | Shipped | Stage B soft MC |
-| [metacognition.md](../grok-improvement-plan/metacognition.md) | Shipped | Metacognition notes |
-| [harness-sandbox-fitness.md](../grok-improvement-plan/harness-sandbox-fitness.md) | Shipped | Full H1–H6 design+plan (STATE gets short checklist later) |
-| [design-rocm-venv-gpu-embed-smoke.md](../radeon-vii-dev/design-rocm-venv-gpu-embed-smoke.md) | DESIGN | ROCm embed smoke design |
+| [phase-0.md](grok-improvement-plan/phase-0.md) | Freeze / Shipped | GI Phase 0 concept + success criteria |
+| [phase-0-execution.md](grok-improvement-plan/phase-0-execution.md) | Freeze / Shipped | GI Phase 0 execution + live smoke checklist |
+| [stage-b-mc.md](grok-improvement-plan/stage-b-mc.md) | Shipped | Stage B soft MC implementation plan |
+| [metacognition.md](grok-improvement-plan/metacognition.md) | Shipped | MC geometry + hybrid soft Decide |
 
-Operator-facing GI usage notes stay STATE: [usage-tracking-supergrok-pacing.md](../grok-improvement-plan/usage-tracking-supergrok-pacing.md).
+---
+
+## memory/ (ROCm design — PR2c; stretch-2 designs → PR2b)
+
+| Doc | Status | Notes |
+|-----|--------|-------|
+| [design-rocm-venv-gpu-embed-smoke.md](memory/design-rocm-venv-gpu-embed-smoke.md) | Shipped (standalone) | ROCm venv + Nemotron encode smoke design |
 
 ---
 
