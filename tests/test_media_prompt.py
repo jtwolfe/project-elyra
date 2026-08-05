@@ -658,3 +658,526 @@ def test_viewing_extract_on_full_expand_carrier(store):
     )
     assert "viewed notes line" in text
     assert "notes.txt" in text
+
+
+# ---------------------------------------------------------------------------
+# Completions audio/video expand (PR4 — KD-V10 / KD-V17)
+# ---------------------------------------------------------------------------
+
+FIXTURE_WAV = Path(__file__).parent / "fixtures" / "media" / "tiny.wav"
+FIXTURE_MP4 = Path(__file__).parent / "fixtures" / "mm_embed" / "tiny.mp4"
+
+
+def _put_wav(store: MediaStore, *, filename: str = "clip.wav") -> object:
+    return store.put_bytes(
+        FIXTURE_WAV.read_bytes(),
+        filename=filename,
+        origin="user_upload",
+    )
+
+
+def _put_mp4(store: MediaStore, *, filename: str = "clip.mp4") -> object:
+    return store.put_bytes(
+        FIXTURE_MP4.read_bytes(),
+        filename=filename,
+        origin="user_upload",
+    )
+
+
+def _count_parts(messages: list[dict], part_type: str) -> int:
+    n = 0
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == part_type:
+                    n += 1
+    return n
+
+
+def _text_of(msg: dict) -> str:
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(p.get("text") or "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        )
+    return ""
+
+
+def test_probe_wav_duration_fixture():
+    from elyra.media.prompt import probe_wav_duration_s
+
+    dur = probe_wav_duration_s(FIXTURE_WAV.read_bytes())
+    assert dur is not None
+    assert abs(dur - 0.1) < 0.02
+
+
+def test_audio_format_from_att_wav_mp3():
+    from elyra.media.prompt import audio_format_from_att
+
+    assert audio_format_from_att({"mime": "audio/wav", "filename": "a.wav"}) == "wav"
+    assert audio_format_from_att({"mime": "audio/mpeg", "filename": "a.mp3"}) == "mp3"
+    assert audio_format_from_att({"mime": "audio/ogg", "filename": "a.ogg"}) is None
+
+
+def test_wake_audio_expand_input_audio_part(store):
+    """Wake audio → input_audio part with base64 + format=wav."""
+    from elyra.media.prompt import AUDIO_PART_TYPE
+
+    att = _put_wav(store)
+    glass = [_glass_row("wake-a", content="listen", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-a",
+        wake_content="listen",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-a",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == 1
+    wake_msg = next(m for m in expanded if m.get("id") == "wake-a")
+    assert isinstance(wake_msg["content"], list)
+    audio_parts = [p for p in wake_msg["content"] if p.get("type") == AUDIO_PART_TYPE]
+    assert len(audio_parts) == 1
+    ia = audio_parts[0]["input_audio"]
+    assert ia["format"] == "wav"
+    assert base64.b64decode(ia["data"]) == FIXTURE_WAV.read_bytes()
+    # Inventory still present.
+    assert att.id in _text_of(wake_msg)
+
+
+def test_wake_video_expand_video_url_part(store):
+    """Wake short video → video_url data URL (duration unknown → byte caps)."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+
+    att = _put_mp4(store)
+    glass = [_glass_row("wake-v", content="watch", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-v",
+        wake_content="watch",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-v",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 1
+    wake_msg = next(m for m in expanded if m.get("id") == "wake-v")
+    video_parts = [p for p in wake_msg["content"] if p.get("type") == VIDEO_PART_TYPE]
+    url = video_parts[0]["video_url"]["url"]
+    assert url.startswith("data:video/mp4;base64,")
+    b64 = url.split(",", 1)[1]
+    assert base64.b64decode(b64) == FIXTURE_MP4.read_bytes()
+
+
+def test_viewing_audio_expand_without_wake(store):
+    """viewing_att_ids alone expands audio on the carrier row."""
+    from elyra.media.prompt import AUDIO_PART_TYPE
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    att = _put_wav(store, filename="viewed.wav")
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        viewing_att_ids=[att.id],
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == 1
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    audio_parts = [p for p in carrier["content"] if p.get("type") == AUDIO_PART_TYPE]
+    assert len(audio_parts) == 1
+
+
+def test_viewing_video_expand_without_wake(store):
+    from elyra.media.prompt import VIDEO_PART_TYPE
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    att = _put_mp4(store, filename="viewed.mp4")
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        viewing_att_ids=[att.id],
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 1
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    assert any(p.get("type") == VIDEO_PART_TYPE for p in carrier["content"])
+
+
+def test_video_duration_over_cap_fail_closed(store):
+    """duration_s > 10s → no video_url part; inventory + duration_over_cap notice."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+
+    att = _put_mp4(store)
+    ad = _att_dict(att)
+    ad["duration_s"] = 45.0
+    glass = [_glass_row("wake-long", content="long clip", attachments=[ad])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-long",
+        wake_content="long clip",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-long",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    wake_msg = next(m for m in expanded if m.get("id") == "wake-long")
+    text = _text_of(wake_msg)
+    assert att.id in text  # inventory present
+    assert "duration_over_cap" in text
+    assert "video expand skipped" in text
+    # No multimodal parts pretending success.
+    assert isinstance(wake_msg["content"], str) or not any(
+        isinstance(p, dict) and p.get("type") == VIDEO_PART_TYPE
+        for p in (wake_msg["content"] if isinstance(wake_msg["content"], list) else [])
+    )
+
+
+def test_audio_duration_over_cap_fail_closed(store):
+    from elyra.media.prompt import AUDIO_PART_TYPE
+
+    att = _put_wav(store)
+    ad = _att_dict(att)
+    ad["duration_s"] = 60.0  # > 30s audio cap
+    glass = [_glass_row("wake-long-a", content="long audio", attachments=[ad])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-long-a",
+        wake_content="long audio",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-long-a",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == 0
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-long-a"))
+    assert "duration_over_cap" in text
+    assert att.id in text
+
+
+def test_video_read_failed_fail_closed(store, monkeypatch):
+    """Missing blob → inventory + read_failed notice; no video part."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+
+    att = _put_mp4(store)
+
+    def _boom(_aid: str) -> bytes:
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr(store, "read_bytes", _boom)
+    ad = _att_dict(att)
+    glass = [_glass_row("wake-miss", content="?", attachments=[ad])]
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "?", "id": "wake-miss"},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-miss",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-miss"))
+    assert "read_failed" in text
+    assert att.id in text
+
+
+def test_av_expand_off_fail_closed_inventory(store, monkeypatch):
+    """ELYRA_AV_EXPAND=0 → inventory + notice; no AV parts."""
+    from elyra.media.prompt import AUDIO_PART_TYPE, VIDEO_PART_TYPE
+
+    monkeypatch.setenv("ELYRA_AV_EXPAND", "0")
+    att = _put_wav(store)
+    glass = [_glass_row("wake-off", content="x", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-off",
+        wake_content="x",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-off",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == 0
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-off"))
+    assert "ELYRA_AV_EXPAND=0" in text
+    assert att.id in text
+
+
+def test_local_provider_av_fail_closed(store):
+    """Non-xAI provider → inventory + local AV notice; no data URLs."""
+    from elyra.media.prompt import AUDIO_PART_TYPE
+
+    att = _put_wav(store)
+    glass = [_glass_row("wake-loc", content="x", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-loc",
+        wake_content="x",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-loc",
+        media_store=store,
+        provider="local",
+    )
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == 0
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-loc"))
+    assert "audio/video expansion requires xAI" in text
+    assert att.id in text
+
+
+def test_shared_video_budget_one_across_wake_and_viewing(store):
+    """MAX_VISION_VIDEO=1 shared: wake video takes the slot; viewing gets notice."""
+    from elyra.media.prompt import MAX_VISION_VIDEO, VIDEO_PART_TYPE
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    wake_att = _put_mp4(store, filename="wake.mp4")
+    view_att = store.put_bytes(
+        FIXTURE_MP4.read_bytes(),
+        filename="view.mp4",
+        origin="user_upload",
+    )
+    glass = [
+        _glass_row("wake-b", content="both", attachments=[_att_dict(wake_att)])
+    ]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-b",
+        wake_content="both",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-b",
+        viewing_att_ids=[view_att.id],
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == MAX_VISION_VIDEO
+    wake_msg = next(m for m in expanded if m.get("id") == "wake-b")
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    wake_vids = [
+        p
+        for p in wake_msg["content"]
+        if isinstance(p, dict) and p.get("type") == VIDEO_PART_TYPE
+    ]
+    assert len(wake_vids) == 1
+    # Viewing row: no second video part; count_cap notice.
+    if isinstance(carrier["content"], list):
+        c_vids = [p for p in carrier["content"] if p.get("type") == VIDEO_PART_TYPE]
+        assert c_vids == []
+    assert "count_cap" in _text_of(carrier)
+
+
+def test_shared_audio_budget_two_cap(store):
+    """Three audio atts → only MAX_VISION_AUDIO=2 parts."""
+    from elyra.media.prompt import AUDIO_PART_TYPE, MAX_VISION_AUDIO
+
+    atts = [
+        store.put_bytes(
+            FIXTURE_WAV.read_bytes(),
+            filename=f"a{i}.wav",
+            origin="user_upload",
+        )
+        for i in range(3)
+    ]
+    glass = [
+        _glass_row(
+            "wake-aud",
+            content="many",
+            attachments=[_att_dict(a) for a in atts],
+        )
+    ]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-aud",
+        wake_content="many",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-aud",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == MAX_VISION_AUDIO
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-aud"))
+    assert "count_cap" in text
+
+
+def test_image_path_not_regressed_with_av(store):
+    """Image expand still works when AV fixtures are also present on wake."""
+    img = _put_png(store)
+    wav = _put_wav(store)
+    glass = [
+        _glass_row(
+            "wake-mix",
+            content="mix",
+            attachments=[_att_dict(img), _att_dict(wav)],
+        )
+    ]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-mix",
+        wake_content="mix",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-mix",
+        media_store=store,
+        provider="xai",
+    )
+    from elyra.media.prompt import AUDIO_PART_TYPE
+
+    assert _count_image_parts(expanded) == 1
+    assert _count_parts(expanded, AUDIO_PART_TYPE) == 1
+
+
+def test_strip_meal_wire_fields_keeps_av_parts():
+    from elyra.media.prompt import AUDIO_PART_TYPE, VIDEO_PART_TYPE
+
+    meal = [
+        {
+            "role": "user",
+            "id": "drop-me",
+            "content": [
+                {"type": "text", "text": "hi"},
+                {
+                    "type": AUDIO_PART_TYPE,
+                    "input_audio": {"data": "YQ==", "format": "wav"},
+                },
+                {
+                    "type": VIDEO_PART_TYPE,
+                    "video_url": {"url": "data:video/mp4;base64,YQ=="},
+                },
+            ],
+        }
+    ]
+    wire = strip_meal_wire_fields(meal)
+    assert "id" not in wire[0]
+    types = [p["type"] for p in wire[0]["content"]]
+    assert types == ["text", AUDIO_PART_TYPE, VIDEO_PART_TYPE]
+
+
+def test_estimate_content_tokens_av_not_base64_strlen():
+    """AV parts must not contribute strlen(base64) to meal token estimates."""
+    huge = "A" * 100_000
+    n = estimate_content_tokens(
+        [
+            {"type": "text", "text": "abcd"},
+            {"type": "input_audio", "input_audio": {"data": huge, "format": "wav"}},
+            {
+                "type": "video_url",
+                "video_url": {"url": f"data:video/mp4;base64,{huge}"},
+            },
+        ]
+    )
+    # 1 text token + 2 * 1024 heuristics
+    assert n == 1 + 1024 + 1024
+
+
+def test_viewing_entries_duration_cap(store):
+    """ViewingEntry.duration_s flows into expand duration_over_cap."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+    from elyra.media.viewing import VIEWING_CARRIER_ID, ViewingEntry
+
+    att = _put_mp4(store)
+    entries = {
+        att.id: ViewingEntry(
+            att_id=att.id,
+            kind="video",
+            mime="video/mp4",
+            filename="long.mp4",
+            byte_size=att.byte_size,
+            duration_s=12.5,
+        )
+    }
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        viewing_att_ids=[att.id],
+        viewing_entries=entries,
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    assert "duration_over_cap" in _text_of(carrier)

@@ -2764,11 +2764,13 @@ class PresenceWorker:
                         social_wake=social,
                     )
                     viewing_ids = self._snapshot_viewing_att_ids()
+                    viewing_entries = self._snapshot_viewing_entries()
                     expanded = expand_memory_meal_for_provider(
                         meal,
                         glass_by_id=glass_by_id,
                         wake_message_id=wake_message_id_s,
                         viewing_att_ids=viewing_ids or None,
+                        viewing_entries=viewing_entries or None,
                         media_store=media_store,
                         provider=provider_name,
                     )
@@ -2794,11 +2796,13 @@ class PresenceWorker:
                 retain_ids=True,
             )
             viewing_ids = self._snapshot_viewing_att_ids()
+            viewing_entries = self._snapshot_viewing_entries()
             expanded = expand_meal_for_provider(
                 meal,
                 glass_by_id=glass_by_id,
                 wake_message_id=wake_message_id_s,
                 viewing_att_ids=viewing_ids or None,
+                viewing_entries=viewing_entries or None,
                 media_store=media_store,
                 provider=provider_name,
             )
@@ -3268,6 +3272,11 @@ class PresenceWorker:
         """FIFO att_ids for expand; lock-held snapshot, expand uses copy."""
         with self._lock:
             return list(self._moment_viewing.keys())
+
+    def _snapshot_viewing_entries(self) -> dict[str, ViewingEntry]:
+        """Shallow copy of viewing entries (duration_s etc.) for expand."""
+        with self._lock:
+            return dict(self._moment_viewing)
 
     def _is_viewing_dirty(self) -> bool:
         with self._lock:

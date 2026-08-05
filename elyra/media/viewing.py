@@ -206,6 +206,10 @@ def viewing_att_dicts(
                 }
             else:
                 d = {"id": aid}
+        # ViewingEntry duration wins when known (expand duration caps).
+        ve = meta_by_id.get(aid)
+        if ve is not None and ve.duration_s is not None:
+            d.setdefault("duration_s", ve.duration_s)
         out.append(d)
     return out
 

@@ -62,6 +62,10 @@ def estimate_content_tokens(content: Any) -> int:
                     total += min(IMAGE_PART_TOKEN_HEURISTIC, max(1, raw_size // 750))
                 else:
                     total += IMAGE_PART_TOKEN_HEURISTIC
+            elif ptype in ("input_audio", "video_url", "input_video"):
+                # Do not strlen base64 payloads (would dominate meal budget).
+                # Same fixed heuristic as image until we have better metering.
+                total += IMAGE_PART_TOKEN_HEURISTIC
             else:
                 total += estimate_tokens(str(part))
         return total
