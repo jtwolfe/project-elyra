@@ -554,6 +554,13 @@ class PresenceWorker:
             paths=paths,
         )
 
+        # Moment viewing set (KD-V4/V12/V13): process-local; clear on finalize.
+        # Insertion-ordered dict att_id → ViewingEntry; dirty forces re-outer.
+        from elyra.media.viewing import ViewingEntry
+
+        self._moment_viewing: dict[str, ViewingEntry] = {}
+        self._viewing_dirty: bool = False
+
         self._phase: str = PHASE_IDLE
         self._busy = False
         self._active_moment_id: str | None = None
@@ -2756,10 +2763,12 @@ class PresenceWorker:
                         glass_rows=glass,
                         social_wake=social,
                     )
+                    viewing_ids = self._snapshot_viewing_att_ids()
                     expanded = expand_memory_meal_for_provider(
                         meal,
                         glass_by_id=glass_by_id,
                         wake_message_id=wake_message_id_s,
+                        viewing_att_ids=viewing_ids or None,
                         media_store=media_store,
                         provider=provider_name,
                     )
@@ -2784,10 +2793,12 @@ class PresenceWorker:
                 sliding_input_tokens=budget,
                 retain_ids=True,
             )
+            viewing_ids = self._snapshot_viewing_att_ids()
             expanded = expand_meal_for_provider(
                 meal,
                 glass_by_id=glass_by_id,
                 wake_message_id=wake_message_id_s,
+                viewing_att_ids=viewing_ids or None,
                 media_store=media_store,
                 provider=provider_name,
             )
@@ -2821,6 +2832,8 @@ class PresenceWorker:
             drain_interjections=self._drain_interjections,
             memory_store=mem,
             memory_settings=self.settings.memory,
+            viewing_dirty_fn=self._is_viewing_dirty,
+            clear_viewing_dirty_fn=self._clear_viewing_dirty,
         )
         return result, list(ctx.skills_used)
 
@@ -2897,6 +2910,9 @@ class PresenceWorker:
 
             # Phase 2a: moment end clears active + sticky last_session/keep.
             self._close_traversal_for_moment(moment_id)
+
+            # KD-V12: viewing set is moment-local — no cross-moment media-part leak.
+            self._clear_moment_viewing_unlocked()
 
         # After close (outside long critical sections): dirty-mark current 1h
         # for the just-ended moment (no LLM on hop path — KD20).
@@ -3069,6 +3085,8 @@ class PresenceWorker:
             self._busy = False
             self._active_moment_id = None
             self._close_traversal_for_moment(moment_id)
+            # KD-V12: error path also drops moment-local viewing set.
+            self._clear_moment_viewing_unlocked()
 
     @staticmethod
     def _close_browser_sessions_for_moment(moment_id: str) -> None:
@@ -3242,6 +3260,58 @@ class PresenceWorker:
                 goal_id,
             )
 
+    # ------------------------------------------------------------------
+    # Moment viewing set (KD-V4 / KD-V12 / KD-V13)
+    # ------------------------------------------------------------------
+
+    def _snapshot_viewing_att_ids(self) -> list[str]:
+        """FIFO att_ids for expand; lock-held snapshot, expand uses copy."""
+        with self._lock:
+            return list(self._moment_viewing.keys())
+
+    def _is_viewing_dirty(self) -> bool:
+        with self._lock:
+            return bool(self._viewing_dirty)
+
+    def _clear_viewing_dirty(self) -> None:
+        with self._lock:
+            self._viewing_dirty = False
+
+    def _clear_moment_viewing_unlocked(self) -> None:
+        """Clear viewing set + dirty. Caller holds ``self._lock``."""
+        self._moment_viewing.clear()
+        self._viewing_dirty = False
+
+    def mark_viewing(
+        self,
+        att_id: str,
+        *,
+        kind: str = "file",
+        mime: str = "application/octet-stream",
+        filename: str = "file",
+        byte_size: int = 0,
+        duration_s: float | None = None,
+    ) -> list[str]:
+        """Add att_id to the moment viewing set and set dirty (test / tool port).
+
+        Returns the FIFO att_id list after the op. Always dirties on success
+        (including re-view — no reorder).
+        """
+        from elyra.media.viewing import add_viewing
+
+        with self._lock:
+            add_viewing(
+                self._moment_viewing,
+                att_id,
+                kind=kind,
+                mime=mime,
+                filename=filename,
+                byte_size=byte_size,
+                duration_s=duration_s,
+            )
+            self._viewing_dirty = True
+            return list(self._moment_viewing.keys())
+
     def _build_tool_context(self, wake: WakeItem, moment_id: str) -> ToolContext:
         user_id = _user_id_from_wake(wake)  # may be None — do not force "operator"
         return ToolContext(
@@ -3268,6 +3338,9 @@ class PresenceWorker:
                 # graph_view is a factory (fresh view per call; warm embedder only).
                 "graph_view": self.graph_view,
                 "traversal": self._traversal,
+                # Moment viewing set port (view_media tool in PR3).
+                "moment_viewing": self._moment_viewing,
+                "viewing_dirty_ref": lambda: self._viewing_dirty,
             },
         )
 
@@ -3414,6 +3487,7 @@ class PresenceWorker:
             self._last_tool = None
             self._continue_injects = 0
             self._last_meal_snapshot = None
+            self._clear_moment_viewing_unlocked()
             try:
                 self._traversal.reset()
             except Exception:  # noqa: BLE001

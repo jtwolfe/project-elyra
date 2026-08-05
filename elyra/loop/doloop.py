@@ -670,6 +670,8 @@ def run_do_loop(
     tools: list[dict[str, Any]] | None = None,
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
+    viewing_dirty_fn: Callable[[], bool] | None = None,
+    clear_viewing_dirty_fn: Callable[[], None] | None = None,
 ) -> DoLoopResult:
     """Run the multi-hop model↔tools loop until a stop reason fires.
 
@@ -687,6 +689,11 @@ def run_do_loop(
     rebuild_outer:
         Callable that rebuilds the outer meal (used at start if needed and on
         re-outer under in-turn budget pressure).
+    viewing_dirty_fn / clear_viewing_dirty_fn:
+        Optional KD-V13 hooks. When ``viewing_dirty_fn()`` is true before a
+        hop's ``chat_completion``, force ``rebuild_outer()`` even without
+        budget pressure so wake∪viewing expand lands on the wire; clear dirty
+        only after a successful force rebuild. None preserves status quo.
     social_wake:
         When True, inject a one-shot no-speak nudge on free-text hops if no
         successful ``counts_as_speak`` occurred — via ``should_allow_no_speak``
@@ -797,6 +804,8 @@ def run_do_loop(
             memory_store=memory_store,
             memory_settings=mem_settings,
             promote_state=promote_state,
+            viewing_dirty_fn=viewing_dirty_fn,
+            clear_viewing_dirty_fn=clear_viewing_dirty_fn,
         )
     except UsageHardStopError as exc:
         # Dedicated catch BEFORE broad Exception so hard-stop is policy, not error.
@@ -979,6 +988,8 @@ def _run_loop_body(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    viewing_dirty_fn: Callable[[], bool] | None = None,
+    clear_viewing_dirty_fn: Callable[[], None] | None = None,
 ) -> DoLoopResult:
     def rb(beat: dict[str, Any]) -> None:
         _record_beat(
@@ -1032,6 +1043,29 @@ def _run_loop_body(
             state.continue_injects += 1
             state.last_activity = t
             rb({"type": "obs", "kind": "continue", "content": host_line})
+
+        # KD-V13: force re-outer when viewing dirty so wake∪viewing expand lands
+        # on the next completion without artificial budget pressure. Clear dirty
+        # only after a successful rebuild (fail-closed: keep dirty on error).
+        if rebuild_outer is not None and viewing_dirty_fn is not None:
+            try:
+                viewing_dirty = bool(viewing_dirty_fn())
+            except Exception:  # noqa: BLE001 — never abort hop on dirty probe
+                _LOG.exception("viewing_dirty_fn failed; treating as not dirty")
+                viewing_dirty = False
+            if viewing_dirty:
+                try:
+                    state.outer_prefix = list(rebuild_outer())
+                    state.reouter_count += 1
+                    if clear_viewing_dirty_fn is not None:
+                        try:
+                            clear_viewing_dirty_fn()
+                        except Exception:  # noqa: BLE001
+                            _LOG.exception("clear_viewing_dirty_fn failed")
+                except Exception:  # noqa: BLE001 — leave dirty set for next hop
+                    _LOG.exception(
+                        "viewing dirty force rebuild_outer failed; dirty retained"
+                    )
 
         state.outer_prefix, state.chain_messages, did_re = enforce_in_turn_budget(
             state.outer_prefix,

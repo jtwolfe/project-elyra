@@ -2581,6 +2581,7 @@ def expand_memory_meal_for_provider(
     *,
     glass_by_id: Mapping[str, Mapping[str, Any]] | None = None,
     wake_message_id: str | None = None,
+    viewing_att_ids: Sequence[str] | None = None,
     media_store: Any | None = None,
     provider: str = "xai",
     expand_last_user_images: bool = False,
@@ -2596,6 +2597,8 @@ def expand_memory_meal_for_provider(
       glass wake row (never full sliding history) when present in
       ``glass_by_id``.
     * Seed glass attachments from ``_memory_media_ids`` when needed.
+    * Forward ``viewing_att_ids`` so expand injects the viewing carrier and
+      shares the wake∪viewing image budget (KD-V4).
     * Delegate MIME / vision / inventory policy to
       :func:`elyra.media.prompt.expand_meal_for_provider`.
     """
@@ -2620,6 +2623,7 @@ def expand_memory_meal_for_provider(
         meal,
         glass_by_id=glass,
         wake_message_id=wake_message_id,
+        viewing_att_ids=viewing_att_ids,
         media_store=media_store,
         provider=provider,
         expand_last_user_images=expand_last_user_images,

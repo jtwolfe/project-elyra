@@ -534,3 +534,123 @@ def test_meal_item_stamps_media_and_wake_id(mem_store):
     msg = meal_item_to_message(temporal[-1])
     assert msg.get("id") == "msg-stamp"
     assert "att_xyz" in (msg.get("_memory_media_ids") or [])
+
+
+def test_memory_path_viewing_expand_parity(paths, media, mem_store):
+    """Memory meal path forwards viewing_att_ids → image_url on carrier."""
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    view_att = _put_png(media)
+    # No wake image — viewing alone.
+    open_mid = "moment-view"
+    meal = compose_outer_messages(
+        mem_store,
+        open_moment_id=open_mid,
+        budget_tokens=24_000,
+        system_text=SYSTEM,
+        orient_text="orient-body",
+        settings=MemorySettings(enabled=True, write_atoms=True),
+    )
+    expanded = expand_memory_meal_for_provider(
+        meal,
+        glass_by_id={},
+        wake_message_id=None,
+        viewing_att_ids=[view_att.id],
+        media_store=media,
+        provider="xai",
+    )
+    assert _count_image_parts(expanded) == 1
+    # Carrier present before strip; check expanded (pre-strip).
+    carrier = next(
+        (m for m in expanded if m.get("id") == VIEWING_CARRIER_ID), None
+    )
+    assert carrier is not None
+    assert isinstance(carrier["content"], list)
+    imgs = [p for p in carrier["content"] if p.get("type") == "image_url"]
+    assert len(imgs) == 1
+
+    wire = strip_meal_wire_fields(expanded)
+    assert _count_image_parts(wire) == 1
+    for m in wire:
+        assert "id" not in m
+
+
+def test_memory_and_legacy_viewing_shared_budget(paths, media, mem_store):
+    """Both meal paths share the same 4-image wake∪viewing budget behaviour."""
+    from elyra.media.prompt import MAX_VISION_IMAGES, expand_meal_for_provider
+    from elyra.media.prompt import index_glass as idx
+    from elyra.loop.context import assemble_outer_meal
+
+    wake_atts = [
+        media.put_bytes(
+            FIXTURE_PNG.read_bytes(),
+            filename=f"w{i}.png",
+            origin="user_upload",
+        )
+        for i in range(3)
+    ]
+    view_atts = [
+        media.put_bytes(
+            FIXTURE_PNG.read_bytes(),
+            filename=f"v{i}.png",
+            origin="user_upload",
+        )
+        for i in range(3)
+    ]
+    content = "multi"
+    msg = append_message(
+        "user",
+        content,
+        attachments=[a.to_dict() for a in wake_atts],
+        paths=paths,
+    )
+    glass = list_messages(paths=paths)
+    view_ids = [a.id for a in view_atts]
+
+    legacy_meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=(
+            "orient {{NOW}}{{SELF}}{{USER}}{{WHY_NOW}}"
+            "{{GOALS}}{{SKILL_CATALOG}}{{SKILL_BIAS}}"
+        ),
+        wake_message_id=msg.id,
+        wake_content=content,
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    legacy = expand_meal_for_provider(
+        legacy_meal,
+        glass_by_id=idx(glass),
+        wake_message_id=msg.id,
+        viewing_att_ids=view_ids,
+        media_store=media,
+        provider="xai",
+    )
+
+    promote_wake_observation(
+        mem_store,
+        "m-budget",
+        content=content,
+        message_id=msg.id,
+        media_ids=[a.id for a in wake_atts],
+        settings=MemorySettings(write_atoms=True),
+    )
+    mem_meal = compose_outer_messages(
+        mem_store,
+        open_moment_id="m-budget",
+        budget_tokens=24_000,
+        system_text=SYSTEM,
+        orient_text="orient-body",
+        settings=MemorySettings(enabled=True, write_atoms=True),
+    )
+    memory = expand_memory_meal_for_provider(
+        mem_meal,
+        glass_by_id=idx(glass),
+        wake_message_id=msg.id,
+        viewing_att_ids=view_ids,
+        media_store=media,
+        provider="xai",
+    )
+    assert _count_image_parts(legacy) == MAX_VISION_IMAGES
+    assert _count_image_parts(memory) == MAX_VISION_IMAGES

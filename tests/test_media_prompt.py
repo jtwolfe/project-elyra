@@ -467,3 +467,194 @@ def test_extract_text_helper_oversize_skipped(store):
     big = b"x" * (256 * 1024 + 1)
     att = store.put_bytes(big, filename="big.txt", mime="text/plain")
     assert extract_text_for_attachment(_att_dict(att), store) is None
+
+
+# ---------------------------------------------------------------------------
+# Viewing set expand (PR2 — KD-V4 shared image budget + carrier)
+# ---------------------------------------------------------------------------
+
+
+def test_viewing_expand_includes_image_without_wake(store):
+    """viewing_att_ids alone → carrier full-expand with image_url (no wake)."""
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    att = _put_png(store, filename="viewed.png")
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "please look"},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        wake_message_id=None,
+        viewing_att_ids=[att.id],
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_image_parts(expanded) == 1
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    assert isinstance(carrier["content"], list)
+    image_parts = [p for p in carrier["content"] if p.get("type") == "image_url"]
+    assert len(image_parts) == 1
+    url = image_parts[0]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,")
+    b64 = url.split(",", 1)[1]
+    assert base64.b64decode(b64) == FIXTURE_PNG.read_bytes()
+    # Carrier sits before orient.
+    assert expanded[-1].get("id") is None
+    assert expanded[-1]["content"] == "orient"
+
+
+def test_empty_viewing_set_status_quo_wake_only(store):
+    """Empty viewing_att_ids ≡ legacy wake-only expand."""
+    att = _put_png(store)
+    glass = [_glass_row("wake-1", content="see", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-1",
+        wake_content="see",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    kwargs = dict(
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-1",
+        media_store=store,
+        provider="xai",
+    )
+    base = expand_meal_for_provider(meal, **kwargs)
+    empty_view = expand_meal_for_provider(meal, viewing_att_ids=[], **kwargs)
+    none_view = expand_meal_for_provider(meal, viewing_att_ids=None, **kwargs)
+    assert _count_image_parts(base) == _count_image_parts(empty_view) == 1
+    assert _count_image_parts(none_view) == 1
+    # No synthetic carrier id when viewing empty.
+    assert all(m.get("id") != "_viewing_carrier" for m in empty_view)
+    assert all(m.get("id") != "_viewing_carrier" for m in none_view)
+
+
+def test_wake_and_viewing_shared_image_budget_cap(store):
+    """3 wake images + 3 viewing images → total 4 parts (shared MAX_VISION_IMAGES)."""
+    from elyra.media.prompt import MAX_VISION_IMAGES
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    wake_atts = [
+        store.put_bytes(
+            FIXTURE_PNG.read_bytes(),
+            filename=f"w{i}.png",
+            origin="user_upload",
+        )
+        for i in range(3)
+    ]
+    view_atts = [
+        store.put_bytes(
+            FIXTURE_PNG.read_bytes(),
+            filename=f"v{i}.png",
+            origin="user_upload",
+        )
+        for i in range(3)
+    ]
+    glass = [
+        _glass_row(
+            "wake-multi",
+            content="multi",
+            attachments=[_att_dict(a) for a in wake_atts],
+        )
+    ]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-multi",
+        wake_content="multi",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-multi",
+        viewing_att_ids=[a.id for a in view_atts],
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_image_parts(expanded) == MAX_VISION_IMAGES
+    # Wake-first: all 3 wake images expand; viewing gets the remaining 1.
+    wake_msg = next(m for m in expanded if m.get("id") == "wake-multi")
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    wake_imgs = [
+        p for p in wake_msg["content"] if isinstance(p, dict) and p.get("type") == "image_url"
+    ]
+    carrier_imgs = [
+        p
+        for p in carrier["content"]
+        if isinstance(p, dict) and p.get("type") == "image_url"
+    ]
+    assert len(wake_imgs) == 3
+    assert len(carrier_imgs) == 1
+
+
+def test_viewing_dedupes_same_att_already_on_wake(store):
+    """Same att_id on wake and viewing expands once (wake owns the part)."""
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    att = _put_png(store)
+    glass = [_glass_row("w-dup", content="x", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="w-dup",
+        wake_content="x",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="w-dup",
+        viewing_att_ids=[att.id],
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_image_parts(expanded) == 1
+    wake_msg = next(m for m in expanded if m.get("id") == "w-dup")
+    assert isinstance(wake_msg["content"], list)
+    wake_imgs = [p for p in wake_msg["content"] if p.get("type") == "image_url"]
+    assert len(wake_imgs) == 1
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    # Carrier may be inventory-only text (no second image part for same att).
+    if isinstance(carrier["content"], list):
+        c_imgs = [p for p in carrier["content"] if p.get("type") == "image_url"]
+        assert c_imgs == []
+
+
+def test_viewing_extract_on_full_expand_carrier(store):
+    """Tier-A text extract runs on viewing carrier (full-expand row)."""
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    body = b"viewed notes line\n"
+    att = store.put_bytes(
+        body, filename="notes.txt", mime="text/plain", origin="user_upload"
+    )
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        viewing_att_ids=[att.id],
+        media_store=store,
+        provider="xai",
+    )
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    text = (
+        carrier["content"]
+        if isinstance(carrier["content"], str)
+        else next(p["text"] for p in carrier["content"] if p.get("type") == "text")
+    )
+    assert "viewed notes line" in text
+    assert "notes.txt" in text

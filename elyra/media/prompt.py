@@ -1,14 +1,17 @@
 """Meal-time multimodal expansion for Chat Completions (KD5, KD6, KD20, KD25).
 
 Scope: inventory text for history attachment rows; full vision + text-extract
-for the protected wake message; strip host-only fields before Completions.
+for full-expand rows (wake ∪ viewing carrier); strip host-only fields before
+Completions.
 In scope: expand_meal_for_provider, strip_meal_wire_fields, inventory format,
 tier-A text extract (always, incl. best-effort PDF), local fail-closed vision
-skip, Files tier B optional upload hook, Completions file attach gated off.
-Out of scope: JSONL writes, TTS, STT, Responses API rewrite, glass UI.
+skip, Files tier B optional upload hook, Completions file attach gated off,
+viewing_att_ids carrier inject + shared image budget (KD-V4).
+Out of scope: JSONL writes, TTS, STT, Responses API rewrite, glass UI,
+audio/video Completions wire parts (PR4).
 
 Glass JSONL stays string content + attachments[]; base64 exists only in memory
-on the Completions wire for the wake row.
+on the Completions wire for full-expand rows (wake + viewing carrier).
 """
 
 from __future__ import annotations
@@ -457,28 +460,44 @@ def _vision_allowed(provider: str) -> bool:
     return (provider or "").lower() == "xai"
 
 
+def _is_image_attachment(att: Mapping[str, Any]) -> bool:
+    kind = str(att.get("kind") or "")
+    mime = str(att.get("mime") or "")
+    return kind == "image" or mime.startswith("image/")
+
+
 def _build_image_parts(
     attachments: Sequence[Mapping[str, Any]],
     media_store: _MediaReadable | None,
     *,
     max_images: int = MAX_VISION_IMAGES,
     max_total_bytes: int = MAX_VISION_IMAGE_BYTES_TOTAL,
-) -> list[dict[str, Any]]:
-    """Build OpenAI-style image_url parts from image attachments (in-memory only)."""
+    remaining_images: int | None = None,
+    remaining_bytes: int | None = None,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Build OpenAI-style image_url parts from image attachments (in-memory only).
+
+    Shared-budget callers pass ``remaining_images`` / ``remaining_bytes`` so wake
+    and viewing rows share the global 4-image / 20 MiB cap (KD-V4). Returns
+    ``(parts, images_used, bytes_used)``.
+    """
     if media_store is None:
-        return []
+        return [], 0, 0
+    img_cap = max_images if remaining_images is None else remaining_images
+    byte_cap = max_total_bytes if remaining_bytes is None else remaining_bytes
+    if img_cap <= 0 or byte_cap <= 0:
+        return [], 0, 0
     parts: list[dict[str, Any]] = []
     total_bytes = 0
     for att in attachments:
-        if len(parts) >= max_images:
+        if len(parts) >= img_cap:
             break
-        kind = str(att.get("kind") or "")
-        mime = str(att.get("mime") or "")
-        if kind != "image" and not mime.startswith("image/"):
+        if not _is_image_attachment(att):
             continue
         aid = str(att.get("id") or "")
         if not aid:
             continue
+        mime = str(att.get("mime") or "")
         try:
             data = media_store.read_bytes(aid)
         except (OSError, FileNotFoundError, ValueError) as exc:
@@ -486,10 +505,14 @@ def _build_image_parts(
             continue
         if not data:
             continue
-        if total_bytes + len(data) > max_total_bytes:
+        if total_bytes + len(data) > byte_cap:
             _LOG.warning(
                 "vision expand: total image bytes cap (%d) hit; skipping %s",
-                max_total_bytes,
+                max_total_bytes if remaining_bytes is None else (
+                    (remaining_bytes or 0) + total_bytes
+                    if remaining_bytes is not None
+                    else max_total_bytes
+                ),
                 aid,
             )
             break
@@ -502,7 +525,7 @@ def _build_image_parts(
             }
         )
         total_bytes += len(data)
-    return parts
+    return parts, len(parts), total_bytes
 
 
 def _needs_not_inlined_notice(
@@ -528,43 +551,134 @@ def _needs_not_inlined_notice(
     return False
 
 
+def _normalize_viewing_att_ids(
+    viewing_att_ids: Sequence[str] | None,
+) -> list[str]:
+    if not viewing_att_ids:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in viewing_att_ids:
+        if raw is None:
+            continue
+        aid = str(raw).strip()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        out.append(aid)
+    return out
+
+
+def _allocate_shared_image_parts(
+    full_rows: Sequence[tuple[str, list[dict[str, Any]]]],
+    media_store: _MediaReadable | None,
+    *,
+    max_images: int = MAX_VISION_IMAGES,
+    max_total_bytes: int = MAX_VISION_IMAGE_BYTES_TOTAL,
+) -> dict[str, list[dict[str, Any]]]:
+    """Allocate image_url parts across full-expand rows with a shared budget.
+
+    ``full_rows`` is ordered wake-first then carrier. Attachments are deduped by
+    att_id (first owner wins). Returns ``row_id → image parts``.
+    """
+    parts_by_row: dict[str, list[dict[str, Any]]] = {rid: [] for rid, _ in full_rows}
+    if media_store is None or not full_rows:
+        return parts_by_row
+
+    remaining_images = max_images
+    remaining_bytes = max_total_bytes
+    seen_att: set[str] = set()
+
+    for row_id, atts in full_rows:
+        if remaining_images <= 0 or remaining_bytes <= 0:
+            break
+        # Only novel image atts for this row (dedupe across rows).
+        novel: list[dict[str, Any]] = []
+        for a in atts:
+            if not _is_image_attachment(a):
+                continue
+            aid = str(a.get("id") or "")
+            if not aid or aid in seen_att:
+                continue
+            seen_att.add(aid)
+            novel.append(a)
+        if not novel:
+            continue
+        parts, n_img, n_bytes = _build_image_parts(
+            novel,
+            media_store,
+            remaining_images=remaining_images,
+            remaining_bytes=remaining_bytes,
+        )
+        if parts:
+            parts_by_row[row_id] = parts
+            remaining_images -= n_img
+            remaining_bytes -= n_bytes
+    return parts_by_row
+
+
 def expand_meal_for_provider(
     messages: Sequence[Mapping[str, Any]],
     *,
     glass_by_id: Mapping[str, Mapping[str, Any]] | None = None,
     wake_message_id: str | None = None,
+    viewing_att_ids: Sequence[str] | None = None,
     media_store: _MediaReadable | None = None,
     provider: str = "xai",
     expand_last_user_images: bool = False,
     xai_files_client: _XaiFilesClientLike | None = None,
     upload_files_to_xai: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return a **new** message list with meal-time inventory + wake vision.
+    """Return a **new** message list with meal-time inventory + full-expand vision.
 
     Correlates history rows via ``msg["id"]`` only (KD25). Invoked on every
     ``rebuild_outer`` (KD20). Idempotent for the same inputs (aside from
     optional Files upload side effects when ``upload_files_to_xai`` is set).
 
     * All history rows with resolvable id + attachments → inventory text.
-    * Full vision ``image_url`` parts + tier-A text extract: wake row only
-      (``id == wake_message_id``), and only when provider is xAI with vision
-      enabled.
-    * PDF/docs: always attempt extract; on failure inventory notes
-      ``file pdf not_inlined`` (PR9 / KD5). Completions Files attach is off
+    * Full vision ``image_url`` parts + tier-A text extract: rows in
+      ``full_expand_ids = {wake_message_id, viewing_carrier_id}`` (KD-V4),
+      when provider is xAI with vision enabled. Shared image budget (4 / 20 MiB)
+      across wake ∪ viewing; wake first.
+    * Empty ``viewing_att_ids`` → status quo (wake-only full expand).
+    * PDF/docs: always attempt extract on full-expand rows; on failure inventory
+      notes ``file pdf not_inlined`` (PR9 / KD5). Completions Files attach is off
       unless ``ELYRA_XAI_FILES_ATTACH=1`` **and** a stored ``xai_file_id``
       exists (unproven with tools — default extract+inventory only).
     * Optional ``upload_files_to_xai`` + ``xai_files_client``: persist
       ``xai_file_id`` even when wire-attach is off.
-    * Local / non-xAI: inventory + fail-closed notice on wake; no data URLs.
+    * Local / non-xAI: inventory + fail-closed notice on full-expand rows;
+      no data URLs.
     * Never mutates glass JSONL; never writes base64 to store.
 
     ``expand_last_user_images`` is reserved (off by default in v1).
     """
-    del expand_last_user_images  # v1: wake-only full expand
-    glass = glass_by_id or {}
+    del expand_last_user_images  # v1: wake ∪ viewing full expand only
+    viewing_ids = _normalize_viewing_att_ids(viewing_att_ids)
+    glass: Mapping[str, Mapping[str, Any]] = glass_by_id or {}
+    meal: Sequence[Mapping[str, Any]] = messages
+    carrier_id: str | None = None
+
+    if viewing_ids:
+        from elyra.media.viewing import inject_viewing_carrier
+
+        meal_list, glass_mut, carrier_id = inject_viewing_carrier(
+            meal,
+            glass_by_id=glass,
+            viewing_att_ids=viewing_ids,
+            media_store=media_store,
+        )
+        meal = meal_list
+        glass = glass_mut
+
     media_on = _env_flag_enabled("ELYRA_MEDIA")
     vision_ok = _vision_allowed(provider)
     wake_id = str(wake_message_id) if wake_message_id else None
+    full_expand_ids: set[str] = set()
+    if wake_id:
+        full_expand_ids.add(wake_id)
+    if carrier_id:
+        full_expand_ids.add(carrier_id)
     logged_missing_id = False
 
     from elyra.media.xai_files import (
@@ -579,8 +693,39 @@ def expand_meal_for_provider(
     file_part_fn = completions_file_part
     is_candidate_fn = is_files_tier_candidate
 
+    # Pre-resolve attachments per message id (for shared image budget + loop).
+    atts_by_mid: dict[str, list[dict[str, Any]]] = {}
+    if media_on:
+        for msg in meal:
+            mid = msg.get("id")
+            if mid is None:
+                continue
+            mid_s = str(mid)
+            if mid_s in atts_by_mid:
+                continue
+            raw_atts = _attachments_for_message(mid_s, glass_by_id=glass)
+            if not raw_atts:
+                atts_by_mid[mid_s] = []
+                continue
+            atts_by_mid[mid_s] = [
+                _enrich_attachment(a, media_store)
+                for a in _filter_model_attachments(raw_atts)
+            ]
+
+    # Shared vision budget: wake first, then carrier (KD-V4).
+    image_parts_by_row: dict[str, list[dict[str, Any]]] = {}
+    if media_on and vision_ok and full_expand_ids:
+        ordered_full: list[tuple[str, list[dict[str, Any]]]] = []
+        if wake_id and wake_id in full_expand_ids:
+            ordered_full.append((wake_id, atts_by_mid.get(wake_id) or []))
+        if carrier_id and carrier_id in full_expand_ids and carrier_id != wake_id:
+            ordered_full.append((carrier_id, atts_by_mid.get(carrier_id) or []))
+        image_parts_by_row = _allocate_shared_image_parts(
+            ordered_full, media_store
+        )
+
     out: list[dict[str, Any]] = []
-    for msg in messages:
+    for msg in meal:
         role = msg.get("role")
         content = msg.get("content")
         if not isinstance(content, str):
@@ -604,8 +749,14 @@ def expand_meal_for_provider(
             out.append(new_msg)
             continue
 
-        raw_atts = _attachments_for_message(mid_s, glass_by_id=glass)
-        if not raw_atts:
+        atts = atts_by_mid.get(mid_s)
+        if atts is None:
+            raw_atts = _attachments_for_message(mid_s, glass_by_id=glass)
+            atts = [
+                _enrich_attachment(a, media_store)
+                for a in _filter_model_attachments(raw_atts)
+            ] if raw_atts else []
+        if not atts:
             # History row with id but no attachments (or unresolvable).
             if mid_s not in glass and not logged_missing_id:
                 _LOG.debug(
@@ -616,19 +767,11 @@ def expand_meal_for_provider(
             out.append(new_msg)
             continue
 
-        atts = [
-            _enrich_attachment(a, media_store)
-            for a in _filter_model_attachments(raw_atts)
-        ]
-        if not atts:
-            out.append(new_msg)
-            continue
-
-        is_wake = wake_id is not None and mid_s == wake_id
+        is_full = mid_s in full_expand_ids
         text = append_inventory_to_content(content, atts)
 
-        if is_wake:
-            # Tier A text extracts into the text part (wake only) — always.
+        if is_full:
+            # Tier A text extracts into the text part (full-expand rows) — always.
             extracts: list[str] = []
             extracted_ids: set[str] = set()
             file_parts: list[dict[str, Any]] = []
@@ -692,8 +835,8 @@ def expand_meal_for_provider(
 
             extra_parts: list[dict[str, Any]] = list(file_parts)
             if vision_ok:
-                image_parts = _build_image_parts(atts, media_store)
-                extra_parts = image_parts + extra_parts
+                image_parts = image_parts_by_row.get(mid_s) or []
+                extra_parts = list(image_parts) + extra_parts
 
             if extra_parts:
                 new_msg["content"] = [
@@ -703,11 +846,7 @@ def expand_meal_for_provider(
             else:
                 if not vision_ok:
                     # Local / vision kill-switch: inventory + fail-closed notice.
-                    has_image = any(
-                        str(a.get("kind") or "") == "image"
-                        or str(a.get("mime") or "").startswith("image/")
-                        for a in atts
-                    )
+                    has_image = any(_is_image_attachment(a) for a in atts)
                     if has_image and (provider or "").lower() != "xai":
                         text = f"{text}\n\n{_LOCAL_VISION_NOTICE}"
                     elif has_image and not _env_flag_enabled("ELYRA_VISION"):
@@ -717,7 +856,7 @@ def expand_meal_for_provider(
                         )
                 new_msg["content"] = text
         else:
-            # Inventory only for non-wake attachment rows (user and assistant).
+            # Inventory only for non-full-expand attachment rows.
             new_msg["content"] = text
 
         out.append(new_msg)
