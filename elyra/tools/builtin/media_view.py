@@ -631,6 +631,16 @@ def _maybe_promote(
     try:
         from elyra.memory.promote import promote_view_observation
 
+        pctx = None
+        pctx_fn = extras.get("promote_context_fn")
+        if callable(pctx_fn):
+            try:
+                pctx = pctx_fn()
+            except Exception:  # noqa: BLE001
+                _LOG.exception("view_media promote_context_fn failed")
+                pctx = None
+        if pctx is None and extras.get("promote_context") is not None:
+            pctx = extras.get("promote_context")
         atom = promote_view_observation(
             store,
             moment_id,
@@ -638,6 +648,7 @@ def _maybe_promote(
             note=note,
             source_url=source_url,
             settings=mem_settings,
+            promote_context=pctx,
         )
         return atom is not None
     except Exception:  # noqa: BLE001

@@ -502,12 +502,18 @@ def _record_beat(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
 ) -> None:
     """Append a moment tape beat, then optionally promote to memory atoms.
 
     Promote is best-effort: failures are logged and never raised. When
     ``write_atoms`` is false or store/settings are None, behaviour matches the
     legacy append-only path.
+
+    ``promote_context`` / ``promote_context_fn`` supply durable-edge write
+    context (raw meal atom ids + EdgeStore). ``promote_context_fn`` is called
+    at promote time so re-outer meal ids are fresh.
     """
     if moments is not None and moment_id:
         try:
@@ -527,12 +533,20 @@ def _record_beat(
         try:
             from elyra.memory.promote import promote_beat
 
+            pctx = promote_context
+            if pctx is None and promote_context_fn is not None:
+                try:
+                    pctx = promote_context_fn()
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("promote_context_fn failed")
+                    pctx = None
             promote_beat(
                 memory_store,
                 moment_id,
                 beat,
                 settings=memory_settings,
                 moment_tool_counts=promote_state,
+                promote_context=pctx,
             )
         except Exception:  # noqa: BLE001 — never raise into do-loop
             _LOG.exception(
@@ -621,6 +635,7 @@ def _drain_interjections(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
 ) -> None:
     if drain is None:
         return
@@ -646,6 +661,7 @@ def _drain_interjections(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
 
 
@@ -670,6 +686,7 @@ def run_do_loop(
     tools: list[dict[str, Any]] | None = None,
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
     viewing_dirty_fn: Callable[[], bool] | None = None,
     clear_viewing_dirty_fn: Callable[[], None] | None = None,
 ) -> DoLoopResult:
@@ -804,6 +821,7 @@ def run_do_loop(
             memory_store=memory_store,
             memory_settings=mem_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
             viewing_dirty_fn=viewing_dirty_fn,
             clear_viewing_dirty_fn=clear_viewing_dirty_fn,
         )
@@ -823,6 +841,7 @@ def run_do_loop(
             memory_store=memory_store,
             memory_settings=mem_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
         return DoLoopResult(
             stop_reason=STOP_POLICY,
@@ -864,6 +883,7 @@ def run_do_loop(
                 memory_store=memory_store,
                 memory_settings=mem_settings,
                 promote_state=promote_state,
+                promote_context_fn=promote_context_fn,
             )
             return DoLoopResult(
                 stop_reason=STOP_ERROR,
@@ -906,6 +926,7 @@ def run_do_loop(
             memory_store=memory_store,
             memory_settings=mem_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
         return DoLoopResult(
             stop_reason=STOP_ERROR,
@@ -935,6 +956,7 @@ def run_do_loop(
             memory_store=memory_store,
             memory_settings=mem_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
         return DoLoopResult(
             stop_reason=STOP_ERROR,
@@ -988,6 +1010,7 @@ def _run_loop_body(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
     viewing_dirty_fn: Callable[[], bool] | None = None,
     clear_viewing_dirty_fn: Callable[[], None] | None = None,
 ) -> DoLoopResult:
@@ -999,6 +1022,7 @@ def _run_loop_body(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
 
     while True:
@@ -1028,6 +1052,7 @@ def _run_loop_body(
                 memory_store=memory_store,
                 memory_settings=memory_settings,
                 promote_state=promote_state,
+                promote_context_fn=promote_context_fn,
             )
 
         # Continue inject (only when not already declined by precheck).
@@ -1166,6 +1191,7 @@ def _run_loop_body(
                 memory_store=memory_store,
                 memory_settings=memory_settings,
                 promote_state=promote_state,
+                promote_context_fn=promote_context_fn,
             )
             if stop is not None:
                 return _finish(
@@ -1177,6 +1203,7 @@ def _run_loop_body(
                     memory_store=memory_store,
                     memory_settings=memory_settings,
                     promote_state=promote_state,
+                    promote_context_fn=promote_context_fn,
                 )
             continue
 
@@ -1196,6 +1223,7 @@ def _run_loop_body(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
 
         # Free-text inject order (K8 extended): skill_commit → no_speak →
@@ -1326,6 +1354,7 @@ def _run_loop_body(
                 memory_store=memory_store,
                 memory_settings=memory_settings,
                 promote_state=promote_state,
+                promote_context_fn=promote_context_fn,
             )
 
 
@@ -1359,6 +1388,7 @@ def _handle_tool_batch(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
 ) -> str | None:
     """Execute tool_calls serially. Returns stop_reason or None to continue."""
     state.chain_messages.append(assistant_message_from_result(result))
@@ -1483,6 +1513,7 @@ def _handle_tool_batch(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
         if skipped:
             _record_beat(
@@ -1501,6 +1532,7 @@ def _handle_tool_batch(
                 memory_store=memory_store,
                 memory_settings=memory_settings,
                 promote_state=promote_state,
+                promote_context_fn=promote_context_fn,
             )
             _LOG.info(
                 "skip-identical moment_id=%s tool=%s streak=%s skip_count=%s fp=%s",
@@ -1558,6 +1590,7 @@ def _handle_tool_batch(
         memory_store=memory_store,
         memory_settings=memory_settings,
         promote_state=promote_state,
+        promote_context_fn=promote_context_fn,
     )
 
     # Post-batch thrash HOST (tool path — NOT free-text order). Last-fp only (v1).
@@ -1600,6 +1633,7 @@ def _handle_tool_batch(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
 
     # Phase C: arm thrash lesson request once after thrash HOST is in play
@@ -1623,6 +1657,7 @@ def _handle_tool_batch(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
 
     # Phase C: HOST-synthesized lesson after K additional *identical* fails.
@@ -1644,6 +1679,7 @@ def _handle_tool_batch(
             memory_store=memory_store,
             memory_settings=memory_settings,
             promote_state=promote_state,
+            promote_context_fn=promote_context_fn,
         )
 
     return None
@@ -1670,6 +1706,7 @@ def _store_and_pin_lesson(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
 ) -> None:
     """Store compact lesson, set pin HOST, mark captured. No auto-stop."""
     body = (lesson or "").strip()
@@ -1702,6 +1739,7 @@ def _store_and_pin_lesson(
         memory_store=memory_store,
         memory_settings=memory_settings,
         promote_state=promote_state,
+        promote_context_fn=promote_context_fn,
     )
 
 
@@ -1715,6 +1753,7 @@ def _maybe_capture_free_text_lesson(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
 ) -> None:
     """Capture non-flood free-text as lesson after request; do not force stop."""
     if not state.lesson_request_sent or state.lesson_captured:
@@ -1736,6 +1775,7 @@ def _maybe_capture_free_text_lesson(
         memory_store=memory_store,
         memory_settings=memory_settings,
         promote_state=promote_state,
+        promote_context_fn=promote_context_fn,
     )
 
 
@@ -1749,6 +1789,7 @@ def _finish(
     memory_store: Any | None = None,
     memory_settings: Any | None = None,
     promote_state: Any | None = None,
+    promote_context_fn: Callable[[], Any] | None = None,
 ) -> DoLoopResult:
     _record_beat(
         moments,
@@ -1768,6 +1809,7 @@ def _finish(
         memory_store=memory_store,
         memory_settings=memory_settings,
         promote_state=promote_state,
+        promote_context_fn=promote_context_fn,
     )
     return DoLoopResult(
         stop_reason=stop_reason,

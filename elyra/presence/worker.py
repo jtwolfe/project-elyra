@@ -549,6 +549,9 @@ class PresenceWorker:
         self._encode_last_drain_stats: dict[str, Any] | None = None
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
+        # Raw meal atom ids for created_with (edges design PR3 / KD-E17).
+        # Filled at rebuild_outer from package items — never glass inspect DTO.
+        self._last_meal_atom_ids: list[str] = []
         # Phase 2a directed traversal (PR-A2): process-local session registry.
         # Flags default off — registry is inert until directed_traversal_enabled.
         from elyra.memory.traverse import TraversalRegistry
@@ -1789,7 +1792,22 @@ class PresenceWorker:
         budget_tokens: int | None = None,
         source: str = "rebuild_outer",
     ) -> None:
-        """Best-effort: stash inspect payload for glass Memory Context tab."""
+        """Best-effort: stash inspect payload for glass Memory Context tab.
+
+        Also captures **raw** uncapped meal atom ids for ``created_with``
+        (``_last_meal_atom_ids``). That list is independent of the glass DTO
+        (which caps multi-atom ``atom_ids`` at 24) — KD-E17.
+        """
+        # Raw ids first (promote edges); inspect DTO is UI-only and may fail.
+        try:
+            from elyra.memory.promote import atom_ids_from_meal_items
+
+            items = getattr(package, "items", None) or ()
+            raw_ids = atom_ids_from_meal_items(items)
+            with self._lock:
+                self._last_meal_atom_ids = list(raw_ids)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("record last meal atom ids failed")
         try:
             from elyra.memory.inspect import meal_package_to_inspect
             from elyra.memory.types import utc_now_iso
@@ -1808,6 +1826,24 @@ class PresenceWorker:
                 self._last_meal_snapshot = payload
         except Exception:  # noqa: BLE001 — never break rebuild for glass
             _LOG.exception("record last meal snapshot failed")
+
+    def _promote_context_snapshot(self) -> Any:
+        """Build PromoteContext from raw meal ids + EdgeStore (fail-soft).
+
+        Returns a memory.promote.PromoteContext. Edge store open is independent
+        of durable_edges_enabled; write path gates on the flag.
+        """
+        from elyra.memory.promote import PromoteContext
+
+        with self._lock:
+            ids = list(self._last_meal_atom_ids)
+        edge_store = None
+        try:
+            edge_store = self._ensure_edge_store()
+        except Exception:  # noqa: BLE001
+            _LOG.exception("promote_context edge_store open failed")
+            edge_store = None
+        return PromoteContext(context_atom_ids=ids, edge_store=edge_store)
 
     def _idle_memory_ladder(self) -> None:
         """Budgeted ladder tick outside the state lock (idle only; never hop)."""
@@ -2550,6 +2586,7 @@ class PresenceWorker:
                 media_ids=media_ids,
                 why_now=why,
                 settings=mem_cfg,
+                promote_context=self._promote_context_snapshot(),
             )
         except Exception:  # noqa: BLE001 — never abort claim/open
             _LOG.exception(
@@ -2882,6 +2919,7 @@ class PresenceWorker:
             drain_interjections=self._drain_interjections,
             memory_store=mem,
             memory_settings=self.settings.memory,
+            promote_context_fn=self._promote_context_snapshot,
             viewing_dirty_fn=self._is_viewing_dirty,
             clear_viewing_dirty_fn=self._clear_viewing_dirty,
         )
@@ -3435,6 +3473,9 @@ class PresenceWorker:
                 "drop_viewing": self.drop_from_viewing,
                 "clear_viewing": self.clear_moment_viewing,
                 "memory_store": self._ensure_memory_store(),
+                # Durable edge promote context (created_with / in_moment).
+                "promote_context_fn": self._promote_context_snapshot,
+                "edge_store": self._ensure_edge_store(),
             },
         )
 
@@ -3581,6 +3622,7 @@ class PresenceWorker:
             self._last_tool = None
             self._continue_injects = 0
             self._last_meal_snapshot = None
+            self._last_meal_atom_ids = []
             self._clear_moment_viewing_unlocked()
             try:
                 self._traversal.reset()

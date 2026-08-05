@@ -1,9 +1,10 @@
-"""Normative beat → atom promotion rules (Phase 1).
+"""Normative beat → atom promotion rules (Phase 1 + durable edges PR3).
 
 Scope: pure promote_beat / promote_wake_observation + control-kind filters.
 In scope: R1–R10, KD16 tool density, ledger one-liners, sequential link,
-idempotency. Best-effort: never raise into the do-loop.
-Out of scope: doloop/presence hooks, GoalsStore, meal, ladder.
+idempotency, created_with / in_moment durable edge writes (when flagged).
+Best-effort: never raise into the do-loop; edge store soft-fails.
+Out of scope: recalls / has_channel (PR4), doloop/presence hooks, GoalsStore.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, MutableMapping, Sequence
 
-from elyra.memory.config import MemorySettings
+from elyra.memory.config import MemorySettings, is_durable_edges_enabled
 from elyra.memory.parcel import (
     make_parent_and_parcels,
     parcel_threshold,
@@ -25,6 +26,15 @@ from elyra.memory.store import MemoryStore
 from elyra.memory.types import Atom, atom_replace, new_atom_id, to_iso_z, utc_now_iso
 
 _LOG = logging.getLogger(__name__)
+
+# Kinds that must never be created_with destinations (OQ-E2 + design §2.1).
+_CREATED_WITH_EXCLUDE_DST_KINDS: frozenset[str] = frozenset(
+    {"tool", "ledger", "parcel", "moment_meta"}
+)
+# Experience kinds that write created_with on promote (design §2.5).
+_CREATED_WITH_SRC_KINDS: frozenset[str] = frozenset(
+    {"speak", "observation", "model"}
+)
 
 # Exact kinds emitted by elyra/loop/doloop.py today (R1).
 CONTROL_OBS_KINDS: frozenset[str] = frozenset(
@@ -79,6 +89,23 @@ class PromoteState:
     tool_atoms: int = 0
     # Optional set of recent idempotency keys seen this moment (fast path).
     seen_keys: set[str] = field(default_factory=set)
+
+
+@dataclass
+class PromoteContext:
+    """Optional durable-edge write context for promote (edges design PR3).
+
+    ``context_atom_ids`` is the **raw** meal atom-id list captured at
+    ``rebuild_outer`` (worker ``_last_meal_atom_ids``) — never the glass
+    inspect DTO (capped / UI-shaped). Empty or missing → **zero**
+    ``created_with`` edges (OQ-E1; no open-moment invent).
+
+    ``edge_store`` may be None / Unavailable; writes soft-fail and atom
+    promote still succeeds.
+    """
+
+    context_atom_ids: Sequence[str] = ()
+    edge_store: Any | None = None
 
 
 def content_hash(text: str) -> str:
@@ -315,14 +342,218 @@ def _embedding_status_for_promote(
     return "none"
 
 
+# ── Durable edge writes (PR3; soft-fail) ───────────────────────────────────
+
+
+def atom_ids_from_meal_items(items: Sequence[Any] | None) -> list[str]:
+    """Extract raw uncapped atom ids from meal package items (created_with src).
+
+    Collects ``item.atom_id`` and multi-atom ``item.meta.atom_ids``. Order is
+    first-seen stable; **not** the glass inspect cap of 24.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    if not items:
+        return out
+    for item in items:
+        aid = getattr(item, "atom_id", None)
+        if isinstance(aid, str) and aid and aid not in seen:
+            seen.add(aid)
+            out.append(aid)
+        meta = getattr(item, "meta", None)
+        if not isinstance(meta, Mapping):
+            continue
+        multi = meta.get("atom_ids")
+        if not isinstance(multi, (list, tuple)):
+            continue
+        for raw in multi:
+            if not isinstance(raw, str):
+                continue
+            s = raw.strip()
+            if s and s not in seen:
+                seen.add(s)
+                out.append(s)
+    return out
+
+
+def _filter_created_with_destinations(
+    store: MemoryStore,
+    src_atom_id: str,
+    candidate_ids: Sequence[str],
+    *,
+    write_cap: int,
+) -> list[str]:
+    """Resolve destinations: exclude self, tool/ledger/parcel/moment_meta, missing.
+
+    Cap at ``write_cap`` (default 32) preserving candidate order.
+    """
+    out: list[str] = []
+    cap = max(0, int(write_cap))
+    for raw in candidate_ids:
+        if len(out) >= cap:
+            break
+        if not isinstance(raw, str):
+            continue
+        dst = raw.strip()
+        if not dst or dst == src_atom_id:
+            continue
+        if dst in out:
+            continue
+        try:
+            atom = store.get_atom(dst)
+        except Exception:  # noqa: BLE001
+            continue
+        if atom is None:
+            continue
+        kind = str(atom.kind or "")
+        if kind in _CREATED_WITH_EXCLUDE_DST_KINDS:
+            continue
+        out.append(dst)
+    return out
+
+
+def _write_in_moment_edge(
+    edge_store: Any,
+    *,
+    src_atom_id: str,
+    moment_id: str,
+    settings: MemorySettings,
+    atom_store: MemoryStore | None = None,
+) -> None:
+    """Idempotent atom → moment:{id} hub edge (membership index only)."""
+    from elyra.memory.edges import DurableEdge, new_edge_id, put_edge_with_budget
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.weights import EDGE_IN_MOMENT, base_weight
+
+    hub = moment_hub_id(moment_id)
+    now = utc_now_iso()
+    edge = DurableEdge(
+        edge_id=new_edge_id(),
+        src_atom_id=src_atom_id,
+        dst_atom_id=hub,
+        edge_kind=EDGE_IN_MOMENT,
+        created_at=now,
+        updated_at=now,
+        weight=base_weight(EDGE_IN_MOMENT),
+        reason="promote_membership",
+        meta={"moment_id": moment_id},
+    )
+    put_edge_with_budget(
+        edge_store, edge, settings, atom_store=atom_store, retarget=False
+    )
+
+
+def _write_created_with_edges(
+    edge_store: Any,
+    atom_store: MemoryStore,
+    *,
+    src_atom_id: str,
+    context_atom_ids: Sequence[str],
+    settings: MemorySettings,
+) -> int:
+    """Write created_with edges from new atom → meal context ids. Returns count.
+
+    Empty ``context_atom_ids`` → zero edges (OQ-E1). Soft-fail per edge.
+    """
+    if not context_atom_ids:
+        return 0
+    from elyra.memory.edges import DurableEdge, new_edge_id, put_edge_with_budget
+    from elyra.memory.weights import EDGE_CREATED_WITH, base_weight
+
+    write_cap = int(getattr(settings, "edge_created_with_write_cap", 32) or 32)
+    dests = _filter_created_with_destinations(
+        atom_store, src_atom_id, context_atom_ids, write_cap=write_cap
+    )
+    if not dests:
+        return 0
+    now = utc_now_iso()
+    written = 0
+    for dst in dests:
+        edge = DurableEdge(
+            edge_id=new_edge_id(),
+            src_atom_id=src_atom_id,
+            dst_atom_id=dst,
+            edge_kind=EDGE_CREATED_WITH,
+            created_at=now,
+            updated_at=now,
+            weight=base_weight(EDGE_CREATED_WITH),
+            reason="promote_context",
+            meta={},
+        )
+        try:
+            put_edge_with_budget(
+                edge_store,
+                edge,
+                settings,
+                atom_store=atom_store,
+                retarget=True,
+            )
+            written += 1
+        except Exception:  # noqa: BLE001 — soft-fail per edge
+            _LOG.exception(
+                "created_with put failed src=%s dst=%s", src_atom_id, dst
+            )
+    return written
+
+
+def _maybe_write_promote_edges(
+    store: MemoryStore,
+    stored: Atom,
+    *,
+    moment_id: str,
+    settings: MemorySettings,
+    promote_context: PromoteContext | None,
+    write_created_with: bool,
+    write_in_moment: bool = True,
+) -> None:
+    """After successful put_atom: durable edges when flag + edge store present.
+
+    Never raises; atom promote already succeeded.
+    """
+    if promote_context is None:
+        return
+    if not is_durable_edges_enabled(settings):
+        return
+    edge_store = promote_context.edge_store
+    if edge_store is None:
+        return
+    try:
+        if write_in_moment and moment_id:
+            _write_in_moment_edge(
+                edge_store,
+                src_atom_id=stored.atom_id,
+                moment_id=moment_id,
+                settings=settings,
+                atom_store=store,
+            )
+        if write_created_with and stored.kind in _CREATED_WITH_SRC_KINDS:
+            ctx_ids = list(promote_context.context_atom_ids or ())
+            _write_created_with_edges(
+                edge_store,
+                store,
+                src_atom_id=stored.atom_id,
+                context_atom_ids=ctx_ids,
+                settings=settings,
+            )
+    except Exception:  # noqa: BLE001 — never break promote
+        _LOG.exception(
+            "memory promote edge writes failed atom_id=%s kind=%s",
+            stored.atom_id,
+            stored.kind,
+        )
+
+
 def _link_and_put(
     store: MemoryStore,
     atom: Atom,
     *,
     moment_id: str,
     settings: MemorySettings,
+    promote_context: PromoteContext | None = None,
+    write_created_with: bool = True,
+    write_in_moment: bool = True,
 ) -> Atom:
-    """R7 sequential linking then put_atom."""
+    """R7 sequential linking then put_atom (+ optional durable edges)."""
     # Phase 2: mark pending when semantic on (enqueue via store write hooks).
     emb_status = _embedding_status_for_promote(settings, atom)
     if emb_status != atom.embedding_status:
@@ -350,6 +581,15 @@ def _link_and_put(
                 prev.atom_id,
                 stored.atom_id,
             )
+    _maybe_write_promote_edges(
+        store,
+        stored,
+        moment_id=moment_id,
+        settings=settings,
+        promote_context=promote_context,
+        write_created_with=write_created_with,
+        write_in_moment=write_in_moment,
+    )
     return stored
 
 
@@ -358,11 +598,14 @@ def _put_parcel_children(
     children: Sequence[Atom],
     *,
     settings: MemorySettings,
+    moment_id: str = "",
+    promote_context: PromoteContext | None = None,
 ) -> list[Atom]:
     """Put parcel children with sequential prev/next among parcels only.
 
     Does **not** join the experience weave (``moment_tail`` already excludes
     ``kind=parcel``). Each put still fires write hooks for encode enqueue.
+    Membership-only edges (``in_moment``); no ``created_with`` (design §2.5).
 
     On mid-chain ``put_atom`` failure: stop, return the partial list (caller
     must reconcile parent meta). Full rollback of an already-linked parent is
@@ -370,6 +613,7 @@ def _put_parcel_children(
     """
     stored: list[Atom] = []
     prev_id: str | None = None
+    mid = moment_id or ""
     for child in children:
         emb_status = _embedding_status_for_promote(settings, child)
         atom = child
@@ -398,6 +642,16 @@ def _put_parcel_children(
                     prev_id,
                     row.atom_id,
                 )
+        if mid:
+            _maybe_write_promote_edges(
+                store,
+                row,
+                moment_id=mid,
+                settings=settings,
+                promote_context=promote_context,
+                write_created_with=False,
+                write_in_moment=True,
+            )
         stored.append(row)
         prev_id = row.atom_id
     return stored
@@ -483,6 +737,8 @@ def _link_and_put_with_parcels(
     source_beat_ts: str | None = None,
     source_beat_type: str | None = None,
     base_meta: Mapping[str, Any] | None = None,
+    promote_context: PromoteContext | None = None,
+    write_created_with: bool = True,
 ) -> Atom:
     """Put experience atom; when parcels apply, split before any truncate.
 
@@ -492,6 +748,8 @@ def _link_and_put_with_parcels(
     failures reconcile parent meta (no silent wrong ``parcel_count``).
     """
     meta = dict(base_meta or {})
+    # Tool/ledger never write created_with (design §2.5); parcels never either.
+    cw = bool(write_created_with) and kind in _CREATED_WITH_SRC_KINDS
     if should_split_into_parcels(raw_text, settings):
         try:
             thr = parcel_threshold(settings)
@@ -507,11 +765,20 @@ def _link_and_put_with_parcels(
                 base_meta=meta,
             )
             stored_parent = _link_and_put(
-                store, parent, moment_id=moment_id, settings=settings
+                store,
+                parent,
+                moment_id=moment_id,
+                settings=settings,
+                promote_context=promote_context,
+                write_created_with=cw,
             )
             if children:
                 stored_children = _put_parcel_children(
-                    store, children, settings=settings
+                    store,
+                    children,
+                    settings=settings,
+                    moment_id=moment_id,
+                    promote_context=promote_context,
                 )
                 if len(stored_children) != len(children):
                     stored_parent = _reconcile_parent_parcel_meta(
@@ -542,7 +809,14 @@ def _link_and_put_with_parcels(
         source_beat_type=source_beat_type,
         meta=meta,
     )
-    return _link_and_put(store, atom, moment_id=moment_id, settings=settings)
+    return _link_and_put(
+        store,
+        atom,
+        moment_id=moment_id,
+        settings=settings,
+        promote_context=promote_context,
+        write_created_with=cw,
+    )
 
 
 def _ledger_one_liner(name: str, content: str, ok: bool) -> str:
@@ -612,6 +886,7 @@ def _promote_speak(
     *,
     settings: MemorySettings,
     state: PromoteState | MutableMapping[str, Any] | None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     ok = bool(beat.get("ok"))
     content = str(beat.get("content") or "")
@@ -649,6 +924,8 @@ def _promote_speak(
         source_beat_ts=t_start,
         source_beat_type="tool",
         base_meta=meta,
+        promote_context=promote_context,
+        write_created_with=True,
     )
     _remember_key(state, key)
     return stored
@@ -661,6 +938,7 @@ def _promote_ledger(
     *,
     settings: MemorySettings,
     state: PromoteState | MutableMapping[str, Any] | None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     name = str(beat.get("name") or "")
     ok = bool(beat.get("ok"))
@@ -691,6 +969,8 @@ def _promote_ledger(
         source_beat_ts=t_start,
         source_beat_type="tool",
         base_meta=meta,
+        promote_context=promote_context,
+        write_created_with=False,  # tool/ledger never created_with src (§2.5)
     )
     _remember_key(state, key)
     return stored
@@ -703,6 +983,7 @@ def _promote_tool(
     *,
     settings: MemorySettings,
     state: PromoteState | MutableMapping[str, Any] | None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     name = str(beat.get("name") or "")
     if name in NON_MEMORABLE_TOOLS or name in _SKIP_TOOL_NAMES:
@@ -754,7 +1035,14 @@ def _promote_tool(
             source_beat_type="tool",
             meta=meta,
         )
-        stored = _link_and_put(store, atom, moment_id=moment_id, settings=settings)
+        stored = _link_and_put(
+            store,
+            atom,
+            moment_id=moment_id,
+            settings=settings,
+            promote_context=promote_context,
+            write_created_with=False,
+        )
         _remember_key(state, key)
         _inc_tool_count(state)
         return stored
@@ -785,6 +1073,8 @@ def _promote_tool(
         source_beat_ts=t_start,
         source_beat_type="tool",
         base_meta=meta,
+        promote_context=promote_context,
+        write_created_with=False,
     )
     _remember_key(state, key)
     _inc_tool_count(state)
@@ -798,6 +1088,7 @@ def _promote_model(
     *,
     settings: MemorySettings,
     state: PromoteState | MutableMapping[str, Any] | None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     tool_calls = beat.get("tool_calls")
     if tool_calls:
@@ -835,6 +1126,8 @@ def _promote_model(
         source_beat_ts=t_start,
         source_beat_type="model",
         base_meta=meta,
+        promote_context=promote_context,
+        write_created_with=True,
     )
     _remember_key(state, key)
     return stored
@@ -847,6 +1140,7 @@ def _promote_interjection(
     *,
     settings: MemorySettings,
     state: PromoteState | MutableMapping[str, Any] | None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     text = str(beat.get("content") or "").strip()
     media_ids = _media_ids_from_beat(beat)
@@ -880,6 +1174,8 @@ def _promote_interjection(
         source_beat_ts=t_start,
         source_beat_type="obs",
         base_meta=meta,
+        promote_context=promote_context,
+        write_created_with=True,
     )
     _remember_key(state, key)
     return stored
@@ -892,6 +1188,7 @@ def promote_beat(
     *,
     settings: MemorySettings | None = None,
     moment_tool_counts: PromoteState | MutableMapping[str, Any] | None = None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     """Promote a single tape beat to an atom when rules fire (R1–R10).
 
@@ -919,6 +1216,7 @@ def promote_beat(
                     beat,
                     settings=cfg,
                     state=moment_tool_counts,
+                    promote_context=promote_context,
                 )
             # lesson_pin and other non-control obs: not promoted by default.
             return None
@@ -932,6 +1230,7 @@ def promote_beat(
                     beat,
                     settings=cfg,
                     state=moment_tool_counts,
+                    promote_context=promote_context,
                 )
             if name in LEDGER_TOOL_NAMES:
                 return _promote_ledger(
@@ -940,6 +1239,7 @@ def promote_beat(
                     beat,
                     settings=cfg,
                     state=moment_tool_counts,
+                    promote_context=promote_context,
                 )
             return _promote_tool(
                 store,
@@ -947,6 +1247,7 @@ def promote_beat(
                 beat,
                 settings=cfg,
                 state=moment_tool_counts,
+                promote_context=promote_context,
             )
 
         if btype == "model":
@@ -956,6 +1257,7 @@ def promote_beat(
                 beat,
                 settings=cfg,
                 state=moment_tool_counts,
+                promote_context=promote_context,
             )
 
         # stop / skill_load / unknown — no promote by default (R6 empty ok).
@@ -978,6 +1280,7 @@ def promote_wake_observation(
     media_ids: Sequence[str] = (),
     why_now: str = "",
     settings: MemorySettings | None = None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     """Promote a social wake user observation (call once at moment open).
 
@@ -1030,6 +1333,8 @@ def promote_wake_observation(
             source_beat_ts=t_start,
             source_beat_type="wake",
             base_meta=meta,
+            promote_context=promote_context,
+            write_created_with=True,
         )
     except Exception:  # noqa: BLE001
         _LOG.exception(
@@ -1051,6 +1356,7 @@ def promote_view_observation(
     note: str | None = None,
     source_url: str | None = None,
     settings: MemorySettings | None = None,
+    promote_context: PromoteContext | None = None,
 ) -> Atom | None:
     """First-wins observation breadcrumb for ``view_media`` (KD-V11 / KD-V16).
 
@@ -1096,6 +1402,8 @@ def promote_view_observation(
             source_beat_ts=t_start,
             source_beat_type="view_media",
             base_meta=meta,
+            promote_context=promote_context,
+            write_created_with=True,
         )
     except Exception:  # noqa: BLE001
         _LOG.exception(
@@ -1111,8 +1419,10 @@ __all__ = [
     "MEMORY_ATOM_MAX_CHARS",
     "MODEL_PROMOTE_MIN_CHARS",
     "NON_MEMORABLE_TOOLS",
+    "PromoteContext",
     "PromoteState",
     "TOOL_OK_PREVIEW_CHARS",
+    "atom_ids_from_meal_items",
     "content_hash",
     "is_control_obs_kind",
     "promote_beat",

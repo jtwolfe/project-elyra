@@ -1,9 +1,9 @@
 """Durable EdgeStore: Protocol, JSONL + Lance backends, budget FIFO helpers.
 
-Scope (PR1 / design-memory-edges-and-traversal): sibling EdgeStore next to
+Scope (PR1–PR3 / design-memory-edges-and-traversal): sibling EdgeStore next to
 atom MemoryStore; put/list/delete/count parity on both backends; kind unique
-keys; outgoing budget FIFO for created_with (≤100) and total (~150).
-Out of scope: promote writes, GraphView, traverse, retarget-to-ladder (PR3+).
+keys; outgoing budget FIFO for created_with (≤100) and total (~150);
+created_with retarget to youngest 1h tip + vertical fabric ensure (OQ-E7).
 """
 
 from __future__ import annotations
@@ -28,12 +28,19 @@ from elyra.memory.config import (
     memory_meta_path,
 )
 from elyra.memory.errors import MemoryUnavailable
-from elyra.memory.types import to_iso_z, utc_now_iso
+from elyra.memory.types import (
+    PERIOD_SCALE_ORDER_WRITE,
+    parse_iso_z,
+    to_iso_z,
+    utc_now_iso,
+    window_bounds,
+)
 from elyra.memory.weights import (
     EDGE_CREATED_WITH,
     EDGE_HAS_CHANNEL,
     EDGE_IN_MOMENT,
     EDGE_RECALLS,
+    base_weight,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -394,18 +401,41 @@ def enforce_outgoing_budgets(
     store: EdgeStore,
     src_atom_id: str,
     settings: MemorySettings | None = None,
+    *,
+    atom_store: Any | None = None,
+    retarget: bool | None = None,
 ) -> list[DurableEdge]:
     """Drop oldest outgoing edges over kind/total caps. Returns dropped.
 
     Call after put when write paths care about windows. Idempotent when
-    already under budget. Does **not** retarget (PR3).
+    already under budget.
+
+    When ``retarget`` is true (or None and ``settings.edge_retarget_enabled``)
+    and ``atom_store`` is provided, each dropped ``created_with`` edge is
+    retargeted to the youngest 1h ladder tip for the dropped target (OQ-E7).
+    Retarget is fail-soft: missing tip → drop only; never invents summaries.
     """
+    cfg = settings or MemorySettings()
     outgoing = store.list_edges_from(src_atom_id)
-    to_drop = plan_budget_drops(outgoing, settings)
+    to_drop = plan_budget_drops(outgoing, cfg)
     dropped: list[DurableEdge] = []
     for edge in sorted(to_drop, key=fifo_sort_key):
         if store.delete_edge(edge.edge_id):
             dropped.append(edge)
+
+    do_retarget = (
+        bool(getattr(cfg, "edge_retarget_enabled", True))
+        if retarget is None
+        else bool(retarget)
+    )
+    if do_retarget and atom_store is not None and dropped:
+        _retarget_created_with_drops(
+            store,
+            atom_store,
+            dropped,
+            settings=cfg,
+            max_rounds=8,
+        )
     return dropped
 
 
@@ -413,11 +443,307 @@ def put_edge_with_budget(
     store: EdgeStore,
     edge: DurableEdge,
     settings: MemorySettings | None = None,
+    *,
+    atom_store: Any | None = None,
+    retarget: bool | None = None,
 ) -> tuple[DurableEdge, list[DurableEdge]]:
-    """``put_edge`` then enforce outgoing budgets on ``src``. Returns (stored, dropped)."""
+    """``put_edge`` then enforce outgoing budgets on ``src``. Returns (stored, dropped).
+
+    Pass ``atom_store`` to enable created_with FIFO retarget (OQ-E7).
+    """
     stored = store.put_edge(edge)
-    dropped = enforce_outgoing_budgets(store, stored.src_atom_id, settings)
+    dropped = enforce_outgoing_budgets(
+        store,
+        stored.src_atom_id,
+        settings,
+        atom_store=atom_store,
+        retarget=retarget,
+    )
     return stored, dropped
+
+
+# ── created_with retarget (OQ-E7) ──────────────────────────────────────────
+
+
+# Coarser scales after 1h for vertical fabric ensure (write-era ladder).
+_COARSER_SCALES: tuple[str, ...] = tuple(
+    s for s in PERIOD_SCALE_ORDER_WRITE if s != "1h"
+)
+
+
+def find_1h_tip_for_target(
+    atom_store: Any,
+    target: Any,
+    *,
+    limit: int = 8,
+) -> Any | None:
+    """Return youngest 1h ladder tip for ``target`` (Atom), or None.
+
+    Prefer tip whose ``meta.source_atom_ids`` contains ``target.atom_id``;
+    else the sole/youngest tip overlapping the 1h window of ``target.t_start``.
+    Never creates summaries. Fail-soft on missing/unparseable t_start.
+    """
+    if atom_store is None or target is None:
+        return None
+    t_start = getattr(target, "t_start", None)
+    if not t_start:
+        return None
+    try:
+        t_dt = parse_iso_z(t_start)
+        w_start, w_end = window_bounds("1h", t_dt)
+    except (TypeError, ValueError):
+        return None
+    try:
+        tips = atom_store.list_summaries(
+            "1h",
+            overlapping=(w_start, w_end),
+            tips_only=True,
+            limit=max(1, int(limit)),
+        )
+    except Exception:  # noqa: BLE001 — fail-soft
+        _LOG.exception("list_summaries 1h for retarget failed")
+        return None
+    if not tips:
+        return None
+    target_id = str(getattr(target, "atom_id", "") or "")
+    if target_id:
+        for tip in tips:
+            meta = getattr(tip, "meta", None) or {}
+            srcs = meta.get("source_atom_ids") if isinstance(meta, dict) else None
+            if isinstance(srcs, (list, tuple)) and target_id in srcs:
+                return tip
+    # Youngest by window_start DESC, then atom_id DESC for stability.
+    def _tip_key(a: Any) -> tuple[str, str]:
+        ws = getattr(a, "window_start", None) or ""
+        try:
+            ws = to_iso_z(ws) if ws else ""
+        except (TypeError, ValueError):
+            ws = str(ws or "")
+        return (ws, str(getattr(a, "atom_id", "") or ""))
+
+    ordered = sorted(tips, key=_tip_key, reverse=True)
+    return ordered[0]
+
+
+def list_coarser_tips_for_1h(
+    atom_store: Any,
+    tip_1h: Any,
+    *,
+    limit_per_scale: int = 4,
+) -> list[Any]:
+    """Existing coarser ladder tips whose windows contain tip_1h.window_start.
+
+    Scales fine→coarse after 1h: 1d → 1w → 1m → 1y. Never invents tips.
+    Prefer tips that list tip_1h in ``meta.child_atom_ids`` / from_children.
+    """
+    if atom_store is None or tip_1h is None:
+        return []
+    anchor = getattr(tip_1h, "window_start", None) or getattr(
+        tip_1h, "t_start", None
+    )
+    if not anchor:
+        return []
+    try:
+        anchor_dt = parse_iso_z(anchor)
+    except (TypeError, ValueError):
+        return []
+    tip_1h_id = str(getattr(tip_1h, "atom_id", "") or "")
+    found: list[Any] = []
+    for scale in _COARSER_SCALES:
+        try:
+            w_start, w_end = window_bounds(scale, anchor_dt)
+            tips = atom_store.list_summaries(
+                scale,
+                overlapping=(w_start, w_end),
+                tips_only=True,
+                limit=max(1, int(limit_per_scale)),
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.exception("list_summaries %s for vertical ensure failed", scale)
+            continue
+        if not tips:
+            continue
+        preferred = None
+        if tip_1h_id:
+            for tip in tips:
+                meta = getattr(tip, "meta", None) or {}
+                if not isinstance(meta, dict):
+                    continue
+                children = meta.get("child_atom_ids") or []
+                if isinstance(children, (list, tuple)) and tip_1h_id in children:
+                    preferred = tip
+                    break
+                # Intermediate lineage: child may be intermediate scale tip.
+                if meta.get("from_children") and preferred is None:
+                    preferred = tip
+        if preferred is None:
+            # Youngest overlapping tip for the coarser window.
+            def _ck(a: Any) -> tuple[str, str]:
+                ws = getattr(a, "window_start", None) or ""
+                try:
+                    ws = to_iso_z(ws) if ws else ""
+                except (TypeError, ValueError):
+                    ws = str(ws or "")
+                return (ws, str(getattr(a, "atom_id", "") or ""))
+
+            preferred = sorted(tips, key=_ck, reverse=True)[0]
+        found.append(preferred)
+    return found
+
+
+def retarget_created_with_edge(
+    edge_store: EdgeStore,
+    atom_store: Any,
+    dropped: DurableEdge,
+    *,
+    settings: MemorySettings | None = None,
+) -> DurableEdge | None:
+    """Retarget one dropped created_with edge to youngest 1h tip (OQ-E7).
+
+    Phase A: put created_with src → tip_1h with meta.retarget_from=T.
+    Phase B: when edge_retarget_ensure_vertical, verify coarser existing tips
+    and record their ids in meta.retarget_vertical (projected fabric walks;
+    does **not** invent summary atoms or durable summary_child mirrors).
+
+    Returns the new/updated edge, or None on fail-soft drop.
+    """
+    if dropped.edge_kind != EDGE_CREATED_WITH:
+        return None
+    cfg = settings or MemorySettings()
+    if not bool(getattr(cfg, "edge_retarget_enabled", True)):
+        return None
+    src = dropped.src_atom_id
+    target_id = dropped.dst_atom_id
+    if not src or not target_id:
+        return None
+    # Do not retarget virtual hubs / channel stubs.
+    if target_id.startswith("moment:"):
+        return None
+    if any(
+        target_id.endswith(suf)
+        for suf in (":text", ":image", ":audio", ":video", ":joint")
+    ):
+        return None
+    try:
+        target = atom_store.get_atom(target_id)
+    except Exception:  # noqa: BLE001
+        _LOG.exception("retarget get_atom failed target=%s", target_id)
+        return None
+    if target is None:
+        return None
+    tip_1h = find_1h_tip_for_target(atom_store, target)
+    if tip_1h is None:
+        _LOG.debug(
+            "retarget_fail reason=no_1h_tip src=%s target=%s",
+            src,
+            target_id,
+        )
+        return None
+    tip_id = str(getattr(tip_1h, "atom_id", "") or "")
+    if not tip_id or tip_id == src:
+        return None
+    # Same dst already (edge to tip itself aged out) — nothing useful.
+    if tip_id == target_id:
+        return None
+
+    vertical_ids: list[str] = []
+    if bool(getattr(cfg, "edge_retarget_ensure_vertical", True)):
+        for tip_c in list_coarser_tips_for_1h(atom_store, tip_1h):
+            cid = str(getattr(tip_c, "atom_id", "") or "")
+            if cid:
+                vertical_ids.append(cid)
+
+    now = utc_now_iso()
+    meta: dict[str, Any] = {
+        "retarget_from": target_id,
+    }
+    if vertical_ids:
+        meta["retarget_vertical"] = vertical_ids
+    # Preserve prior retarget chain if re-retargeting a tip later.
+    prior_meta = dropped.meta if isinstance(dropped.meta, dict) else {}
+    if prior_meta.get("retarget_from") and prior_meta.get("retarget_from") != target_id:
+        meta["retarget_chain"] = list(
+            prior_meta.get("retarget_chain") or []
+        ) + [prior_meta.get("retarget_from")]
+
+    edge = DurableEdge(
+        edge_id=new_edge_id(),
+        src_atom_id=src,
+        dst_atom_id=tip_id,
+        edge_kind=EDGE_CREATED_WITH,
+        created_at=now,
+        updated_at=now,
+        weight=base_weight(EDGE_CREATED_WITH),
+        reason="retarget_1h_tip",
+        meta=meta,
+        schema_version=EDGE_SCHEMA_VERSION,
+    )
+    try:
+        # Unique (src, tip, kind) may already exist — put updates in place.
+        # Do not re-enter budget+retarget here (caller manages rounds).
+        stored = edge_store.put_edge(edge)
+        _LOG.debug(
+            "retarget_ok src=%s from=%s to=%s vertical=%s",
+            src,
+            target_id,
+            tip_id,
+            vertical_ids,
+        )
+        return stored
+    except Exception:  # noqa: BLE001 — soft-fail
+        _LOG.exception(
+            "retarget put failed src=%s from=%s to=%s",
+            src,
+            target_id,
+            tip_id,
+        )
+        return None
+
+
+def _retarget_created_with_drops(
+    edge_store: EdgeStore,
+    atom_store: Any,
+    dropped: Sequence[DurableEdge],
+    *,
+    settings: MemorySettings | None = None,
+    max_rounds: int = 8,
+) -> list[DurableEdge]:
+    """Retarget created_with drops; re-enforce budget if retarget puts overflow.
+
+    Bounded rounds so a cascade of FIFO drops cannot loop forever.
+    """
+    cfg = settings or MemorySettings()
+    produced: list[DurableEdge] = []
+    pending = [e for e in dropped if e.edge_kind == EDGE_CREATED_WITH]
+    seen_targets: set[tuple[str, str]] = set()
+    rounds = 0
+    while pending and rounds < max(1, int(max_rounds)):
+        rounds += 1
+        next_pending: list[DurableEdge] = []
+        for edge in pending:
+            key = (edge.src_atom_id, edge.dst_atom_id)
+            if key in seen_targets:
+                continue
+            seen_targets.add(key)
+            new_edge = retarget_created_with_edge(
+                edge_store, atom_store, edge, settings=cfg
+            )
+            if new_edge is None:
+                continue
+            produced.append(new_edge)
+            # Retarget put may push kind/total over cap again.
+            overflow = enforce_outgoing_budgets(
+                edge_store,
+                new_edge.src_atom_id,
+                cfg,
+                atom_store=None,
+                retarget=False,
+            )
+            for d in overflow:
+                if d.edge_kind == EDGE_CREATED_WITH:
+                    next_pending.append(d)
+        pending = next_pending
+    return produced
 
 
 # ── Shared index mixin helpers ─────────────────────────────────────────────
@@ -1377,12 +1703,15 @@ __all__ = [
     "edge_identity_key",
     "enforce_outgoing_budgets",
     "fifo_sort_key",
+    "find_1h_tip_for_target",
     "kind_outgoing_cap",
+    "list_coarser_tips_for_1h",
     "new_edge_id",
     "open_edge_store",
     "plan_budget_drops",
     "prepare_edge_for_put",
     "put_edge_with_budget",
+    "retarget_created_with_edge",
     "select_fifo_overflow",
     "total_outgoing_cap",
 ]
