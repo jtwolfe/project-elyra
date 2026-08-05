@@ -123,7 +123,7 @@ class MemorySettings:
     enabled: bool = True  # outer meal uses labeled memory package (not full glass slide)
     write_atoms: bool = True  # promote beats/wakes into the atom store
     backend: str = "jsonl"  # jsonl | lance
-    episodic_fraction: float = 0.20
+    episodic_fraction: float = 0.24
     episodic_horizon_hours: float = 24.0
     ladder_enabled: bool = True  # runs if write_atoms or enabled
     ladder_max_ms_per_tick: int = 200  # nibble / repair (template)
@@ -197,7 +197,7 @@ class MemorySettings:
     parcels_enabled: bool = False  # KD23: off until operator enables
     parcel_threshold_chars: int = 8000
     semantic_fraction: float = 0.12  # of remaining when semantic on
-    episodic_fraction_with_semantic: float = 0.18
+    episodic_fraction_with_semantic: float = 0.22
     temporal_min_fraction: float = 0.55
     semantic_horizon_hours: float = 168.0
     semantic_top_k: int = 12
@@ -236,9 +236,11 @@ class MemorySettings:
 
     # --- Glass-tail band (S1 / #93 instance continuity) ---
     # Soft residual share + absolute message floor for social wakes (KD-SOC).
-    glass_tail_fraction: float = 0.08  # soft % of residual R (5–12% band)
-    glass_tail_floor_messages: int = 4  # social wakes only; ≥2 full turns
-    glass_tail_max_messages: int = 16  # hard cap — prevent unbounded dump
+    # KD-V8 conservative outer rebalance: tip thickened without cutting meal
+    # fraction 0.5 or temporal_min_fraction 0.55.
+    glass_tail_fraction: float = 0.10  # soft % of residual R (5–12% band)
+    glass_tail_floor_messages: int = 6  # social wakes only; ≥2 full turns
+    glass_tail_max_messages: int = 20  # hard cap — prevent unbounded dump
     glass_tail_list_limit: int = 80  # align with rebuild_outer list_messages
 
     # Per-step expand compute (NOT multi-hop session wall-clock — KD-A18).

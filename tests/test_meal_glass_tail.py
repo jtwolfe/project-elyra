@@ -497,9 +497,9 @@ def test_split_memory_budget_v4_active_identity():
 
 
 def test_split_memory_budget_v4_temporal_pressure_cuts_glass_soft():
-    """Temporal floor cuts sem → dk → epi → glass_soft."""
+    """Temporal floor cuts sem → dk first (partial) under moderate pressure."""
     # s0.20 + d0.15 + e0.20 + g0.15 = 0.70 → temp 0.30 < floor 0.55; deficit 250
-    # cut s 200→0 (take 200), still need 50 from d (150→100), e/g untouched? deficit 250
+    # cut s 200→0 (take 200), still need 50 from d (150→100), e/g untouched
     # s=200 take 200 → s=0 deficit 50; d take 50 → d=100; e=200; g=150; t=550
     fixed, sem, dk, epi, gt, temp = split_memory_budget_v4(
         1000,
@@ -520,6 +520,98 @@ def test_split_memory_budget_v4_temporal_pressure_cuts_glass_soft():
     assert epi == 200
     assert gt == 150
     assert temp == 550
+
+
+def test_split_memory_budget_v4_floor_cut_order_sem_dk_epi_gt():
+    """v4 floor cut order is semantic → directed_keep → episodic → glass_tail.
+
+    Large soft sum forces the clamp through every support band so the order
+    is observable (not only sem/dk under moderate pressure).
+    """
+    R = 1000
+    # s0.15 + d0.15 + e0.15 + g0.50 = 0.95 → temp 0.05 < floor 0.55; deficit 500
+    # take s 150→0, d 150→0, e 150→0, g 500→450; temp=550
+    fixed, sem, dk, epi, gt, temp = split_memory_budget_v4(
+        R,
+        semantic_enabled=True,
+        directed_keep_active=True,
+        glass_tail_active=True,
+        semantic_fraction=0.15,
+        directed_keep_fraction=0.15,
+        episodic_fraction_with_semantic=0.15,
+        glass_tail_fraction=0.50,
+        temporal_min_fraction=0.55,
+    )
+    assert fixed == 0
+    assert sem + dk + epi + gt + temp == R
+    assert sem == 0, "semantic cut first"
+    assert dk == 0, "directed_keep cut second"
+    assert epi == 0, "episodic cut third"
+    assert gt == 450, "glass_tail_soft cut last (partial)"
+    assert temp == 550
+
+    # Intermediate: stop mid-episodic (sem+dk fully gone, gt untouched).
+    # s0.20 + d0.20 + e0.25 + g0.25 = 0.90 → temp 0.10; deficit 450
+    # take s 200→0, d 200→0, e 250→200 (take 50), g=250; temp=550
+    _f, sem2, dk2, epi2, gt2, temp2 = split_memory_budget_v4(
+        R,
+        semantic_enabled=True,
+        directed_keep_active=True,
+        glass_tail_active=True,
+        semantic_fraction=0.20,
+        directed_keep_fraction=0.20,
+        episodic_fraction_with_semantic=0.25,
+        glass_tail_fraction=0.25,
+        temporal_min_fraction=0.55,
+    )
+    assert sem2 == 0
+    assert dk2 == 0
+    assert epi2 == 200
+    assert gt2 == 250
+    assert temp2 == 550
+    assert sem2 + dk2 + epi2 + gt2 + temp2 == R
+
+
+def test_split_memory_budget_v4_product_defaults_kd_v8():
+    """KD-V8 product defaults: gt 0.10, epi 0.24 / with-sem 0.22; floor 0.55.
+
+    Meal fraction stays 0.5 (DEFAULT_MEAL_BUDGET_TOKENS path); only residual
+    share knobs change.
+    """
+    R = 100_000
+    # semantic off, glass on: soft = epi 0.24 + gt 0.10 = 0.34 → temp 0.66 ≥ 0.55
+    fixed, sem, dk, epi, gt, temp = split_memory_budget_v4(
+        R,
+        system_text="",
+        orient_text="",
+        semantic_enabled=False,
+        directed_keep_active=False,
+        glass_tail_active=True,
+    )
+    assert fixed == 0
+    assert sem == 0 and dk == 0
+    assert epi == int(R * 0.24)
+    assert gt == int(R * 0.10)
+    assert temp == R - epi - gt
+    assert temp >= int(R * 0.55)
+
+    # semantic + dk + glass on: 0.12+0.08+0.22+0.10 = 0.52 → temp 0.48 < 0.55
+    # deficit = 7000; cut semantic first (12000→5000); dk/epi/gt untouched.
+    fixed2, sem2, dk2, epi2, gt2, temp2 = split_memory_budget_v4(
+        R,
+        system_text="",
+        orient_text="",
+        semantic_enabled=True,
+        directed_keep_active=True,
+        glass_tail_active=True,
+    )
+    assert fixed2 == 0
+    assert sem2 + dk2 + epi2 + gt2 + temp2 == R
+    assert sem2 == 5_000
+    assert dk2 == int(R * 0.08)
+    assert epi2 == int(R * 0.22)
+    assert gt2 == int(R * 0.10)
+    assert temp2 == int(R * 0.55)
 
 
 def test_oq6_temporal_suppress_when_wake_on_glass_tail(store):
