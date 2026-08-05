@@ -3,7 +3,7 @@
   "properties": {
     "goal": {
       "type": "string",
-      "description": "Short walk goal (required). Also used as seed_query when seed_query omitted."
+      "description": "Short walk goal (required). Also used as seed_query when seed_query omitted (auto/semantic_only)."
     },
     "seed_query": {
       "type": "string",
@@ -13,6 +13,16 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Optional explicit durable atom ids to seed (point lookups)."
+    },
+    "seed_media_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional media attachment ids for multimodal semantic seed (att_…)."
+    },
+    "seed_mode": {
+      "type": "string",
+      "enum": ["auto", "semantic_only", "temporal_only", "explicit_only"],
+      "description": "Seed policy. Default auto (dual temporal anchors when semantic hits). Prefer semantic_only when the goal is already focused."
     },
     "budgets": {
       "type": "object",
