@@ -8,8 +8,8 @@
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-05 |
 | **Status** | Draft (rev 3 — OQ-V5/V6 user lock) |
-| **Topic branch** | Prefer `feature/view-media-meal-rebalance` off `working` tip after `feature/mm-embed-buildout` merges; may stack on `feature/mm-embed-buildout` if still open |
-| **PR base** | `working` (house branch law: `main` ← `working` ← `feature/*`) |
+| **Topic branch** | Prefer `feature/view-media-meal-rebalance` off `working` tip after `feature/mm-embed-buildout` merges; may stack on `feature/mm-embed-buildout` if still open. **Execute-plan stacks** may use `feature/mm-consumption-improvement` as the stack base (same tip family as mm-embed-buildout when open). |
+| **PR base** | `working` (house branch law: `main` ← `working` ← `feature/*`); stacked execute-plan PRs land onto the stack base (`feature/mm-consumption-improvement` / topic feature), not `main` |
 | **Depends on** | Glass multimodal attachments (MediaStore, speak ingest, `expand_meal_for_provider`); MM encode buildout (#124) for breadcrumb encode path (`media_encode` true after qwen-omni-utils) |
 | **Normative priors** | [design-glass-multimodal-attachments.md](../glass/design-glass-multimodal-attachments.md), [design-mm-embed-buildout.md](design-mm-embed-buildout.md), [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md), [design-context-meal-composition.md](design-context-meal-composition.md) |
 | **Engineering** | [engineering-principles.md](../../dev/engineering-principles.md), [branch-law.md](../../dev/branch-law.md) |
@@ -710,6 +710,8 @@ A1–A7 from rev 2 stand (skill-only, expand-all, base64 tool, durable tray, 50k
 
 ```text
 main ← working ← feature/view-media-meal-rebalance
+# execute-plan stack base (when used):
+main ← working ← feature/mm-consumption-improvement ← execute-plan/…-pr-N-…
 ```
 
 Flags: `ELYRA_MEDIA`, `ELYRA_VISION`, post-PR4 `ELYRA_AV_EXPAND` (default on when shipped).
@@ -778,7 +780,8 @@ flowchart LR
   PR0[PR0 design] --> PR1[PR1 rebalance]
   PR0 --> PR2[PR2 set+expand image+force]
   PR2 --> PR3[PR3 view_media path/att_id]
-  PR3 --> PR4[PR4 AV Completions wire]
+  PR2 --> PR4[PR4 AV Completions wire]
+  PR3 -.->|preferably for e2e tool dogfood| PR4
   PR3 --> PR5[PR5 URL fetch+view]
   PR4 --> PR6[PR6 observability+dogfood]
   PR5 --> PR6
@@ -877,3 +880,4 @@ Only if force-reouter latency fails dogfood. Not blocking AV/URL.
 | 2026-08-05 | Initial draft |
 | 2026-08-05 | Rev 2: review pass — force re-outer, cut order, injection, expand algorithm |
 | 2026-08-05 | Rev 3: **OQ-V5/V6 user lock** — true AV Completions perception (KD-V10/V17); URL fetch+view with SSRF + ~10s video (KD-V18); PR4/PR5 required; soft warnings |
+| 2026-08-05 | Rev 3.1: review nits — mermaid PR4 hard-edge from PR2 (dotted preference to PR3); banner/rollout note for `feature/mm-consumption-improvement` stack base |
