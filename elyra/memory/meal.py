@@ -1913,8 +1913,8 @@ def _glass_tail_item_from_row(row: Mapping[str, Any]) -> MealItem:
 def estimate_glass_tail_floor_tokens(
     glass_rows: Sequence[Mapping[str, Any]],
     *,
-    floor_messages: int = 4,
-    max_messages: int = 16,
+    floor_messages: int = 6,
+    max_messages: int = 20,
     exclude_message_ids: set[str] | None = None,
 ) -> int:
     """Token cost of packing the floor message set (newest eligible rows)."""
@@ -1940,8 +1940,8 @@ def select_glass_tail(
     glass_rows: Sequence[Mapping[str, Any]],
     *,
     cap_tokens: int,
-    floor_messages: int = 4,
-    max_messages: int = 16,
+    floor_messages: int = 6,
+    max_messages: int = 20,
     social_wake: bool = False,
     exclude_message_ids: set[str] | None = None,
 ) -> tuple[list[MealItem], dict[str, Any]]:
