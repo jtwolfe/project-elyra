@@ -1,8 +1,10 @@
 """Edge weight model v1 for Phase 2a directed traversal (pure functions).
 
-Scope: deterministic temporal + structural (+ cosine for soft hops);
+Scope: deterministic temporal + structural (+ cosine for soft hops / recalls);
 Phase 3 multiplier hook is a no-op (always 1.0).
-Out of scope: success learning, durable edge table, session budgets.
+Durable kinds (created_with / recalls / in_moment / has_channel) land with
+EdgeStore (#98 / edges design); expand still recomputes weight (Option 1).
+Out of scope: success learning, session budgets.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from typing import Any, Callable, Mapping
 
 from elyra.memory.types import parse_iso_z
 
-# ── Kind constants (shared with graph.py) ──────────────────────────────────
+# ── Kind constants (shared with graph.py / EdgeStore) ──────────────────────
 
 EDGE_SEQUENTIAL = "sequential"
 EDGE_PARENT_OF = "parent_of"
@@ -24,6 +26,11 @@ EDGE_SEMANTIC_HOP = "semantic_hop"
 EDGE_SUMMARY_CHILD = "summary_child"
 EDGE_SUMMARY_SOURCE = "summary_source"
 EDGE_SUPERSEDES = "supersedes"
+# Durable edge kinds (EdgeStore; design-memory-edges-and-traversal).
+EDGE_CREATED_WITH = "created_with"
+EDGE_RECALLS = "recalls"
+EDGE_IN_MOMENT = "in_moment"
+EDGE_HAS_CHANNEL = "has_channel"
 
 EDGE_KINDS: frozenset[str] = frozenset(
     {
@@ -35,8 +42,20 @@ EDGE_KINDS: frozenset[str] = frozenset(
         EDGE_SUMMARY_CHILD,
         EDGE_SUMMARY_SOURCE,
         EDGE_SUPERSEDES,
+        EDGE_CREATED_WITH,
+        EDGE_RECALLS,
+        EDGE_IN_MOMENT,
+        EDGE_HAS_CHANNEL,
     }
 )
+
+# Default step expand omits has_channel (structural modality; opt-in via flag).
+DEFAULT_EXPAND_KINDS: frozenset[str] = frozenset(
+    k for k in EDGE_KINDS if k != EDGE_HAS_CHANNEL
+)
+
+# Kinds that multiply cosine at expand (live hop + durable recalls).
+_COSINE_KINDS: frozenset[str] = frozenset({EDGE_SEMANTIC_HOP, EDGE_RECALLS})
 
 # ── Defaults (design weight model v1 table) ────────────────────────────────
 
@@ -47,6 +66,10 @@ BASE_SEMANTIC_HOP = 0.70
 BASE_SUMMARY_CHILD = 0.88
 BASE_SUMMARY_SOURCE = 0.75
 BASE_SUPERSEDES = 0.95
+BASE_CREATED_WITH = 0.72
+BASE_RECALLS = 0.78
+BASE_IN_MOMENT = 0.60
+BASE_HAS_CHANNEL = 0.50
 
 DEFAULT_TEMPORAL_HALF_LIFE_HOURS = 72.0
 DEFAULT_MIN_EXPAND_WEIGHT = 0.05
@@ -60,6 +83,10 @@ _BASE_BY_KIND: Mapping[str, float] = {
     EDGE_SUMMARY_CHILD: BASE_SUMMARY_CHILD,
     EDGE_SUMMARY_SOURCE: BASE_SUMMARY_SOURCE,
     EDGE_SUPERSEDES: BASE_SUPERSEDES,
+    EDGE_CREATED_WITH: BASE_CREATED_WITH,
+    EDGE_RECALLS: BASE_RECALLS,
+    EDGE_IN_MOMENT: BASE_IN_MOMENT,
+    EDGE_HAS_CHANNEL: BASE_HAS_CHANNEL,
 }
 
 
@@ -119,12 +146,14 @@ def semantic_factor(
     edge_kind: str,
     cosine: float | None = None,
 ) -> float:
-    """Cosine factor for ``semantic_hop``; 1.0 for structural kinds.
+    """Cosine factor for ``semantic_hop`` / ``recalls``; 1.0 otherwise.
 
-    Cosine is clamped to ``[0, 1]``. Missing cosine on semantic_hop → 0.0
-    (drop unless caller supplies a score).
+    Cosine is clamped to ``[0, 1]``. Missing cosine on cosine-bearing kinds
+    → 0.0 (drop unless caller supplies a score). Durable ``recalls`` stores
+    ``meta.cosine`` at write; expand recomputes via this factor (no double
+    application of stored ``weight`` as authority).
     """
-    if edge_kind != EDGE_SEMANTIC_HOP:
+    if edge_kind not in _COSINE_KINDS:
         return 1.0
     if cosine is None:
         return 0.0
@@ -195,18 +224,27 @@ def passes_min_weight(
 
 
 __all__ = [
+    "BASE_CREATED_WITH",
+    "BASE_HAS_CHANNEL",
+    "BASE_IN_MOMENT",
     "BASE_PARENT_CHILD",
+    "BASE_RECALLS",
     "BASE_SAME_MOMENT",
     "BASE_SEMANTIC_HOP",
     "BASE_SEQUENTIAL",
     "BASE_SUMMARY_CHILD",
     "BASE_SUMMARY_SOURCE",
     "BASE_SUPERSEDES",
+    "DEFAULT_EXPAND_KINDS",
     "DEFAULT_MIN_EXPAND_WEIGHT",
     "DEFAULT_TEMPORAL_HALF_LIFE_HOURS",
     "EDGE_CHILD_OF",
+    "EDGE_CREATED_WITH",
+    "EDGE_HAS_CHANNEL",
+    "EDGE_IN_MOMENT",
     "EDGE_KINDS",
     "EDGE_PARENT_OF",
+    "EDGE_RECALLS",
     "EDGE_SAME_MOMENT",
     "EDGE_SEMANTIC_HOP",
     "EDGE_SEQUENTIAL",

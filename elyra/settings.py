@@ -22,6 +22,14 @@ from elyra.llm.constants import (
 )
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 from elyra.memory.config import (
+    EDGE_CREATED_WITH_MAX_MAX,
+    EDGE_CREATED_WITH_WRITE_CAP_MAX,
+    EDGE_MAX_PER_ATOM_MAX,
+    EDGE_RECALLS_ANN_K_MAX,
+    EDGE_RECALLS_KEEP_MAX,
+    EDGE_RECALLS_MAX_MAX,
+    EDGE_RECALLS_MAX_MS_MAX,
+    EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX,
     LADDER_SOURCE_EDGE_K_MAX,
     MEMORY_ANN_SEARCH_BACKENDS,
     MEMORY_BACKENDS,
@@ -578,6 +586,25 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
         }
         if path in _traverse_int_caps:
             hi = _traverse_int_caps[path]
+            if coerced < 0 or coerced > hi:
+                raise ValueError(
+                    f"{path}: expected int in [0, {hi}], got {coerced!r}"
+                )
+        # Durable EdgeStore budgets (design-memory-edges-and-traversal §7).
+        _edge_int_caps = {
+            "memory.edge_max_per_atom": EDGE_MAX_PER_ATOM_MAX,
+            "memory.edge_created_with_max": EDGE_CREATED_WITH_MAX_MAX,
+            "memory.edge_created_with_write_cap": EDGE_CREATED_WITH_WRITE_CAP_MAX,
+            "memory.edge_recalls_max": EDGE_RECALLS_MAX_MAX,
+            "memory.edge_recalls_ann_k": EDGE_RECALLS_ANN_K_MAX,
+            "memory.edge_recalls_keep": EDGE_RECALLS_KEEP_MAX,
+            "memory.edge_recalls_max_ms": EDGE_RECALLS_MAX_MS_MAX,
+            "memory.edge_recalls_skip_queue_depth": (
+                EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX
+            ),
+        }
+        if path in _edge_int_caps:
+            hi = _edge_int_caps[path]
             if coerced < 0 or coerced > hi:
                 raise ValueError(
                     f"{path}: expected int in [0, {hi}], got {coerced!r}"

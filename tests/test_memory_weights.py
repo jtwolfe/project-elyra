@@ -5,18 +5,27 @@ from __future__ import annotations
 import math
 
 from elyra.memory.weights import (
+    BASE_CREATED_WITH,
+    BASE_HAS_CHANNEL,
+    BASE_IN_MOMENT,
     BASE_PARENT_CHILD,
+    BASE_RECALLS,
     BASE_SAME_MOMENT,
     BASE_SEMANTIC_HOP,
     BASE_SEQUENTIAL,
     BASE_SUMMARY_CHILD,
     BASE_SUMMARY_SOURCE,
     BASE_SUPERSEDES,
+    DEFAULT_EXPAND_KINDS,
     DEFAULT_MIN_EXPAND_WEIGHT,
     DEFAULT_TEMPORAL_HALF_LIFE_HOURS,
     EDGE_CHILD_OF,
+    EDGE_CREATED_WITH,
+    EDGE_HAS_CHANNEL,
+    EDGE_IN_MOMENT,
     EDGE_KINDS,
     EDGE_PARENT_OF,
+    EDGE_RECALLS,
     EDGE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP,
     EDGE_SEQUENTIAL,
@@ -52,6 +61,10 @@ def test_base_weights_match_design_table():
     assert base_weight(EDGE_SUMMARY_CHILD) == BASE_SUMMARY_CHILD == 0.88
     assert base_weight(EDGE_SUMMARY_SOURCE) == BASE_SUMMARY_SOURCE == 0.75
     assert base_weight(EDGE_SUPERSEDES) == BASE_SUPERSEDES == 0.95
+    assert base_weight(EDGE_CREATED_WITH) == BASE_CREATED_WITH == 0.72
+    assert base_weight(EDGE_RECALLS) == BASE_RECALLS == 0.78
+    assert base_weight(EDGE_IN_MOMENT) == BASE_IN_MOMENT == 0.60
+    assert base_weight(EDGE_HAS_CHANNEL) == BASE_HAS_CHANNEL == 0.50
     assert base_weight("unknown_kind") == 0.5
 
 
@@ -65,6 +78,24 @@ def test_summary_edge_tokens_frozen_and_in_kinds():
     assert EDGE_SUPERSEDES in EDGE_KINDS
 
 
+def test_durable_edge_tokens_and_default_expand_kinds():
+    """Edges design: durable kinds + DEFAULT_EXPAND_KINDS omits has_channel."""
+    assert EDGE_CREATED_WITH == "created_with"
+    assert EDGE_RECALLS == "recalls"
+    assert EDGE_IN_MOMENT == "in_moment"
+    assert EDGE_HAS_CHANNEL == "has_channel"
+    for k in (
+        EDGE_CREATED_WITH,
+        EDGE_RECALLS,
+        EDGE_IN_MOMENT,
+        EDGE_HAS_CHANNEL,
+    ):
+        assert k in EDGE_KINDS
+    assert EDGE_HAS_CHANNEL not in DEFAULT_EXPAND_KINDS
+    assert EDGE_CREATED_WITH in DEFAULT_EXPAND_KINDS
+    assert DEFAULT_EXPAND_KINDS == EDGE_KINDS - {EDGE_HAS_CHANNEL}
+
+
 def test_structural_bonus_v1_is_unity():
     for kind in (
         EDGE_SEQUENTIAL,
@@ -75,6 +106,10 @@ def test_structural_bonus_v1_is_unity():
         EDGE_SUMMARY_CHILD,
         EDGE_SUMMARY_SOURCE,
         EDGE_SUPERSEDES,
+        EDGE_CREATED_WITH,
+        EDGE_RECALLS,
+        EDGE_IN_MOMENT,
+        EDGE_HAS_CHANNEL,
     ):
         assert structural_bonus(kind) == 1.0
 
@@ -120,6 +155,11 @@ def test_semantic_factor():
     assert semantic_factor(EDGE_SEMANTIC_HOP, cosine=1.5) == 1.0
     assert semantic_factor(EDGE_SEMANTIC_HOP, cosine=-0.2) == 0.0
     assert semantic_factor(EDGE_SEMANTIC_HOP, cosine=None) == 0.0
+    # Durable recalls use the same cosine path as semantic_hop.
+    assert semantic_factor(EDGE_RECALLS, cosine=0.8) == 0.8
+    assert semantic_factor(EDGE_RECALLS, cosine=None) == 0.0
+    assert semantic_factor(EDGE_CREATED_WITH, cosine=None) == 1.0
+    assert semantic_factor(EDGE_IN_MOMENT, cosine=0.5) == 1.0
 
 
 def test_phase3_multiplier_always_one():

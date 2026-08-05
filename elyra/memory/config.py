@@ -20,6 +20,7 @@ from elyra.memory.embed.types import (
 
 MEMORY_DIRNAME = "memory"
 ATOMS_JSONL = "atoms.jsonl"
+EDGES_JSONL = "edges.jsonl"
 META_JSON = "meta.json"
 ATOMS_BLOB_DIRNAME = "atoms"
 LADDER_DIRNAME = "ladder"
@@ -28,6 +29,25 @@ LANCE_DIRNAME = "lance"
 # Write-time cap for meta.source_atom_ids (PR-C summary edge fabric).
 LADDER_SOURCE_EDGE_K_DEFAULT = 24
 LADDER_SOURCE_EDGE_K_MAX = 48
+
+# Durable EdgeStore schema / budgets (design-memory-edges-and-traversal).
+EDGE_SCHEMA_VERSION = 1
+EDGE_MAX_PER_ATOM_DEFAULT = 150
+EDGE_MAX_PER_ATOM_MAX = 256
+EDGE_CREATED_WITH_MAX_DEFAULT = 100
+EDGE_CREATED_WITH_MAX_MAX = 150
+EDGE_CREATED_WITH_WRITE_CAP_DEFAULT = 32
+EDGE_CREATED_WITH_WRITE_CAP_MAX = 100
+EDGE_RECALLS_MAX_DEFAULT = 8
+EDGE_RECALLS_MAX_MAX = 10
+EDGE_RECALLS_ANN_K_DEFAULT = 15
+EDGE_RECALLS_ANN_K_MAX = 32
+EDGE_RECALLS_KEEP_DEFAULT = 5
+EDGE_RECALLS_KEEP_MAX = 10
+EDGE_RECALLS_MAX_MS_DEFAULT = 40
+EDGE_RECALLS_MAX_MS_MAX = 500
+EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT = 64
+EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX = 4096
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
 # Kept below atom_max_chars (8000) so spill is reachable under default settings
@@ -105,6 +125,17 @@ def is_directed_keep_enabled(settings: MemorySettings | None) -> bool:
     if bool(getattr(settings, "directed_keep_enabled", False)):
         return True
     return bool(getattr(settings, "directed_traversal_enabled", False))
+
+
+def is_durable_edges_enabled(settings: MemorySettings | None) -> bool:
+    """True when promote / encode may write durable EdgeStore rows.
+
+    Default false (Gate B non-goal). EdgeStore itself can still open and
+    serve put/list for tests and admin when the flag is off.
+    """
+    if settings is None:
+        return False
+    return bool(getattr(settings, "durable_edges_enabled", False))
 
 
 @dataclass(frozen=True)
@@ -273,6 +304,20 @@ class MemorySettings:
     traverse_inspect_max_total_chars: int = 2400
     traverse_scratchpad_chars: int = 200
 
+    # --- Durable EdgeStore (default OFF writes — KD-E / edges design) ---
+    # Store open is independent of this flag; promote write path gates on it.
+    durable_edges_enabled: bool = False
+    edge_max_per_atom: int = EDGE_MAX_PER_ATOM_DEFAULT
+    edge_created_with_max: int = EDGE_CREATED_WITH_MAX_DEFAULT
+    edge_created_with_write_cap: int = EDGE_CREATED_WITH_WRITE_CAP_DEFAULT
+    edge_recalls_max: int = EDGE_RECALLS_MAX_DEFAULT
+    edge_recalls_ann_k: int = EDGE_RECALLS_ANN_K_DEFAULT
+    edge_recalls_keep: int = EDGE_RECALLS_KEEP_DEFAULT
+    edge_recalls_max_ms: int = EDGE_RECALLS_MAX_MS_DEFAULT
+    edge_recalls_skip_queue_depth: int = EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT
+    edge_retarget_enabled: bool = True
+    edge_retarget_ensure_vertical: bool = True
+
 
 def memory_root(paths: ElyraPaths) -> Path:
     """Return ``{data_dir}/memory``."""
@@ -281,6 +326,11 @@ def memory_root(paths: ElyraPaths) -> Path:
 
 def atoms_jsonl_path(paths: ElyraPaths) -> Path:
     return memory_root(paths) / ATOMS_JSONL
+
+
+def edges_jsonl_path(paths: ElyraPaths) -> Path:
+    """Return ``{data_dir}/memory/edges.jsonl`` (JSONL EdgeStore)."""
+    return memory_root(paths) / EDGES_JSONL
 
 
 def memory_meta_path(paths: ElyraPaths) -> Path:
@@ -319,6 +369,24 @@ def blob_relpath_for_atom(atom_id: str) -> str:
 __all__ = [
     "ATOMS_BLOB_DIRNAME",
     "ATOMS_JSONL",
+    "EDGE_CREATED_WITH_MAX_DEFAULT",
+    "EDGE_CREATED_WITH_MAX_MAX",
+    "EDGE_CREATED_WITH_WRITE_CAP_DEFAULT",
+    "EDGE_CREATED_WITH_WRITE_CAP_MAX",
+    "EDGE_MAX_PER_ATOM_DEFAULT",
+    "EDGE_MAX_PER_ATOM_MAX",
+    "EDGE_RECALLS_ANN_K_DEFAULT",
+    "EDGE_RECALLS_ANN_K_MAX",
+    "EDGE_RECALLS_KEEP_DEFAULT",
+    "EDGE_RECALLS_KEEP_MAX",
+    "EDGE_RECALLS_MAX_DEFAULT",
+    "EDGE_RECALLS_MAX_MAX",
+    "EDGE_RECALLS_MAX_MS_DEFAULT",
+    "EDGE_RECALLS_MAX_MS_MAX",
+    "EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT",
+    "EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX",
+    "EDGE_SCHEMA_VERSION",
+    "EDGES_JSONL",
     "LADDER_DIRNAME",
     "LADDER_SOURCE_EDGE_K_DEFAULT",
     "LADDER_SOURCE_EDGE_K_MAX",
@@ -360,9 +428,11 @@ __all__ = [
     "atoms_jsonl_path",
     "blob_relpath_for_atom",
     "clamp_semantic_wait_max_ms",
+    "edges_jsonl_path",
     "ensure_memory_dirs",
     "is_directed_keep_enabled",
     "is_directed_traversal_enabled",
+    "is_durable_edges_enabled",
     "ladder_dir",
     "lance_root",
     "memory_meta_path",
