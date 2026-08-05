@@ -584,10 +584,12 @@ class TraversalRegistry:
     """Process-local session registry: active + last_session + keep tray.
 
     Single active session (one open moment at a time in the worker). Sticky
-    ``last_session`` (glass KD-A19) survives abandon / idle TTL / new start;
-    moment-close clears ``last_session`` only. Meal directed_keep is owned by
-    the registry tray (KD-TRAY-SOT) — survives moment close; reloads from disk.
-    Thin ``last_confirmed_keep`` snapshot remains for compat/inspect.
+    ``last_session`` (glass KD-P-glass §5.1) survives abandon / idle TTL /
+    new start **and** moment close (process-life only). Moment close abandons
+    active only. Clear last_session via ``reset()``, newer ``finish``, or
+    ``clear_confirmed_keep(clear_glass=True)``. Meal directed_keep is owned by
+    the registry tray (KD-TRAY-SOT / KD-A16) — survives moment close; reloads
+    from disk. Thin ``last_confirmed_keep`` snapshot remains for compat/inspect.
     """
 
     def __init__(

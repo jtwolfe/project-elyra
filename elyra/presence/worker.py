@@ -1787,10 +1787,12 @@ class PresenceWorker:
             _LOG.exception("traversal idle TTL sweep failed")
 
     def _close_traversal_for_moment(self, moment_id: str | None) -> None:
-        """Moment end hygiene: abandon active; clear last_session (KD-A19).
+        """Moment end hygiene: abandon active only (KD-P-glass §5.1).
 
-        Meal directed_keep tray is retained on the registry (B5); do not wipe.
-        No-op when traversal was never installed (partial worker fixtures).
+        Retains process-life glass ``last_session`` and meal directed_keep tray
+        (B5 / KD-A16). Clear glass via operator ``clear_confirmed_keep(clear_glass=True)``
+        or registry ``reset()``. No-op when traversal was never installed
+        (partial worker fixtures).
         """
         trav = getattr(self, "_traversal", None)
         if trav is None:
@@ -3035,7 +3037,7 @@ class PresenceWorker:
             if result and result.error:
                 self._worker_error = result.error
 
-            # Phase 2a: moment end clears active + sticky last_session/keep.
+            # Phase 2a / KD-P-glass: abandon active only; retain last_session + meal tray.
             self._close_traversal_for_moment(moment_id)
 
             # KD-V12: viewing set is moment-local — no cross-moment media-part leak.

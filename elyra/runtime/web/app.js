@@ -6198,6 +6198,16 @@ function renderGraphSession(data) {
     .join(" · ");
   memoryGraphSessionBody.appendChild(meta);
 
+  // Surface API honesty.note when present (e.g. sticky last across moment close).
+  if (data.honesty && data.honesty.note) {
+    const noteEl = document.createElement("div");
+    noteEl.className = "muted";
+    noteEl.style.fontSize = "0.8rem";
+    noteEl.style.marginTop = "0.25rem";
+    noteEl.textContent = String(data.honesty.note);
+    memoryGraphSessionBody.appendChild(noteEl);
+  }
+
   const goal = document.createElement("div");
   goal.style.marginTop = "0.35rem";
   const goalLabel = document.createElement("span");
