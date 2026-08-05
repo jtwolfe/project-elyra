@@ -1167,3 +1167,282 @@ def test_summary_child_skips_non_summary_destinations(store):
     assert len(edges) == 1
     assert edges[0].dst_atom_id == child.atom_id
     assert edges[0].edge_kind == EDGE_SUMMARY_CHILD
+
+
+# ── Durable EdgeStore + expand_moment (PR2) ─────────────────────────────────
+
+
+def _put_edge(edge_store, *, src: str, dst: str, kind: str, **kwargs: Any):
+    from elyra.memory.edges import DurableEdge, new_edge_id
+
+    created = kwargs.pop("created_at", "2026-08-05T10:00:00Z")
+    return edge_store.put_edge(
+        DurableEdge(
+            edge_id=kwargs.pop("edge_id", None) or new_edge_id(),
+            src_atom_id=src,
+            dst_atom_id=dst,
+            edge_kind=kind,
+            created_at=created,
+            updated_at=created,
+            weight=kwargs.pop("weight", None),
+            reason=kwargs.pop("reason", "test"),
+            meta=dict(kwargs.pop("meta", None) or {}),
+        )
+    )
+
+
+@pytest.fixture
+def edge_store(paths):
+    from elyra.memory.edges import open_edge_store
+
+    es = open_edge_store(
+        paths, MemorySettings(write_atoms=True, backend="jsonl"), fail_soft=False
+    )
+    yield es
+    es.close()
+
+
+def test_default_expand_kinds_excludes_has_channel(store, edge_store):
+    """kinds=None uses DEFAULT_EXPAND_KINDS — has_channel never becomes a dst."""
+    from elyra.memory.graph import (
+        EDGE_HAS_CHANNEL,
+        is_channel_virtual_id,
+        is_virtual_graph_id,
+    )
+    from elyra.memory.weights import DEFAULT_EXPAND_KINDS
+
+    assert EDGE_HAS_CHANNEL not in DEFAULT_EXPAND_KINDS
+    a = store.put_atom(_atom(atom_id="a_hc_src", text="src"))
+    _put_edge(
+        edge_store,
+        src=a.atom_id,
+        dst=f"{a.atom_id}:text",
+        kind=EDGE_HAS_CHANNEL,
+        meta={"channel": "text"},
+    )
+    # Also a real durable edge so expand is non-empty.
+    b = store.put_atom(_atom(atom_id="a_hc_peer", text="peer", t="2026-07-28T10:01:00Z"))
+    _put_edge(edge_store, src=a.atom_id, dst=b.atom_id, kind="created_with")
+
+    gv = GraphView(
+        store, edge_store=edge_store, now="2026-07-28T10:02:00Z"
+    )
+    edges = gv.neighbors(a.atom_id, k=20, allow_semantic=False)
+    assert all(e.edge_kind != EDGE_HAS_CHANNEL for e in edges)
+    assert all(not is_virtual_graph_id(e.dst_atom_id) for e in edges)
+    assert all(not is_channel_virtual_id(e.dst_atom_id) for e in edges)
+    assert any(
+        e.dst_atom_id == b.atom_id and e.edge_kind == "created_with" for e in edges
+    )
+    # Channel name may be annotated in expand meta when kind was filtered out
+    # entirely (has_channel not in DEFAULT) — so channels may be empty.
+    # Explicit kinds including has_channel still never emit virtual dsts.
+    edges_ch = gv.neighbors(
+        a.atom_id,
+        kinds=[EDGE_HAS_CHANNEL, "created_with"],
+        k=20,
+        allow_semantic=False,
+    )
+    assert all(not is_virtual_graph_id(e.dst_atom_id) for e in edges_ch)
+    assert "text" in (gv.last_expand_meta.get("channels") or [])
+
+
+def test_durable_created_with_outgoing_and_reverse(store, edge_store):
+    a = store.put_atom(
+        _atom(atom_id="a_cw_a", text="new", t="2026-07-28T12:00:00Z")
+    )
+    b = store.put_atom(
+        _atom(atom_id="a_cw_b", text="ctx", t="2026-07-28T11:00:00Z")
+    )
+    _put_edge(
+        edge_store,
+        src=a.atom_id,
+        dst=b.atom_id,
+        kind="created_with",
+        reason="meal_context",
+    )
+    gv = GraphView(
+        store, edge_store=edge_store, now="2026-07-28T12:00:00Z"
+    )
+    out = gv.neighbors(
+        a.atom_id, kinds=["created_with"], k=10, allow_semantic=False
+    )
+    assert len(out) == 1
+    assert out[0].dst_atom_id == b.atom_id
+    assert out[0].edge_kind == "created_with"
+    assert out[0].weight > 0
+
+    rev = gv.neighbors(
+        b.atom_id, kinds=["created_with"], k=10, allow_semantic=False
+    )
+    assert len(rev) == 1
+    assert rev[0].dst_atom_id == a.atom_id
+    assert rev[0].meta.get("direction") == "reverse"
+
+
+def test_recalls_recomputes_weight_from_cosine(store, edge_store):
+    """Stored weight is not authority — expand uses meta.cosine + base."""
+    from elyra.memory.weights import BASE_RECALLS, edge_weight
+
+    speak = store.put_atom(
+        _atom(atom_id="a_rc_s", kind="speak", text="hello", t="2026-07-28T12:00:00Z")
+    )
+    past = store.put_atom(
+        _atom(
+            atom_id="a_rc_p",
+            kind="speak",
+            text="earlier",
+            t="2026-07-28T11:00:00Z",
+        )
+    )
+    _put_edge(
+        edge_store,
+        src=speak.atom_id,
+        dst=past.atom_id,
+        kind="recalls",
+        weight=0.01,  # stale cache — must not be used as authority
+        meta={"cosine": 0.9},
+    )
+    gv = GraphView(
+        store, edge_store=edge_store, now="2026-07-28T12:00:00Z"
+    )
+    edges = gv.neighbors(
+        speak.atom_id, kinds=["recalls"], k=5, allow_semantic=False
+    )
+    assert len(edges) == 1
+    expected = edge_weight(
+        "recalls",
+        dst_t_start=past.t_start,
+        now="2026-07-28T12:00:00Z",
+        cosine=0.9,
+    )
+    assert abs(edges[0].weight - expected) < 1e-9
+    assert edges[0].weight > BASE_RECALLS * 0.5  # not the stale 0.01
+
+
+def test_in_moment_hub_rewrite_to_peers(store, edge_store):
+    """Option A: moment: hub never appears as dst; peers are real atoms."""
+    from elyra.memory.graph import EDGE_IN_MOMENT, is_moment_hub_id, moment_hub_id
+
+    mid = "m_hub_rewrite"
+    a = store.put_atom(
+        _atom(atom_id="a_im_a", text="a", moment_id=mid, t="2026-07-28T10:00:00Z")
+    )
+    b = store.put_atom(
+        _atom(atom_id="a_im_b", text="b", moment_id=mid, t="2026-07-28T10:01:00Z")
+    )
+    c = store.put_atom(
+        _atom(atom_id="a_im_c", text="c", moment_id=mid, t="2026-07-28T10:02:00Z")
+    )
+    hub = moment_hub_id(mid)
+    for atom in (a, b, c):
+        _put_edge(
+            edge_store,
+            src=atom.atom_id,
+            dst=hub,
+            kind=EDGE_IN_MOMENT,
+            reason="membership",
+        )
+
+    gv = GraphView(
+        store, edge_store=edge_store, now="2026-07-28T10:03:00Z"
+    )
+    edges = gv.neighbors(
+        a.atom_id, kinds=[EDGE_IN_MOMENT], k=20, allow_semantic=False
+    )
+    dsts = {e.dst_atom_id for e in edges}
+    assert hub not in dsts
+    assert all(not is_moment_hub_id(d) for d in dsts)
+    assert dsts == {b.atom_id, c.atom_id}
+    assert all(e.edge_kind == EDGE_IN_MOMENT for e in edges)
+    # Membership came from EdgeStore hub reverse index.
+    assert gv.last_expand_meta.get("moment_source") == "edge_store" or (
+        gv.moment_member_cache.get(mid)
+        and set(gv.moment_member_cache[mid]) == {a.atom_id, b.atom_id, c.atom_id}
+    )
+
+
+def test_expand_moment_api_prefers_edge_store_fallback_list(store, edge_store):
+    from elyra.memory.graph import EDGE_IN_MOMENT, moment_hub_id
+
+    mid = "m_expand_api"
+    a = store.put_atom(
+        _atom(atom_id="a_em_a", text="a", moment_id=mid, t="2026-07-28T10:00:00Z")
+    )
+    b = store.put_atom(
+        _atom(atom_id="a_em_b", text="b", moment_id=mid, t="2026-07-28T10:01:00Z")
+    )
+    tool = store.put_atom(
+        _atom(
+            atom_id="a_em_tool",
+            kind="tool",
+            text="tool body",
+            moment_id=mid,
+            t="2026-07-28T10:02:00Z",
+        )
+    )
+    hub = moment_hub_id(mid)
+    for atom in (a, b, tool):
+        _put_edge(edge_store, src=atom.atom_id, dst=hub, kind=EDGE_IN_MOMENT)
+
+    gv = GraphView(
+        store, edge_store=edge_store, now="2026-07-28T10:03:00Z"
+    )
+    peers = gv.expand_moment(atom_id=a.atom_id)
+    dsts = {e.dst_atom_id for e in peers}
+    assert a.atom_id not in dsts  # seed excluded
+    assert b.atom_id in dsts
+    assert tool.atom_id in dsts  # tool walkable via membership (OQ-E2)
+    assert all(e.edge_kind == EDGE_IN_MOMENT for e in peers)
+    assert gv.last_expand_meta.get("source") == "edge_store"
+    assert set(gv.moment_member_cache[mid]) == {a.atom_id, b.atom_id, tool.atom_id}
+
+    # Fallback without edge store uses list_by_moment.
+    gv2 = GraphView(store, edge_store=None, now="2026-07-28T10:03:00Z")
+    peers2 = gv2.expand_moment(moment_id=mid, exclude_ids={a.atom_id})
+    assert {e.dst_atom_id for e in peers2} == {b.atom_id, tool.atom_id}
+    assert gv2.last_expand_meta.get("source") == "list_by_moment"
+
+
+def test_neighbors_default_reaches_comembers_via_in_moment(store, edge_store):
+    """Default expand from member A reaches co-member B without expand_moment call."""
+    from elyra.memory.graph import EDGE_IN_MOMENT, moment_hub_id
+
+    mid = "m_default_peer"
+    a = store.put_atom(
+        _atom(atom_id="a_df_a", text="a", moment_id=mid, t="2026-07-28T10:00:00Z")
+    )
+    b = store.put_atom(
+        _atom(atom_id="a_df_b", text="b", moment_id=mid, t="2026-07-28T10:01:00Z")
+    )
+    hub = moment_hub_id(mid)
+    for atom in (a, b):
+        _put_edge(edge_store, src=atom.atom_id, dst=hub, kind=EDGE_IN_MOMENT)
+
+    gv = GraphView(
+        store, edge_store=edge_store, now="2026-07-28T10:02:00Z"
+    )
+    edges = gv.neighbors(a.atom_id, k=20, allow_semantic=False)
+    assert any(
+        e.dst_atom_id == b.atom_id and e.edge_kind == EDGE_IN_MOMENT for e in edges
+    )
+    assert all(not str(e.dst_atom_id).startswith("moment:") for e in edges)
+
+
+def test_virtual_ids_helpers():
+    from elyra.memory.graph import (
+        is_channel_virtual_id,
+        is_moment_hub_id,
+        is_virtual_graph_id,
+        moment_hub_id,
+    )
+
+    assert moment_hub_id("m1") == "moment:m1"
+    assert moment_hub_id("moment:m1") == "moment:m1"
+    assert is_moment_hub_id("moment:abc")
+    assert not is_moment_hub_id("a_real")
+    assert is_channel_virtual_id("a_xyz:text")
+    assert is_channel_virtual_id("a_xyz:joint")
+    assert not is_channel_virtual_id("a_xyz")
+    assert is_virtual_graph_id("moment:m")
+    assert is_virtual_graph_id("a:image")

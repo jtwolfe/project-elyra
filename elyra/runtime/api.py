@@ -1882,6 +1882,33 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 _LOG.exception("graph overview session peek failed")
 
+        # EdgeStore health for glass honesty (counts; empty store still ok).
+        edge_count = 0
+        edges_by_kind: dict[str, int] = {}
+        edge_backend: str | None = None
+        edge_ok = False
+        ensure_edges = getattr(self.worker, "_ensure_edge_store", None)
+        if callable(ensure_edges):
+            try:
+                estore = ensure_edges()
+                if estore is not None and hasattr(estore, "health"):
+                    eh = estore.health() or {}
+                    if isinstance(eh, dict):
+                        edge_ok = bool(eh.get("ok"))
+                        edge_count = int(eh.get("edge_count") or 0)
+                        raw_by = eh.get("edges_by_kind") or {}
+                        if isinstance(raw_by, dict):
+                            edges_by_kind = {
+                                str(k): int(v)
+                                for k, v in raw_by.items()
+                                if v is not None
+                            }
+                        edge_backend = (
+                            str(eh.get("backend")) if eh.get("backend") else None
+                        )
+            except Exception:  # noqa: BLE001
+                _LOG.exception("graph overview edge health peek failed")
+
         # Overview is always 200; ok tracks store health (flags may be off).
         self._json(
             200,
@@ -1891,6 +1918,17 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "has_last_session": has_last,
                 "meal_keep_count": meal_keep_count,
                 "edge_kind_legend": edge_kind_legend(),
+                "edge_count": edge_count,
+                "edges_by_kind": edges_by_kind,
+                "edge_store": {
+                    "ok": edge_ok,
+                    "backend": edge_backend,
+                    "edge_count": edge_count,
+                    "edges_by_kind": edges_by_kind,
+                    "durable_edges_enabled": bool(
+                        trav_flags.get("durable_edges_enabled")
+                    ),
+                },
                 "traversal": trav_flags,
                 "memory": flags,
                 "tabs": {
@@ -1903,6 +1941,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         trav_flags.get("directed_traversal_enabled")
                     ),
                     "no_session": not has_active and not has_last,
+                    "durable_edges_enabled": bool(
+                        trav_flags.get("durable_edges_enabled")
+                    ),
                     "note": (
                         "directed_traversal_enabled is off — tools/POST fail closed; "
                         "structural neighbor probe still available when store is open"

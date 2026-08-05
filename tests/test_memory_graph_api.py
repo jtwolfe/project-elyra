@@ -559,3 +559,144 @@ def test_graph_which_query_validation(paths):
         assert body["ok"] is False
     finally:
         h.close()
+
+
+# ── PR2: full legend + durable neighbors honesty ────────────────────────────
+
+
+def test_graph_overview_legend_covers_all_edge_kinds(paths):
+    """Legend includes summary_* and durable kinds (not stub partial list)."""
+    from elyra.memory.weights import EDGE_KINDS
+
+    h = _ApiHarness(paths, memory=_enabled_memory())
+    try:
+        code, body = h.get("/api/memory/graph")
+        assert code == 200, body
+        legend = body["edge_kind_legend"]
+        kinds = {e["kind"] for e in legend}
+        # All EDGE_KINDS present.
+        assert EDGE_KINDS <= kinds
+        for required in (
+            "sequential",
+            "summary_child",
+            "summary_source",
+            "supersedes",
+            "created_with",
+            "recalls",
+            "in_moment",
+            "has_channel",
+            "semantic_hop",
+        ):
+            assert required in kinds
+        # Durable flag honesty on overview.
+        assert "edge_count" in body
+        assert "edges_by_kind" in body
+        assert "edge_store" in body
+        assert body["edge_store"]["durable_edges_enabled"] is False
+        assert body["traversal"].get("durable_edges_enabled") is False
+    finally:
+        h.close()
+
+
+def test_graph_neighbors_durable_created_with_real_dsts(paths):
+    """Neighbors API returns durable edges with real atom dsts only."""
+    from elyra.memory.edges import DurableEdge, new_edge_id
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.weights import EDGE_CREATED_WITH, EDGE_IN_MOMENT
+
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            directed_traversal_enabled=True,
+            durable_edges_enabled=True,
+        ),
+    )
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        estore = h.worker._ensure_edge_store()  # noqa: SLF001
+        assert store is not None and estore is not None
+
+        mid = "m_api_durable"
+        a = store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-07-28T10:00:00Z",
+                kind="observation",
+                content_text="seed atom",
+                content_ref="inline",
+                moment_id=mid,
+            )
+        )
+        b = store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-07-28T09:00:00Z",
+                kind="observation",
+                content_text="context atom",
+                content_ref="inline",
+                moment_id=mid,
+            )
+        )
+        c = store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-07-28T10:01:00Z",
+                kind="observation",
+                content_text="peer atom",
+                content_ref="inline",
+                moment_id=mid,
+            )
+        )
+        now = "2026-07-28T10:02:00Z"
+        estore.put_edge(
+            DurableEdge(
+                edge_id=new_edge_id(),
+                src_atom_id=a.atom_id,
+                dst_atom_id=b.atom_id,
+                edge_kind=EDGE_CREATED_WITH,
+                created_at=now,
+                updated_at=now,
+                reason="test",
+                meta={"retarget_from": None},
+            )
+        )
+        hub = moment_hub_id(mid)
+        for atom in (a, b, c):
+            estore.put_edge(
+                DurableEdge(
+                    edge_id=new_edge_id(),
+                    src_atom_id=atom.atom_id,
+                    dst_atom_id=hub,
+                    edge_kind=EDGE_IN_MOMENT,
+                    created_at=now,
+                    updated_at=now,
+                    reason="membership",
+                )
+            )
+
+        code, body = h.get(
+            f"/api/memory/graph/neighbors?atom_id={a.atom_id}&k=20&allow_semantic=0"
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        dsts = {n["atom_id"] for n in body["neighbors"]}
+        kinds = {n["edge_kind"] for n in body["neighbors"]}
+        assert b.atom_id in dsts
+        assert c.atom_id in dsts  # co-member via in_moment rewrite
+        assert hub not in dsts
+        assert all(not str(d).startswith("moment:") for d in dsts)
+        assert EDGE_CREATED_WITH in kinds or EDGE_IN_MOMENT in kinds
+
+        # Overview reflects durable edge counts when store has rows.
+        code, overview = h.get("/api/memory/graph")
+        assert code == 200
+        assert overview["edge_count"] >= 4
+        assert overview["traversal"]["durable_edges_enabled"] is True
+        assert "created_with" in overview["edges_by_kind"] or overview[
+            "edge_count"
+        ] > 0
+    finally:
+        h.close()

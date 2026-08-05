@@ -24,15 +24,31 @@ from elyra.memory.types import (
     utc_now_iso,
 )
 from elyra.memory.weights import (
+    BASE_CREATED_WITH,
+    BASE_HAS_CHANNEL,
+    BASE_IN_MOMENT,
     BASE_PARENT_CHILD,
+    BASE_RECALLS,
     BASE_SAME_MOMENT,
     BASE_SEMANTIC_HOP,
     BASE_SEQUENTIAL,
+    BASE_SUMMARY_CHILD,
+    BASE_SUMMARY_SOURCE,
+    BASE_SUPERSEDES,
     EDGE_CHILD_OF,
+    EDGE_CREATED_WITH,
+    EDGE_HAS_CHANNEL,
+    EDGE_IN_MOMENT,
+    EDGE_KINDS,
     EDGE_PARENT_OF,
+    EDGE_RECALLS,
     EDGE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP,
     EDGE_SEQUENTIAL,
+    EDGE_SUMMARY_CHILD,
+    EDGE_SUMMARY_SOURCE,
+    EDGE_SUPERSEDES,
+    base_weight,
 )
 
 # Truncation for glass list rows (not store limits).
@@ -877,46 +893,126 @@ def index_health_block(index: Any | None) -> dict[str, Any]:
         }
 
 
-# ── Phase 2a Graph glass (PR-A5) ────────────────────────────────────────────
+# ── Phase 2a Graph glass (PR-A5 + edges PR2) ────────────────────────────────
 
-# Edge-kind legend for the Graph tab (base weights from weights.py v1).
+# Full EDGE_KINDS legend (projected + durable + ephemeral). Order is display.
 _EDGE_KIND_LEGEND: tuple[dict[str, Any], ...] = (
     {
         "kind": EDGE_SEQUENTIAL,
         "base_weight": BASE_SEQUENTIAL,
         "label": "Sequential prev/next",
         "structural": True,
+        "durable": False,
     },
     {
         "kind": EDGE_PARENT_OF,
         "base_weight": BASE_PARENT_CHILD,
         "label": "Parent → child (parcel)",
         "structural": True,
+        "durable": False,
     },
     {
         "kind": EDGE_CHILD_OF,
         "base_weight": BASE_PARENT_CHILD,
         "label": "Child → parent",
         "structural": True,
+        "durable": False,
     },
     {
         "kind": EDGE_SAME_MOMENT,
         "base_weight": BASE_SAME_MOMENT,
-        "label": "Same moment (soft)",
+        "label": "Same moment (soft, capped)",
         "structural": True,
+        "durable": False,
+    },
+    {
+        "kind": EDGE_SUMMARY_CHILD,
+        "base_weight": BASE_SUMMARY_CHILD,
+        "label": "Summary → child summary (ladder)",
+        "structural": True,
+        "durable": False,
+    },
+    {
+        "kind": EDGE_SUMMARY_SOURCE,
+        "base_weight": BASE_SUMMARY_SOURCE,
+        "label": "1h summary → raw sources",
+        "structural": True,
+        "durable": False,
+    },
+    {
+        "kind": EDGE_SUPERSEDES,
+        "base_weight": BASE_SUPERSEDES,
+        "label": "Summary tip → previous version",
+        "structural": True,
+        "durable": False,
+    },
+    {
+        "kind": EDGE_CREATED_WITH,
+        "base_weight": BASE_CREATED_WITH,
+        "label": "Created with (meal context)",
+        "structural": False,
+        "durable": True,
+    },
+    {
+        "kind": EDGE_RECALLS,
+        "base_weight": BASE_RECALLS,
+        "label": "Recalls (speak-time memory)",
+        "structural": False,
+        "durable": True,
+    },
+    {
+        "kind": EDGE_IN_MOMENT,
+        "base_weight": BASE_IN_MOMENT,
+        "label": "In moment (membership; expand rewrites peers)",
+        "structural": True,
+        "durable": True,
+    },
+    {
+        "kind": EDGE_HAS_CHANNEL,
+        "base_weight": BASE_HAS_CHANNEL,
+        "label": "Has channel (modality; default expand omits)",
+        "structural": True,
+        "durable": True,
     },
     {
         "kind": EDGE_SEMANTIC_HOP,
         "base_weight": BASE_SEMANTIC_HOP,
         "label": "Semantic hop (ephemeral ANN)",
         "structural": False,
+        "durable": False,
     },
 )
 
 
 def edge_kind_legend() -> list[dict[str, Any]]:
-    """Static edge-kind legend for Graph overview (no secrets)."""
-    return [dict(row) for row in _EDGE_KIND_LEGEND]
+    """Full edge-kind legend for Graph overview covering all EDGE_KINDS.
+
+    Includes projected sequential/parent/child/same_moment, summary_*, durable
+    created_with/recalls/in_moment/has_channel, and ephemeral semantic_hop.
+    """
+    rows = [dict(row) for row in _EDGE_KIND_LEGEND]
+    # Honesty: if a new EDGE_KINDS entry is missing from the static table,
+    # surface it with base_weight so glass never silently stubs.
+    known = {str(r.get("kind")) for r in rows}
+    for kind in sorted(EDGE_KINDS):
+        if kind in known:
+            continue
+        rows.append(
+            {
+                "kind": kind,
+                "base_weight": base_weight(kind),
+                "label": kind,
+                "structural": False,
+                "durable": kind
+                in {
+                    EDGE_CREATED_WITH,
+                    EDGE_RECALLS,
+                    EDGE_IN_MOMENT,
+                    EDGE_HAS_CHANNEL,
+                },
+            }
+        )
+    return rows
 
 
 def idle_age_seconds(
@@ -960,7 +1056,17 @@ def graph_edge_to_inspect(
     meta = getattr(edge, "meta", None)
     slim_meta: dict[str, Any] = {}
     if isinstance(meta, Mapping):
-        for key in ("moment_id", "parent_atom_id", "parcel_index", "cosine", "channel"):
+        for key in (
+            "moment_id",
+            "parent_atom_id",
+            "parcel_index",
+            "cosine",
+            "channel",
+            "retarget_from",
+            "hub",
+            "membership_source",
+            "direction",
+        ):
             if key in meta:
                 slim_meta[key] = meta[key]
 
@@ -1071,13 +1177,21 @@ def directed_traversal_flags(settings: Any | None) -> dict[str, Any]:
     from elyra.memory.config import (
         is_directed_keep_enabled,
         is_directed_traversal_enabled,
+        is_durable_edges_enabled,
     )
 
     trav = is_directed_traversal_enabled(settings)
     keep = is_directed_keep_enabled(settings)
+    durable = is_durable_edges_enabled(settings)
     return {
         "directed_traversal_enabled": trav,
         "directed_keep_enabled": keep,
+        "durable_edges_enabled": durable,
+        "traverse_expand_channels": bool(
+            getattr(settings, "traverse_expand_channels", False)
+        )
+        if settings is not None
+        else False,
         # Surface key budgets so glass can explain caps without a separate call.
         "traverse_expand_max_ms": int(
             getattr(settings, "traverse_expand_max_ms", 80) or 80

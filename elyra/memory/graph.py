@@ -1,9 +1,11 @@
-"""GraphView — projected structural edges + optional soft semantic hops (Phase 2a).
+"""GraphView — projected structural + durable EdgeStore + soft semantic hops.
 
 Scope: neighbourhood expand over Atom fields (sequential / parent-child /
-same_moment) and ephemeral semantic_hop via injected EmbeddingIndex + warm
-embedder. No durable edge table; no session/worker wiring.
-Out of scope: TraversalSession, meal directed_keep, tools, glass.
+same_moment / summary_*), durable EdgeStore kinds (created_with / recalls /
+in_moment hub rewrite / has_channel opt-in), and ephemeral semantic_hop via
+injected EmbeddingIndex + warm embedder. Option A: virtual hub/channel ids
+never leave expand as walk destinations.
+Out of scope: TraversalSession budgets, promote writes, seed_from_query (PR5).
 """
 
 from __future__ import annotations
@@ -18,11 +20,16 @@ from elyra.memory.config import MemorySettings
 from elyra.memory.store import MemoryStore
 from elyra.memory.types import Atom, parse_iso_z, to_iso_z, utc_now_iso
 from elyra.memory.weights import (
+    DEFAULT_EXPAND_KINDS,
     DEFAULT_MIN_EXPAND_WEIGHT,
     DEFAULT_TEMPORAL_HALF_LIFE_HOURS,
     EDGE_CHILD_OF,
+    EDGE_CREATED_WITH,
+    EDGE_HAS_CHANNEL,
+    EDGE_IN_MOMENT,
     EDGE_KINDS,
     EDGE_PARENT_OF,
+    EDGE_RECALLS,
     EDGE_SAME_MOMENT,
     EDGE_SEMANTIC_HOP,
     EDGE_SEQUENTIAL,
@@ -32,6 +39,20 @@ from elyra.memory.weights import (
     edge_weight,
     passes_min_weight,
 )
+
+# Durable kinds that store real atom destinations (bidirectional expand).
+_DURABLE_REAL_KINDS: frozenset[str] = frozenset(
+    {EDGE_CREATED_WITH, EDGE_RECALLS}
+)
+# Channel suffix tokens for virtual has_channel destinations.
+_CHANNEL_VIRTUAL_SUFFIXES: tuple[str, ...] = (
+    ":text",
+    ":image",
+    ":audio",
+    ":video",
+    ":joint",
+)
+MOMENT_HUB_PREFIX = "moment:"
 
 _LOG = logging.getLogger(__name__)
 
@@ -69,9 +90,42 @@ STRUCTURAL_KINDS: frozenset[str] = frozenset(
 )
 
 
+def moment_hub_id(moment_id: str) -> str:
+    """Stable virtual hub id for durable ``in_moment`` membership edges."""
+    mid = str(moment_id or "").strip()
+    if mid.startswith(MOMENT_HUB_PREFIX):
+        return mid
+    return f"{MOMENT_HUB_PREFIX}{mid}"
+
+
+def is_moment_hub_id(node_id: str | None) -> bool:
+    """True when ``node_id`` is a storage-only moment hub (not an Atom)."""
+    if not node_id:
+        return False
+    return str(node_id).startswith(MOMENT_HUB_PREFIX)
+
+
+def is_channel_virtual_id(node_id: str | None) -> bool:
+    """True when ``node_id`` is a storage-only ``{atom}:{channel}`` stub."""
+    if not node_id:
+        return False
+    s = str(node_id)
+    return any(s.endswith(suf) for suf in _CHANNEL_VIRTUAL_SUFFIXES)
+
+
+def is_virtual_graph_id(node_id: str | None) -> bool:
+    """True for moment hubs or channel stubs (must never enter considered)."""
+    return is_moment_hub_id(node_id) or is_channel_virtual_id(node_id)
+
+
 @dataclass(frozen=True)
 class GraphEdge:
-    """One projected or ephemeral directed edge."""
+    """One projected, durable, or ephemeral directed edge.
+
+    Contract: ``dst_atom_id`` returned from ``neighbors`` / ``expand_moment`` is
+    always a real atom id (Option A rewrite). Virtual hubs/channels are storage
+    only and never appear as destinations after expand.
+    """
 
     src_atom_id: str
     dst_atom_id: str
@@ -152,7 +206,12 @@ def _index_is_null(index: Any | None) -> bool:
 
 
 class GraphView:
-    """1-hop neighbourhood over projected Atom edges (+ optional semantic hops)."""
+    """1-hop neighbourhood: projected + durable EdgeStore + optional semantic hops.
+
+    When ``edge_store`` is provided, durable kinds are unioned into expand.
+    ``in_moment`` hub destinations are rewritten to peer atom members (Option A).
+    Default expand kinds exclude ``has_channel`` (see ``DEFAULT_EXPAND_KINDS``).
+    """
 
     def __init__(
         self,
@@ -162,18 +221,33 @@ class GraphView:
         embedder: Any | None = None,
         settings: MemorySettings | None = None,
         now: datetime | str | None = None,
+        edge_store: Any | None = None,
     ) -> None:
         self._store = store
         self._index = index
         self._embedder = embedder
         self._settings = settings or MemorySettings()
         self._now_override = now
+        self._edge_store = edge_store
         self._last_expand_meta: dict[str, Any] = {}
+        # Process-local moment member ids after expand_moment / hub rewrite
+        # (session frontier cache hook for PR6).
+        self._moment_member_cache: dict[str, list[str]] = {}
 
     @property
     def last_expand_meta(self) -> dict[str, Any]:
         """Metadata from the most recent ``neighbors`` / ``seed_from_text`` call."""
         return dict(self._last_expand_meta)
+
+    @property
+    def edge_store(self) -> Any | None:
+        """Injected EdgeStore (may be None when durable fabric unused)."""
+        return self._edge_store
+
+    @property
+    def moment_member_cache(self) -> dict[str, list[str]]:
+        """Copy of moment_id → member atom_ids populated by expand_moment."""
+        return {k: list(v) for k, v in self._moment_member_cache.items()}
 
     def _now_iso(self) -> str:
         if self._now_override is not None:
@@ -228,6 +302,19 @@ class GraphView:
         return _bool_setting(
             self._settings, "traverse_allow_semantic_hops", True
         )
+
+    def _expand_channels(self) -> bool:
+        """When True, default expand includes ``has_channel`` (still no virtual dsts)."""
+        return _bool_setting(
+            self._settings, "traverse_expand_channels", False
+        )
+
+    def _default_expand_kinds(self) -> set[str]:
+        """``kinds is None`` → DEFAULT_EXPAND_KINDS (± has_channel flag)."""
+        wanted = set(DEFAULT_EXPAND_KINDS)
+        if self._expand_channels():
+            wanted.add(EDGE_HAS_CHANNEL)
+        return wanted
 
     def _summary_expand_mode(self) -> str:
         """``lite`` (default) or ``deep`` (Phase 3 / #103 stub)."""
@@ -719,6 +806,302 @@ class GraphView:
             expand_meta.setdefault("semantic_reason", REASON_NO_HITS)
         return edges
 
+    # ── Durable EdgeStore + expand_moment (Option A hub rewrite) ───────────
+
+    def _durable_edge_to_graph(
+        self,
+        *,
+        src_id: str,
+        dst: Atom,
+        edge_kind: str,
+        reason: str,
+        meta: dict[str, Any] | None = None,
+        cosine: float | None = None,
+    ) -> GraphEdge | None:
+        """Weight a durable edge at expand time (stored weight is not authority)."""
+        m = dict(meta or {})
+        cos = cosine
+        if cos is None and "cosine" in m:
+            try:
+                cos = float(m["cosine"])
+            except (TypeError, ValueError):
+                cos = None
+        return self._weight_edge(
+            edge_kind,
+            src_id=src_id,
+            dst=dst,
+            cosine=cos,
+            reason=reason,
+            meta=m,
+        )
+
+    def expand_moment(
+        self,
+        atom_id: str | None = None,
+        *,
+        moment_id: str | None = None,
+        k: int | None = None,
+        exclude_ids: AbstractSet[str] | None = None,
+    ) -> list[GraphEdge]:
+        """Moment members as edges with **real atom destinations only**.
+
+        Resolves ``moment_id`` from the arg or ``get_atom(atom_id).moment_id``.
+        Prefers EdgeStore hub membership (``list_edges_to(moment:{id})``);
+        falls back to ``store.list_by_moment``. Includes all experience kinds
+        present in the moment (tool/ledger walkable — OQ-E2).
+
+        ``src_atom_id`` is the seed atom when ``atom_id`` is given; otherwise
+        the moment hub label (glass/debug only — not a walk seed).
+        """
+        seed_id = str(atom_id).strip() if atom_id else None
+        mid = str(moment_id).strip() if moment_id else None
+        if not mid and seed_id:
+            seed = self._store.get_atom(seed_id)
+            if seed is not None and seed.moment_id:
+                mid = str(seed.moment_id).strip()
+        meta: dict[str, Any] = {
+            "expand": "moment",
+            "moment_id": mid,
+            "atom_id": seed_id,
+            "source": None,
+        }
+        if not mid:
+            meta["error"] = "moment_not_resolved"
+            self._last_expand_meta = meta
+            return []
+
+        exclude: set[str] = set(exclude_ids or ())
+        if seed_id:
+            exclude.add(seed_id)
+
+        hub = moment_hub_id(mid)
+        member_ids: list[str] = []
+        source = "list_by_moment"
+
+        if self._edge_store is not None:
+            try:
+                inbound = self._edge_store.list_edges_to(
+                    hub, kinds=[EDGE_IN_MOMENT]
+                )
+                for de in inbound:
+                    sid = str(getattr(de, "src_atom_id", "") or "").strip()
+                    if sid and not is_virtual_graph_id(sid):
+                        member_ids.append(sid)
+                if member_ids:
+                    source = "edge_store"
+            except Exception:  # noqa: BLE001
+                _LOG.exception("expand_moment edge_store list_edges_to failed")
+                member_ids = []
+
+        if not member_ids:
+            try:
+                rows = self._store.list_by_moment(mid)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("expand_moment list_by_moment failed for %s", mid)
+                rows = []
+            for a in rows:
+                aid = str(getattr(a, "atom_id", "") or "").strip()
+                if aid and not is_virtual_graph_id(aid):
+                    member_ids.append(aid)
+            source = "list_by_moment"
+
+        # Full membership (including seed) for frontier cache; peers for edges.
+        seen_all: set[str] = set()
+        all_members: list[str] = []
+        for mid_atom in member_ids:
+            if mid_atom in seen_all:
+                continue
+            seen_all.add(mid_atom)
+            all_members.append(mid_atom)
+
+        self._moment_member_cache[mid] = list(all_members)
+        meta["source"] = source
+        meta["member_count"] = len(all_members)
+        meta["hub"] = hub
+
+        peer_ids = [m for m in all_members if m not in exclude]
+        src_for_edges = seed_id or hub
+        cap = len(peer_ids) if k is None else max(0, int(k))
+        edges: list[GraphEdge] = []
+        for dst_id in peer_ids:
+            if len(edges) >= cap:
+                break
+            dst = self._store.get_atom(dst_id)
+            if dst is None:
+                continue
+            e = self._durable_edge_to_graph(
+                src_id=src_for_edges,
+                dst=dst,
+                edge_kind=EDGE_IN_MOMENT,
+                reason="in_moment:peer",
+                meta={
+                    "moment_id": mid,
+                    "hub": hub,
+                    "membership_source": source,
+                },
+            )
+            if e is not None:
+                edges.append(e)
+
+        edges.sort(key=lambda e: (-e.weight, e.dst_atom_id))
+        meta["returned"] = len(edges)
+        self._last_expand_meta = meta
+        return edges
+
+    def _project_durable(
+        self,
+        atom: Atom,
+        *,
+        wanted: AbstractSet[str],
+        exclude: AbstractSet[str],
+        deadline: float | None,
+        t0: float,
+        expand_meta: dict[str, Any],
+    ) -> list[GraphEdge]:
+        """Union durable EdgeStore edges; rewrite hubs; drop virtual channels.
+
+        - ``created_with`` / ``recalls``: outgoing + reverse (incoming as flip).
+        - ``in_moment``: never emit hub dst; materialize peer members via
+          ``expand_moment`` when seed has moment membership.
+        - ``has_channel``: never emit ``{atom}:channel`` dst; record channel
+          names in expand_meta only.
+        """
+        durable_wanted = wanted & {
+            EDGE_CREATED_WITH,
+            EDGE_RECALLS,
+            EDGE_IN_MOMENT,
+            EDGE_HAS_CHANNEL,
+        }
+        if not durable_wanted:
+            return []
+
+        edges: list[GraphEdge] = []
+        channels_seen: list[str] = []
+
+        def over() -> bool:
+            return deadline is not None and (_now_ms() - t0) > deadline
+
+        # ── in_moment: Option A peer materialization ──────────────────────
+        if EDGE_IN_MOMENT in durable_wanted and not over():
+            if atom.moment_id or self._edge_store is not None:
+                peer_edges = self.expand_moment(
+                    atom_id=atom.atom_id,
+                    moment_id=atom.moment_id,
+                    exclude_ids=exclude,
+                )
+                # expand_moment overwrites last_expand_meta — restore parent keys.
+                for key in ("source", "member_count", "hub", "moment_id"):
+                    val = self._last_expand_meta.get(key)
+                    if val is not None:
+                        expand_meta.setdefault(f"moment_{key}", val)
+                edges.extend(peer_edges)
+
+        if self._edge_store is None:
+            return edges
+
+        # ── Outgoing durable real kinds ───────────────────────────────────
+        try:
+            outgoing = self._edge_store.list_edges_from(atom.atom_id)
+        except Exception:  # noqa: BLE001
+            _LOG.exception(
+                "list_edges_from failed for %s", atom.atom_id
+            )
+            outgoing = []
+
+        for de in outgoing:
+            if over():
+                break
+            kind = str(getattr(de, "edge_kind", "") or "")
+            if kind not in durable_wanted:
+                continue
+            dst_id = str(getattr(de, "dst_atom_id", "") or "").strip()
+            if not dst_id or dst_id == atom.atom_id or dst_id in exclude:
+                continue
+
+            if kind == EDGE_IN_MOMENT:
+                # Hubs already rewritten via expand_moment; skip raw hub rows.
+                continue
+
+            if kind == EDGE_HAS_CHANNEL or is_channel_virtual_id(dst_id):
+                # Storage only — never walk into channel stubs.
+                ch = None
+                de_meta = getattr(de, "meta", None) or {}
+                if isinstance(de_meta, Mapping):
+                    ch = de_meta.get("channel")
+                if not ch and ":" in dst_id:
+                    ch = dst_id.rsplit(":", 1)[-1]
+                if ch and ch not in channels_seen:
+                    channels_seen.append(str(ch))
+                continue
+
+            if is_virtual_graph_id(dst_id):
+                continue
+
+            if kind not in _DURABLE_REAL_KINDS and kind != EDGE_HAS_CHANNEL:
+                continue
+
+            dst = self._store.get_atom(dst_id)
+            if dst is None:
+                continue
+            de_meta = dict(getattr(de, "meta", None) or {})
+            reason = str(getattr(de, "reason", "") or "") or f"durable:{kind}"
+            e = self._durable_edge_to_graph(
+                src_id=atom.atom_id,
+                dst=dst,
+                edge_kind=kind,
+                reason=reason,
+                meta=de_meta,
+            )
+            if e is not None:
+                edges.append(e)
+
+        # ── Reverse (incoming) for real-atom durable kinds ────────────────
+        reverse_kinds = durable_wanted & _DURABLE_REAL_KINDS
+        if reverse_kinds and not over():
+            try:
+                incoming = self._edge_store.list_edges_to(atom.atom_id)
+            except Exception:  # noqa: BLE001
+                _LOG.exception(
+                    "list_edges_to failed for %s", atom.atom_id
+                )
+                incoming = []
+            for de in incoming:
+                if over():
+                    break
+                kind = str(getattr(de, "edge_kind", "") or "")
+                if kind not in reverse_kinds:
+                    continue
+                peer_id = str(getattr(de, "src_atom_id", "") or "").strip()
+                if (
+                    not peer_id
+                    or peer_id == atom.atom_id
+                    or peer_id in exclude
+                    or is_virtual_graph_id(peer_id)
+                ):
+                    continue
+                peer = self._store.get_atom(peer_id)
+                if peer is None:
+                    continue
+                de_meta = dict(getattr(de, "meta", None) or {})
+                de_meta.setdefault("direction", "reverse")
+                reason = (
+                    str(getattr(de, "reason", "") or "")
+                    or f"durable:{kind}:reverse"
+                )
+                e = self._durable_edge_to_graph(
+                    src_id=atom.atom_id,
+                    dst=peer,
+                    edge_kind=kind,
+                    reason=reason,
+                    meta=de_meta,
+                )
+                if e is not None:
+                    edges.append(e)
+
+        if channels_seen:
+            expand_meta["channels"] = channels_seen
+        return edges
+
     # ── Public API ─────────────────────────────────────────────────────────
 
     def neighbors(
@@ -733,9 +1116,16 @@ class GraphView:
     ) -> list[GraphEdge]:
         """1-hop expand sorted by weight desc (then dst_atom_id for stability).
 
-        Semantic hops only if index present AND embedder warm AND
-        ``allow_semantic`` and settings allow. Skip reasons in
-        ``last_expand_meta["semantic_reason"]``:
+        When ``kinds is None``, uses ``DEFAULT_EXPAND_KINDS`` (all EDGE_KINDS
+        except ``has_channel``, unless ``traverse_expand_channels``). Explicit
+        ``kinds`` is intersected with ``EDGE_KINDS``; empty → no edges.
+
+        Durable EdgeStore edges are unioned with projected structural kinds.
+        ``in_moment`` hubs rewrite to peer atoms; virtual channel ids never
+        appear as destinations. Semantic hops only if index present AND
+        embedder warm AND ``allow_semantic`` and settings allow.
+
+        Skip reasons in ``last_expand_meta["semantic_reason"]``:
 
         - ``semantic_disabled`` — settings off or ``allow_semantic=False``
         - ``no_index`` — missing / Null index
@@ -781,7 +1171,7 @@ class GraphView:
 
         wanted: set[str]
         if kinds is None:
-            wanted = set(EDGE_KINDS)
+            wanted = self._default_expand_kinds()
         else:
             wanted = {str(x) for x in kinds if str(x) in EDGE_KINDS}
 
@@ -849,6 +1239,19 @@ class GraphView:
                 else:
                     expand_meta["supersedes_skipped"] = "lite"
 
+        # Durable EdgeStore union + in_moment hub rewrite (Option A).
+        if not over():
+            edges.extend(
+                self._project_durable(
+                    atom,
+                    wanted=wanted,
+                    exclude=exclude,
+                    deadline=deadline_cap,
+                    t0=t0,
+                    expand_meta=expand_meta,
+                )
+            )
+
         if EDGE_SEMANTIC_HOP in wanted and allow_semantic and not over():
             edges.extend(
                 self._project_semantic_hop(
@@ -868,6 +1271,11 @@ class GraphView:
         if over():
             expand_meta["expand_truncated"] = True
 
+        # Defense: drop any virtual destinations that slipped through.
+        edges = [
+            e for e in edges if not is_virtual_graph_id(e.dst_atom_id)
+        ]
+
         # Dedupe by (dst, kind) keeping highest weight.
         best: dict[tuple[str, str], GraphEdge] = {}
         for e in edges:
@@ -884,6 +1292,7 @@ class GraphView:
         expand_meta["elapsed_ms"] = int(_now_ms() - t0)
         expand_meta["returned"] = len(result)
         expand_meta["candidates"] = len(ordered)
+        expand_meta["default_kinds"] = kinds is None
         self._last_expand_meta = expand_meta
         return result
 
@@ -1078,6 +1487,7 @@ class GraphView:
 
 
 __all__ = [
+    "DEFAULT_EXPAND_KINDS",
     "DEFAULT_EXPAND_MAX_MS",
     "DEFAULT_NEIGHBOR_K",
     "DEFAULT_PARCEL_CHILD_CAP",
@@ -1087,8 +1497,12 @@ __all__ = [
     "DEFAULT_SUMMARY_SOURCE_DEEP_K",
     "DEFAULT_SUMMARY_SOURCE_LITE_K",
     "EDGE_CHILD_OF",
+    "EDGE_CREATED_WITH",
+    "EDGE_HAS_CHANNEL",
+    "EDGE_IN_MOMENT",
     "EDGE_KINDS",
     "EDGE_PARENT_OF",
+    "EDGE_RECALLS",
     "EDGE_SAME_MOMENT",
     "EDGE_SEMANTIC_HOP",
     "EDGE_SEQUENTIAL",
@@ -1097,6 +1511,7 @@ __all__ = [
     "EDGE_SUPERSEDES",
     "GraphEdge",
     "GraphView",
+    "MOMENT_HUB_PREFIX",
     "REASON_ENCODER_COLD",
     "REASON_NO_HITS",
     "REASON_NO_INDEX",
@@ -1105,4 +1520,8 @@ __all__ = [
     "REASON_TIMEOUT",
     "STRUCTURAL_KINDS",
     "TRAVERSE_SUMMARY_EXPAND_MODES",
+    "is_channel_virtual_id",
+    "is_moment_hub_id",
+    "is_virtual_graph_id",
+    "moment_hub_id",
 ]

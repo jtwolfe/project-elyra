@@ -317,6 +317,9 @@ class MemorySettings:
     edge_recalls_skip_queue_depth: int = EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT
     edge_retarget_enabled: bool = True
     edge_retarget_ensure_vertical: bool = True
+    # When True, default GraphView expand includes has_channel kind filter
+    # (virtual channel destinations are still never walkable — Option A).
+    traverse_expand_channels: bool = False
 
 
 def memory_root(paths: ElyraPaths) -> Path:

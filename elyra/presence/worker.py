@@ -512,6 +512,10 @@ class PresenceWorker:
         self._memory: Any | None = None
         self._memory_open_attempted = False
         self._memory_open_failed = False
+        # Durable EdgeStore (sibling to atoms; lazy; PR1+).
+        self._edge_store: Any | None = None
+        self._edge_store_open_attempted = False
+        self._edge_store_open_failed = False
         # Phase 2 encode queue + embedder + EmbeddingIndex (lazy; store open).
         self._encode_queue: Any | None = None
         self._embedder: Any | None = None
@@ -1666,12 +1670,47 @@ class PresenceWorker:
         """Process-local TraversalRegistry (tools inject via extras later)."""
         return self._traversal
 
+    def _ensure_edge_store(self) -> Any | None:
+        """Open EdgeStore once alongside the atom store (fail-soft).
+
+        Open is independent of ``durable_edges_enabled`` so glass/tests can
+        read edges written when the flag was on. Returns UnavailableEdgeStore
+        or None on hard failure — GraphView treats both as no durable fabric.
+        """
+        mem_cfg = self.settings.memory
+        if not (mem_cfg.write_atoms or mem_cfg.enabled):
+            return None
+        if self._edge_store is not None:
+            return self._edge_store
+        if self._edge_store_open_failed:
+            return None
+        if self._edge_store_open_attempted and self._edge_store is None:
+            return None
+        self._edge_store_open_attempted = True
+        # Ensure atom store root exists first (shared data/memory layout).
+        if self._ensure_memory_store() is None:
+            self._edge_store_open_failed = True
+            return None
+        try:
+            from elyra.memory.edges import open_edge_store
+
+            self._edge_store = open_edge_store(
+                self.paths, mem_cfg, fail_soft=True
+            )
+            return self._edge_store
+        except Exception:  # noqa: BLE001 — edges optional for graph expand
+            self._edge_store_open_failed = True
+            self._edge_store = None
+            _LOG.exception("edge store open failed; durable expand disabled")
+            return None
+
     def graph_view(self) -> Any | None:
         """Build a GraphView from the open store + warm embedder if available.
 
         Never cold-loads torch. Returns None when the memory store is down.
         Structural walks work without index/embedder; semantic hops require
         a non-null index and already-warm embedder (GraphView policy).
+        Injects EdgeStore when open so durable kinds union into neighbors.
         """
         store = self._ensure_memory_store()
         if store is None:
@@ -1684,11 +1723,13 @@ class PresenceWorker:
             index = self._ensure_embedding_index()
             # Consumer gated handle only (KD-E5); never cold-load for graph.
             embedder = self._ensure_embedder(role="consumer")
+            edge_store = self._ensure_edge_store()
             return GraphView(
                 store,
                 index=index,
                 embedder=embedder,
                 settings=mem_cfg,
+                edge_store=edge_store,
             )
         except Exception:  # noqa: BLE001 — fail closed for tools/glass
             _LOG.exception("graph_view factory failed")
