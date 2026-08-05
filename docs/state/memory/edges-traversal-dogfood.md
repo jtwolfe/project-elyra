@@ -3,16 +3,19 @@
 | Field | Value |
 |-------|--------|
 | **Class** | STATE |
-| **Audience** | Operators dogfooding EdgeStore fabric + pure semantic start + raised traverse budgets |
-| **Design** | [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code)**) |
+| **Audience** | Operators dogfooding EdgeStore fabric + pure semantic start + raised traverse budgets + **polish1** (unified wait, deferred recalls, local_map, backfill, glass sticky, skill maneuvers) |
+| **Design (edges stack)** | [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code)**) |
+| **Design (polish1)** | [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) (**Shipped (code)** — PR0–PR5; this checklist is PR6) |
 | **Architecture priors** | [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
-| **Program** | [README.md](README.md) — edges/traversal close-out |
+| **Program** | [README.md](README.md) — edges/traversal + polish1 close-out |
 | **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98) source/context edges; [#120](https://github.com/jtwolfe/project-elyra/issues/120) C14 edges dogfood; [#103](https://github.com/jtwolfe/project-elyra/issues/103) semantic seed timeout; [#105](https://github.com/jtwolfe/project-elyra/issues/105) frontier cache + dual start |
-| **Claim today (2026-08-05)** | **Code complete + hermetic tests green** on edges stack (PR0–PR7: EdgeStore, GraphView, `created_with`/`in_moment`/retarget, `recalls`/`has_channel`, pure semantic start + dual slots, raised budgets + frontier cache, this checklist). **Live operator dogfood not signed.** **Not** Gate B / product default-on. |
+| **Claim today (2026-08-05)** | **Edges stack code complete + hermetic green** (PR0–PR7). **Polish1 code complete + hermetic green** on `feature/edge-enrichment-polish1` (PR0 design, PR1a unified wait, PR1b deferred recalls, PR2 local_map, PR3 skill maneuvers, PR4 dev backfill, PR5 glass sticky). **Live operator dogfood not signed** (partial edges dogfood pre-polish; polish1 boxes open). **Not** Gate B / product default-on of `durable_edges_enabled`. |
 
 ---
 
 ## Truth notes
+
+### Edges stack (PR0–PR7)
 
 | Claim | Status |
 |-------|--------|
@@ -24,16 +27,42 @@
 | Raised product budgets + HARD_MAX clamp + frontier/moment cache (#105) | **Code** (PR6) |
 | Graph API `edge_count` / `edges_by_kind` / `durable_edges_enabled` | **Code** (PR2+) |
 | Glass overview edge counts polish | **Code** (PR7) |
-| Live promote → edges → multi-hop walk on operator machine | **Open** — boxes below |
+| Visual free-browse graph (#61) | **Code** (PR8 on edges tip) |
+| Live promote → edges → multi-hop walk on operator machine | **Open** — boxes below (partial pre-polish dogfood 2026-08-05) |
 | Gate B / `durable_edges_enabled` factory default-on | **Not** this checklist’s done bar |
 
+### Polish1 (PR0–PR5)
+
+| Claim | Status |
+|-------|--------|
+| Unified semantic wait ceiling for long-path ANN (meal / traverse start / step hop / deferred recalls; band 1s–120s) | **Code** (PR1a) |
+| Dual deadlines: structural `expand_ms` vs semantic wait; free-browse / HTTP snappy or structural default | **Code** (PR1a) |
+| Speak `recalls` **deferred** product default (promote never waits; idle-tick drain) | **Code** (PR1b) |
+| `edge_recalls_max_ms` deprecated no-op for live ANN ceiling | **Code** (PR1b) |
+| Host ~d2.5 `local_map` + kind filters (noisy kinds default-off) | **Code** (PR2) |
+| Skill walk maneuvers + tool surface `local_map` / `include_noisy_kinds` | **Code** (PR3) |
+| Dev force edge backfill (`in_moment` structural-first) + Graph button | **Code** (PR4) |
+| Glass last finished walk sticky across moment close (process-life) | **Code** (PR5) |
+| Expand / walk budget honesty (structural vs semantic spent) | **Code** (PR5 + PR1a) |
+| Live polish1 dogfood (120s wait, deferred recalls, map, backfill, sticky) | **Open** — polish1 boxes below |
+| Gate B / factory default-on | **Still not** — polish1 does not flip flags |
+
 **Factory defaults stay off:** `durable_edges_enabled` / `directed_traversal_enabled` / `directed_keep_enabled` / `semantic_enabled` / `embed_enabled` **false**. Dogfood must opt in via operator `elyra.toml`. Raised traverse *product defaults* (depth 5, nodes 80, …) apply when traversal is on; they do **not** enable writes or tools by themselves.
+
+**Polish1 product defaults that *do* change behaviour when flags are on (not Gate B):**
+
+| Knob | Product default | Dogfood note |
+|------|-----------------|--------------|
+| `semantic_wait_max_ms` | **15_000** (band max **120_000**) | Operator dogfood: set runtime / glass wait to **120s** for ROCm Nemotron long-path ANN |
+| `edge_recalls_inline` | **false** (deferred) | Hermetic tests may force inline |
+| `edge_backfill_dev_enabled` | **true** (dev / dogfood era) | Toggleable; marked dev; not a product Gate B flag |
+| Free-browse `allow_semantic` | **off / snappy** unless explicit | Full wait only with `semantic_wait=1` (+ allow semantic) |
 
 ---
 
 ## Prep
 
-- [ ] Tip of edges stack (or `feature/edge-enrichment` after merge) with hermetic suite green
+- [ ] Tip of **`feature/edge-enrichment-polish1`** (or edges tip after polish1 merge) with hermetic suite green
 - [ ] `backend=lance` + `elyra[memory-lance]` (preferred dogfood path; JSONL structural-only is ok for edge fabric without ANN)
 - [ ] Operator `elyra.toml` (or equivalent) includes:
   ```toml
@@ -46,7 +75,12 @@
   # keep follows traversal (OQ-A1) when directed_keep_enabled omitted/false
   semantic_enabled = true
   embed_enabled = true
+  # optional: product default is already false (deferred)
+  # edge_recalls_inline = false
+  # optional: product default true for dogfood-era Graph backfill button
+  # edge_backfill_dev_enabled = true
   ```
+- [ ] **Semantic wait for long-path ANN:** glass / runtime `semantic_wait` enabled with `max_ms` **120000** (dogfood OK; product settings default remains 15s until raised)
 - [ ] Encoder known: **mock** (dev/CI) or **Nemotron** warm for live recalls + semantic start
 - [ ] Glass **Memory → Graph** tab available (`GET /api/memory/graph`)
 - [ ] Confirm factory defaults elsewhere remain **off** when this install is not dogfooding (no accidental Gate B)
@@ -68,7 +102,7 @@
 
 ## Edge fabric — `recalls` / `has_channel` (#98 / #120)
 
-- [ ] Speak promote (Elyra speak or user wake observation) with warm embedder + semantic on → up to ~5 durable `recalls` (top ~15 by sim, then newest by `t_start` — OQ-E3)
+- [ ] Speak promote (Elyra speak or user wake observation) with warm embedder + semantic on → durable `recalls` appear (**deferred** under polish1 — see polish1 section; not inline under 40ms island)
 - [ ] `meta.cosine` present on recalls edges; expand recomputes weight (stored weight not authority)
 - [ ] Soft-skip under cold encoder / encode-queue pressure / flag off — **never blocks** speak/promote
 - [ ] View-observation / tool promote: **no** recalls writes
@@ -96,7 +130,8 @@
 - [ ] `seed_mode=semantic_only` + cold → **empty frontier OK** (does not fall through to temporal strip — pure semantic honesty for #103)
 - [ ] `seed_mode=temporal_only` → strip fill; no semantic ANN
 - [ ] Skill nudge: focused goals may use `semantic_only` (playbook); default remains `auto` (OQ-E6)
-- [ ] Start budget: `traverse_start_expand_max_ms` product **250**; payload reports `start_ms_budget` / `start_ms_spent`
+- [ ] Start structural budget: `traverse_start_expand_max_ms` product **250** for non-ANN start work / reporting; **ANN seed uses semantic wait ceiling** (polish1 — not 250 as ANN cap)
+- [ ] Start payload reports `start_ms_budget` / `start_ms_spent` (structural) and honest semantic budget/spent when wait on
 
 ---
 
@@ -118,33 +153,131 @@
 
 ---
 
+## Polish1 — unified semantic wait (long-path ANN)
+
+Design: [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) §1 / KD-P0.
+
+- [ ] Status `semantic_wait.applies_to` lists long-path sites: meal select, traverse start, traverse step semantic, speak recalls deferred, http neighbors opt-in
+- [ ] Operator sets wait max **120000** (dogfood OK) via glass / runtime; traverse start / step hop / deferred recalls share that ceiling identity (not secret 40 / 120 / 250 ms islands)
+- [ ] Product settings default remains **15_000** until raised — *identity* of ceiling is unified; 120s is operator dogfood, not a new factory max
+- [ ] `memory_traverse_start` `semantic_only` under warm encoder + index hits: seeds non-empty / `semantic_reason` not starved-timeout from structural 250ms
+- [ ] Step with multi `expand_ids`: structural multi-id under `expand_ms`; **at most one** `semantic_hop` ANN per step under wait budget
+- [ ] Free-browse / `GET …/neighbors` default: **no** multi-minute hang; semantic unchecked / snappy; full wait only with explicit `semantic_wait=1` (+ allow semantic)
+- [ ] Cold encoder: `encoder_cold` (or honest cold reason); **no torch cold-load** on traverse start
+- [ ] Glass `set_semantic_wait` changes long-path ceiling without process restart (worker overlay)
+- [ ] Expand / walk surfaces report structural vs semantic spent/budget when relevant
+
+---
+
+## Polish1 — deferred speak recalls (product default)
+
+Design: polish1 §1.3 / KD-P0-defer / PR1b.
+
+- [ ] Speak → promote returns quickly (no inline ANN wait on promote path)
+- [ ] After idle tick / deferred drain under warm encoder + wait on: EdgeStore gains `recalls` for that speak (`recalls` count > 0; not permanent 40ms soft-skip)
+- [ ] Soft-skip still applies under cold / encode pressure / edges or semantic off — **never blocks** speak
+- [ ] Metrics / status: deferred queue activity visible when present (`recalls_deferred_*` or equivalent)
+- [ ] `edge_recalls_inline=true` only for debug / hermetic — **not** dogfood product path
+- [ ] `edge_recalls_max_ms` is **not** presented as the live ANN ceiling in status
+
+---
+
+## Polish1 — host d2.5 `local_map` + kind filters
+
+Design: polish1 §2 / KD-P2 / PR2.
+
+- [ ] `memory_traverse_start` / `step` thin surface includes `local_map` (null only when no focus / empty seeds)
+- [ ] Caps respected (approx): edges ≤ 16, ring ≤ 12, moment_peers ≤ 8, associative ≤ 5, d2 fanout limited
+- [ ] Default map **omits** tool / ledger / raw model from primary ring; sequential bridges may appear with short labels / `bridge_noisy`
+- [ ] `include_noisy_kinds=true` surfaces noisy kinds when goal needs them
+- [ ] Multi-expand step: `local_map` = first expanded; `local_maps` ≤ 3 when multiple expand
+- [ ] Map build does **not** re-run seed ANN; truncation → honest `map_truncated` / partial map, not tool failure
+- [ ] Depth-1 star alone is **not** the model surface — host map present when focus exists
+
+---
+
+## Polish1 — skill walk maneuvers
+
+Design: polish1 §3 / KD-P1 / PR3; skill: `skills/bundled/memory-traverse/SKILL.md`.
+
+- [ ] Skill documents named maneuvers with worked tool-args examples: **Moment bloom**, **Context fan**, **Time spine**, **Associative enter**, **Anchor+dig**
+- [ ] Skill states: `timeout` / `expand_truncated` under warm slow embedder ≠ empty memory; prefer structural maneuvers or wait
+- [ ] Skill / tools document `local_map` read-before-blind-expand and `include_noisy_kinds`
+- [ ] Skill does **not** promise disk-sticky last walk (process-life glass only)
+- [ ] Multi-expand: at most one semantic hop per step; prefer structural multi-id
+
+---
+
+## Polish1 — dev force edge backfill
+
+Design: polish1 §4 / KD-P-backfill / PR4.
+
+- [ ] Graph glass **Force edge backfill** (or equivalent) visible when `edge_backfill_dev_enabled` and edges path live
+- [ ] Force backfill raises `in_moment` for historical atoms with `moment_id` missing hub edge
+- [ ] Re-run is cheap / idempotent: `written ≈ 0` when fabric already complete
+- [ ] Progress / last result visible on glass (sync POST; no pollable job v1)
+- [ ] `durable_edges_enabled` off or dev flag off: honest failure / button hidden; no silent writes
+- [ ] v1 does **not** invent `created_with` / `recalls` history
+
+---
+
+## Polish1 — glass last-session stickiness
+
+Design: polish1 §5 / KD-P-glass / PR5.
+
+- [ ] Finish walk → glass `has_last_session` true; walk summary / considered / kept visible
+- [ ] After **moment close / boundary**: **still** `has_last_session` (process-life sticky; not cleared on moment_close)
+- [ ] Abandon retains sticky last session (existing behaviour)
+- [ ] Tray / meal: directed_keep still packs on **next** `compose_meal` only (KD-A16 unchanged)
+- [ ] Process restart: last walk **not** claimed durable (honesty)
+- [ ] Expand / session glass shows structural vs semantic budget honesty when walk used ANN
+
+---
+
 ## No Gate B / no default-on
 
 - [ ] Confirm `durable_edges_enabled` factory default remains **false** on clean settings
 - [ ] Confirm `directed_traversal_enabled` / `semantic_enabled` / `embed_enabled` factory defaults remain **false**
 - [ ] This checklist does **not** authorize product default-on of edges, traversal, or Nemotron (Gate B is separate)
-- [ ] Sign-off here is **edges fabric + traverse start/budgets dogfood** only
+- [ ] Polish1 timeout / wait / defer / dev-backfill defaults are **not** Gate B
+- [ ] Sign-off here is **edges fabric + traverse start/budgets + polish1 product polish dogfood** only
 
 ---
 
 ## Hermetic evidence (not a substitute for boxes above)
 
+### Edges stack
+
 | Suite | Role |
 |-------|------|
-| `tests/test_memory_edges.py` | EdgeStore put/list/budget/FIFO both backends |
+| `tests/test_memory_edges.py` | EdgeStore put/list/budget/FIFO both backends; **backfill** idempotent / flags |
 | `tests/test_memory_promote_edges.py` | created_with / in_moment / retarget / OQ-E1–E2 |
-| `tests/test_memory_recalls_has_channel.py` | recalls rank/write soft-fail; has_channel |
-| `tests/test_memory_graph.py` | durable expand, expand_moment, kind priority |
-| `tests/test_memory_graph_api.py` | overview counts + legend + neighbors honesty |
-| `tests/test_memory_traverse.py` | seed modes, dual slots, budget clamp, moment cache |
-| `tests/test_memory_traverse_tools.py` | tool schema budgets / seed_mode / media |
-| `tests/test_settings.py` | product defaults + hard max validation |
+| `tests/test_memory_recalls_has_channel.py` | recalls rank/write soft-fail; has_channel; **deferred promote path + wait ceiling** |
+| `tests/test_memory_graph.py` | durable expand, expand_moment, kind priority; **dual deadline** structural vs semantic |
+| `tests/test_memory_graph_api.py` | overview counts + legend + neighbors honesty; **neighbors snappy defaults / wait opt-in; backfill API; session sticky** |
+| `tests/test_memory_traverse.py` | seed modes, dual slots, budget clamp, moment cache; **local_map filters/caps; stickiness on moment_close; one ANN per step** |
+| `tests/test_memory_traverse_tools.py` | tool schema budgets / seed_mode / media; **local_map surface; include_noisy_kinds** |
+| `tests/test_settings.py` | product defaults + hard max validation; polish1 flags / deprecations |
 
-Optional live: warm Nemotron path for recalls + semantic start quality (mock proves plumbing).
+### Polish1 additions
+
+| Suite | Role |
+|-------|------|
+| `tests/test_semantic_wait.py` | Helper clamp/overlay; status `applies_to`; glass assets; 1s–120s band |
+| `tests/test_presence_worker.py` | `_memory_settings_with_wait`; deferred recalls enqueue/drain; soft-skip cold |
+| `tests/test_memory_recalls_has_channel.py` | PR1b deferred path; promote not blocked; wait ceiling; inline flag |
+| `tests/test_memory_traverse.py` | PR1a dual deadlines / per-step ANN; PR2 local_map; PR5 stickiness |
+| `tests/test_memory_graph.py` | PR1a dual deadline structural complete + semantic timeout |
+| `tests/test_memory_graph_api.py` | PR1a neighbors defaults; PR4 backfill; PR5 sticky after moment_close |
+| `tests/test_memory_edges.py` | PR4 backfill_in_moment writes + idempotent + flag gates |
+| `tests/test_settings.py` | `edge_recalls_inline` default false; `edge_backfill_dev_enabled` default true; wait band |
+| Skill / tools (docs) | `skills/bundled/memory-traverse/SKILL.md` + `tools/bundled/memory_traverse_*` maneuvers / local_map |
+
+Optional live: warm Nemotron path for recalls + semantic start quality (mock proves plumbing). Prefer MM encode smoke ([mm-embed-dogfood.md](mm-embed-dogfood.md)) before rich multi-hop quality claims.
 
 ---
 
-## Sign-off block
+## Sign-off block — edges stack
 
 | Field | Value |
 |-------|--------|
@@ -160,9 +293,32 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 
 ---
 
+## Sign-off block — polish1
+
+| Field | Value |
+|-------|--------|
+| Operator | |
+| Date | |
+| Tip SHA | (`feature/edge-enrichment-polish1` or post-merge tip) |
+| Encoder backend | mock / nemotron |
+| `semantic_wait.max_ms` (dogfood) | e.g. 120000 |
+| Deferred recalls | observed / not observed |
+| local_map | pass / fail / partial |
+| Dev backfill | pass / fail / n/a |
+| Last-session sticky | pass / fail |
+| Skill maneuvers | read / exercised |
+| `durable_edges_enabled` factory | still **false** |
+| Result | pass / fail / partial |
+| Notes | |
+
+**Done for “polish1 green” product claim:** unified wait (120s dogfood OK) + deferred recalls + local_map + backfill + glass sticky + skill boxes checked with notes, or residual filed against polish1 design / edges issues with explicit defer. **Still not** Gate B or factory default-on of `durable_edges_enabled`.
+
+---
+
 ## Related
 
-- [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) — KD-E* + PR0–PR7
+- [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) — KD-E* + PR0–PR8 edges stack
+- [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) — KD-P* + PR0–PR5 polish1 (this checklist extends STATE for PR6)
 - [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) — base 2a walk / Graph glass
 - [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — semantic seeds / MM loop
 - [mm-embed-dogfood.md](mm-embed-dogfood.md) — prefer MM encode smoke before rich multi-hop quality claims
