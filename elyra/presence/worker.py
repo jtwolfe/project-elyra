@@ -3277,6 +3277,11 @@ class PresenceWorker:
         with self._lock:
             self._viewing_dirty = False
 
+    def _set_viewing_dirty(self) -> None:
+        """Tool / host port: mark viewing dirty (KD-V13 force re-outer)."""
+        with self._lock:
+            self._viewing_dirty = True
+
     def _clear_moment_viewing_unlocked(self) -> None:
         """Clear viewing set + dirty. Caller holds ``self._lock``."""
         self._moment_viewing.clear()
@@ -3338,9 +3343,12 @@ class PresenceWorker:
                 # graph_view is a factory (fresh view per call; warm embedder only).
                 "graph_view": self.graph_view,
                 "traversal": self._traversal,
-                # Moment viewing set port (view_media tool in PR3).
+                # Moment viewing set + promote ports (view_media tool).
                 "moment_viewing": self._moment_viewing,
                 "viewing_dirty_ref": lambda: self._viewing_dirty,
+                "set_viewing_dirty": self._set_viewing_dirty,
+                "mark_viewing": self.mark_viewing,
+                "memory_store": self._ensure_memory_store(),
             },
         )
 

@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Sandbox-relative path to ingest and view (e.g. tmp/animal.png)."
+    },
+    "att_id": {
+      "type": "string",
+      "description": "Existing MediaStore attachment id (att_*)."
+    },
+    "url": {
+      "type": "string",
+      "description": "HTTPS URL to fetch into MediaStore and view. Prefer short clips (~10s video). Large/long media may be rejected or truncated with an explicit reason. (URL body fetch may return url_not_yet_wired until wired.)"
+    },
+    "op": {
+      "type": "string",
+      "enum": ["view", "list", "drop", "clear"],
+      "description": "view (default): resolve and add. list: current set. drop: remove one att_id. clear: empty set."
+    },
+    "note": {
+      "type": "string",
+      "description": "Optional short caption used only on first promote of this att_id this moment (not a describe mode)."
+    }
+  },
+  "additionalProperties": false
+}

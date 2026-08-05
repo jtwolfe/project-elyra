@@ -1038,6 +1038,72 @@ def promote_wake_observation(
         return None
 
 
+def _view_idem_key(moment_id: str, media_ids: Sequence[str]) -> str:
+    """Stable first-wins key for a view observation (moment + media fingerprint)."""
+    return f"view:{moment_id}:{_media_fp(media_ids)}"
+
+
+def promote_view_observation(
+    store: MemoryStore | None,
+    moment_id: str,
+    *,
+    media_ids: Sequence[str] = (),
+    note: str | None = None,
+    source_url: str | None = None,
+    settings: MemorySettings | None = None,
+) -> Atom | None:
+    """First-wins observation breadcrumb for ``view_media`` (KD-V11 / KD-V16).
+
+    - Requires non-empty media_ids (optional note caption).
+    - meta.source = ``view_media``, meta.view = true.
+    - **Never** stamps ``wake_message_id`` (KD-V16).
+    - First-wins: same moment + media fingerprint idempotency key → skip.
+    - Returns None on dedupe / empty / write_atoms false / errors (logged).
+    """
+    cfg = _settings_or_default(settings)
+    if store is None or not moment_id or not _write_enabled(cfg):
+        return None
+
+    try:
+        mids = tuple(str(m) for m in (media_ids or ()) if m)
+        if not mids:
+            return None
+        text = (note or "").strip()
+        t_start = utc_now_iso()
+        chash = content_hash(text if text else _media_fp(mids))
+        key = _view_idem_key(moment_id, mids)
+        if _key_seen(store, moment_id, key, None):
+            return None
+
+        meta: dict[str, Any] = {
+            _META_IDEM: key,
+            _META_CONTENT_HASH: chash,
+            _META_MEDIA_FP: _media_fp(mids),
+            "source": "view_media",
+            "view": True,
+        }
+        if source_url:
+            meta["source_url"] = str(source_url)
+
+        return _link_and_put_with_parcels(
+            store,
+            moment_id=moment_id,
+            settings=cfg,
+            kind="observation",
+            raw_text=text,
+            t_start=t_start,
+            media_ids=mids,
+            source_beat_ts=t_start,
+            source_beat_type="view_media",
+            base_meta=meta,
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.exception(
+            "memory promote_view_observation failed moment_id=%s", moment_id
+        )
+        return None
+
+
 __all__ = [
     "CONTROL_OBS_KINDS",
     "LEDGER_TOOL_NAMES",
@@ -1050,5 +1116,6 @@ __all__ = [
     "content_hash",
     "is_control_obs_kind",
     "promote_beat",
+    "promote_view_observation",
     "promote_wake_observation",
 ]
