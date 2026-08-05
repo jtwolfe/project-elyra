@@ -19,6 +19,7 @@ from elyra.media.viewing import (
     list_viewing,
     list_viewing_att_ids,
     viewing_att_dicts,
+    viewing_observability,
 )
 
 FIXTURE_PNG = Path(__file__).parent / "fixtures" / "media" / "1x1.png"
@@ -127,6 +128,32 @@ def test_viewing_att_dicts_resolves_media_store(store):
     assert len(viewing_att_dicts([att.id, att.id], store)) == 1
 
 
+def test_viewing_observability_shape_no_secrets():
+    """PR6: status/meal fields are count + dirty + att_ids only."""
+    empty = viewing_observability(None, dirty=False)
+    assert empty == {
+        "viewing_count": 0,
+        "viewing_dirty": False,
+        "viewing_att_ids": [],
+    }
+    entries: dict[str, ViewingEntry] = {}
+    add_viewing(entries, "att_aaa", kind="image", filename="secret-path.png")
+    add_viewing(entries, "att_bbb", kind="audio")
+    block = viewing_observability(entries, dirty=True)
+    assert block["viewing_count"] == 2
+    assert block["viewing_dirty"] is True
+    assert block["viewing_att_ids"] == ["att_aaa", "att_bbb"]
+    # No filenames / paths / source URLs in the operator block (att_ids only).
+    assert set(block.keys()) == {
+        "viewing_count",
+        "viewing_dirty",
+        "viewing_att_ids",
+    }
+    blob = str(block)
+    assert "secret-path" not in blob
+    assert "filename" not in blob
+
+
 def test_worker_mark_viewing_and_finalize_clear(paths, store):
     """KD-V12: mark_viewing dirties set; finalize clear empties set + dirty."""
     import threading
@@ -171,8 +198,85 @@ def test_worker_mark_viewing_and_finalize_clear(paths, store):
     assert worker._is_viewing_dirty() is True
     assert worker._snapshot_viewing_att_ids() == [att.id]
 
+    # PR6: status_snapshot exposes viewing count / dirty / att_ids (no paths).
+    snap = worker.status_snapshot()
+    viewing = snap["viewing"]
+    assert viewing["viewing_count"] == 1
+    assert viewing["viewing_dirty"] is True
+    assert viewing["viewing_att_ids"] == [att.id]
+    assert "filename" not in viewing
+    assert "path" not in viewing
+
     # Finalize path clears set (caller holds lock in production; use unlocked).
     with worker._lock:
         worker._clear_moment_viewing_unlocked()
     assert worker._snapshot_viewing_att_ids() == []
     assert worker._is_viewing_dirty() is False
+    snap2 = worker.status_snapshot()
+    assert snap2["viewing"]["viewing_count"] == 0
+    assert snap2["viewing"]["viewing_dirty"] is False
+    assert snap2["viewing"]["viewing_att_ids"] == []
+
+
+def test_last_meal_snapshot_includes_viewing_fields(paths, store):
+    """PR6: meal inspect payload carries viewing_count / dirty / att_ids."""
+    import threading
+    from types import SimpleNamespace
+
+    from elyra.llm.client import StubChatClient
+    from elyra.loop.doloop import DoLoopResult
+    from elyra.moment import MomentStore
+    from elyra.presence import TimerService, WakeQueue
+    from elyra.presence.worker import PresenceWorker
+    from elyra.settings import default_settings
+    from elyra.tools import ToolRegistry
+
+    def _stub_loop(**_kwargs):
+        return DoLoopResult(
+            stop_reason="no_tools",
+            hop_count=1,
+            arm_wait=None,
+            spoke=False,
+            moment_id=_kwargs.get("ctx").moment_id if _kwargs.get("ctx") else "",
+            reouter_count=0,
+        )
+
+    worker = PresenceWorker(
+        paths=paths,
+        client=StubChatClient(),
+        stop_event=threading.Event(),
+        poll_seconds=0.05,
+        settings=default_settings(),
+        queue=WakeQueue(paths),
+        timers=TimerService(paths, WakeQueue(paths)),
+        moments=MomentStore(paths),
+        registry=ToolRegistry(),
+        run_do_loop_fn=_stub_loop,
+    )
+    att = store.put_bytes(
+        FIXTURE_PNG.read_bytes(), filename="meal.png", origin="user_upload"
+    )
+    worker.mark_viewing(att.id, kind="image", mime="image/png", filename="meal.png")
+
+    # Minimal MealPackage-like object for inspect serialization.
+    package = SimpleNamespace(
+        open_moment_id="mom_test",
+        total_tokens=0,
+        slid_off_count=0,
+        compact_text=None,
+        channels_present=[],
+        items=[],
+        semantic_omitted_reason=None,
+        semantic_select_meta=None,
+        directed_keep_omitted_reason=None,
+        directed_keep_meta=None,
+        glass_tail_meta=None,
+    )
+    worker._record_last_meal_snapshot(package, source="test")
+    snap = worker.last_meal_snapshot()
+    assert snap is not None
+    assert snap["viewing_count"] == 1
+    assert snap["viewing_dirty"] is True
+    assert snap["viewing_att_ids"] == [att.id]
+    # Redacted: no path/filename secrets in viewing fields.
+    assert "meal.png" not in str(snap.get("viewing_att_ids"))

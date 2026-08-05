@@ -504,9 +504,24 @@ def fetch_url_bytes(
 
     while True:
         if current in seen:
+            safe = redacted_url_for_log(current)
+            _LOG.info("media fetch url_redirect_blocked url=%s detail=loop", safe)
             raise FetchError("url_redirect_blocked", detail="redirect loop")
         seen.add(current)
-        _parsed, allow_ips = _validate_url_target(current, getaddrinfo=getaddrinfo)
+        try:
+            _parsed, allow_ips = _validate_url_target(
+                current, getaddrinfo=getaddrinfo
+            )
+        except FetchError as exc:
+            # SSRF / scheme / DNS — log redacted URL only (no query secrets).
+            safe = redacted_url_for_log(current)
+            _LOG.info(
+                "media fetch %s url=%s detail=%s",
+                exc.reason,
+                safe,
+                (exc.detail or "-")[:120],
+            )
+            raise
         safe = redacted_url_for_log(current)
         connect_ip = allow_ips[0]
 
@@ -627,8 +642,14 @@ def fetch_url_bytes(
                 pass
 
         if not data:
+            _LOG.info("media fetch url_fetch_failed url=%s detail=empty_body", safe)
             raise FetchError("url_fetch_failed", detail="empty_body")
 
+        _LOG.info(
+            "media fetch ok url=%s bytes=%d",
+            redacted_url_for_log(current),
+            len(data),
+        )
         return FetchedBytes(
             data=data,
             filename=fname,
@@ -728,7 +749,7 @@ def fetch_url_to_media(
         return existing
 
     try:
-        return store.put_bytes(
+        att = store.put_bytes(
             fetched.data,
             filename=fetched.filename,
             mime=mime,
@@ -743,6 +764,14 @@ def fetch_url_to_media(
             "url_fetch_failed",
             detail=f"os_error:{type(exc).__name__}",
         ) from exc
+    _LOG.info(
+        "media fetch stored att_id=%s kind=%s bytes=%d url=%s",
+        att.id,
+        att.kind,
+        int(att.byte_size or 0),
+        redacted_url_for_log(url),
+    )
+    return att
 
 
 __all__ = [

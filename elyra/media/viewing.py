@@ -70,6 +70,25 @@ def list_viewing_att_ids(
     return list(entries.keys())
 
 
+def viewing_observability(
+    entries: Mapping[str, ViewingEntry] | None,
+    *,
+    dirty: bool = False,
+) -> dict[str, Any]:
+    """Operator-visible viewing state for ``/api/status`` and meal snapshot.
+
+    Includes count, dirty flag, and durable ``att_*`` ids only — no sandbox
+    paths, source URLs, filenames, or blob bytes (att ids are opaque durable
+    references, not secrets).
+    """
+    ids = list_viewing_att_ids(entries)
+    return {
+        "viewing_count": len(ids),
+        "viewing_dirty": bool(dirty),
+        "viewing_att_ids": list(ids),
+    }
+
+
 def add_viewing(
     entries: MutableMapping[str, ViewingEntry],
     att_id: str,
@@ -304,4 +323,5 @@ __all__ = [
     "list_viewing",
     "list_viewing_att_ids",
     "viewing_att_dicts",
+    "viewing_observability",
 ]

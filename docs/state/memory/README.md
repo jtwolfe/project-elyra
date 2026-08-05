@@ -192,6 +192,8 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-phase-2-rectification.md](../../design/memory/design-phase-2-rectification.md) | **Phase 2 product-path rectification** design + PR-R1–R6 |
 | [design-mm-embed-buildout.md](../../design/memory/design-mm-embed-buildout.md) | **MM semantic loop** (ingest→encode→search→glass) — **Shipped (code)** #124; dogfood open |
 | [mm-embed-dogfood.md](mm-embed-dogfood.md) | **Operator MM dogfood checklist** (unchecked until live sign-off) |
+| [mm-view-dogfood.md](mm-view-dogfood.md) | **Operator view_media + meal rebalance dogfood checklist** (unchecked until live sign-off) |
+| [design-view-media-meal-rebalance.md](../../design/memory/design-view-media-meal-rebalance.md) | **view_media + Completions expand + outer meal rebalance** design (PR0–PR6) |
 | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped + rectified + MM loop: structure ↔ essay, activities, invariants) |
 | [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) | Phase 2a intent sketch (points at implementation + architecture) |
 | [design-phase-2a-implementation.md](../../design/memory/design-phase-2a-implementation.md) | **Normative** Phase 2a implementation design + PR-A1–A6 |

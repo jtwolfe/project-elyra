@@ -1227,6 +1227,9 @@ class PresenceWorker:
                 "meal_budget": meal_budget_block,
                 "context": context_block,
                 "memory": self._memory_status_block(),
+                # Moment viewing set (KD-V4 / PR6 observability).
+                # att_ids only — no paths/URLs/filenames.
+                "viewing": self._viewing_status_block_unlocked(),
             }
 
     # ------------------------------------------------------------------
@@ -1759,6 +1762,8 @@ class PresenceWorker:
                 recorded_at=utc_now_iso(),
             )
             with self._lock:
+                # Viewing observability (PR6): count / dirty / att_ids only.
+                payload.update(self._viewing_status_block_unlocked())
                 self._last_meal_snapshot = payload
         except Exception:  # noqa: BLE001 — never break rebuild for glass
             _LOG.exception("record last meal snapshot failed")
@@ -3277,6 +3282,15 @@ class PresenceWorker:
         """Shallow copy of viewing entries (duration_s etc.) for expand."""
         with self._lock:
             return dict(self._moment_viewing)
+
+    def _viewing_status_block_unlocked(self) -> dict[str, Any]:
+        """Operator viewing fields. Caller holds ``self._lock`` (or single-thread)."""
+        from elyra.media.viewing import viewing_observability
+
+        return viewing_observability(
+            self._moment_viewing,
+            dirty=bool(self._viewing_dirty),
+        )
 
     def _is_viewing_dirty(self) -> bool:
         with self._lock:

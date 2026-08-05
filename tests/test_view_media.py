@@ -709,14 +709,16 @@ def test_promote_skipped_without_memory_store(
 
 
 # ---------------------------------------------------------------------------
-# Modality honesty (AV inventory until PR4)
+# Modality honesty (image + AV when ELYRA_AV_EXPAND on)
 # ---------------------------------------------------------------------------
 
 
-def test_audio_perception_false_soft_warnings(
+def test_audio_perception_true_when_av_expand_on(
     ctx: ToolContext,
     media: MediaStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("ELYRA_AV_EXPAND", raising=False)
     data = FIXTURE_WAV.read_bytes() if FIXTURE_WAV.is_file() else b"RIFF....WAVEfmt "
     att = media.put_bytes(
         data,
@@ -728,11 +730,36 @@ def test_audio_perception_false_soft_warnings(
     result = view_media({"att_id": att.id}, ctx)
     assert result.ok is True
     assert result.payload["kind"] == "audio"
+    assert result.payload["presentation"] == "input_audio"
+    assert result.payload["perception"] is True
+    assert "skip_reason" not in result.payload
+    assert result.payload.get("soft_warnings")
+    assert any(
+        "audio" in w.lower() or "short" in w.lower()
+        for w in result.payload["soft_warnings"]
+    )
+
+
+def test_audio_perception_false_when_av_expand_off(
+    ctx: ToolContext,
+    media: MediaStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ELYRA_AV_EXPAND", "0")
+    data = FIXTURE_WAV.read_bytes() if FIXTURE_WAV.is_file() else b"RIFF....WAVEfmt "
+    att = media.put_bytes(
+        data,
+        filename="clip.wav",
+        mime="audio/wav",
+        kind="audio",
+        origin="tool",
+    )
+    result = view_media({"att_id": att.id}, ctx)
+    assert result.ok is True
     assert result.payload["presentation"] == "inventory"
     assert result.payload["perception"] is False
-    assert result.payload.get("skip_reason") == "av_expand_not_yet_wired"
+    assert result.payload.get("skip_reason") == "av_expand_disabled"
     assert result.payload.get("soft_warnings")
-    assert any("audio" in w.lower() or "short" in w.lower() for w in result.payload["soft_warnings"])
 
 
 def test_image_perception_true(ctx: ToolContext, media: MediaStore) -> None:

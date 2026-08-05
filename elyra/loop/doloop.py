@@ -1055,6 +1055,10 @@ def _run_loop_body(
                 viewing_dirty = False
             if viewing_dirty:
                 try:
+                    _LOG.info(
+                        "viewing dirty: force rebuild_outer moment_id=%s",
+                        moment_id,
+                    )
                     state.outer_prefix = list(rebuild_outer())
                     state.reouter_count += 1
                     if clear_viewing_dirty_fn is not None:

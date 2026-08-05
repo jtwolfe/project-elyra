@@ -520,6 +520,14 @@ def _av_skip_notice(
     detail: str = "",
 ) -> str:
     """Fail-closed host notice when an AV item is not put on the wire."""
+    # Operator log: skip_reason only (att_id is durable id, not a secret).
+    _LOG.info(
+        "media expand skip kind=%s att_id=%s reason=%s detail=%s",
+        kind,
+        att_id,
+        reason,
+        detail or "-",
+    )
     base = f"[host notice: {kind} expand skipped for {att_id}: {reason}"
     if detail:
         return f"{base} ({detail})]"
@@ -1457,6 +1465,25 @@ def expand_meal_for_provider(
             new_msg["content"] = text
 
         out.append(new_msg)
+
+    # Expand summary for operators (no base64 / paths / URL query secrets).
+    n_img = sum(len(v) for v in image_parts_by_row.values())
+    n_aud = sum(len(v) for v in audio_parts_by_row.values())
+    n_vid = sum(len(v) for v in video_parts_by_row.values())
+    n_skip = sum(len(v) for v in av_notices_by_row.values())
+    if n_img or n_aud or n_vid or n_skip or viewing_ids or full_expand_ids:
+        _LOG.info(
+            "media expand provider=%s viewing=%d images=%d audio=%d video=%d "
+            "av_skips=%d vision_ok=%s av_ok=%s",
+            provider,
+            len(viewing_ids),
+            n_img,
+            n_aud,
+            n_vid,
+            n_skip,
+            vision_ok,
+            av_ok,
+        )
 
     return out
 

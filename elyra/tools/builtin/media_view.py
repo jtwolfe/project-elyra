@@ -2,8 +2,8 @@
 
 Scope: resolve path|att_id|url into MediaStore, add to moment viewing set,
 first-wins promote with media_ids (no wake_message_id), list/drop/clear ops.
-URL fetch is SSRF-aware (KD-V18). AV Completions parts may still be inventory
-until PR4 wire builders ship (perception honesty fail-closed for audio/video).
+URL fetch is SSRF-aware (KD-V18). Image + AV Completions perception when
+provider/env gates allow (PR2 image; PR4 AV wire; tool honesty matches env).
 
 KD-V1, V11, V13–V16, V18. Tool results stay text-only JSON (KD-V9).
 """
@@ -58,9 +58,6 @@ _SOFT_LARGE_WARN = (
 _SOFT_URL_WARN = (
     "Large downloads cost time and tokens; prefer sandbox paths when already local."
 )
-
-# Image Completions expand is live (PR2). AV wire parts land in PR4.
-_AV_EXPAND_WIRED = False
 
 # Soft multi-source miss reasons (KD-V14: if only one resolves → use it).
 _SOFT_MISS_REASONS = frozenset({"not_found", "unsupported_kind"})
@@ -162,10 +159,28 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             ctx=ctx,
         )
     except IngestError as exc:
+        _LOG.info(
+            "view_media resolve_failed reason=%s source=path/att detail=%s",
+            exc.reason,
+            (exc.detail or "-")[:120],
+        )
         return _err(exc.reason, detail=exc.detail)
     except FetchError as exc:
+        # Redacted URL only — never log query/fragment secrets.
+        safe = redacted_source_url(url) if url else "-"
+        _LOG.info(
+            "view_media fetch_failed reason=%s url=%s detail=%s",
+            exc.reason,
+            safe or "-",
+            (exc.detail or "-")[:120],
+        )
         return _err(exc.reason, detail=exc.detail)
     except _ViewResolveError as exc:
+        _LOG.info(
+            "view_media resolve_failed reason=%s detail=%s",
+            exc.reason,
+            (exc.detail or "-")[:120],
+        )
         return _err(exc.reason, detail=exc.detail, **exc.extra)
 
     # Membership + dirty (always on successful view, including re-view).
@@ -204,8 +219,8 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         payload["skip_reason"] = skip_reason
         payload["notice"] = (
             f"Media stored and in viewing set; Completions expand is inventory-only "
-            f"for this item ({skip_reason}). Image wire is live; audio/video wire "
-            f"ships in a follow-on PR."
+            f"for this item ({skip_reason}). Provider/env gates and duration/size "
+            f"caps apply on the next hop."
         )
     if soft_warnings:
         payload["soft_warnings"] = soft_warnings
@@ -213,6 +228,17 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         payload["view_note"] = note
     if source_url:
         payload["source_url"] = source_url
+    _LOG.info(
+        "view_media op=view att_id=%s kind=%s source=%s perception=%s "
+        "skip_reason=%s viewing_count=%d promoted=%s",
+        att.id,
+        att.kind,
+        source_label,
+        perception,
+        skip_reason or "-",
+        int(payload.get("viewing_count") or 0),
+        promoted,
+    )
     return _ok(payload)
 
 
@@ -637,20 +663,32 @@ def _list_payload(entries: dict[str, Any]) -> dict[str, Any]:
 def _presentation_for(kind: str) -> tuple[str, bool, str | None]:
     """Return (presentation, perception, skip_reason).
 
-    Image wire expand is live. Audio/video Completions parts are PR4 — do not
-    claim perception:true until those builders ship.
+    Image wire expand is live (PR2). Audio/video Completions parts are live
+    when ``ELYRA_AV_EXPAND`` is on (PR4 default). Tool cannot know the live
+    provider; reports wire-ready when media+AV env gates allow. Per-item
+    duration/size caps still fail-closed on expand with skip notices.
     """
     k = (kind or "").lower()
     if k == "image":
         return "image_url", True, None
     if k in ("audio", "video"):
-        if _AV_EXPAND_WIRED:
-            # Reserved for PR4 flip; keep branch for honesty continuity.
-            pres = "input_audio" if k == "audio" else "input_video"
-            return pres, True, None
-        return "inventory", False, "av_expand_not_yet_wired"
+        if not _media_enabled():
+            return "inventory", False, "media_disabled"
+        if not _av_expand_env_enabled():
+            return "inventory", False, "av_expand_disabled"
+        # Match prompt.py wire part type names.
+        pres = "input_audio" if k == "audio" else "video_url"
+        return pres, True, None
     # file / unknown — inventory only on expand
     return "inventory", False, "unsupported_kind_for_vision"
+
+
+def _av_expand_env_enabled() -> bool:
+    """``ELYRA_AV_EXPAND`` default-on (matches ``prompt._env_flag_enabled``)."""
+    raw = os.environ.get("ELYRA_AV_EXPAND")
+    if raw is None or raw == "":
+        return True
+    return raw.strip() not in ("0", "false", "False", "no", "NO")
 
 
 def _soft_warnings(
