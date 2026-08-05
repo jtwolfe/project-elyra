@@ -36,6 +36,7 @@ from elyra.memory.config import (
     MEMORY_EMBED_BACKENDS,
     MEMORY_EMBED_DEVICES,
     MEMORY_SEARCH_CHANNELS,
+    TRAVERSE_DUAL_START_N_MAX,
     TRAVERSE_EXPAND_MAX_MS_MAX,
     TRAVERSE_FRONTIER_MAX_MAX,
     TRAVERSE_INSPECT_CHARS_PER_ID_MAX,
@@ -52,6 +53,7 @@ from elyra.memory.config import (
     TRAVERSE_PREVIEW_CHARS_MAX,
     TRAVERSE_SAME_MOMENT_K_MAX,
     TRAVERSE_SCRATCHPAD_CHARS_MAX,
+    TRAVERSE_SEED_MODES,
     TRAVERSE_SEMANTIC_K_MAX,
     TRAVERSE_SESSION_TTL_S_MAX,
     MemorySettings,
@@ -583,6 +585,7 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.traverse_semantic_k": TRAVERSE_SEMANTIC_K_MAX,
             "memory.traverse_parcel_child_cap": TRAVERSE_PARCEL_CHILD_CAP_MAX,
             "memory.traverse_same_moment_k": TRAVERSE_SAME_MOMENT_K_MAX,
+            "memory.traverse_dual_start_n": TRAVERSE_DUAL_START_N_MAX,
         }
         if path in _traverse_int_caps:
             hi = _traverse_int_caps[path]
@@ -590,6 +593,14 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
                 raise ValueError(
                     f"{path}: expected int in [0, {hi}], got {coerced!r}"
                 )
+        if path == "memory.traverse_default_seed_mode":
+            mode = str(coerced).strip().lower()
+            if mode not in TRAVERSE_SEED_MODES:
+                raise ValueError(
+                    f"{path}: expected one of {sorted(TRAVERSE_SEED_MODES)}, "
+                    f"got {coerced!r}"
+                )
+            coerced = mode
         # Durable EdgeStore budgets (design-memory-edges-and-traversal §7).
         _edge_int_caps = {
             "memory.edge_max_per_atom": EDGE_MAX_PER_ATOM_MAX,

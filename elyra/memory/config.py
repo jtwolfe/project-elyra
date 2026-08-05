@@ -93,6 +93,11 @@ TRAVERSE_SCRATCHPAD_CHARS_MAX = 400
 TRAVERSE_SEMANTIC_K_MAX = 16
 TRAVERSE_PARCEL_CHILD_CAP_MAX = 128
 TRAVERSE_SAME_MOMENT_K_MAX = 16
+# PR5 dual temporal anchors reserved before semantic fill (#105 seed half).
+TRAVERSE_DUAL_START_N_MAX = 4
+TRAVERSE_SEED_MODES = frozenset(
+    {"auto", "semantic_only", "temporal_only", "temporal", "explicit_only"}
+)
 
 
 def clamp_semantic_wait_max_ms(value: float | int) -> int:
@@ -276,8 +281,8 @@ class MemorySettings:
 
     # Per-step expand compute (NOT multi-hop session wall-clock — KD-A18).
     traverse_expand_max_ms: int = 80  # soft wall for neighbors / seed_from_text
-    # Start seed_from_text budget; 0 = same as traverse_expand_max_ms.
-    traverse_start_expand_max_ms: int = 0
+    # Start seed_from_query budget (PR5 / #103); 0 = same as traverse_expand_max_ms.
+    traverse_start_expand_max_ms: int = 250
     traverse_parcel_child_cap: int = 32  # parent_of reverse chain / moment cap
     traverse_same_moment_k: int = 4  # OQ-A4 same_moment soft edge cap
     traverse_semantic_k: int = 8  # semantic_hop / seed_from_text top-k
@@ -289,12 +294,21 @@ class MemorySettings:
     traverse_max_depth: int = 3
     traverse_max_nodes: int = 48
     traverse_max_steps: int = 8
-    traverse_max_seeds: int = 8
+    # PR5: dual reserve + semantic top (#105 seed half); hard max still 16.
+    traverse_max_seeds: int = 10
     traverse_frontier_max: int = 16
     traverse_max_expand_per_step: int = 3
     traverse_keep_max: int = 16
     traverse_keep_adjacent: bool = True  # finish: sequential ±1 if slots remain
     traverse_session_ttl_s: int = 900  # idle TTL for active only (KD-A18)
+
+    # Pure semantic start + dual temporal anchors (PR5 / #103 / #105 seed).
+    # dual_start reserves N temporal slots BEFORE semantic fill so anchors
+    # are not starved when ANN returns a full semantic top-k.
+    traverse_dual_start: bool = True
+    traverse_dual_start_n: int = 2
+    # auto | semantic_only | temporal_only | explicit_only ("temporal" alias).
+    traverse_default_seed_mode: str = "auto"
 
     # Thin surface / inspect caps (KD-A17).
     traverse_label_chars: int = 80
@@ -408,6 +422,7 @@ __all__ = [
     "SEMANTIC_WAIT_MAX_MS_DEFAULT",
     "SEMANTIC_WAIT_MAX_MS_MAX",
     "SEMANTIC_WAIT_MAX_MS_MIN",
+    "TRAVERSE_DUAL_START_N_MAX",
     "TRAVERSE_EXPAND_MAX_MS_MAX",
     "TRAVERSE_FRONTIER_MAX_MAX",
     "TRAVERSE_INSPECT_CHARS_PER_ID_MAX",
@@ -424,6 +439,7 @@ __all__ = [
     "TRAVERSE_PREVIEW_CHARS_MAX",
     "TRAVERSE_SAME_MOMENT_K_MAX",
     "TRAVERSE_SCRATCHPAD_CHARS_MAX",
+    "TRAVERSE_SEED_MODES",
     "TRAVERSE_SEMANTIC_K_MAX",
     "TRAVERSE_SESSION_TTL_S_MAX",
     "MemorySettings",

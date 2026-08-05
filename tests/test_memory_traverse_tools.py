@@ -187,6 +187,11 @@ def test_skill_catalog_has_memory_traverse(paths):
     assert "inspect" in meta.body.lower()
     assert "compose_meal" in meta.body or "next" in meta.body.lower()
     assert "KD-A16" in meta.body or "meal" in meta.body.lower()
+    # PR5: default auto + semantic_only nudge for focused goals.
+    body = meta.body.lower()
+    assert "semantic_only" in body
+    assert "auto" in body
+    assert "focused" in body or "know what" in body
 
 
 # ── Fail closed ─────────────────────────────────────────────────────────────
@@ -540,6 +545,70 @@ def test_start_seed_from_text_mock_warm(paths, store):
     assert a1.atom_id in seed_ids or "semantic" in reasons or start.payload[
         "considered_count"
     ] >= 1
+    # PR5 payload honesty.
+    assert start.payload.get("seed_mode") == "auto"
+    assert "seed_sources" in start.payload
+    assert "dual_n" in start.payload
+
+
+def test_tool_seed_mode_semantic_only_cold(paths, store):
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    _chain(store, 3)
+    mem = _enabled_settings()
+    reg = TraversalRegistry(settings=mem)
+
+    def factory() -> GraphView:
+        return GraphView(
+            store,
+            index=MemoryEmbeddingIndex(store=store),
+            embedder=None,
+            settings=mem,
+            now="2026-07-28T10:05:00Z",
+        )
+
+    full = replace(default_settings(), memory=mem)
+    ctx = ToolContext(
+        paths=paths,
+        settings=full,
+        moment_id="m1",
+        extras={"traversal": reg, "graph_view": factory},
+    )
+    start = memory_traverse_start(
+        {
+            "goal": "focused look for X",
+            "seed_query": "focused look for X",
+            "seed_mode": "semantic_only",
+        },
+        ctx,
+    )
+    assert start.ok is True
+    assert start.payload.get("seed_mode") == "semantic_only"
+    assert (start.payload.get("seed_ids") or []) == []
+    assert (start.payload.get("seed_sources") or {}).get("temporal", 0) == 0
+    assert (
+        start.payload.get("semantic_reason") == "encoder_cold"
+        or "encoder_cold" in (start.payload.get("seed_reasons") or [])
+    )
+
+
+def test_tool_invalid_seed_mode(paths, store):
+    ctx = _ctx(paths, store=store)
+    r = memory_traverse_start({"goal": "g", "seed_mode": "not_a_mode"}, ctx)
+    assert r.ok is False
+    assert r.error_reason == ERROR_INVALID_ARGS
+
+
+def test_tool_schema_has_seed_mode_and_media(paths):
+    from elyra.tools.schema import load_schema_json
+    from elyra.tools.policy import resolve_bundled_tools_root as _root
+
+    root = _root()
+    schema = load_schema_json(root / "memory_traverse_start")
+    props = schema.get("properties") or {}
+    assert "seed_mode" in props
+    assert "seed_media_ids" in props
+    assert "seed_atom_ids" in props
 
 
 def test_registry_execute_start_via_bundled(paths, store):

@@ -1714,6 +1714,7 @@ class PresenceWorker:
         Structural walks work without index/embedder; semantic hops require
         a non-null index and already-warm embedder (GraphView policy).
         Injects EdgeStore when open so durable kinds union into neighbors.
+        Injects MediaStore for multimodal ``seed_from_query`` (PR5).
         """
         store = self._ensure_memory_store()
         if store is None:
@@ -1727,12 +1728,20 @@ class PresenceWorker:
             # Consumer gated handle only (KD-E5); never cold-load for graph.
             embedder = self._ensure_embedder(role="consumer")
             edge_store = self._ensure_edge_store()
+            media_store = None
+            try:
+                from elyra.media.store import MediaStore
+
+                media_store = MediaStore(self.paths)
+            except Exception:  # noqa: BLE001 — media optional for graph
+                _LOG.debug("MediaStore open failed for graph_view", exc_info=True)
             return GraphView(
                 store,
                 index=index,
                 embedder=embedder,
                 settings=mem_cfg,
                 edge_store=edge_store,
+                media_store=media_store,
             )
         except Exception:  # noqa: BLE001 — fail closed for tools/glass
             _LOG.exception("graph_view factory failed")

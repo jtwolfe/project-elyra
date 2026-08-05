@@ -29,14 +29,31 @@ channel. Temporary until `finish` — never invent atom bodies or keep blind ids
 After this playbook loads, your **next** completion must include a `tool_calls` entry.
 Do not answer with free-text only.
 
-1. **`memory_traverse_start`** with a short `goal` (+ optional `seed_query` / `seed_atom_ids`)
+1. **`memory_traverse_start`** with a short `goal` (+ optional `seed_query` /
+   `seed_atom_ids` / `seed_media_ids` / `seed_mode`)
 2. On `traverse_disabled` / `traverse_unavailable` → honest stop (ledger / speak); no invent
 3. Else continue the loop below
+
+### Seed mode (product default **`auto`**)
+
+| Mode | When |
+|------|------|
+| **`auto`** (default) | Open-ended digs; dual temporal anchors attach when semantic hits so the walk is not only ANN |
+| **`semantic_only`** | **Prefer when you already know what you are looking for** (focused traversal / named topic) — pure semantic start; empty frontier is OK if cold/no hits |
+| `temporal_only` | Recent strip only (no ANN) |
+| `explicit_only` | Only the atom ids you already have |
+
+Do **not** wait for meal semantic timeout before choosing `semantic_only` — if the
+goal is already focused, start pure semantic immediately.
+
+Dual-start honesty: under `auto`, up to `dual_n` (default 2) temporal anchors are
+**reserved** before semantic fill so recent context is not starved by a full ANN top-k.
+Cold encoder → `encoder_cold` (no torch load on start); structural/explicit still work.
 
 ## Loop
 
 ```text
-memory_traverse_start(goal, seed_query?)
+memory_traverse_start(goal, seed_query?, seed_mode?, seed_media_ids?)
   → read frontier (label ≤80, preview ≤400 on seeds / new expands)
   → memory_traverse_inspect(atom_ids) when label/preview insufficient for keep
   → memory_traverse_step(expand_ids, keep_ids?, scratchpad?)
@@ -54,6 +71,8 @@ memory_traverse_start(goal, seed_query?)
 4. **No full meal rewrite mid-walk.** Tools return a thin surface only.
 5. Prefer **few good expands** over thrashing steps. Respect budget remaining.
 6. **Fail closed:** never invent atom content on `atom_not_found`, empty seeds, or errors.
+7. Moment co-members appear via normal **step expand** (in_moment hub rewrite) —
+   no separate expand_moment tool required.
 
 ## Stop conditions
 
@@ -79,7 +98,7 @@ is already packed into this hop's outer package.
 
 | Tool | Role |
 |------|------|
-| `memory_traverse_start` | Create session; seed explicit / semantic / temporal |
+| `memory_traverse_start` | Create session; seed explicit / semantic / dual-temporal |
 | `memory_traverse_step` | Expand frontier nodes; provisional keep; scratchpad |
 | `memory_traverse_inspect` | Capped body slices before keep |
 | `memory_traverse_finish` | Confirm keep-set + walk summary; sticky snapshots |
@@ -93,8 +112,9 @@ is already packed into this hop's outer package.
 | `traverse_unavailable` | Stop; host wiring missing — note for operator |
 | `no_active_session` | Call `start` first (or finish already happened) |
 | `atom_not_found` | Drop that id; re-inspect only known considered ids |
-| `expand_truncated` / cold encoder | Structural path may still work; do not thrash semantic |
+| `expand_truncated` / `encoder_cold` | Structural path may still work; do not thrash semantic |
 | empty seeds + thin frontier | Abandon or finish with honest empty keep |
+| `semantic_only` + empty | Expected when cold/no hits — abandon honestly |
 
 ## Quality / completion
 

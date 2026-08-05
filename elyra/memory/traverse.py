@@ -53,11 +53,12 @@ ERROR_NOT_CONSIDERED = "not_in_considered"
 _DEFAULT_MAX_DEPTH = 3
 _DEFAULT_MAX_NODES = 48
 _DEFAULT_MAX_STEPS = 8
-_DEFAULT_MAX_SEEDS = 8
+_DEFAULT_MAX_SEEDS = 10  # PR5 dual reserve + semantic top
 _DEFAULT_FRONTIER_MAX = 16
 _DEFAULT_EXPAND_PER_STEP = 3
 _DEFAULT_KEEP_MAX = 16
 _DEFAULT_EXPAND_MS = 80
+_DEFAULT_START_EXPAND_MS = 250  # PR5 / #103 warm semantic start headroom
 _DEFAULT_LABEL_CHARS = 80
 _DEFAULT_PREVIEW_CHARS = 400
 _DEFAULT_INSPECT_CHARS = 800
@@ -66,6 +67,10 @@ _DEFAULT_INSPECT_MAX_TOTAL = 2400
 _DEFAULT_SCRATCHPAD = 200
 _DEFAULT_TTL_S = 900
 _DEFAULT_NEIGHBOR_K = 12
+_DEFAULT_DUAL_START_N = 2
+_SEED_MODES = frozenset(
+    {"auto", "semantic_only", "temporal_only", "temporal", "explicit_only"}
+)
 
 
 def _new_session_id() -> str:
@@ -735,6 +740,8 @@ class TraversalRegistry:
         goal: str,
         seed_query: str | None = None,
         seed_atom_ids: Sequence[str] | None = None,
+        seed_media_ids: Sequence[str] | None = None,
+        seed_mode: str | None = None,
         moment_id: str | None = None,
         budget_overrides: Mapping[str, int] | None = None,
     ) -> dict[str, Any]:
@@ -742,6 +749,17 @@ class TraversalRegistry:
 
         Retains ``last_confirmed_keep`` and ``last_session`` (KD-A9 / KD-A19).
         Flags-off → ``error_reason=traverse_disabled`` without mutating sticky.
+
+        **Seed modes (PR5 / #103 / #105 seed half):**
+        - ``auto`` (default): semantic with dual temporal slot reserve; strip
+          fill when semantic empty.
+        - ``semantic_only``: pure semantic (text and/or media); never temporal.
+        - ``temporal_only`` (alias ``temporal``): temporal strip only.
+        - ``explicit_only``: only ``seed_atom_ids``; no semantic/temporal fill.
+
+        Dual start reserves ``dual_n`` slots **before** semantic fill so
+        temporal anchors are not starved when ANN returns a full top-k.
+        Start never cold-loads the encoder (GraphView ``encoder_cold`` honesty).
         """
         if not self.enabled():
             return {
@@ -764,10 +782,28 @@ class TraversalRegistry:
         max_steps = _int_cfg(cfg, "traverse_max_steps", _DEFAULT_MAX_STEPS)
         max_keep = _int_cfg(cfg, "traverse_keep_max", _DEFAULT_KEEP_MAX)
         expand_ms = _int_cfg(cfg, "traverse_expand_max_ms", _DEFAULT_EXPAND_MS)
-        start_ms = _int_cfg(cfg, "traverse_start_expand_max_ms", 0)
+        start_ms = _int_cfg(
+            cfg, "traverse_start_expand_max_ms", _DEFAULT_START_EXPAND_MS
+        )
         if start_ms <= 0:
             start_ms = expand_ms
         frontier_max = _int_cfg(cfg, "traverse_frontier_max", _DEFAULT_FRONTIER_MAX)
+
+        # Normalize seed_mode.
+        raw_mode = (
+            seed_mode
+            if seed_mode is not None
+            else getattr(cfg, "traverse_default_seed_mode", None)
+        )
+        mode = str(raw_mode or "auto").strip().lower() or "auto"
+        if mode not in _SEED_MODES:
+            mode = "auto"
+        if mode == "temporal":
+            mode = "temporal_only"
+
+        dual_enabled = _bool_cfg(cfg, "traverse_dual_start", True)
+        dual_n_cfg = _int_cfg(cfg, "traverse_dual_start_n", _DEFAULT_DUAL_START_N)
+        dual_n = max(0, min(4, dual_n_cfg)) if dual_enabled and mode == "auto" else 0
 
         if budget_overrides:
             max_steps = min(max_steps, max(0, int(budget_overrides.get("max_steps", max_steps))))
@@ -801,124 +837,162 @@ class TraversalRegistry:
         store = graph._store  # noqa: SLF001 — same process GraphView
         seed_order: list[str] = []
         seed_reason_tags: list[str] = []
+        seed_sources = {"explicit": 0, "semantic": 0, "temporal": 0}
         expand_truncated = False
         expand_ms_spent = 0
+        semantic_reason: str | None = None
+        semantic_hits = 0
 
-        # 1) Explicit seeds (point lookups — free of expand_ms).
-        for raw in seed_atom_ids or ():
+        def _add_seed(
+            aid: str,
+            atom: Atom,
+            *,
+            source: str,
+            via_edge_kind: str | None,
+            via_reason: str,
+            weight: float,
+        ) -> bool:
             if len(seed_order) >= max_seeds:
-                break
-            aid = str(raw)
+                return False
             if aid in session.considered:
-                continue
-            atom = store.get_atom(aid)
-            if atom is None:
-                continue
+                return False
             self._add_considered(
                 session,
                 store,
                 atom,
-                via_edge_kind=None,
-                via_reason="seed:explicit",
+                via_edge_kind=via_edge_kind,
+                via_reason=via_reason,
                 depth=0,
-                weight=1.0,
+                weight=float(weight),
                 parent_id=None,
                 label_n=label_n,
                 preview_n=preview_n,
             )
             seed_order.append(aid)
-            if "explicit" not in seed_reason_tags:
-                seed_reason_tags.append("explicit")
+            seed_sources[source] = seed_sources.get(source, 0) + 1
+            if source not in seed_reason_tags:
+                seed_reason_tags.append(source)
+            return True
 
-        # 2) Semantic seed_from_text under start expand_ms.
-        q = (seed_query if seed_query is not None else session.goal).strip()
-        if q and len(seed_order) < max_seeds:
-            t0 = _now_ms()
-            room = max_seeds - len(seed_order)
-            hits = graph.seed_from_text(
-                q,
-                k=room,
-                exclude_moment_id=moment_id,
-                expand_deadline_ms=start_ms,
+        # 1) Explicit seeds (point lookups — free of expand_ms; free of dual reserve).
+        for raw in seed_atom_ids or ():
+            if len(seed_order) >= max_seeds:
+                break
+            aid = str(raw)
+            atom = store.get_atom(aid)
+            if atom is None:
+                continue
+            _add_seed(
+                aid,
+                atom,
+                source="explicit",
+                via_edge_kind=None,
+                via_reason="seed:explicit",
+                weight=1.0,
             )
-            expand_ms_spent = int(_now_ms() - t0)
-            meta = graph.last_expand_meta
-            if meta.get("expand_truncated"):
-                expand_truncated = True
-            sem_reason = meta.get("semantic_reason")
-            if hits:
-                if "semantic" not in seed_reason_tags:
-                    seed_reason_tags.append("semantic")
-            elif sem_reason:
-                # Surface empty reasons without failing start.
-                tag = str(sem_reason)
-                if tag not in seed_reason_tags:
-                    seed_reason_tags.append(tag)
-            if expand_truncated and "expand_truncated" not in seed_reason_tags:
-                seed_reason_tags.append("expand_truncated")
-            for aid, score, reason in hits:
-                if len(seed_order) >= max_seeds:
-                    break
-                if aid in session.considered:
-                    continue
-                atom = store.get_atom(aid)
-                if atom is None:
-                    continue
-                self._add_considered(
-                    session,
-                    store,
-                    atom,
-                    via_edge_kind="semantic_hop",
-                    via_reason=reason,
-                    depth=0,
-                    weight=float(score),
-                    parent_id=None,
-                    label_n=label_n,
-                    preview_n=preview_n,
-                )
-                seed_order.append(aid)
 
-        # 3) Temporal seeds free (not under expand_ms).
-        if len(seed_order) < max_seeds:
+        # 2) Semantic seed_from_query under start expand_ms (room after dual reserve).
+        want_semantic = mode in ("auto", "semantic_only")
+        media_list = [str(m) for m in (seed_media_ids or ()) if str(m).strip()]
+        q = ""
+        if seed_query is not None:
+            q = str(seed_query).strip()
+        elif want_semantic:
+            q = session.goal.strip()
+
+        if want_semantic and (q or media_list) and len(seed_order) < max_seeds:
+            # RESERVE dual_n slots so temporal anchors cannot be starved.
+            semantic_room = max_seeds - len(seed_order) - dual_n
+            if semantic_room > 0:
+                t0 = _now_ms()
+                hits = graph.seed_from_query(
+                    q or None,
+                    media_ids=media_list or None,
+                    k=semantic_room,
+                    exclude_moment_id=moment_id,
+                    expand_deadline_ms=start_ms,
+                )
+                expand_ms_spent = int(_now_ms() - t0)
+                meta = graph.last_expand_meta
+                if meta.get("expand_truncated"):
+                    expand_truncated = True
+                sem_reason = meta.get("semantic_reason")
+                if sem_reason:
+                    semantic_reason = str(sem_reason)
+                # Ceiling leaves dual_n slots empty for temporal anchors.
+                semantic_ceiling = max_seeds - dual_n
+                if hits:
+                    for aid, score, reason in hits:
+                        if len(seed_order) >= semantic_ceiling:
+                            break
+                        if seed_sources["semantic"] >= semantic_room:
+                            break
+                        atom = store.get_atom(aid)
+                        if atom is None:
+                            continue
+                        if _add_seed(
+                            aid,
+                            atom,
+                            source="semantic",
+                            via_edge_kind="semantic_hop",
+                            via_reason=reason,
+                            weight=float(score),
+                        ):
+                            semantic_hits += 1
+                elif semantic_reason:
+                    if semantic_reason not in seed_reason_tags:
+                        seed_reason_tags.append(semantic_reason)
+                if expand_truncated and "expand_truncated" not in seed_reason_tags:
+                    seed_reason_tags.append("expand_truncated")
+
+        # 3) Temporal: dual anchors when semantic non-empty; strip fill when empty.
+        def _fill_temporal(*, cap: int) -> int:
+            if cap <= 0 or len(seed_order) >= max_seeds:
+                return 0
             around = seed_order[0] if seed_order else None
             if around is None:
-                # Open-moment tail / global tail anchor.
                 if moment_id:
                     tail = store.moment_tail(moment_id)
                 else:
                     tail = store.global_tail()
                 around = tail.atom_id if tail is not None else None
-            room = max_seeds - len(seed_order)
             temporal = graph.seed_temporal(
                 around_atom_id=around,
                 moment_id=moment_id,
-                k=room + len(seed_order),  # room after exclude already-seen
+                k=cap + len(seed_order),
             )
-            added_temporal = False
+            added = 0
             for aid, score, reason in temporal:
-                if len(seed_order) >= max_seeds:
+                if added >= cap or len(seed_order) >= max_seeds:
                     break
-                if aid in session.considered:
-                    continue
                 atom = store.get_atom(aid)
                 if atom is None:
                     continue
-                self._add_considered(
-                    session,
-                    store,
+                if _add_seed(
+                    aid,
                     atom,
+                    source="temporal",
                     via_edge_kind=None,
                     via_reason=reason,
-                    depth=0,
                     weight=float(score),
-                    parent_id=None,
-                    label_n=label_n,
-                    preview_n=preview_n,
-                )
-                seed_order.append(aid)
-                added_temporal = True
-            if added_temporal and "temporal" not in seed_reason_tags:
-                seed_reason_tags.append("temporal")
+                ):
+                    added += 1
+            return added
+
+        if mode == "semantic_only":
+            # Pure semantic — empty frontier is OK (never temporal fill).
+            pass
+        elif mode == "explicit_only":
+            pass
+        elif mode == "temporal_only":
+            _fill_temporal(cap=max_seeds - len(seed_order))
+        elif mode == "auto":
+            if dual_n > 0 and semantic_hits >= 1:
+                # Reserved dual temporal anchors (not full strip).
+                _fill_temporal(cap=min(dual_n, max_seeds - len(seed_order)))
+            elif semantic_hits == 0:
+                # Collapse path: full temporal strip fill — honest tags.
+                _fill_temporal(cap=max_seeds - len(seed_order))
 
         session.seed_ids = tuple(seed_order)
         session.seed_reasons = seed_reason_tags
@@ -935,6 +1009,12 @@ class TraversalRegistry:
         view = session.to_thin_surface()
         view["ok"] = True
         view["seed_ids"] = list(session.seed_ids)
+        view["seed_sources"] = dict(seed_sources)
+        view["seed_mode"] = mode
+        view["dual_n"] = dual_n
+        view["semantic_reason"] = semantic_reason
+        view["start_ms_budget"] = start_ms
+        view["start_ms_spent"] = expand_ms_spent
         return view
 
     def step(

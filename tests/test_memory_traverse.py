@@ -447,6 +447,326 @@ def test_invalid_explicit_seed_skipped(store):
     assert atoms[0].atom_id in out["seed_ids"]
 
 
+# ── PR5 pure semantic start + dual slot reserve ─────────────────────────────
+
+
+def test_pr5_defaults_max_seeds_and_start_ms():
+    """Product defaults: traverse_max_seeds=10, start expand 250ms."""
+    from elyra.memory.config import MemorySettings as MS
+
+    s = MS()
+    assert s.traverse_max_seeds == 10
+    assert s.traverse_start_expand_max_ms == 250
+    assert s.traverse_dual_start is True
+    assert s.traverse_dual_start_n == 2
+    assert s.traverse_default_seed_mode == "auto"
+
+
+def test_seed_mode_semantic_only_encoder_cold_empty_frontier(store):
+    """Cold encoder + semantic_only → empty seeds; encoder_cold honesty; no temporal."""
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    _chain_store(store, 5)
+    settings = _enabled_settings(
+        traverse_dual_start=True,
+        traverse_max_seeds=10,
+    )
+    reg = _reg(settings)
+    # Index present but embedder None → encoder_cold (never torch load).
+    gv = GraphView(
+        store,
+        index=MemoryEmbeddingIndex(store=store),
+        embedder=None,
+        settings=settings,
+        now="2026-07-28T10:05:00Z",
+    )
+    out = reg.start(
+        gv,
+        goal="focused topic",
+        seed_query="focused topic",
+        seed_mode="semantic_only",
+        moment_id="m1",
+    )
+    assert out["ok"] is True
+    assert out["seed_mode"] == "semantic_only"
+    assert out["dual_n"] == 0
+    assert out["seed_ids"] == []
+    assert (out.get("seed_sources") or {}).get("temporal", 0) == 0
+    assert (out.get("seed_sources") or {}).get("semantic", 0) == 0
+    assert out.get("semantic_reason") == "encoder_cold" or "encoder_cold" in (
+        out.get("seed_reasons") or []
+    )
+    assert out.get("frontier") == [] or len(out.get("frontier") or []) == 0
+
+
+def test_seed_mode_semantic_only_no_temporal_fill_when_no_index(store):
+    atoms = _chain_store(store, 4)
+    settings = _enabled_settings(traverse_max_seeds=8)
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(
+        gv,
+        goal="g",
+        seed_mode="semantic_only",
+        seed_atom_ids=[atoms[0].atom_id],
+        moment_id="m1",
+    )
+    assert out["ok"]
+    src = out.get("seed_sources") or {}
+    assert src.get("temporal", 0) == 0
+    assert atoms[0].atom_id in out["seed_ids"]
+    # Only explicit (semantic unavailable without index).
+    assert set(out["seed_ids"]) == {atoms[0].atom_id}
+
+
+def test_dual_start_reserves_temporal_slots(store):
+    """High semantic k + dual_start → temporal in {1,2} and semantic > 0."""
+    from elyra.memory.embed.mock import MockEmbedder, mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    # Plant many atoms with the same vector as the query so ANN fills top-k.
+    query = "shared theme"
+    match = mock_vector(f"text|{query}", dim=EMBED_DIM)
+    atoms = []
+    for i in range(12):
+        a = store.put_atom(
+            _atom(
+                atom_id=f"a_dual{i}",
+                t=f"2026-07-28T10:{i:02d}:00Z",
+                text=f"body {i} {query}",
+                moment_id="m_dual",
+            )
+        )
+        atoms.append(a)
+    # Link temporal chain so seed_temporal has prev/next.
+    for i, a in enumerate(atoms):
+        prev_id = atoms[i - 1].atom_id if i > 0 else None
+        next_id = atoms[i + 1].atom_id if i + 1 < len(atoms) else None
+        store.put_atom(
+            Atom(
+                atom_id=a.atom_id,
+                t_start=a.t_start,
+                kind=a.kind,
+                content_text=a.content_text,
+                content_ref=a.content_ref,
+                moment_id=a.moment_id,
+                prev_atom_id=prev_id,
+                next_atom_id=next_id,
+            )
+        )
+
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    for a in atoms:
+        idx.upsert(
+            EmbeddingSet(
+                atom_id=a.atom_id,
+                dim=EMBED_DIM,
+                emb_text=match,
+                emb_joint=match,
+                model_id="mock",
+                encoded_at="2026-07-28T10:00:00Z",
+            )
+        )
+
+    settings = _enabled_settings(
+        traverse_max_seeds=10,
+        traverse_dual_start=True,
+        traverse_dual_start_n=2,
+        traverse_start_expand_max_ms=250,
+    )
+    reg = _reg(settings)
+    gv = GraphView(
+        store,
+        index=idx,
+        embedder=emb,
+        settings=settings,
+        now="2026-07-28T10:30:00Z",
+    )
+    out = reg.start(
+        gv,
+        goal=query,
+        seed_query=query,
+        seed_mode="auto",
+        moment_id="m_other",  # exclude open moment? use different so ANN unrestricted
+    )
+    assert out["ok"] is True
+    assert out["seed_mode"] == "auto"
+    assert out["dual_n"] == 2
+    src = out["seed_sources"]
+    assert src["semantic"] > 0
+    assert src["temporal"] in (1, 2)
+    # Semantic must not starve dual reserve: semantic ≤ max_seeds - dual_n.
+    assert src["semantic"] <= 10 - 2
+    assert len(out["seed_ids"]) <= 10
+    assert src["semantic"] + src["temporal"] + src.get("explicit", 0) == len(
+        out["seed_ids"]
+    )
+
+
+def test_dual_start_off_no_reserve(store):
+    from elyra.memory.embed.mock import MockEmbedder, mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    query = "theme x"
+    match = mock_vector(f"text|{query}", dim=EMBED_DIM)
+    a1 = store.put_atom(_atom(atom_id="a_off1", text=query, moment_id="m1"))
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    idx.upsert(
+        EmbeddingSet(
+            atom_id=a1.atom_id,
+            dim=EMBED_DIM,
+            emb_text=match,
+            emb_joint=match,
+            model_id="mock",
+            encoded_at="2026-07-28T10:00:00Z",
+        )
+    )
+    settings = _enabled_settings(
+        traverse_max_seeds=4,
+        traverse_dual_start=False,
+    )
+    reg = _reg(settings)
+    gv = GraphView(
+        store, index=idx, embedder=emb, settings=settings, now="2026-07-28T10:05:00Z"
+    )
+    # Use a different open moment so ANN is not exclude_moment_id-filtered.
+    out = reg.start(
+        gv, goal=query, seed_query=query, seed_mode="auto", moment_id="m_other"
+    )
+    assert out["dual_n"] == 0
+    assert out["seed_sources"]["semantic"] >= 1
+
+
+def test_seed_mode_temporal_only_skips_semantic(store):
+    atoms = _chain_store(store, 5)
+    settings = _enabled_settings(traverse_max_seeds=3)
+    reg = _reg(settings)
+    # Even with a warm-looking graph, temporal_only must not call semantic path
+    # in a way that fails start; sources should be temporal only.
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(
+        gv,
+        goal="should not semantic",
+        seed_mode="temporal",  # alias
+        moment_id="m1",
+    )
+    assert out["ok"]
+    assert out["seed_mode"] == "temporal_only"
+    assert out["seed_sources"]["semantic"] == 0
+    assert out["seed_sources"]["temporal"] >= 1
+    assert len(out["seed_ids"]) <= 3
+    # Atoms from the chain should appear via temporal.
+    assert any(a.atom_id in out["seed_ids"] for a in atoms)
+
+
+def test_seed_mode_explicit_only(store):
+    atoms = _chain_store(store, 5)
+    reg = _reg(_enabled_settings(traverse_max_seeds=8))
+    gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(
+        gv,
+        goal="g",
+        seed_mode="explicit_only",
+        seed_atom_ids=[atoms[2].atom_id],
+        moment_id="m1",
+    )
+    assert out["seed_ids"] == [atoms[2].atom_id]
+    assert out["seed_sources"]["temporal"] == 0
+    assert out["seed_sources"]["semantic"] == 0
+
+
+def test_auto_collapse_to_temporal_when_semantic_empty(store):
+    atoms = _chain_store(store, 6)
+    settings = _enabled_settings(
+        traverse_max_seeds=4,
+        traverse_dual_start=True,
+        traverse_dual_start_n=2,
+    )
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(
+        gv,
+        goal="no index here",
+        seed_mode="auto",
+        moment_id="m1",
+    )
+    assert out["ok"]
+    # Collapse path: full temporal strip (not just dual_n).
+    assert out["seed_sources"]["temporal"] >= 1
+    assert out["seed_sources"]["semantic"] == 0
+    assert len(out["seed_ids"]) <= 4
+    assert any(a.atom_id in out["seed_ids"] for a in atoms)
+
+
+def test_start_payload_includes_pr5_fields(store):
+    settings = _enabled_settings()
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(gv, goal="probe", seed_mode="auto", moment_id="m1")
+    assert out["ok"]
+    assert "seed_sources" in out
+    assert "dual_n" in out
+    assert "seed_mode" in out
+    assert "start_ms_budget" in out
+    assert out["start_ms_budget"] == 250 or out["start_ms_budget"] > 0
+    assert "start_ms_spent" in out
+    assert "semantic_reason" in out
+
+
+def test_seed_from_query_text_hits(store):
+    from elyra.memory.embed.mock import MockEmbedder, mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    a1 = store.put_atom(_atom(atom_id="a_q1", text="blue sky"))
+    a2 = store.put_atom(_atom(atom_id="a_q2", text="green grass"))
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    match = mock_vector("text|blue sky", dim=EMBED_DIM)
+    other = mock_vector("text|green grass", dim=EMBED_DIM)
+    for atom, vec in ((a1, match), (a2, other)):
+        idx.upsert(
+            EmbeddingSet(
+                atom_id=atom.atom_id,
+                dim=EMBED_DIM,
+                emb_text=vec,
+                emb_joint=vec,
+                model_id="mock",
+                encoded_at="2026-07-28T10:00:00Z",
+            )
+        )
+    gv = GraphView(store, index=idx, embedder=emb)
+    seeds = gv.seed_from_query("blue sky", k=5)
+    assert seeds
+    assert seeds[0][0] == a1.atom_id
+    assert gv.last_expand_meta.get("seed") == "text"
+
+
+def test_seed_from_query_encoder_cold_no_encode(store):
+    """Never call encode when embedder is cold/missing."""
+
+    class _BoomEmbedder:
+        loaded = False
+
+        def health(self):
+            return {"ok": False}
+
+        def encode_text(self, text: str):
+            raise AssertionError("must not cold-load / encode when not warm")
+
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    idx = MemoryEmbeddingIndex(store=store)
+    gv = GraphView(store, index=idx, embedder=_BoomEmbedder())
+    seeds = gv.seed_from_query("anything")
+    assert seeds == []
+    assert gv.last_expand_meta.get("semantic_reason") == "encoder_cold"
+
+
 # ── keep / inspect / summary ────────────────────────────────────────────────
 
 

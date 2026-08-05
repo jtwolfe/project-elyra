@@ -136,11 +136,12 @@ def test_default_settings_match_design():
     assert s.memory.glass_tail_floor_messages == 6
     assert s.memory.glass_tail_max_messages == 20
     assert s.memory.traverse_expand_max_ms == 80
-    assert s.memory.traverse_start_expand_max_ms == 0
+    # PR5 pure semantic start: 250ms headroom; dual temporal anchors reserved.
+    assert s.memory.traverse_start_expand_max_ms == 250
     assert s.memory.traverse_max_depth == 3
     assert s.memory.traverse_max_nodes == 48
     assert s.memory.traverse_max_steps == 8
-    assert s.memory.traverse_max_seeds == 8
+    assert s.memory.traverse_max_seeds == 10
     assert s.memory.traverse_frontier_max == 16
     assert s.memory.traverse_max_expand_per_step == 3
     assert s.memory.traverse_keep_max == 16
@@ -156,6 +157,9 @@ def test_default_settings_match_design():
     assert s.memory.traverse_same_moment_k == 4
     assert s.memory.traverse_semantic_k == 8
     assert s.memory.traverse_allow_semantic_hops is True
+    assert s.memory.traverse_dual_start is True
+    assert s.memory.traverse_dual_start_n == 2
+    assert s.memory.traverse_default_seed_mode == "auto"
     assert s.api_host == "127.0.0.1"
     assert s.api_port == 8787
     assert not hasattr(s, "context_tokens")

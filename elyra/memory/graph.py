@@ -2,10 +2,11 @@
 
 Scope: neighbourhood expand over Atom fields (sequential / parent-child /
 same_moment / summary_*), durable EdgeStore kinds (created_with / recalls /
-in_moment hub rewrite / has_channel opt-in), and ephemeral semantic_hop via
-injected EmbeddingIndex + warm embedder. Option A: virtual hub/channel ids
-never leave expand as walk destinations.
-Out of scope: TraversalSession budgets, promote writes, seed_from_query (PR5).
+in_moment hub rewrite / has_channel opt-in), ephemeral semantic_hop via
+injected EmbeddingIndex + warm embedder, and multimodal ``seed_from_query``
+for pure semantic traverse start (text and/or media). Option A: virtual
+hub/channel ids never leave expand as walk destinations.
+Out of scope: TraversalSession budgets, promote write paths.
 """
 
 from __future__ import annotations
@@ -76,6 +77,10 @@ REASON_NO_HITS = "no_hits"
 REASON_PARENT_OF_UNAVAILABLE = "parent_of_unavailable"
 # Distinct from no_index: settings or call-site disabled semantic hops (Issue 3).
 REASON_SEMANTIC_DISABLED = "semantic_disabled"
+# Multimodal seed_from_query soft reasons (never cold-load encoder on start).
+REASON_MEDIA_MISSING = "media_missing"
+REASON_MEDIA_ENCODE_UNAVAILABLE = "media_encode_unavailable"
+REASON_QUERY_REQUIRED = "query_required"
 
 STRUCTURAL_KINDS: frozenset[str] = frozenset(
     {
@@ -222,6 +227,7 @@ class GraphView:
         settings: MemorySettings | None = None,
         now: datetime | str | None = None,
         edge_store: Any | None = None,
+        media_store: Any | None = None,
     ) -> None:
         self._store = store
         self._index = index
@@ -229,6 +235,7 @@ class GraphView:
         self._settings = settings or MemorySettings()
         self._now_override = now
         self._edge_store = edge_store
+        self._media_store = media_store
         self._last_expand_meta: dict[str, Any] = {}
         # Process-local moment member ids after expand_moment / hub rewrite
         # (session frontier cache hook for PR6).
@@ -236,8 +243,13 @@ class GraphView:
 
     @property
     def last_expand_meta(self) -> dict[str, Any]:
-        """Metadata from the most recent ``neighbors`` / ``seed_from_text`` call."""
+        """Metadata from the most recent ``neighbors`` / seed call."""
         return dict(self._last_expand_meta)
+
+    @property
+    def media_store(self) -> Any | None:
+        """Optional MediaStore for multimodal ``seed_from_query``."""
+        return self._media_store
 
     @property
     def edge_store(self) -> Any | None:
@@ -1304,11 +1316,36 @@ class GraphView:
         exclude_moment_id: str | None = None,
         expand_deadline_ms: int | None = None,
     ) -> list[tuple[str, float, str]]:
-        """Vector seeds → ``(atom_id, score, reason)``.
+        """Text-only vector seeds — thin wrapper over :meth:`seed_from_query`."""
+        return self.seed_from_query(
+            query,
+            k=k,
+            exclude_moment_id=exclude_moment_id,
+            expand_deadline_ms=expand_deadline_ms,
+        )
+
+    def seed_from_query(
+        self,
+        query: str | None = None,
+        *,
+        media_ids: Sequence[str] | None = None,
+        k: int = DEFAULT_SEED_K,
+        exclude_moment_id: str | None = None,
+        expand_deadline_ms: int | None = None,
+        channel: str | None = None,
+        media_store: Any | None = None,
+    ) -> list[tuple[str, float, str]]:
+        """Multimodal vector seeds → ``(atom_id, score, reason)``.
+
+        Accepts text and/or media attachment ids. Uses the same encode path
+        family as ``POST /api/memory/vectors/neighbors`` (resolve_one_media +
+        encode_text / encode_{image,audio,video} / encode_joint). **Never**
+        cold-loads the encoder — cold/missing embedder → ``encoder_cold``.
 
         Empty reasons in ``last_expand_meta["semantic_reason"]``:
         ``no_index`` | ``encoder_cold`` | ``timeout`` | ``no_hits`` |
-        ``semantic_disabled``.
+        ``semantic_disabled`` | ``media_missing`` |
+        ``media_encode_unavailable`` | ``query_required``.
         """
         t0 = _now_ms()
         deadline = (
@@ -1317,9 +1354,13 @@ class GraphView:
             else float(self._expand_max_ms())
         )
         deadline_cap: float | None = deadline if deadline > 0 else None
+        q = (query or "").strip()
+        mids = [str(m).strip() for m in (media_ids or ()) if str(m).strip()]
         meta: dict[str, Any] = {
             "expand_truncated": False,
-            "seed": "text",
+            "seed": "query",
+            "has_text": bool(q),
+            "media_ids": list(mids),
             "elapsed_ms": 0,
         }
         self._last_expand_meta = meta
@@ -1342,15 +1383,131 @@ class GraphView:
         if skip is not None:
             return finish([], reason=skip)
 
-        q = (query or "").strip()
-        if not q:
+        if not q and not mids:
+            # seed_from_text empty-query parity: no_hits (not a hard error).
             return finish([], reason=REASON_NO_HITS)
 
+        # ── Resolve optional media (first-wins single resolve) ────────────
+        media_store_eff = media_store if media_store is not None else self._media_store
+        media_modality: str | None = None
+        media_input: Any | None = None
+        media_skip_reason: str | None = None
+        if mids:
+            if media_store_eff is None:
+                media_skip_reason = REASON_MEDIA_MISSING
+            else:
+                from elyra.memory.embed.encode import (  # noqa: PLC0415
+                    resolve_one_media,
+                )
+
+                max_bytes = int(
+                    getattr(self._settings, "embed_media_max_bytes", 8_000_000)
+                    or 8_000_000
+                )
+                for mid in mids:
+                    if deadline_cap is not None and (_now_ms() - t0) > deadline_cap:
+                        meta["expand_truncated"] = True
+                        return finish([], reason=REASON_TIMEOUT)
+                    try:
+                        one = resolve_one_media(
+                            media_store_eff, mid, max_bytes=max_bytes
+                        )
+                    except Exception:  # noqa: BLE001
+                        _LOG.debug(
+                            "seed_from_query resolve_one_media failed mid=%s",
+                            mid,
+                            exc_info=True,
+                        )
+                        one = {
+                            "modality": None,
+                            "input": None,
+                            "skipped": f"{mid}:error",
+                        }
+                    if one.get("skipped") or not one.get("modality") or one.get(
+                        "input"
+                    ) is None:
+                        media_skip_reason = REASON_MEDIA_MISSING
+                        continue
+                    media_modality = str(one["modality"])
+                    media_input = one["input"]
+                    meta["media_id"] = mid
+                    meta["query_modality"] = media_modality
+                    media_skip_reason = None
+                    break
+                if media_modality is None and media_skip_reason is None:
+                    media_skip_reason = REASON_MEDIA_MISSING
+
+        # Media-only query that failed resolve → soft empty (no silent text demote).
+        if mids and media_modality is None and not q:
+            return finish([], reason=media_skip_reason or REASON_MEDIA_MISSING)
+
+        # ── Encode query vector (warm embedder only — no cold load) ───────
+        query_vec: list[float] | None = None
+        seed_channels: list[str] | None = None
         try:
-            query_vec = self._embedder.encode_text(q)
+            if media_modality is not None and media_input is not None:
+                # Fail closed when media encode is known unavailable.
+                media_ok: Any = None
+                try:
+                    h = self._embedder.health() if hasattr(self._embedder, "health") else {}
+                    if isinstance(h, Mapping):
+                        media_ok = h.get("media_encode")
+                except Exception:  # noqa: BLE001
+                    media_ok = None
+                if media_ok is False:
+                    if not q:
+                        return finish([], reason=REASON_MEDIA_ENCODE_UNAVAILABLE)
+                    # Text fallback when media encode unavailable but text present.
+                    meta["media_encode_fallback"] = "text"
+                    query_vec = list(self._embedder.encode_text(q))
+                    seed_channels = ["text"]
+                    meta["seed"] = "text"
+                elif q:
+                    from elyra.memory.embed.types import (  # noqa: PLC0415
+                        ModalityParts,
+                    )
+
+                    parts = ModalityParts(
+                        text=q,
+                        image=media_input if media_modality == "image" else None,
+                        audio=media_input if media_modality == "audio" else None,
+                        video=media_input if media_modality == "video" else None,
+                    )
+                    encode_joint = getattr(self._embedder, "encode_joint", None)
+                    if callable(encode_joint):
+                        query_vec = list(encode_joint(parts))
+                    else:
+                        enc_fn = getattr(
+                            self._embedder, f"encode_{media_modality}", None
+                        )
+                        if not callable(enc_fn):
+                            return finish([], reason=REASON_ENCODER_COLD)
+                        query_vec = list(enc_fn(media_input))
+                    seed_channels = ["text", media_modality]
+                    meta["seed"] = "text+media"
+                else:
+                    enc_fn = getattr(
+                        self._embedder, f"encode_{media_modality}", None
+                    )
+                    if not callable(enc_fn):
+                        return finish([], reason=REASON_ENCODER_COLD)
+                    query_vec = list(enc_fn(media_input))
+                    seed_channels = [media_modality]
+                    meta["seed"] = "media"
+            else:
+                if not q:
+                    return finish(
+                        [], reason=media_skip_reason or REASON_QUERY_REQUIRED
+                    )
+                query_vec = list(self._embedder.encode_text(q))
+                seed_channels = ["text"]
+                meta["seed"] = "text"
+                if media_skip_reason:
+                    meta["media_skip"] = media_skip_reason
         except Exception:  # noqa: BLE001
-            _LOG.exception("seed_from_text encode failed")
+            _LOG.exception("seed_from_query encode failed")
             return finish([], reason=REASON_ENCODER_COLD)
+
         if not query_vec:
             return finish([], reason=REASON_ENCODER_COLD)
 
@@ -1371,13 +1528,18 @@ class GraphView:
         if not isinstance(vectors_by_channel, Mapping):
             vectors_by_channel = {}
         joint_repair_remaining = int(health.get("joint_repair_remaining") or 0)
-        channel_req = str(
-            getattr(self._settings, "semantic_search_channel", None) or "auto"
-        ).strip().lower() or "auto"
+        channel_req = (
+            str(channel).strip().lower()
+            if channel
+            else str(
+                getattr(self._settings, "semantic_search_channel", None) or "auto"
+            ).strip().lower()
+        ) or "auto"
         concrete, channel_reason = resolve_search_channel(
             channel_req,
             vectors_by_channel=vectors_by_channel,
             joint_repair_remaining=joint_repair_remaining,
+            seed_channels=seed_channels,
         )
         meta["semantic_channel"] = concrete
         meta["semantic_channel_reason"] = channel_reason
@@ -1394,7 +1556,7 @@ class GraphView:
                 exclude_moment_id=exclude_moment_id,
             )
         except Exception:  # noqa: BLE001
-            _LOG.exception("seed_from_text search failed")
+            _LOG.exception("seed_from_query search failed")
             return finish([], reason=REASON_NO_HITS)
 
         if deadline_cap is not None and (_now_ms() - t0) > deadline_cap:
@@ -1513,9 +1675,12 @@ __all__ = [
     "GraphView",
     "MOMENT_HUB_PREFIX",
     "REASON_ENCODER_COLD",
+    "REASON_MEDIA_ENCODE_UNAVAILABLE",
+    "REASON_MEDIA_MISSING",
     "REASON_NO_HITS",
     "REASON_NO_INDEX",
     "REASON_PARENT_OF_UNAVAILABLE",
+    "REASON_QUERY_REQUIRED",
     "REASON_SEMANTIC_DISABLED",
     "REASON_TIMEOUT",
     "STRUCTURAL_KINDS",

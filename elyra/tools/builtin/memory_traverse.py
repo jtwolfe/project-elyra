@@ -185,6 +185,28 @@ def memory_traverse_start(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     seed_atom_ids, serr = _str_list(args.get("seed_atom_ids"), name="seed_atom_ids")
     if serr is not None:
         return serr
+    seed_media_ids, merr = _str_list(args.get("seed_media_ids"), name="seed_media_ids")
+    if merr is not None:
+        return merr
+
+    seed_mode = _optional_str(args.get("seed_mode"))
+    if seed_mode is not None:
+        seed_mode = seed_mode.lower()
+        allowed = {
+            "auto",
+            "semantic_only",
+            "temporal_only",
+            "temporal",
+            "explicit_only",
+        }
+        if seed_mode not in allowed:
+            return _err(
+                ERROR_INVALID_ARGS,
+                detail=(
+                    "seed_mode must be one of auto|semantic_only|temporal_only|"
+                    "explicit_only"
+                ),
+            )
 
     # Optional budget overrides (clamped by registry to settings max).
     budget_overrides: dict[str, int] | None = None
@@ -208,6 +230,8 @@ def memory_traverse_start(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         goal=goal,
         seed_query=seed_query,
         seed_atom_ids=seed_atom_ids or None,
+        seed_media_ids=seed_media_ids or None,
+        seed_mode=seed_mode,
         moment_id=moment_id,
         budget_overrides=budget_overrides,
     )
