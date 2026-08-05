@@ -458,6 +458,18 @@
           <div id="memory-tab-graph" class="memory-tab-panel" role="tabpanel" hidden>
             <div id="memory-graph-overview" class="memory-flags status-fields">loading…</div>
             <p id="memory-graph-honesty" class="muted status-helper memory-graph-honesty" hidden></p>
+            <div class="memory-context-actions memory-graph-backfill-actions" id="memory-graph-backfill-row" hidden>
+              <button
+                type="button"
+                id="memory-graph-backfill-btn"
+                class="btn-secondary btn-sm"
+                title="Dev: force structural in_moment edges for historical atoms (idempotent; requires durable_edges_enabled)"
+              >
+                Force edge backfill
+              </button>
+              <span class="badge" title="Dev feature; toggle via memory.edge_backfill_dev_enabled">dev</span>
+              <span id="memory-graph-backfill-status" class="muted status-helper" hidden></span>
+            </div>
             <div class="memory-graph-browse card" id="memory-graph-browse">
               <div class="card-head">
                 <strong>Free-browse graph</strong>

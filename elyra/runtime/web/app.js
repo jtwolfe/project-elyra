@@ -36,6 +36,9 @@ const memoryContextFlags = $("#memory-context-flags");
 const memoryContextBody = $("#memory-context-body");
 const memoryLadderRebuildBtn = $("#memory-ladder-rebuild-btn");
 const memoryLadderRebuildStatus = $("#memory-ladder-rebuild-status");
+const memoryGraphBackfillRow = $("#memory-graph-backfill-row");
+const memoryGraphBackfillBtn = $("#memory-graph-backfill-btn");
+const memoryGraphBackfillStatus = $("#memory-graph-backfill-status");
 const memoryAtomsList = $("#memory-atoms-list");
 const memoryAtomDetail = $("#memory-atom-detail");
 const memoryAtomKind = $("#memory-atom-kind");
@@ -4397,6 +4400,97 @@ async function onMemoryLadderRebuildClick() {
   }
 }
 
+/**
+ * Format last force-edge-backfill result for the Graph status line.
+ * @param {Record<string, any> | null | undefined} res
+ */
+function formatEdgeBackfillStatus(res) {
+  if (!res || typeof res !== "object") return "";
+  if (res.ok === false) {
+    const err = res.error || res.note || "failed";
+    return `Failed: ${err}`;
+  }
+  const scanned = res.scanned != null ? res.scanned : "?";
+  const written = res.written != null ? res.written : "?";
+  const skipped = res.skipped != null ? res.skipped : "?";
+  const ms = res.elapsed_ms != null ? res.elapsed_ms : "?";
+  const trunc = res.truncated ? " · truncated" : "";
+  const errs =
+    res.errors != null && Number(res.errors) > 0 ? ` · errors=${res.errors}` : "";
+  return `Done: scanned=${scanned} written=${written} skipped=${skipped} · ${ms}ms${trunc}${errs}`;
+}
+
+/**
+ * Show/hide Graph force-backfill controls from overview flags + last result.
+ * @param {Record<string, any>} data  GET /api/memory/graph payload
+ */
+function updateGraphBackfillUi(data) {
+  if (!memoryGraphBackfillRow) return;
+  const trav = (data && data.traversal) || {};
+  const bf = (data && data.edge_backfill) || {};
+  const honesty = (data && data.honesty) || {};
+  const devOn =
+    bf.dev_enabled === true ||
+    trav.edge_backfill_dev_enabled === true ||
+    honesty.edge_backfill_dev_enabled === true;
+  memoryGraphBackfillRow.hidden = !devOn;
+  if (!devOn) return;
+  if (memoryGraphBackfillStatus && bf.last) {
+    const line = formatEdgeBackfillStatus(bf.last);
+    if (line) {
+      memoryGraphBackfillStatus.hidden = false;
+      memoryGraphBackfillStatus.textContent = line;
+    }
+  }
+}
+
+/**
+ * Dev force edge backfill: structural in_moment for historical atoms.
+ * Requires confirm(); posts POST /api/memory/graph/edges/backfill then refreshes Graph.
+ */
+async function onMemoryGraphBackfillClick() {
+  if (!memoryGraphBackfillBtn) return;
+  const ok = window.confirm(
+    "Force edge backfill?\n\n" +
+      "Writes missing structural in_moment membership edges for recent atoms " +
+      "that already have a moment_id (idempotent; re-run writes ≈0). Does not " +
+      "reconstruct created_with or recalls. Requires durable_edges_enabled. " +
+      "May take up to ~30s.\n\n" +
+      "Continue?"
+  );
+  if (!ok) return;
+  memoryGraphBackfillBtn.disabled = true;
+  if (memoryGraphBackfillStatus) {
+    memoryGraphBackfillStatus.hidden = false;
+    memoryGraphBackfillStatus.textContent = "Backfilling…";
+  }
+  try {
+    const res = await fetchJson("/api/memory/graph/edges/backfill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!res || res.ok === false) {
+      const err = (res && (res.error || res.note)) || "backfill failed";
+      if (memoryGraphBackfillStatus) {
+        memoryGraphBackfillStatus.textContent = `Failed: ${err}`;
+      }
+      return;
+    }
+    if (memoryGraphBackfillStatus) {
+      memoryGraphBackfillStatus.textContent = formatEdgeBackfillStatus(res);
+    }
+    lastGraphFp = null;
+    await refreshMemoryGraph({ force: true });
+  } catch (e) {
+    if (memoryGraphBackfillStatus) {
+      memoryGraphBackfillStatus.textContent = `Failed: ${e && e.message ? e.message : e}`;
+    }
+  } finally {
+    memoryGraphBackfillBtn.disabled = false;
+  }
+}
+
 function setAtomDetailOpen(on) {
   const panel = document.getElementById("panel-memory");
   if (panel) panel.classList.toggle("atom-detail-open", !!on);
@@ -6498,6 +6592,7 @@ async function refreshMemoryGraph(opts = {}) {
   lastGraphFp = fp;
   bindFreeBrowsePointerHandlers();
   renderGraphOverview(overview);
+  updateGraphBackfillUi(overview);
   renderGraphSession(session);
   renderGraphLists(session);
   updateFreeBrowseSessionOverlay(session);
@@ -6535,6 +6630,13 @@ if (memoryLadderRebuildBtn) {
   memoryLadderRebuildBtn.addEventListener("click", () => {
     onMemoryLadderRebuildClick().catch((e) =>
       panelLoadError("Memory ladder rebuild", e)
+    );
+  });
+}
+if (memoryGraphBackfillBtn) {
+  memoryGraphBackfillBtn.addEventListener("click", () => {
+    onMemoryGraphBackfillClick().catch((e) =>
+      panelLoadError("Memory edge backfill", e)
     );
   });
 }

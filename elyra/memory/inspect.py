@@ -1179,15 +1179,19 @@ def directed_traversal_flags(settings: Any | None) -> dict[str, Any]:
         is_directed_keep_enabled,
         is_directed_traversal_enabled,
         is_durable_edges_enabled,
+        is_edge_backfill_dev_enabled,
     )
 
     trav = is_directed_traversal_enabled(settings)
     keep = is_directed_keep_enabled(settings)
     durable = is_durable_edges_enabled(settings)
+    backfill_dev = is_edge_backfill_dev_enabled(settings)
     return {
         "directed_traversal_enabled": trav,
         "directed_keep_enabled": keep,
         "durable_edges_enabled": durable,
+        # Dev force-backfill surface (factory ON for dogfood; KD-P-backfill).
+        "edge_backfill_dev_enabled": backfill_dev,
         "traverse_expand_channels": bool(
             getattr(settings, "traverse_expand_channels", False)
         )
