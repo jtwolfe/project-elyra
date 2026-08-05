@@ -263,6 +263,105 @@ def _compass_node(
     return out
 
 
+def _empty_local_map_shell(
+    store: MemoryStore,
+    focus: Atom,
+    *,
+    label_n: int,
+    preview_n: int,
+    include_noisy: bool,
+    map_truncated: bool,
+    structural_ms_budget: int | None,
+    structural_ms_spent: int = 0,
+    associative_extra: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Focus-only map (no d1 expand). Used when structural budget is exhausted.
+
+    ``expand_deadline_ms=0`` must NOT mean GraphView unlimited — budget honesty
+    requires map_truncated + empty edges/ring (compass may still use free
+    prev/next fields on the focus atom).
+    """
+    focus_label = _map_node_label(store, focus, label_n=label_n)
+    focus_preview = _clip(_atom_body(store, focus), preview_n)
+    if _is_noisy_kind(focus.kind):
+        focus_label = _noisy_short_label(focus, label_n)
+        focus_preview = focus_label
+
+    sequential: dict[str, Any] = {}
+    if focus.prev_atom_id:
+        prev_a = store.get_atom(focus.prev_atom_id)
+        if prev_a is not None:
+            sequential["prev"] = _compass_node(
+                store, prev_a, label_n=label_n, edge_kind="sequential"
+            )
+            if _is_noisy_kind(prev_a.kind) and not include_noisy:
+                sequential["prev"]["bridge_noisy"] = True
+                sequential["prev"]["label"] = _noisy_short_label(prev_a, label_n)
+    if focus.next_atom_id:
+        next_a = store.get_atom(focus.next_atom_id)
+        if next_a is not None:
+            sequential["next"] = _compass_node(
+                store, next_a, label_n=label_n, edge_kind="sequential"
+            )
+            if _is_noisy_kind(next_a.kind) and not include_noisy:
+                sequential["next"]["bridge_noisy"] = True
+                sequential["next"]["label"] = _noisy_short_label(next_a, label_n)
+
+    associative: list[dict[str, Any]] = []
+    assoc_ids: set[str] = set()
+    for extra in associative_extra or ():
+        if len(associative) >= LOCAL_MAP_ASSOCIATIVE_CAP:
+            break
+        aid = str(extra.get("atom_id") or extra.get("dst") or "").strip()
+        if not aid or aid in assoc_ids or aid == focus.atom_id:
+            continue
+        atom = store.get_atom(aid)
+        if atom is None:
+            continue
+        if _is_noisy_kind(atom.kind) and not include_noisy:
+            continue
+        assoc_ids.add(aid)
+        associative.append(
+            _compass_node(
+                store,
+                atom,
+                label_n=label_n,
+                weight=float(extra.get("weight") or 0.0),
+                edge_kind=str(extra.get("edge_kind") or "semantic_hop"),
+            )
+        )
+
+    meta_out: dict[str, Any] = {
+        "structural_ms_spent": int(structural_ms_spent),
+        "map_truncated": bool(map_truncated),
+        "budget_exhausted": True,
+    }
+    if structural_ms_budget is not None:
+        meta_out["structural_ms_budget"] = int(structural_ms_budget)
+
+    return {
+        "focus": {
+            "atom_id": focus.atom_id,
+            "kind": focus.kind,
+            "label": focus_label,
+            "preview": focus_preview,
+        },
+        "edges": [],
+        "ring": [],
+        "compass": {
+            "sequential": sequential,
+            "moment_peers": [],
+            "ladder": {},
+            "associative": associative[:LOCAL_MAP_ASSOCIATIVE_CAP],
+        },
+        "filters": {
+            "noisy_kinds_omitted": [],
+            "include_noisy": bool(include_noisy),
+        },
+        "meta": meta_out,
+    }
+
+
 def build_local_map(
     graph: GraphView,
     focus_id: str,
@@ -273,12 +372,23 @@ def build_local_map(
     preview_n: int = _DEFAULT_PREVIEW_CHARS,
     neighbor_k: int = _DEFAULT_NEIGHBOR_K,
     associative_extra: Sequence[Mapping[str, Any]] | None = None,
+    prefetched_edges: Sequence[Any] | None = None,
 ) -> dict[str, Any] | None:
     """Host-assembled ~d2.5 local map for one focus atom (KD-P2).
 
     Structural-only neighbors + capped d2 compass fanout. Default kind filter
     omits tool/ledger/model from the ring; sequential bridges to noisy dsts
     are kept with ``bridge_noisy=true`` and short hygiene labels.
+
+    Budget honesty (GraphView convention differs):
+    - ``expand_deadline_ms is None`` — use GraphView product default soft wall
+    - ``expand_deadline_ms > 0`` — structural soft wall for d1 + d2
+    - ``expand_deadline_ms == 0`` — **exhausted**: no neighbor expand, focus-only
+      map with ``meta.map_truncated=true`` (never pass 0 into GraphView as
+      “unlimited”)
+
+    ``prefetched_edges`` reuses step Phase-A structural edges so the map does
+    not re-expand d1 under a shared remaining budget.
     """
     store = graph._store  # noqa: SLF001
     focus_id = str(focus_id or "").strip()
@@ -293,20 +403,44 @@ def build_local_map(
     membership_source: str | None = None
     noisy_omitted: set[str] = set()
 
-    # One structural expand for the focus (no ANN for map build — §2.4).
-    edges_raw = graph.neighbors(
-        focus_id,
-        k=max(1, int(neighbor_k)),
-        allow_semantic=False,
-        expand_deadline_ms=expand_deadline_ms,
-        semantic_deadline_ms=0,
-    )
-    meta = graph.last_expand_meta
-    if meta.get("expand_truncated") or meta.get("structural_truncated"):
-        map_truncated = True
-    ms = meta.get("membership_source")
-    if ms:
-        membership_source = str(ms)
+    # Exhausted structural budget: focus-only truncated map (Issue 1).
+    # GraphView treats expand_deadline_ms=0 as unlimited — never pass 0.
+    if expand_deadline_ms is not None and int(expand_deadline_ms) <= 0:
+        if prefetched_edges:
+            # Have free d1 from step expand — use them, skip paid neighbors,
+            # skip d2 (no remaining budget for fanout).
+            edges_raw = list(prefetched_edges)
+            map_truncated = True
+        else:
+            return _empty_local_map_shell(
+                store,
+                focus,
+                label_n=label_n,
+                preview_n=preview_n,
+                include_noisy=include_noisy,
+                map_truncated=True,
+                structural_ms_budget=0,
+                structural_ms_spent=0,
+                associative_extra=associative_extra,
+            )
+    elif prefetched_edges is not None:
+        # Reuse step expand edges for d1 (no second full neighbors call).
+        edges_raw = list(prefetched_edges)
+    else:
+        # One structural expand for the focus (no ANN for map build — §2.4).
+        edges_raw = graph.neighbors(
+            focus_id,
+            k=max(1, int(neighbor_k)),
+            allow_semantic=False,
+            expand_deadline_ms=expand_deadline_ms,
+            semantic_deadline_ms=0,
+        )
+        meta = graph.last_expand_meta
+        if meta.get("expand_truncated") or meta.get("structural_truncated"):
+            map_truncated = True
+        ms = meta.get("membership_source")
+        if ms:
+            membership_source = str(ms)
 
     edge_rows: list[dict[str, Any]] = []
     ring_candidates: list[dict[str, Any]] = []
@@ -522,19 +656,25 @@ def build_local_map(
         )
 
     # ── d2 structural fanout for compass (§2.1 / §2.5) ────────────────────
-    # Best d1 primary nodes by weight (prefer primary kinds).
-    d1_for_d2 = sorted(
-        ring,
-        key=lambda r: (
-            _primary_kind_rank(r.get("kind")),
-            -float(r.get("weight") or 0.0),
-            str(r.get("atom_id")),
-        ),
-    )[:LOCAL_MAP_D1_TO_D2]
+    # Skip d2 when budget already exhausted (deadline 0 / prefetched-only path).
+    # Never pass expand_deadline_ms=0 into GraphView (means unlimited).
+    allow_d2 = expand_deadline_ms is None or int(expand_deadline_ms) > 0
+    d1_for_d2 = (
+        sorted(
+            ring,
+            key=lambda r: (
+                _primary_kind_rank(r.get("kind")),
+                -float(r.get("weight") or 0.0),
+                str(r.get("atom_id")),
+            ),
+        )[:LOCAL_MAP_D1_TO_D2]
+        if allow_d2
+        else []
+    )
 
     struct_budget = (
         float(expand_deadline_ms)
-        if expand_deadline_ms is not None and expand_deadline_ms > 0
+        if expand_deadline_ms is not None and int(expand_deadline_ms) > 0
         else None
     )
     spent = _now_ms() - t0
@@ -549,7 +689,8 @@ def build_local_map(
                 map_truncated = True
                 break
         else:
-            remaining = expand_deadline_ms
+            # None deadline → GraphView product default (do not pass 0).
+            remaining = None
         d1_id = str(d1["atom_id"])
         hop2 = graph.neighbors(
             d1_id,
@@ -615,7 +756,9 @@ def build_local_map(
     if membership_source:
         meta_out["membership_source"] = membership_source
     if expand_deadline_ms is not None:
-        meta_out["structural_ms_budget"] = int(expand_deadline_ms)
+        meta_out["structural_ms_budget"] = max(0, int(expand_deadline_ms))
+        if int(expand_deadline_ms) <= 0:
+            meta_out["budget_exhausted"] = True
 
     return {
         "focus": {
@@ -1598,6 +1741,7 @@ class TraversalRegistry:
         self._active = session
 
         # KD-P2: host local_map for primary focus (first seed). No re-ANN.
+        # remaining_struct=0 → truncated focus-only map (never GraphView unlimited).
         local_map: dict[str, Any] | None = None
         map_enabled = _bool_cfg(cfg, "traverse_local_map_enabled", True)
         if map_enabled and seed_order:
@@ -1751,6 +1895,8 @@ class TraversalRegistry:
         expanded_focus_ids: list[str] = []
         # Semantic/recalls hits from this step's first ANN (associative compass).
         step_assoc_by_focus: dict[str, list[dict[str, Any]]] = {}
+        # Phase-A structural edges per focus — reused for map d1 (Issue 2).
+        step_struct_edges_by_focus: dict[str, list[Any]] = {}
 
         if can_expand and expand_ids:
             picks = [str(x) for x in expand_ids][: max(0, expand_per)]
@@ -1784,6 +1930,7 @@ class TraversalRegistry:
                     remaining_struct = None  # no structural soft wall
 
                 # Phase A: structural-only under remaining expand_ms.
+                # Note: remaining_struct==0 never reaches here (break above).
                 edges_struct = graph.neighbors(
                     src_id,
                     k=neighbor_k,
@@ -1803,6 +1950,7 @@ class TraversalRegistry:
                     expand_truncated = True
                 _pack_edges(src_id, next_depth, edges_struct)
                 expanded_focus_ids.append(src_id)
+                step_struct_edges_by_focus[src_id] = list(edges_struct)
 
                 # Phase B: at most one semantic_hop under independent ANN budget.
                 if (
@@ -1859,23 +2007,33 @@ class TraversalRegistry:
         )
 
         # KD-P2: local_map for first expanded focus; local_maps when multi.
+        # Shared remaining structural budget across maps (Issue 2) — do not
+        # re-spend a full expand_ms per focus. Reuse Phase-A edges for d1.
         local_map: dict[str, Any] | None = None
         local_maps: list[dict[str, Any]] | None = None
         map_enabled = _bool_cfg(cfg, "traverse_local_map_enabled", True)
         if map_enabled and expanded_focus_ids:
-            map_struct_budget = expand_ms if expand_ms > 0 else None
+            if expand_ms > 0:
+                map_remaining: int | None = max(
+                    0, int(expand_ms) - int(expand_ms_spent)
+                )
+            else:
+                map_remaining = None
             built: list[dict[str, Any]] = []
             for fid in expanded_focus_ids[:LOCAL_MAPS_STEP_CAP]:
+                deadline = map_remaining
+                # 0 remaining → truncated (prefetched d1 only, no d2 / no re-expand).
                 try:
                     m = build_local_map(
                         graph,
                         fid,
                         include_noisy=bool(include_noisy_kinds),
-                        expand_deadline_ms=map_struct_budget,
+                        expand_deadline_ms=deadline,
                         label_n=label_n,
                         preview_n=preview_n,
                         neighbor_k=neighbor_k,
                         associative_extra=step_assoc_by_focus.get(fid),
+                        prefetched_edges=step_struct_edges_by_focus.get(fid),
                     )
                 except Exception:  # noqa: BLE001
                     _LOG.debug(
@@ -1886,6 +2044,11 @@ class TraversalRegistry:
                     m = None
                 if m is not None:
                     built.append({"focus_id": fid, "map": m})
+                    if map_remaining is not None:
+                        spent_map = int(
+                            (m.get("meta") or {}).get("structural_ms_spent") or 0
+                        )
+                        map_remaining = max(0, int(map_remaining) - spent_map)
             if built:
                 local_map = built[0]["map"]
                 if len(built) > 1:

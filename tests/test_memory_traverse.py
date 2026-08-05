@@ -1791,3 +1791,270 @@ def test_start_empty_seeds_local_map_null(store):
     assert start["ok"] is True
     assert start["local_map"] is None
     assert start["local_maps"] is None
+
+
+def test_build_local_map_deadline_zero_truncated_not_unlimited(store):
+    """Issue 1: expand_deadline_ms=0 must not mean GraphView unlimited.
+
+    Focus-only map with map_truncated=true and empty edges/ring — never a full
+    d1+d2 expand with structural_ms_budget=0 and map_truncated=false.
+    """
+    atoms = _chain_store(store, 5)
+    settings = _enabled_settings()
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    focus = atoms[2].atom_id
+
+    full = build_local_map(
+        gv, focus, include_noisy=False, expand_deadline_ms=80, neighbor_k=16
+    )
+    assert full is not None
+    assert len(full["edges"]) >= 1  # sequential neighbors exist
+
+    zero = build_local_map(
+        gv, focus, include_noisy=False, expand_deadline_ms=0, neighbor_k=16
+    )
+    assert zero is not None
+    assert zero["focus"]["atom_id"] == focus
+    assert zero["edges"] == []
+    assert zero["ring"] == []
+    assert zero["meta"]["map_truncated"] is True
+    assert zero["meta"].get("budget_exhausted") is True
+    assert zero["meta"].get("structural_ms_budget") == 0
+    # Free compass prev/next from atom fields is OK (no expand).
+    seq = zero["compass"]["sequential"]
+    assert "prev" in seq or "next" in seq
+
+
+def test_start_passes_remaining_zero_when_seed_spent(store, monkeypatch):
+    """When start structural spent >= start_ms, remaining_struct=0 is passed.
+
+    Integration: explicit seed + monkeypatch expand_ms_spent accounting via
+    ``_now_ms`` around a dummy seed_from_query spend is brittle; instead
+    force spent by patching the remaining computation inputs — after start
+    builds seeds, replace expand_ms_spent effect by intercepting build and
+    verifying start would pass max(0, start_ms - spent).
+
+    Hermetic path: monkeypatch ``build_local_map`` and force
+    ``expand_ms_spent`` high by making start's seed timing report large
+    elapsed when semantic path runs with explicit seeds co-present under auto.
+    Simpler: patch remaining at call site by wrapping start's use of
+    expand_ms_spent — set start_ms=100 and expand_ms_spent via attribute
+    on a custom seed that advances monotonic clock.
+    """
+    atoms = _chain_store(store, 3)
+    settings = _enabled_settings(traverse_start_expand_max_ms=100)
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+
+    captured: list[Any] = []
+    real_build = build_local_map
+
+    def _capture(graph, focus_id, **kwargs):
+        captured.append(kwargs.get("expand_deadline_ms"))
+        return real_build(graph, focus_id, **kwargs)
+
+    monkeypatch.setattr("elyra.memory.traverse.build_local_map", _capture)
+
+    # Alternating clock: seed block does t0=_now_ms(); ...; spent=now-t0.
+    # Odd calls → 0, even → 10_000 so spent ≈ 10_000 ≥ start_ms (100).
+    clock = {"n": 0}
+
+    def _fake_now():
+        clock["n"] += 1
+        return 0.0 if clock["n"] % 2 == 1 else 10_000.0
+
+    monkeypatch.setattr("elyra.memory.traverse._now_ms", _fake_now)
+
+    start = reg.start(
+        gv,
+        goal="topic garden",
+        seed_atom_ids=[atoms[1].atom_id],
+        seed_mode="auto",
+        moment_id="m1",
+    )
+    assert start["ok"] is True
+    assert start.get("seed_ids")  # at least explicit seed
+    assert captured, "build_local_map must be called for primary seed"
+    # remaining_struct = max(0, start_ms - expand_ms_spent) → 0 when spent large
+    assert captured[0] == 0
+    lm = start["local_map"]
+    assert lm is not None
+    assert lm["meta"]["map_truncated"] is True
+    assert lm["edges"] == []
+    assert lm["meta"].get("structural_ms_budget") == 0
+
+
+def test_local_maps_capped_at_three(store):
+    """local_maps length ≤ 3 even when more expand_ids succeed."""
+    atoms = _chain_store(store, 8)
+    settings = _enabled_settings(traverse_max_expand_per_step=8)
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    seed_ids = [a.atom_id for a in atoms[:5]]
+    start = reg.start(
+        gv,
+        goal="cap maps",
+        seed_atom_ids=seed_ids,
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    step = reg.step(
+        gv,
+        session_id=start["session_id"],
+        expand_ids=seed_ids,  # 5 expands
+    )
+    assert step["ok"] is True
+    maps = step["local_maps"]
+    assert maps is not None
+    assert len(maps) <= LOCAL_MAPS_STEP_CAP
+    assert len(maps) == LOCAL_MAPS_STEP_CAP  # first 3 of 5
+
+
+def test_local_map_non_seq_noisy_created_with_omitted(store, paths):
+    """Non-sequential durable edge to tool is omitted under default filter."""
+    from elyra.memory.edges import DurableEdge, new_edge_id, open_edge_store
+    from elyra.memory.weights import EDGE_CREATED_WITH
+
+    speak = store.put_atom(
+        _atom(
+            atom_id="ns_speak",
+            kind="speak",
+            text="hello",
+            moment_id="m_ns",
+            t="2026-07-28T10:00:00Z",
+        )
+    )
+    tool = store.put_atom(
+        _atom(
+            atom_id="ns_tool",
+            kind="tool",
+            text='{"raw":true}',
+            moment_id="m_ns",
+            t="2026-07-28T10:01:00Z",
+            meta={"tool_name": "run_cmd"},
+        )
+    )
+    # No sequential link — only created_with speak → tool.
+    edge_store = open_edge_store(
+        paths, MemorySettings(write_atoms=True, backend="jsonl"), fail_soft=False
+    )
+    try:
+        edge_store.put_edge(
+            DurableEdge(
+                edge_id=new_edge_id(),
+                src_atom_id=speak.atom_id,
+                dst_atom_id=tool.atom_id,
+                edge_kind=EDGE_CREATED_WITH,
+                created_at="2026-07-28T10:00:00Z",
+                updated_at="2026-07-28T10:00:00Z",
+                reason="test",
+            )
+        )
+        settings = _enabled_settings(durable_edges_enabled=True)
+        gv = GraphView(
+            store,
+            settings=settings,
+            edge_store=edge_store,
+            now="2026-07-28T10:05:00Z",
+        )
+        # Sanity: neighbors includes created_with to tool.
+        raw = gv.neighbors(speak.atom_id, k=16, allow_semantic=False)
+        assert any(
+            e.dst_atom_id == tool.atom_id and e.edge_kind == EDGE_CREATED_WITH
+            for e in raw
+        )
+        lm = build_local_map(
+            gv, speak.atom_id, include_noisy=False, expand_deadline_ms=80
+        )
+        assert lm is not None
+        # No edge to tool (non-seq noisy omitted).
+        assert not any(e["dst"] == tool.atom_id for e in lm["edges"])
+        assert tool.atom_id not in {n["atom_id"] for n in lm["ring"]}
+        assert "tool" in set(lm["filters"]["noisy_kinds_omitted"])
+    finally:
+        edge_store.close()
+
+
+def test_build_local_map_caps_force_truncation(store):
+    """Synthesize >16 edges via prefetched rows → map_truncated + cap lengths."""
+    from elyra.memory.graph import GraphEdge
+
+    atoms = _chain_store(store, 3)
+    focus = atoms[1]
+    settings = _enabled_settings()
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+
+    # Fabricate 20 observation neighbors as prefetched edges.
+    fake_atoms = []
+    for i in range(20):
+        a = store.put_atom(
+            _atom(
+                atom_id=f"fake_peer_{i}",
+                kind="observation",
+                text=f"peer {i}",
+                moment_id="m1",
+                t=f"2026-07-28T12:{i:02d}:00Z",
+            )
+        )
+        fake_atoms.append(a)
+    prefetched = [
+        GraphEdge(
+            src_atom_id=focus.atom_id,
+            dst_atom_id=a.atom_id,
+            edge_kind="same_moment",
+            weight=1.0 - (i * 0.01),
+            reason="test",
+        )
+        for i, a in enumerate(fake_atoms)
+    ]
+    lm = build_local_map(
+        gv,
+        focus.atom_id,
+        include_noisy=False,
+        expand_deadline_ms=200,
+        prefetched_edges=prefetched,
+    )
+    assert lm is not None
+    assert len(lm["edges"]) == LOCAL_MAP_EDGES_CAP
+    assert len(lm["ring"]) == LOCAL_MAP_RING_CAP
+    assert lm["meta"]["map_truncated"] is True
+
+
+def test_step_map_reuses_prefetched_under_shared_budget(store, monkeypatch):
+    """Issue 2: step maps share remaining budget; d1 from Phase-A edges."""
+    atoms = _chain_store(store, 5)
+    settings = _enabled_settings(
+        traverse_max_expand_per_step=3,
+        traverse_expand_max_ms=50,
+    )
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="shared",
+        seed_atom_ids=[a.atom_id for a in atoms[:3]],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    deadlines: list[Any] = []
+    pref_flags: list[bool] = []
+    real_build = build_local_map
+
+    def _spy(graph, focus_id, **kwargs):
+        deadlines.append(kwargs.get("expand_deadline_ms"))
+        pref_flags.append(kwargs.get("prefetched_edges") is not None)
+        return real_build(graph, focus_id, **kwargs)
+
+    monkeypatch.setattr("elyra.memory.traverse.build_local_map", _spy)
+    step = reg.step(
+        gv,
+        session_id=start["session_id"],
+        expand_ids=[atoms[0].atom_id, atoms[1].atom_id],
+    )
+    assert step["ok"] is True
+    assert step["local_map"] is not None
+    assert deadlines  # maps built
+    assert all(pref_flags)  # all maps got prefetched Phase-A edges
+    # Deadlines are remaining after expand (0..) not a fresh full expand_ms each.
+    for d in deadlines:
+        assert d is None or d <= settings.traverse_expand_max_ms
