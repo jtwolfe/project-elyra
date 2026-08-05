@@ -1,12 +1,11 @@
-"""Host ``view_media`` tool — mid-moment look at path / att_id (PR3).
+"""Host ``view_media`` tool — mid-moment look at path / att_id / url.
 
-Scope: resolve path|att_id into MediaStore, add to moment viewing set, first-wins
-promote with media_ids (no wake_message_id), list/drop/clear ops.
+Scope: resolve path|att_id|url into MediaStore, add to moment viewing set,
+first-wins promote with media_ids (no wake_message_id), list/drop/clear ops.
+URL fetch is SSRF-aware (KD-V18). AV Completions parts may still be inventory
+until PR4 wire builders ship (perception honesty fail-closed for audio/video).
 
-Out of scope: URL body fetch (PR5 → ``url_not_yet_wired``), AV Completions
-parts (PR4 — perception honesty stays fail-closed for audio/video).
-
-KD-V1, V11, V13–V16. Tool results stay text-only JSON (KD-V9).
+KD-V1, V11, V13–V16, V18. Tool results stay text-only JSON (KD-V9).
 """
 
 from __future__ import annotations
@@ -16,6 +15,13 @@ import logging
 import os
 from typing import Any
 
+from elyra.media.fetch import (
+    FetchError,
+    FetchedBytes,
+    fetch_url_bytes,
+    redacted_source_url,
+    reject_non_media_payload,
+)
 from elyra.media.ingest import IngestError, ingest_sandbox_path, resolve_sandbox_file
 from elyra.media.store import MediaStore, sniff_mime_and_kind, validate_att_id
 from elyra.media.types import Attachment
@@ -36,6 +42,8 @@ _DEFAULT_OP = "view"
 
 # Soft guidance thresholds (design KD-V18 / soft large-media).
 _SOFT_SIZE_BYTES = 8_000_000
+_SOFT_VIDEO_DURATION_S = 10.0
+_SOFT_AUDIO_DURATION_S = 15.0
 
 _SOFT_VIDEO_WARN = (
     "Prefer short media: video perception is reliable around ≤10 seconds; "
@@ -46,6 +54,9 @@ _SOFT_AUDIO_WARN = (
 )
 _SOFT_LARGE_WARN = (
     "Large media costs time and tokens; prefer sandbox paths when already local."
+)
+_SOFT_URL_WARN = (
+    "Large downloads cost time and tokens; prefer sandbox paths when already local."
 )
 
 # Image Completions expand is live (PR2). AV wire parts land in PR4.
@@ -62,12 +73,20 @@ _HARD_ARG_REASONS = frozenset(
         "is_directory",
         "file_too_large",
         "invalid_attachment",
+        # URL security / integrity failures are never soft-skipped.
+        "url_invalid",
+        "url_ssrf_blocked",
+        "url_redirect_blocked",
+        "url_timeout",
+        "url_too_large",
+        "url_content_type_rejected",
+        "url_fetch_failed",
     }
 )
 
 
 def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    """Resolve media into the moment viewing set (path and/or att_id).
+    """Resolve media into the moment viewing set (path and/or att_id and/or url).
 
     Schema: path?, att_id?, url?, op?, note?
     """
@@ -131,27 +150,20 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if src_err is not None:
         return _err(src_err)
 
-    # URL body fetch is PR5; schema keeps url for forward-compat.
-    if url is not None:
-        return _err(
-            "url_not_yet_wired",
-            detail=(
-                "URL fetch+view lands in a follow-on PR; use path or att_id for now."
-            ),
-            url=url,
-        )
-
-    if path is None and att_id is None:
+    if path is None and att_id is None and url is None:
         return _err("missing_source")
 
     note = _optional_note(args)
     try:
-        att, source_label = _resolve_view_attachment(
+        att, source_label, source_url = _resolve_view_attachment(
             path=path,
             att_id=att_id,
+            url=url,
             ctx=ctx,
         )
     except IngestError as exc:
+        return _err(exc.reason, detail=exc.detail)
+    except FetchError as exc:
         return _err(exc.reason, detail=exc.detail)
     except _ViewResolveError as exc:
         return _err(exc.reason, detail=exc.detail, **exc.extra)
@@ -163,10 +175,12 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return _err("invalid_att_id", detail=str(exc))
 
     # First-wins breadcrumb (no wake_message_id). Soft-fail if store missing.
-    promoted = _maybe_promote(ctx, moment_id, att, note=note)
+    promoted = _maybe_promote(
+        ctx, moment_id, att, note=note, source_url=source_url
+    )
 
     presentation, perception, skip_reason = _presentation_for(att.kind)
-    soft_warnings = _soft_warnings(att)
+    soft_warnings = _soft_warnings(att, from_url=bool(source_url))
     payload: dict[str, Any] = {
         "op": "view",
         "att_id": att.id,
@@ -197,6 +211,8 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         payload["soft_warnings"] = soft_warnings
     if note:
         payload["view_note"] = note
+    if source_url:
+        payload["source_url"] = source_url
     return _ok(payload)
 
 
@@ -223,121 +239,149 @@ def _resolve_view_attachment(
     *,
     path: str | None,
     att_id: str | None,
+    url: str | None,
     ctx: ToolContext,
-) -> tuple[Attachment, str]:
-    """Resolve path and/or att_id to one Attachment (KD-V14 soft multi-source).
+) -> tuple[Attachment, str, str | None]:
+    """Resolve path and/or att_id and/or url (KD-V14 soft multi-source + KD-V18).
+
+    Returns ``(attachment, source_label, source_url_or_none)``.
 
     - Soft-miss (``not_found`` / ``unsupported_kind``): skip that source when
       another is present; if only one resolves, use it.
-    - Hard failures (``invalid_att_id``, ``path_escape``, size, …): always raise.
-    - Path resolve hashes first: reuses existing meta by sha (content-idempotent
-      re-view); dual-source conflict compares sha **before** durable put (no orphan).
+    - Hard failures (``invalid_att_id``, ``path_escape``, SSRF, size, …): always raise.
+    - Path/url **hash first**: multi-source conflict compares sha **before** any
+      durable put (no orphan ingest). Reuses existing meta by sha.
     """
     id_att: Attachment | None = None
     id_err: _ViewResolveError | None = None
-    path_att: Attachment | None = None
+    path_blob: tuple[bytes, str, str, str, str] | None = None  # data,fname,mime,kind,sha
     path_err: Exception | None = None
+    url_blob: tuple[FetchedBytes, str, str] | None = None  # fetched, sha, safe_url
 
     if att_id is not None:
         try:
             id_att = _get_existing_att(att_id, ctx)
         except _ViewResolveError as exc:
+            sole = path is None and url is None
             if exc.reason in _HARD_ARG_REASONS or (
-                path is None and exc.reason not in _SOFT_MISS_REASONS
+                sole and exc.reason not in _SOFT_MISS_REASONS
             ):
                 raise
-            if path is None:
-                # Sole source soft miss → surface the error.
+            if sole:
                 raise
             id_err = exc
 
     if path is not None:
         try:
-            # When att_id already resolved, compare sha before any put.
-            path_att = _resolve_path_attachment(
-                path,
-                ctx,
-                peer=id_att,
-            )
-        except _ViewResolveError as exc:
-            if exc.reason == "ambiguous_source":
-                raise
-            if exc.reason in _HARD_ARG_REASONS or id_att is None:
-                raise
-            path_err = exc
+            data, fname, mime, kind = _read_sandbox_media_bytes(path, ctx)
+            sha = hashlib.sha256(data).hexdigest()
+            path_blob = (data, fname, mime, kind, sha)
         except IngestError as exc:
             reason = exc.reason
+            sole = id_att is None and url is None
             hard = (
                 reason in _HARD_ARG_REASONS
                 or reason.startswith("os_error:")
-                or id_att is None
+                or sole
             )
             if hard:
                 raise
             path_err = exc
+        except _ViewResolveError as exc:
+            sole = id_att is None and url is None
+            if exc.reason in _HARD_ARG_REASONS or sole:
+                raise
+            path_err = exc
 
-    if path_att is not None and id_att is not None:
-        # Same durable media (id or sha) — prefer explicit att_id.
-        if path_att.id == id_att.id or path_att.sha256 == id_att.sha256:
-            return id_att, "path+att_id"
-        # Should be unreachable: _resolve_path_attachment raises on conflict.
-        raise _ViewResolveError(
-            "ambiguous_source",
-            detail=(
-                f"path and att_id resolve to different media "
-                f"(sha {path_att.sha256[:12]}… vs {id_att.sha256[:12]}…)"
-            ),
-            path_att_id=path_att.id,
-            att_id=id_att.id,
-        )
+    if url is not None:
+        try:
+            open_fn, gai_fn = _fetch_hooks(ctx)
+            fetched = fetch_url_bytes(url, urlopen=open_fn, getaddrinfo=gai_fn)
+            sha = hashlib.sha256(fetched.data).hexdigest()
+            safe_url = redacted_source_url(fetched.final_url or url)
+            # Validate payload kind/size before multi-source compare commits.
+            mime, kind = sniff_mime_and_kind(
+                fetched.data,
+                filename=fetched.filename,
+                claimed_mime=fetched.claimed_mime,
+            )
+            reject_non_media_payload(fetched.data, mime, kind)
+            if kind == "tts_cache":
+                raise FetchError(
+                    "url_content_type_rejected",
+                    detail="tts_cache cannot be fetched for view",
+                )
+            limit = max_bytes_for_kind(kind)
+            if len(fetched.data) > limit:
+                raise FetchError(
+                    "url_too_large",
+                    detail=f"{len(fetched.data)} bytes exceeds {kind} max {limit}",
+                )
+            url_blob = (fetched, sha, safe_url)
+        except FetchError:
+            # URL security/network/content failures are always hard.
+            raise
 
+    labels: list[str] = []
+    shas: list[str] = []
+    if path_blob is not None:
+        labels.append("path")
+        shas.append(path_blob[4])
     if id_att is not None:
-        return id_att, "att_id"
-    if path_att is not None:
-        return path_att, "path"
+        labels.append("att_id")
+        shas.append(id_att.sha256)
+    if url_blob is not None:
+        labels.append("url")
+        shas.append(url_blob[1])
 
-    # Zero resolved — surface the most specific soft error.
-    if id_err is not None:
-        raise id_err
-    if isinstance(path_err, IngestError):
-        raise path_err
-    if isinstance(path_err, _ViewResolveError):
-        raise path_err
-    raise _ViewResolveError("missing_source")
+    if not labels:
+        if id_err is not None:
+            raise id_err
+        if isinstance(path_err, (IngestError, _ViewResolveError)):
+            raise path_err
+        raise _ViewResolveError("missing_source")
 
-
-def _resolve_path_attachment(
-    path: str,
-    ctx: ToolContext,
-    *,
-    peer: Attachment | None = None,
-) -> Attachment:
-    """Hash sandbox path; compare peer / reuse by sha / put origin=view.
-
-    When ``peer`` is set and sha differs → ``ambiguous_source`` without put.
-    When sha already has meta → reuse that att (content-idempotent re-view).
-    """
-    data, fname, mime, kind = _read_sandbox_media_bytes(path, ctx)
-    sha = hashlib.sha256(data).hexdigest()
-
-    if peer is not None:
-        if peer.sha256 == sha:
-            return peer
+    if len(set(shas)) > 1:
         raise _ViewResolveError(
             "ambiguous_source",
             detail=(
-                f"path and att_id resolve to different media "
-                f"(sha {sha[:12]}… vs {peer.sha256[:12]}…)"
+                "sources resolve to different media "
+                f"(sha {shas[0][:12]}… vs {shas[-1][:12]}…)"
             ),
-            att_id=peer.id,
+            att_id=id_att.id if id_att is not None else None,
         )
 
+    source_label = "+".join(labels)
+    out_url = url_blob[2] if url_blob is not None else None
+
+    # Prefer explicit att_id when present (matching sha already enforced).
+    if id_att is not None:
+        return id_att, source_label, out_url
+
+    # Materialize once from path or url (reuse meta by sha when possible).
+    if path_blob is not None:
+        att = _materialize_path_blob(path, path_blob, ctx)
+        return att, source_label, out_url
+
+    assert url_blob is not None
+    att = _materialize_url_blob(url_blob, ctx)
+    return att, source_label, out_url
+
+
+def _materialize_path_blob(
+    path: str | None,
+    path_blob: tuple[bytes, str, str, str, str],
+    ctx: ToolContext,
+) -> Attachment:
+    """Reuse-by-sha or put path bytes with origin=view."""
+    _data, fname, mime, kind, sha = path_blob
     store = MediaStore(ctx.paths)
     existing = store.find_first_by_sha256(sha)
     if existing is not None and existing.kind != "tts_cache":
         return existing
-
-    # First sight of these bytes — durable put with origin view.
+    if not path:
+        # Should not happen when path_blob came from path resolve.
+        raise _ViewResolveError("missing_source", detail="path blob without path")
     return ingest_sandbox_path(
         path,
         paths=ctx.paths,
@@ -347,6 +391,50 @@ def _resolve_path_attachment(
         origin="view",
         uploader_user_id=_uploader_user_id(ctx),
         mime=mime,
+    )
+
+
+def _materialize_url_blob(
+    url_blob: tuple[FetchedBytes, str, str],
+    ctx: ToolContext,
+) -> Attachment:
+    """Reuse-by-sha or put fetched URL bytes with origin=view."""
+    fetched, sha, _safe = url_blob
+    store = MediaStore(ctx.paths)
+    existing = store.find_first_by_sha256(sha)
+    if existing is not None and existing.kind != "tts_cache":
+        return existing
+    mime, kind = sniff_mime_and_kind(
+        fetched.data,
+        filename=fetched.filename,
+        claimed_mime=fetched.claimed_mime,
+    )
+    try:
+        return store.put_bytes(
+            fetched.data,
+            filename=fetched.filename,
+            mime=mime,
+            kind=kind,
+            origin="view",
+            uploader_user_id=_uploader_user_id(ctx),
+        )
+    except ValueError as exc:
+        raise FetchError("url_fetch_failed", detail=str(exc)) from exc
+    except OSError as exc:
+        raise FetchError(
+            "url_fetch_failed",
+            detail=f"os_error:{type(exc).__name__}",
+        ) from exc
+
+
+def _fetch_hooks(ctx: ToolContext) -> tuple[Any, Any]:
+    """Optional injectable urlopen / getaddrinfo from ctx.extras (hermetic tests)."""
+    extras = ctx.extras if isinstance(ctx.extras, dict) else {}
+    urlopen = extras.get("urlopen") or extras.get("media_fetch_urlopen")
+    getaddrinfo = extras.get("getaddrinfo") or extras.get("media_fetch_getaddrinfo")
+    return (
+        urlopen if callable(urlopen) else None,
+        getaddrinfo if callable(getaddrinfo) else None,
     )
 
 
@@ -505,6 +593,7 @@ def _maybe_promote(
     att: Attachment,
     *,
     note: str | None,
+    source_url: str | None = None,
 ) -> bool:
     extras = ctx.extras if isinstance(ctx.extras, dict) else {}
     store = extras.get("memory_store")
@@ -521,6 +610,7 @@ def _maybe_promote(
             moment_id,
             media_ids=[att.id],
             note=note,
+            source_url=source_url,
             settings=mem_settings,
         )
         return atom is not None
@@ -563,16 +653,44 @@ def _presentation_for(kind: str) -> tuple[str, bool, str | None]:
     return "inventory", False, "unsupported_kind_for_vision"
 
 
-def _soft_warnings(att: Attachment) -> list[str]:
+def _soft_warnings(
+    att: Attachment,
+    *,
+    from_url: bool = False,
+    duration_s: float | None = None,
+) -> list[str]:
+    """Soft large/long-media guidance (never hard-fails the view)."""
     warns: list[str] = []
     kind = (att.kind or "").lower()
     if kind == "video":
         warns.append(_SOFT_VIDEO_WARN)
     elif kind == "audio":
         warns.append(_SOFT_AUDIO_WARN)
-    if int(att.byte_size or 0) > _SOFT_SIZE_BYTES:
+    size = int(att.byte_size or 0)
+    if size > _SOFT_SIZE_BYTES:
         warns.append(_SOFT_LARGE_WARN)
-    return warns
+    elif from_url and kind in ("audio", "video"):
+        # Always caution URL AV even under soft size threshold.
+        if _SOFT_URL_WARN not in warns:
+            warns.append(_SOFT_URL_WARN)
+    if duration_s is not None:
+        try:
+            d = float(duration_s)
+        except (TypeError, ValueError):
+            d = None
+        if d is not None:
+            if kind == "video" and d > _SOFT_VIDEO_DURATION_S and _SOFT_VIDEO_WARN not in warns:
+                warns.append(_SOFT_VIDEO_WARN)
+            if kind == "audio" and d > _SOFT_AUDIO_DURATION_S and _SOFT_AUDIO_WARN not in warns:
+                warns.append(_SOFT_AUDIO_WARN)
+    # De-dupe preserve order
+    out: list[str] = []
+    seen: set[str] = set()
+    for w in warns:
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
 
 
 def _media_enabled() -> bool:

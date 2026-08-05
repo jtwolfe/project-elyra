@@ -11,7 +11,7 @@
     },
     "url": {
       "type": "string",
-      "description": "HTTPS URL to fetch into MediaStore and view. Prefer short clips (~10s video). Large/long media may be rejected or truncated with an explicit reason. (URL body fetch may return url_not_yet_wired until wired.)"
+      "description": "HTTPS URL to fetch into MediaStore and view (SSRF-safe host fetch). Prefer short clips (~10s video). Large/long media may be rejected or soft-warned; private/metadata IPs blocked."
     },
     "op": {
       "type": "string",

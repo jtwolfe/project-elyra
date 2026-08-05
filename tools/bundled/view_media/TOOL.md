@@ -1,12 +1,12 @@
 ---
 name: view_media
-description: Look at media mid-moment from a sandbox path or prior att_id so the next model hop can perceive it (images now; audio/video Completions wire follows). Use when you need to see, hear, or inspect media that is not already on the wake.
+description: Look at media mid-moment from a sandbox path, prior att_id, or HTTPS URL so the next model hop can perceive it (images now; audio/video Completions wire follows). Use when you need to see, hear, or inspect media that is not already on the wake.
 kind: media
 ---
 
 # view_media
 
-Host capability: resolve **path** and/or **att_id** (and later **url**) into the
+Host capability: resolve **path** and/or **att_id** and/or **url** into the
 durable media store, add the attachment to the **moment viewing set**, and leave
 a thin memory breadcrumb. Multimodal bytes never appear in the tool JSON — they
 travel only on the Completions wire after the host **force-rebuilds outer**
@@ -17,6 +17,7 @@ before the next hop (`expand_next_hop: true`).
 - Sandbox file you wrote or downloaded (`tmp/animal.png`, a short clip, …) and
   need to **actually look at** (not invent from the filename).
 - Re-view a prior `att_*` already in MediaStore.
+- HTTPS URL to fetch into MediaStore then view (prefer short clips).
 - `op=list` / `drop` / `clear` to manage the current moment viewing set.
 
 ## Args
@@ -25,7 +26,7 @@ before the next hop (`expand_next_hop: true`).
 |-----|------|
 | `path` | Sandbox-relative path → ingest (origin `view`) |
 | `att_id` | Existing `att_*` |
-| `url` | HTTPS URL (may return `url_not_yet_wired` until URL fetch ships) |
+| `url` | HTTPS URL → SSRF-safe host fetch into MediaStore (origin `view`) |
 | `op` | `view` (default) \| `list` \| `drop` \| `clear` |
 | `note` | Optional short caption on **first** promote only |
 
@@ -33,10 +34,19 @@ Provide at least one of `path` / `att_id` / `url` for `op=view`. Combinations ar
 allowed when they refer to the **same** durable media (matching sha); different
 media → `ambiguous_source`. When multiple sources are named and only one
 resolves (e.g. good path + missing att_id), the host uses the successful source.
+URL security failures (`url_ssrf_blocked`, `url_invalid`, …) are always hard.
 
-**Path re-view is content-idempotent:** if the sandbox file's blob sha already
-has a MediaStore meta, that `att_*` is reused (no extra durable id / no second
+**Path/URL re-view is content-idempotent:** if the blob sha already has a
+MediaStore meta, that `att_*` is reused (no extra durable id / no second
 breadcrumb for the same media). Prefer `att_id` when you already have one.
+
+## URL fetch (SSRF-aware)
+
+- **HTTPS only** (http / file / other schemes → `url_invalid` or blocked).
+- Host DNS is resolved; loopback, link-local, private RFC1918, and metadata IPs
+  (e.g. `169.254.169.254`) are blocked (`url_ssrf_blocked`).
+- Redirects revalidated (max 3 hops); timeouts and size caps apply.
+- Prefer sandbox paths when the bytes are already local.
 
 ## Modalities (honesty)
 
@@ -63,6 +73,9 @@ Never treat `ok: true` + membership as guaranteed pixels/audio when
 # View a sandbox image (next hop sees pixels)
 view_media(path="tmp/animal.png")
 
+# Fetch + view an HTTPS image
+view_media(url="https://example.com/cat.png")
+
 # Re-view a prior attachment
 view_media(att_id="att_…")
 
@@ -79,6 +92,7 @@ view_media(op="clear")
 - `expand_next_hop: true`, `viewing_dirty: true`
 - `presentation` / `perception` — honesty for wire expand
 - `promoted` — whether a first-wins observation atom was written
+- `source_url` — redacted (no query) when the view used `url`
 
 Tool payload has **no media bytes**. Do not claim you saw the image until after
 the next hop when `perception: true`.

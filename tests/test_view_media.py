@@ -1,12 +1,16 @@
-"""Hermetic tests for view_media host tool (PR3 — path / att_id / dual-source).
+"""Hermetic tests for view_media host tool (path / att_id / url dual-source).
 
-Covers: path ingest origin=view, att_id, dual-source same/conflict sha,
-list/drop/clear, missing_source, no_open_moment, promote first-wins,
-url_not_yet_wired, modality honesty, registry discovery.
+Covers: path ingest origin=view, att_id, url SSRF-safe fetch, dual-source
+same/conflict sha, list/drop/clear, missing_source, no_open_moment, promote
+first-wins, modality honesty, registry discovery.
 """
 
 from __future__ import annotations
 
+import hashlib
+import io
+import socket
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +30,59 @@ from elyra.tools.policy import resolve_bundled_tools_root
 
 FIXTURE_PNG = Path(__file__).parent / "fixtures" / "media" / "1x1.png"
 FIXTURE_WAV = Path(__file__).parent / "fixtures" / "media" / "tiny.wav"
+
+
+class _FakeHeaders(dict):
+    pass
+
+
+class _FakeResp:
+    def __init__(
+        self,
+        body: bytes,
+        *,
+        status: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self._buf = io.BytesIO(body)
+        self.status = status
+        self.headers = _FakeHeaders(headers or {})
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, n: int = -1) -> bytes:
+        return self._buf.read(n)
+
+    def close(self) -> None:
+        self._buf.close()
+
+
+def _public_getaddrinfo(host: str, port: int, *args: Any, **kwargs: Any):
+    return [
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            0,
+            "",
+            ("93.184.216.34", port if isinstance(port, int) else 443),
+        )
+    ]
+
+
+def _png_urlopen(body: bytes | None = None):
+    data = body if body is not None else FIXTURE_PNG.read_bytes()
+
+    def urlopen(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        return _FakeResp(
+            data,
+            headers={
+                "Content-Type": "image/png",
+                "Content-Length": str(len(data)),
+            },
+        )
+
+    return urlopen
 
 
 # ---------------------------------------------------------------------------
@@ -418,21 +475,166 @@ def test_unsupported_kind_tts_cache(ctx: ToolContext, media: MediaStore) -> None
     assert result.error_reason == "unsupported_kind"
 
 
-def test_url_not_yet_wired(ctx: ToolContext) -> None:
+def test_view_url_success(
+    ctx: ToolContext,
+    viewing: dict,
+    dirty_flag: list[bool],
+    media: MediaStore,
+) -> None:
+    data = FIXTURE_PNG.read_bytes()
+    ctx.extras["urlopen"] = _png_urlopen(data)
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
     result = view_media({"url": "https://example.com/cat.png"}, ctx)
+    assert result.ok is True
+    assert result.payload["source"] == "url"
+    assert result.payload["kind"] == "image"
+    assert result.payload["perception"] is True
+    assert result.payload["source_url"] == "https://example.com/cat.png"
+    assert dirty_flag[0] is True
+    aid = result.payload["att_id"]
+    assert list_viewing_att_ids(viewing) == [aid]
+    att = media.get(aid)
+    assert att is not None
+    assert att.origin == "view"
+
+
+def test_view_url_ssrf_loopback_blocked(ctx: ToolContext, viewing: dict) -> None:
+    # Literal private IP — no mock needed; must fail before open.
+    result = view_media({"url": "https://127.0.0.1/secret.png"}, ctx)
     assert result.ok is False
-    assert result.error_reason == "url_not_yet_wired"
-    assert "url_not_yet_wired" in (result.payload.get("reason") or "")
+    assert result.error_reason == "url_ssrf_blocked"
+    assert list_viewing_att_ids(viewing) == []
 
 
-def test_url_with_path_still_not_wired(ctx: ToolContext, sandbox: Sandbox) -> None:
-    _write_sandbox_png(sandbox)
+def test_view_url_ssrf_10_x_blocked(ctx: ToolContext) -> None:
+    result = view_media({"url": "https://10.0.0.8/x.png"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "url_ssrf_blocked"
+
+
+def test_view_url_ssrf_metadata_blocked(ctx: ToolContext) -> None:
+    result = view_media({"url": "https://169.254.169.254/latest/meta-data/"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "url_ssrf_blocked"
+
+
+def test_view_url_http_invalid(ctx: ToolContext) -> None:
+    result = view_media({"url": "http://example.com/a.png"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "url_invalid"
+
+
+def test_view_url_size_cap(ctx: ToolContext) -> None:
+    # Content-Length over URL_MAX_BYTES (48 MiB) aborts before body read.
+    def urlopen_cl(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        return _FakeResp(
+            b"x",
+            headers={
+                "Content-Type": "image/png",
+                "Content-Length": str(60 * 1024 * 1024),
+            },
+        )
+
+    ctx.extras["urlopen"] = urlopen_cl
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
+    result = view_media({"url": "https://example.com/huge.png"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "url_too_large"
+
+
+def test_view_url_timeout(ctx: ToolContext) -> None:
+    def urlopen(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        raise TimeoutError("simulated")
+
+    ctx.extras["urlopen"] = urlopen
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
+    result = view_media({"url": "https://example.com/slow.png"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "url_timeout"
+
+
+def test_dual_source_path_url_same_sha(
+    ctx: ToolContext,
+    sandbox: Sandbox,
+    media: MediaStore,
+) -> None:
+    data = FIXTURE_PNG.read_bytes()
+    _write_sandbox_bytes(sandbox, "tmp/same.png", data)
+    ctx.extras["urlopen"] = _png_urlopen(data)
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
+    meta_before = set(media.list_meta_ids())
     result = view_media(
-        {"path": "tmp/animal.png", "url": "https://example.com/x.png"},
+        {"path": "tmp/same.png", "url": "https://example.com/same.png"},
+        ctx,
+    )
+    assert result.ok is True
+    assert result.payload["source"] == "path+url"
+    assert result.payload["kind"] == "image"
+    after = set(media.list_meta_ids())
+    new_ids = after - meta_before
+    assert len(new_ids) == 1
+    att = media.get(result.payload["att_id"])
+    assert att is not None
+    assert att.sha256 == hashlib.sha256(data).hexdigest()
+
+
+def test_dual_source_path_url_conflict(
+    ctx: ToolContext,
+    sandbox: Sandbox,
+    viewing: dict,
+    media: MediaStore,
+) -> None:
+    _write_sandbox_png(sandbox, "tmp/local.png")
+    other = b"\x89PNG\r\n\x1a\n" + b"DIFFERENT-BYTES"
+    ctx.extras["urlopen"] = _png_urlopen(other)
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
+    meta_before = set(media.list_meta_ids())
+    result = view_media(
+        {"path": "tmp/local.png", "url": "https://example.com/other.png"},
         ctx,
     )
     assert result.ok is False
-    assert result.error_reason == "url_not_yet_wired"
+    assert result.error_reason == "ambiguous_source"
+    assert list_viewing_att_ids(viewing) == []
+    # No orphan URL put on conflict.
+    assert set(media.list_meta_ids()) == meta_before
+
+
+def test_dual_source_url_with_att_id_same_sha(
+    ctx: ToolContext,
+    media: MediaStore,
+) -> None:
+    data = FIXTURE_PNG.read_bytes()
+    existing = media.put_bytes(data, filename="prior.png", origin="user_upload")
+    ctx.extras["urlopen"] = _png_urlopen(data)
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
+    result = view_media(
+        {"att_id": existing.id, "url": "https://example.com/prior.png"},
+        ctx,
+    )
+    assert result.ok is True
+    assert result.payload["att_id"] == existing.id
+    assert "url" in result.payload["source"]
+    assert "att_id" in result.payload["source"]
+
+
+def test_promote_source_url_redacted(
+    ctx: ToolContext,
+    mem_store,
+) -> None:
+    data = FIXTURE_PNG.read_bytes()
+    ctx.extras["urlopen"] = _png_urlopen(data)
+    ctx.extras["getaddrinfo"] = _public_getaddrinfo
+    result = view_media(
+        {"url": "https://example.com/cat.png?token=supersecret", "note": "from web"},
+        ctx,
+    )
+    assert result.ok is True
+    assert "token" not in result.payload.get("source_url", "")
+    atoms = mem_store.list_by_moment("moment-view-1", kinds=["observation"])
+    assert len(atoms) == 1
+    assert atoms[0].meta.get("source_url") == "https://example.com/cat.png"
+    assert "supersecret" not in str(atoms[0].meta)
 
 
 def test_media_disabled(ctx: ToolContext, sandbox: Sandbox, monkeypatch) -> None:
