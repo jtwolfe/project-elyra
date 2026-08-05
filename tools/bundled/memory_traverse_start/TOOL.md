@@ -14,7 +14,7 @@ Open a **temporary** directed-traversal session (Phase 2a). Prefer skill
 - Optional: `seed_atom_ids` — durable atom ids to seed (validated; free of expand_ms)
 - Optional: `seed_media_ids` — media attachment ids for multimodal semantic seed
 - Optional: `seed_mode` — `auto` (default) | `semantic_only` | `temporal_only` | `explicit_only`
-- Optional: `budgets` — `{max_steps, max_nodes, max_depth, max_keep}` (clamped down)
+- Optional: `budgets` — `{max_steps, max_nodes, max_depth, max_keep, frontier_max, max_expand_per_step, neighbor_k}` (clamped to HARD_MAX; may raise above product defaults)
 
 ## Seed modes
 

@@ -488,9 +488,10 @@ def test_parent_of_respects_parcel_child_cap(store):
 # ── same_moment ────────────────────────────────────────────────────────────
 
 
-def test_same_moment_capped_at_four(store):
-    # 8 peers + self in moment
-    for i in range(9):
+def test_same_moment_capped_at_product_default(store):
+    """PR6: product default traverse_same_moment_k=8 (was 4)."""
+    # 12 peers + self in moment → cap at product default 8
+    for i in range(13):
         store.put_atom(
             _atom(
                 atom_id=f"a_sm{i}",
@@ -503,7 +504,7 @@ def test_same_moment_capped_at_four(store):
     edges = gv.neighbors(
         "a_sm0", kinds=[EDGE_SAME_MOMENT], k=20, allow_semantic=False
     )
-    assert len(edges) == 4
+    assert len(edges) == 8
     assert all(e.edge_kind == EDGE_SAME_MOMENT for e in edges)
     # Prefer more recent (higher weight)
     assert edges[0].weight >= edges[-1].weight

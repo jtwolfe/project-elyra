@@ -38,6 +38,7 @@ from elyra.memory.weights import (
     EDGE_SUMMARY_SOURCE,
     EDGE_SUPERSEDES,
     edge_weight,
+    kind_priority,
     passes_min_weight,
 )
 
@@ -57,13 +58,13 @@ MOMENT_HUB_PREFIX = "moment:"
 
 _LOG = logging.getLogger(__name__)
 
-# Defaults when settings omit a knob (PR-A1 read-only; PR-A2 owns full flags).
-DEFAULT_EXPAND_MAX_MS = 80
+# Defaults when settings omit a knob (aligned with MemorySettings / design §5.1).
+DEFAULT_EXPAND_MAX_MS = 120
 DEFAULT_PARCEL_CHILD_CAP = 32
-DEFAULT_SAME_MOMENT_K = 4
-DEFAULT_SEMANTIC_K = 8
-DEFAULT_NEIGHBOR_K = 12
-DEFAULT_SEED_K = 8
+DEFAULT_SAME_MOMENT_K = 8
+DEFAULT_SEMANTIC_K = 10
+DEFAULT_NEIGHBOR_K = 16
+DEFAULT_SEED_K = 10
 # Lite summary fabric expand caps (PR-C design §6).
 DEFAULT_SUMMARY_SOURCE_LITE_K = 8
 DEFAULT_SUMMARY_SOURCE_DEEP_K = 24
@@ -300,6 +301,15 @@ class GraphView:
         return max(
             0,
             _int_setting(self._settings, "traverse_semantic_k", DEFAULT_SEMANTIC_K),
+        )
+
+    def _neighbor_k(self) -> int:
+        """Product default for neighbors top-k (``traverse_neighbor_k``)."""
+        return max(
+            1,
+            _int_setting(
+                self._settings, "traverse_neighbor_k", DEFAULT_NEIGHBOR_K
+            ),
         )
 
     def _expand_max_ms(self) -> int:
@@ -1121,21 +1131,26 @@ class GraphView:
         atom_id: str,
         *,
         kinds: Sequence[str] | None = None,
-        k: int = DEFAULT_NEIGHBOR_K,
+        k: int | None = None,
         exclude_ids: AbstractSet[str] | None = None,
         allow_semantic: bool = True,
         expand_deadline_ms: int | None = None,
     ) -> list[GraphEdge]:
-        """1-hop expand sorted by weight desc (then dst_atom_id for stability).
+        """1-hop expand sorted by weight desc (then kind priority, dst id).
 
         When ``kinds is None``, uses ``DEFAULT_EXPAND_KINDS`` (all EDGE_KINDS
         except ``has_channel``, unless ``traverse_expand_channels``). Explicit
         ``kinds`` is intersected with ``EDGE_KINDS``; empty → no edges.
 
+        ``k`` defaults to ``settings.traverse_neighbor_k`` (product 16).
+
         Durable EdgeStore edges are unioned with projected structural kinds.
         ``in_moment`` hubs rewrite to peer atoms; virtual channel ids never
         appear as destinations. Semantic hops only if index present AND
         embedder warm AND ``allow_semantic`` and settings allow.
+
+        Dual ``same_moment`` + ``in_moment`` peers for the same dst collapse
+        to the higher-priority kind (``in_moment`` wins — design §1.4 / §5.3).
 
         Skip reasons in ``last_expand_meta["semantic_reason"]``:
 
@@ -1160,6 +1175,8 @@ class GraphView:
           default lite semantics.
         """
         t0 = _now_ms()
+        if k is None:
+            k = self._neighbor_k()
         deadline = (
             float(expand_deadline_ms)
             if expand_deadline_ms is not None
@@ -1295,9 +1312,40 @@ class GraphView:
             prev = best.get(key)
             if prev is None or e.weight > prev.weight:
                 best[key] = e
+
+        # Dual same_moment + in_moment for the same dst: prefer durable
+        # in_moment (kind priority — design §1.4 / §5.3). Other multi-kind
+        # pairs to the same dst remain distinct edges.
+        _moment_dual = {EDGE_SAME_MOMENT, EDGE_IN_MOMENT}
+        drop_keys: set[tuple[str, str]] = set()
+        by_dst_moment: dict[str, GraphEdge] = {}
+        for e in best.values():
+            if e.edge_kind not in _moment_dual:
+                continue
+            prev = by_dst_moment.get(e.dst_atom_id)
+            if prev is None:
+                by_dst_moment[e.dst_atom_id] = e
+                continue
+            # Prefer higher priority (lower rank), then weight.
+            winner = e
+            if kind_priority(prev.edge_kind) < kind_priority(e.edge_kind) or (
+                kind_priority(prev.edge_kind) == kind_priority(e.edge_kind)
+                and prev.weight >= e.weight
+            ):
+                winner = prev
+            loser = e if winner is prev else prev
+            by_dst_moment[e.dst_atom_id] = winner
+            drop_keys.add((loser.dst_atom_id, loser.edge_kind))
+        if drop_keys:
+            best = {k: v for k, v in best.items() if k not in drop_keys}
+
         ordered = sorted(
             best.values(),
-            key=lambda e: (-e.weight, e.edge_kind, e.dst_atom_id),
+            key=lambda e: (
+                -e.weight,
+                kind_priority(e.edge_kind),
+                e.dst_atom_id,
+            ),
         )
         limit = max(0, int(k))
         result = ordered[:limit]

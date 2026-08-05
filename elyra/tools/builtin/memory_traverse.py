@@ -208,14 +208,23 @@ def memory_traverse_start(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 ),
             )
 
-    # Optional budget overrides (clamped by registry to settings max).
+    # Optional budget overrides — clamp(request or default, 1, HARD_MAX)
+    # in TraversalRegistry (PR6 §5.4; may raise above product default).
     budget_overrides: dict[str, int] | None = None
     raw_budgets = args.get("budgets")
     if raw_budgets is not None:
         if not isinstance(raw_budgets, dict):
             return _err(ERROR_INVALID_ARGS, detail="budgets must be an object")
         budget_overrides = {}
-        for key in ("max_steps", "max_nodes", "max_depth", "max_keep"):
+        for key in (
+            "max_steps",
+            "max_nodes",
+            "max_depth",
+            "max_keep",
+            "frontier_max",
+            "max_expand_per_step",
+            "neighbor_k",
+        ):
             if key in raw_budgets and raw_budgets[key] is not None:
                 try:
                     budget_overrides[key] = int(raw_budgets[key])

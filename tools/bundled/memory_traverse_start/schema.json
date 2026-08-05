@@ -26,12 +26,15 @@
     },
     "budgets": {
       "type": "object",
-      "description": "Optional lower budget overrides (clamped to settings max).",
+      "description": "Optional budget overrides. Clamped to [1, HARD_MAX] (may raise above product defaults up to hard max).",
       "properties": {
         "max_steps": { "type": "integer" },
         "max_nodes": { "type": "integer" },
         "max_depth": { "type": "integer" },
-        "max_keep": { "type": "integer" }
+        "max_keep": { "type": "integer" },
+        "frontier_max": { "type": "integer" },
+        "max_expand_per_step": { "type": "integer" },
+        "neighbor_k": { "type": "integer" }
       },
       "additionalProperties": false
     }

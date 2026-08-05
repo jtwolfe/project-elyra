@@ -54,6 +54,36 @@ DEFAULT_EXPAND_KINDS: frozenset[str] = frozenset(
     k for k in EDGE_KINDS if k != EDGE_HAS_CHANNEL
 )
 
+# Kind priority for expand sort / dst-level dual-kind collapse (design §5.3).
+# Lower rank = preferred. sequential > recalls > created_with > in_moment >
+# parent/child > summary_* > same_moment > semantic_hop > has_channel.
+_KIND_PRIORITY_ORDER: tuple[str, ...] = (
+    EDGE_SEQUENTIAL,
+    EDGE_RECALLS,
+    EDGE_CREATED_WITH,
+    EDGE_IN_MOMENT,
+    EDGE_PARENT_OF,
+    EDGE_CHILD_OF,
+    EDGE_SUMMARY_CHILD,
+    EDGE_SUMMARY_SOURCE,
+    EDGE_SUPERSEDES,
+    EDGE_SAME_MOMENT,
+    EDGE_SEMANTIC_HOP,
+    EDGE_HAS_CHANNEL,
+)
+KIND_PRIORITY: Mapping[str, int] = {
+    k: i for i, k in enumerate(_KIND_PRIORITY_ORDER)
+}
+# Unknown kinds sort after known (stable fallback).
+_KIND_PRIORITY_UNKNOWN = len(_KIND_PRIORITY_ORDER)
+
+
+def kind_priority(edge_kind: str | None) -> int:
+    """Lower is better for expand sort / dual same_moment+in_moment collapse."""
+    if not edge_kind:
+        return _KIND_PRIORITY_UNKNOWN
+    return KIND_PRIORITY.get(str(edge_kind), _KIND_PRIORITY_UNKNOWN)
+
 # Kinds that multiply cosine at expand (live hop + durable recalls).
 _COSINE_KINDS: frozenset[str] = frozenset({EDGE_SEMANTIC_HOP, EDGE_RECALLS})
 
@@ -251,9 +281,11 @@ __all__ = [
     "EDGE_SUMMARY_CHILD",
     "EDGE_SUMMARY_SOURCE",
     "EDGE_SUPERSEDES",
+    "KIND_PRIORITY",
     "base_weight",
     "clamp01",
     "edge_weight",
+    "kind_priority",
     "passes_min_weight",
     "phase3_multiplier",
     "semantic_factor",

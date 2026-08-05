@@ -609,6 +609,42 @@ def test_tool_schema_has_seed_mode_and_media(paths):
     assert "seed_mode" in props
     assert "seed_media_ids" in props
     assert "seed_atom_ids" in props
+    # PR6 budget keys (HARD_MAX clamp surface).
+    budgets = (props.get("budgets") or {}).get("properties") or {}
+    for key in (
+        "max_steps",
+        "max_nodes",
+        "max_depth",
+        "max_keep",
+        "frontier_max",
+        "max_expand_per_step",
+        "neighbor_k",
+    ):
+        assert key in budgets, f"missing budgets.{key}"
+
+
+def test_tool_budget_override_raises_above_product(paths, store):
+    """Tool budgets: request max_nodes=100 with product 80 → session 100."""
+    atoms = _chain(store, 2)
+    mem = _enabled_settings(traverse_max_nodes=80)
+    ctx = _ctx(paths, store=store, settings=mem)
+    start = memory_traverse_start(
+        {
+            "goal": "raise nodes",
+            "seed_atom_ids": [atoms[0].atom_id],
+            "budgets": {
+                "max_nodes": 100,
+                "frontier_max": 30,
+                "neighbor_k": 20,
+            },
+        },
+        ctx,
+    )
+    assert start.ok is True
+    budget = start.payload.get("budget") or {}
+    assert budget.get("max_nodes") == 100
+    assert budget.get("frontier_max") == 30
+    assert budget.get("neighbor_k") == 20
 
 
 def test_registry_execute_start_via_bundled(paths, store):

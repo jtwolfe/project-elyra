@@ -135,16 +135,17 @@ def test_default_settings_match_design():
     assert s.memory.glass_tail_fraction == 0.10
     assert s.memory.glass_tail_floor_messages == 6
     assert s.memory.glass_tail_max_messages == 20
-    assert s.memory.traverse_expand_max_ms == 80
+    # PR6 raised product defaults (design §5.1).
+    assert s.memory.traverse_expand_max_ms == 120
     # PR5 pure semantic start: 250ms headroom; dual temporal anchors reserved.
     assert s.memory.traverse_start_expand_max_ms == 250
-    assert s.memory.traverse_max_depth == 3
-    assert s.memory.traverse_max_nodes == 48
-    assert s.memory.traverse_max_steps == 8
+    assert s.memory.traverse_max_depth == 5
+    assert s.memory.traverse_max_nodes == 80
+    assert s.memory.traverse_max_steps == 12
     assert s.memory.traverse_max_seeds == 10
-    assert s.memory.traverse_frontier_max == 16
-    assert s.memory.traverse_max_expand_per_step == 3
-    assert s.memory.traverse_keep_max == 16
+    assert s.memory.traverse_frontier_max == 24
+    assert s.memory.traverse_max_expand_per_step == 5
+    assert s.memory.traverse_keep_max == 20
     assert s.memory.traverse_keep_adjacent is True
     assert s.memory.traverse_session_ttl_s == 900
     assert s.memory.traverse_label_chars == 80
@@ -154,8 +155,9 @@ def test_default_settings_match_design():
     assert s.memory.traverse_inspect_max_total_chars == 2400
     assert s.memory.traverse_scratchpad_chars == 200
     assert s.memory.traverse_parcel_child_cap == 32
-    assert s.memory.traverse_same_moment_k == 4
-    assert s.memory.traverse_semantic_k == 8
+    assert s.memory.traverse_same_moment_k == 8
+    assert s.memory.traverse_semantic_k == 10
+    assert s.memory.traverse_neighbor_k == 16
     assert s.memory.traverse_allow_semantic_hops is True
     assert s.memory.traverse_dual_start is True
     assert s.memory.traverse_dual_start_n == 2
@@ -679,12 +681,16 @@ directed_keep_enabled = false
     assert s_off.memory.directed_traversal_enabled is False
     assert s_off.memory.directed_keep_enabled is False
 
-    # Hard max rejects (design budgets table).
+    # Hard max rejects (design §5.1 budgets table — PR6 raised caps).
     for key, bad in (
         ("traverse_expand_max_ms", 501),
-        ("traverse_max_depth", 7),
-        ("traverse_max_nodes", 129),
-        ("traverse_max_steps", 17),
+        ("traverse_max_depth", 9),  # hard max 8
+        ("traverse_max_nodes", 161),  # hard max 160
+        ("traverse_max_steps", 25),  # hard max 24
+        ("traverse_frontier_max", 49),  # hard max 48
+        ("traverse_max_expand_per_step", 11),  # hard max 10
+        ("traverse_neighbor_k", 33),  # hard max 32
+        ("traverse_same_moment_k", 25),  # hard max 24
         ("traverse_session_ttl_s", 3601),
         ("traverse_label_chars", 161),
         ("traverse_preview_chars", 801),

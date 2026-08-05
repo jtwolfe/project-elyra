@@ -1369,7 +1369,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         channel_req = (
             (qs.get("channel") or ["auto"])[0] or "auto"
         ).strip() or "auto"
-        k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
+        k = resolve_neighbor_k((qs.get("k") or ["16"])[0])
         atom_id = (
             atom_id_raw.strip()
             if isinstance(atom_id_raw, str) and atom_id_raw.strip()
@@ -1413,7 +1413,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if isinstance(channel_raw, str) and str(channel_raw).strip()
             else "auto"
         ) or "auto"
-        k = resolve_neighbor_k(body.get("k", 12))
+        k = resolve_neighbor_k(body.get("k", 16))
         self._neighbors_search(
             atom_id=atom_id,
             query_text=query_text,
@@ -2088,7 +2088,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             if isinstance(atom_id_raw, str) and atom_id_raw.strip()
             else None
         )
-        k = resolve_neighbor_k((qs.get("k") or ["12"])[0])
+        k = resolve_neighbor_k((qs.get("k") or ["16"])[0])
         allow_sem_raw = (qs.get("allow_semantic") or ["1"])[0]
         allow_semantic = str(allow_sem_raw).strip().lower() not in (
             "0",

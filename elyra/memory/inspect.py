@@ -57,8 +57,9 @@ from elyra.memory.weights import (
 _SNIPPET_CHARS = 480
 _ATOM_LIST_HARD_CAP = 200
 _ATOM_TEXT_CAP = 4000
-_NEIGHBOR_K_DEFAULT = 12
-_NEIGHBOR_K_MAX = 50
+# Aligned with MemorySettings.traverse_neighbor_k / TRAVERSE_NEIGHBOR_K_MAX (PR6).
+_NEIGHBOR_K_DEFAULT = 16
+_NEIGHBOR_K_MAX = 32
 
 
 def truncate_text(text: str | None, *, max_chars: int = _SNIPPET_CHARS) -> str:
@@ -1194,19 +1195,22 @@ def directed_traversal_flags(settings: Any | None) -> dict[str, Any]:
         else False,
         # Surface key budgets so glass can explain caps without a separate call.
         "traverse_expand_max_ms": int(
-            getattr(settings, "traverse_expand_max_ms", 80) or 80
+            getattr(settings, "traverse_expand_max_ms", 120) or 120
         )
         if settings is not None
+        else 120,
+        "traverse_max_steps": int(getattr(settings, "traverse_max_steps", 12) or 12)
+        if settings is not None
+        else 12,
+        "traverse_max_nodes": int(getattr(settings, "traverse_max_nodes", 80) or 80)
+        if settings is not None
         else 80,
-        "traverse_max_steps": int(getattr(settings, "traverse_max_steps", 8) or 8)
+        "traverse_max_depth": int(getattr(settings, "traverse_max_depth", 5) or 5)
         if settings is not None
-        else 8,
-        "traverse_max_nodes": int(getattr(settings, "traverse_max_nodes", 48) or 48)
+        else 5,
+        "traverse_neighbor_k": int(getattr(settings, "traverse_neighbor_k", 16) or 16)
         if settings is not None
-        else 48,
-        "traverse_max_depth": int(getattr(settings, "traverse_max_depth", 3) or 3)
-        if settings is not None
-        else 3,
+        else 16,
         "traverse_session_ttl_s": int(
             getattr(settings, "traverse_session_ttl_s", 900) or 900
         )

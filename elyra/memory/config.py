@@ -74,14 +74,15 @@ SEMANTIC_WAIT_MAX_MS_MIN = 1_000
 SEMANTIC_WAIT_MAX_MS_MAX = 120_000
 SEMANTIC_WAIT_MAX_MS_DEFAULT = 15_000
 
-# Phase 2a traverse hard maxes (settings validation; design budgets table).
+# Phase 2a / PR6 traverse hard maxes (settings validation; design §5.1 table).
+# Product defaults live on MemorySettings; request clamp uses these as hi.
 TRAVERSE_EXPAND_MAX_MS_MAX = 500
-TRAVERSE_MAX_DEPTH_MAX = 6
-TRAVERSE_MAX_NODES_MAX = 128
-TRAVERSE_MAX_STEPS_MAX = 16
+TRAVERSE_MAX_DEPTH_MAX = 8  # was 6
+TRAVERSE_MAX_NODES_MAX = 160  # was 128
+TRAVERSE_MAX_STEPS_MAX = 24  # was 16
 TRAVERSE_MAX_SEEDS_MAX = 16
-TRAVERSE_FRONTIER_MAX_MAX = 32
-TRAVERSE_MAX_EXPAND_PER_STEP_MAX = 8
+TRAVERSE_FRONTIER_MAX_MAX = 48  # was 32
+TRAVERSE_MAX_EXPAND_PER_STEP_MAX = 10  # was 8
 TRAVERSE_KEEP_MAX_MAX = 32
 TRAVERSE_SESSION_TTL_S_MAX = 3600
 TRAVERSE_LABEL_CHARS_MAX = 160
@@ -92,7 +93,8 @@ TRAVERSE_INSPECT_MAX_TOTAL_CHARS_MAX = 6000
 TRAVERSE_SCRATCHPAD_CHARS_MAX = 400
 TRAVERSE_SEMANTIC_K_MAX = 16
 TRAVERSE_PARCEL_CHILD_CAP_MAX = 128
-TRAVERSE_SAME_MOMENT_K_MAX = 16
+TRAVERSE_SAME_MOMENT_K_MAX = 24  # was 16
+TRAVERSE_NEIGHBOR_K_MAX = 32  # step expand + GraphView default k hard max
 # PR5 dual temporal anchors reserved before semantic fill (#105 seed half).
 TRAVERSE_DUAL_START_N_MAX = 4
 TRAVERSE_SEED_MODES = frozenset(
@@ -280,25 +282,28 @@ class MemorySettings:
     glass_tail_list_limit: int = 80  # align with rebuild_outer list_messages
 
     # Per-step expand compute (NOT multi-hop session wall-clock — KD-A18).
-    traverse_expand_max_ms: int = 80  # soft wall for neighbors / seed_from_text
+    # PR6 raised product defaults (§5.1): expand 120ms; same_moment 8; semantic 10.
+    traverse_expand_max_ms: int = 120  # soft wall for neighbors / seed_from_text
     # Start seed_from_query budget (PR5 / #103); 0 = same as traverse_expand_max_ms.
     traverse_start_expand_max_ms: int = 250
     traverse_parcel_child_cap: int = 32  # parent_of reverse chain / moment cap
-    traverse_same_moment_k: int = 4  # OQ-A4 same_moment soft edge cap
-    traverse_semantic_k: int = 8  # semantic_hop / seed_from_text top-k
+    traverse_same_moment_k: int = 8  # OQ-A4 same_moment soft edge cap
+    traverse_semantic_k: int = 10  # semantic_hop / seed_from_text top-k
+    traverse_neighbor_k: int = 16  # step expand + GraphView neighbors top-k
     traverse_allow_semantic_hops: bool = True  # no-ops without index / cold encoder
     traverse_temporal_half_life_hours: float = 72.0  # weight model half-life
     traverse_min_expand_weight: float = 0.05  # drop edges below this floor
 
-    # Session budgets (hard maxes enforced in settings validation).
-    traverse_max_depth: int = 3
-    traverse_max_nodes: int = 48
-    traverse_max_steps: int = 8
+    # Session budgets (hard maxes enforced in settings validation + request clamp).
+    # PR6 raised product defaults (design §5.1).
+    traverse_max_depth: int = 5
+    traverse_max_nodes: int = 80
+    traverse_max_steps: int = 12
     # PR5: dual reserve + semantic top (#105 seed half); hard max still 16.
     traverse_max_seeds: int = 10
-    traverse_frontier_max: int = 16
-    traverse_max_expand_per_step: int = 3
-    traverse_keep_max: int = 16
+    traverse_frontier_max: int = 24
+    traverse_max_expand_per_step: int = 5
+    traverse_keep_max: int = 20
     traverse_keep_adjacent: bool = True  # finish: sequential ±1 if slots remain
     traverse_session_ttl_s: int = 900  # idle TTL for active only (KD-A18)
 
@@ -435,6 +440,7 @@ __all__ = [
     "TRAVERSE_MAX_NODES_MAX",
     "TRAVERSE_MAX_SEEDS_MAX",
     "TRAVERSE_MAX_STEPS_MAX",
+    "TRAVERSE_NEIGHBOR_K_MAX",
     "TRAVERSE_PARCEL_CHILD_CAP_MAX",
     "TRAVERSE_PREVIEW_CHARS_MAX",
     "TRAVERSE_SAME_MOMENT_K_MAX",

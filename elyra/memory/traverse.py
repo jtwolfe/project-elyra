@@ -23,6 +23,13 @@ from typing import Any, Callable, Literal, Mapping, Sequence
 from elyra.config import ElyraPaths
 from elyra.memory.config import (
     MemorySettings,
+    TRAVERSE_FRONTIER_MAX_MAX,
+    TRAVERSE_KEEP_MAX_MAX,
+    TRAVERSE_MAX_DEPTH_MAX,
+    TRAVERSE_MAX_EXPAND_PER_STEP_MAX,
+    TRAVERSE_MAX_NODES_MAX,
+    TRAVERSE_MAX_STEPS_MAX,
+    TRAVERSE_NEIGHBOR_K_MAX,
     is_directed_traversal_enabled,
 )
 from elyra.memory.graph import GraphView
@@ -49,15 +56,15 @@ ERROR_UNKNOWN_SESSION = "unknown_session"
 ERROR_BUDGET = "budget_exhausted"
 ERROR_NOT_CONSIDERED = "not_in_considered"
 
-# Defaults mirrored from MemorySettings / design budgets table.
-_DEFAULT_MAX_DEPTH = 3
-_DEFAULT_MAX_NODES = 48
-_DEFAULT_MAX_STEPS = 8
+# Defaults mirrored from MemorySettings / design §5.1 budgets table (PR6).
+_DEFAULT_MAX_DEPTH = 5
+_DEFAULT_MAX_NODES = 80
+_DEFAULT_MAX_STEPS = 12
 _DEFAULT_MAX_SEEDS = 10  # PR5 dual reserve + semantic top
-_DEFAULT_FRONTIER_MAX = 16
-_DEFAULT_EXPAND_PER_STEP = 3
-_DEFAULT_KEEP_MAX = 16
-_DEFAULT_EXPAND_MS = 80
+_DEFAULT_FRONTIER_MAX = 24
+_DEFAULT_EXPAND_PER_STEP = 5
+_DEFAULT_KEEP_MAX = 20
+_DEFAULT_EXPAND_MS = 120
 _DEFAULT_START_EXPAND_MS = 250  # PR5 / #103 warm semantic start headroom
 _DEFAULT_LABEL_CHARS = 80
 _DEFAULT_PREVIEW_CHARS = 400
@@ -66,11 +73,47 @@ _DEFAULT_INSPECT_MAX_IDS = 4
 _DEFAULT_INSPECT_MAX_TOTAL = 2400
 _DEFAULT_SCRATCHPAD = 200
 _DEFAULT_TTL_S = 900
-_DEFAULT_NEIGHBOR_K = 12
+_DEFAULT_NEIGHBOR_K = 16
 _DEFAULT_DUAL_START_N = 2
 _SEED_MODES = frozenset(
     {"auto", "semantic_only", "temporal_only", "temporal", "explicit_only"}
 )
+
+# Budget keys accepted on start (tool/session overrides).
+_BUDGET_OVERRIDE_KEYS = frozenset(
+    {
+        "max_steps",
+        "max_nodes",
+        "max_depth",
+        "max_keep",
+        "frontier_max",
+        "max_expand_per_step",
+        "neighbor_k",
+    }
+)
+
+
+def clamp_budget(
+    request: int | None,
+    product_default: int,
+    hard_max: int,
+    *,
+    lo: int = 1,
+) -> int:
+    """Clamp request-or-default to ``[lo, hard_max]`` (design §5.4).
+
+    **Not** ``min(product_default, request)`` — tool may raise above the
+    product default up to HARD_MAX (e.g. nodes default 80, hard 160,
+    request 100 → 100).
+    """
+    raw = product_default if request is None else int(request)
+    if hard_max < lo:
+        return lo
+    if raw < lo:
+        return lo
+    if raw > hard_max:
+        return hard_max
+    return raw
 
 
 def _new_session_id() -> str:
@@ -128,13 +171,20 @@ def _now_ms() -> float:
 
 @dataclass
 class BudgetState:
-    """Session budgets (KD-A18) — no multi-hop wall-clock field."""
+    """Session budgets (KD-A18) — no multi-hop wall-clock field.
+
+    PR6: also carries session-scoped frontier / expand-per-step / neighbor_k
+    so tool overrides apply for the whole walk (not re-read only from settings).
+    """
 
     max_steps: int = _DEFAULT_MAX_STEPS
     max_nodes: int = _DEFAULT_MAX_NODES
     max_depth: int = _DEFAULT_MAX_DEPTH
     max_keep: int = _DEFAULT_KEEP_MAX
     expand_ms_budget: int = _DEFAULT_EXPAND_MS
+    frontier_max: int = _DEFAULT_FRONTIER_MAX
+    max_expand_per_step: int = _DEFAULT_EXPAND_PER_STEP
+    neighbor_k: int = _DEFAULT_NEIGHBOR_K
     steps_spent: int = 0
     nodes_spent: int = 0  # considered count
     depth_spent: int = 0
@@ -173,6 +223,9 @@ class BudgetState:
             "max_depth": self.max_depth,
             "max_steps": self.max_steps,
             "max_keep": self.max_keep,
+            "frontier_max": self.frontier_max,
+            "max_expand_per_step": self.max_expand_per_step,
+            "neighbor_k": self.neighbor_k,
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -182,6 +235,9 @@ class BudgetState:
             "max_depth": self.max_depth,
             "max_keep": self.max_keep,
             "expand_ms_budget": self.expand_ms_budget,
+            "frontier_max": self.frontier_max,
+            "max_expand_per_step": self.max_expand_per_step,
+            "neighbor_k": self.neighbor_k,
             "steps_spent": self.steps_spent,
             "nodes_spent": self.nodes_spent,
             "depth_spent": self.depth_spent,
@@ -304,6 +360,9 @@ class TraversalSession:
     edge_kind_counts: dict[str, int] = field(default_factory=dict)
     expand_truncated: bool = False
     error_reason: str | None = None
+    # Session frontier cache: moment_id → member atom_ids after expand_moment
+    # (#105 / design §5.2). Populated from GraphView on step expand.
+    moment_member_cache: dict[str, list[str]] = field(default_factory=dict)
 
     def touch(self, now: str) -> None:
         self.updated_at = now
@@ -337,6 +396,7 @@ class TraversalSession:
             "expand_truncated": self.expand_truncated,
             "edge_kind_counts": dict(self.edge_kind_counts),
             "error_reason": self.error_reason,
+            "moment_cache_size": len(self.moment_member_cache),
         }
 
     def to_thin_surface(self) -> dict[str, Any]:
@@ -805,11 +865,36 @@ class TraversalRegistry:
         dual_n_cfg = _int_cfg(cfg, "traverse_dual_start_n", _DEFAULT_DUAL_START_N)
         dual_n = max(0, min(4, dual_n_cfg)) if dual_enabled and mode == "auto" else 0
 
-        if budget_overrides:
-            max_steps = min(max_steps, max(0, int(budget_overrides.get("max_steps", max_steps))))
-            max_nodes = min(max_nodes, max(0, int(budget_overrides.get("max_nodes", max_nodes))))
-            max_depth = min(max_depth, max(0, int(budget_overrides.get("max_depth", max_depth))))
-            max_keep = min(max_keep, max(0, int(budget_overrides.get("max_keep", max_keep))))
+        expand_per = _int_cfg(
+            cfg, "traverse_max_expand_per_step", _DEFAULT_EXPAND_PER_STEP
+        )
+        neighbor_k = _int_cfg(cfg, "traverse_neighbor_k", _DEFAULT_NEIGHBOR_K)
+
+        # PR6 §5.4: clamp(request or product_default, 1, HARD_MAX) — NOT
+        # min(product_default, request). Tools may raise above product default.
+        ov = budget_overrides or {}
+
+        def _ov(key: str) -> int | None:
+            if key not in ov or ov[key] is None:
+                return None
+            try:
+                return int(ov[key])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return None
+
+        max_steps = clamp_budget(_ov("max_steps"), max_steps, TRAVERSE_MAX_STEPS_MAX)
+        max_nodes = clamp_budget(_ov("max_nodes"), max_nodes, TRAVERSE_MAX_NODES_MAX)
+        max_depth = clamp_budget(_ov("max_depth"), max_depth, TRAVERSE_MAX_DEPTH_MAX)
+        max_keep = clamp_budget(_ov("max_keep"), max_keep, TRAVERSE_KEEP_MAX_MAX)
+        frontier_max = clamp_budget(
+            _ov("frontier_max"), frontier_max, TRAVERSE_FRONTIER_MAX_MAX
+        )
+        expand_per = clamp_budget(
+            _ov("max_expand_per_step"), expand_per, TRAVERSE_MAX_EXPAND_PER_STEP_MAX
+        )
+        neighbor_k = clamp_budget(
+            _ov("neighbor_k"), neighbor_k, TRAVERSE_NEIGHBOR_K_MAX
+        )
 
         budgets = BudgetState(
             max_steps=max_steps,
@@ -817,6 +902,9 @@ class TraversalRegistry:
             max_depth=max_depth,
             max_keep=max_keep,
             expand_ms_budget=expand_ms,
+            frontier_max=frontier_max,
+            max_expand_per_step=expand_per,
+            neighbor_k=neighbor_k,
         )
 
         session = TraversalSession(
@@ -1042,11 +1130,11 @@ class TraversalRegistry:
         cfg = self._settings
         label_n = _int_cfg(cfg, "traverse_label_chars", _DEFAULT_LABEL_CHARS)
         preview_n = _int_cfg(cfg, "traverse_preview_chars", _DEFAULT_PREVIEW_CHARS)
-        expand_per = _int_cfg(
-            cfg, "traverse_max_expand_per_step", _DEFAULT_EXPAND_PER_STEP
-        )
-        frontier_max = _int_cfg(cfg, "traverse_frontier_max", _DEFAULT_FRONTIER_MAX)
-        expand_ms = _int_cfg(cfg, "traverse_expand_max_ms", _DEFAULT_EXPAND_MS)
+        # Prefer session-scoped budgets (set at start with HARD_MAX clamp).
+        expand_per = session.budgets.max_expand_per_step
+        frontier_max = session.budgets.frontier_max
+        neighbor_k = session.budgets.neighbor_k
+        expand_ms = session.budgets.expand_ms_budget
         scratch_n = _int_cfg(cfg, "traverse_scratchpad_chars", _DEFAULT_SCRATCHPAD)
 
         if scratchpad is not None:
@@ -1094,10 +1182,12 @@ class TraversalRegistry:
                         break
                 edges = graph.neighbors(
                     src_id,
-                    k=_DEFAULT_NEIGHBOR_K,
+                    k=neighbor_k,
                     exclude_ids=set(session.considered.keys()),
                     expand_deadline_ms=remaining_ms,
                 )
+                # Sync GraphView moment_member_cache → session frontier cache.
+                self._sync_moment_cache(session, graph)
                 meta = graph.last_expand_meta
                 if meta.get("expand_truncated"):
                     expand_truncated = True
@@ -1473,6 +1563,25 @@ class TraversalRegistry:
                 session.keep_ids.append(aid)
         session.budgets.nodes_spent = len(session.considered)
 
+    def _sync_moment_cache(
+        self, session: TraversalSession, graph: GraphView
+    ) -> None:
+        """Copy GraphView moment_member_cache into session (#105 / §5.2).
+
+        Moments are append-mostly; each expand_moment overwrites the entry so
+        a mid-walk membership growth refreshes once per expand.
+        """
+        try:
+            cache = graph.moment_member_cache
+        except Exception:  # noqa: BLE001
+            return
+        if not cache:
+            return
+        for mid, members in cache.items():
+            if not mid:
+                continue
+            session.moment_member_cache[str(mid)] = list(members)
+
     def _rebuild_frontier(
         self,
         session: TraversalSession,
@@ -1533,5 +1642,6 @@ __all__ = [
     "TraversalRegistry",
     "TraversalSession",
     "build_walk_summary_nl",
+    "clamp_budget",
     "inspect_atoms",
 ]

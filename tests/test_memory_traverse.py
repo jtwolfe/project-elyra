@@ -966,6 +966,210 @@ def test_budget_steps_gate_expand(store):
     assert fin["ok"] is True
 
 
+# ── PR6 raised budgets + HARD_MAX clamp + frontier cache ─────────────────────
+
+
+def test_pr6_product_defaults_and_hard_maxes():
+    """§5.1 / §5.4 items 1–2: raised product defaults + HARD_MAX constants."""
+    from elyra.memory.config import (
+        MemorySettings as MS,
+        TRAVERSE_FRONTIER_MAX_MAX,
+        TRAVERSE_MAX_DEPTH_MAX,
+        TRAVERSE_MAX_EXPAND_PER_STEP_MAX,
+        TRAVERSE_MAX_NODES_MAX,
+        TRAVERSE_MAX_STEPS_MAX,
+        TRAVERSE_NEIGHBOR_K_MAX,
+        TRAVERSE_SAME_MOMENT_K_MAX,
+    )
+
+    s = MS()
+    assert s.traverse_max_depth == 5
+    assert s.traverse_max_nodes == 80
+    assert s.traverse_max_steps == 12
+    assert s.traverse_frontier_max == 24
+    assert s.traverse_max_expand_per_step == 5
+    assert s.traverse_keep_max == 20
+    assert s.traverse_expand_max_ms == 120
+    assert s.traverse_same_moment_k == 8
+    assert s.traverse_semantic_k == 10
+    assert s.traverse_neighbor_k == 16
+
+    assert TRAVERSE_MAX_DEPTH_MAX == 8
+    assert TRAVERSE_MAX_NODES_MAX == 160
+    assert TRAVERSE_MAX_STEPS_MAX == 24
+    assert TRAVERSE_FRONTIER_MAX_MAX == 48
+    assert TRAVERSE_MAX_EXPAND_PER_STEP_MAX == 10
+    assert TRAVERSE_SAME_MOMENT_K_MAX == 24
+    assert TRAVERSE_NEIGHBOR_K_MAX == 32
+
+
+def test_clamp_budget_hard_max_not_product_default():
+    """§5.4 items 4+6: clamp(request or default, 1, HARD_MAX)."""
+    from elyra.memory.config import TRAVERSE_MAX_NODES_MAX
+    from elyra.memory.traverse import clamp_budget
+
+    # request 100, product default 80, hard 160 → 100 (raise above product).
+    assert clamp_budget(100, 80, TRAVERSE_MAX_NODES_MAX) == 100
+    # request above hard → hard.
+    assert clamp_budget(999, 80, TRAVERSE_MAX_NODES_MAX) == TRAVERSE_MAX_NODES_MAX
+    # request None → product default.
+    assert clamp_budget(None, 80, TRAVERSE_MAX_NODES_MAX) == 80
+    # request 0 → lo=1.
+    assert clamp_budget(0, 80, TRAVERSE_MAX_NODES_MAX) == 1
+
+
+def test_budget_override_raises_above_product_default(store):
+    """Hermetic: request max_nodes=100 with product 80 hard 160 → session 100."""
+    atoms = _chain_store(store, 2)
+    # Product defaults deliberately tight so override must raise, not min-down.
+    settings = _enabled_settings(
+        traverse_max_nodes=80,
+        traverse_max_steps=12,
+        traverse_max_depth=5,
+        traverse_keep_max=20,
+        traverse_frontier_max=24,
+        traverse_max_expand_per_step=5,
+        traverse_neighbor_k=16,
+    )
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(
+        gv,
+        goal="budget raise",
+        seed_atom_ids=[atoms[0].atom_id],
+        moment_id="m1",
+        budget_overrides={
+            "max_nodes": 100,
+            "frontier_max": 30,
+            "max_expand_per_step": 7,
+            "neighbor_k": 20,
+        },
+    )
+    assert out["ok"] is True
+    budget = out["budget"]
+    assert budget["max_nodes"] == 100
+    assert budget["frontier_max"] == 30
+    assert budget["max_expand_per_step"] == 7
+    assert budget["neighbor_k"] == 20
+    # Cap at HARD_MAX.
+    out2 = reg.start(
+        gv,
+        goal="budget hard",
+        seed_atom_ids=[atoms[0].atom_id],
+        moment_id="m1",
+        budget_overrides={"max_nodes": 999},
+    )
+    assert out2["budget"]["max_nodes"] == 160
+
+
+def test_session_moment_member_cache_on_step(store, paths):
+    """§5.2: expand_moment during step populates session.moment_member_cache."""
+    from elyra.memory.edges import DurableEdge, new_edge_id, open_edge_store
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.weights import EDGE_IN_MOMENT
+
+    mid = "m_cache"
+    a = store.put_atom(_atom(atom_id="a_c0", text="seed", moment_id=mid))
+    b = store.put_atom(_atom(atom_id="a_c1", text="peer", moment_id=mid))
+    c = store.put_atom(_atom(atom_id="a_c2", text="peer2", moment_id=mid))
+    edge_store = open_edge_store(
+        paths, MemorySettings(write_atoms=True, backend="jsonl"), fail_soft=False
+    )
+    try:
+        hub = moment_hub_id(mid)
+        for atom in (a, b, c):
+            edge_store.put_edge(
+                DurableEdge(
+                    edge_id=new_edge_id(),
+                    src_atom_id=atom.atom_id,
+                    dst_atom_id=hub,
+                    edge_kind=EDGE_IN_MOMENT,
+                    created_at="2026-07-28T10:00:00Z",
+                    updated_at="2026-07-28T10:00:00Z",
+                    reason="membership",
+                )
+            )
+        settings = _enabled_settings(durable_edges_enabled=True)
+        reg = _reg(settings)
+        gv = GraphView(
+            store,
+            settings=settings,
+            edge_store=edge_store,
+            now="2026-07-28T10:05:00Z",
+        )
+        reg.start(
+            gv,
+            goal="cache",
+            seed_atom_ids=[a.atom_id],
+            moment_id=mid,
+        )
+        out = reg.step(gv, expand_ids=[a.atom_id])
+        assert out["ok"] is True
+        active = reg.active_session
+        assert active is not None
+        assert mid in active.moment_member_cache
+        members = set(active.moment_member_cache[mid])
+        assert a.atom_id in members
+        assert b.atom_id in members
+        assert c.atom_id in members
+        assert active.to_view().get("moment_cache_size", 0) >= 1
+        # Peers reachable via step expand alone.
+        newly = set(out.get("newly_expanded") or [])
+        frontier_ids = {f["atom_id"] for f in (out.get("frontier") or [])}
+        assert (
+            b.atom_id in newly
+            or c.atom_id in newly
+            or b.atom_id in frontier_ids
+            or c.atom_id in frontier_ids
+        )
+    finally:
+        edge_store.close()
+
+
+def test_kind_priority_in_moment_over_same_moment(store, paths):
+    """Dual same_moment + in_moment for same dst → in_moment wins (§5.3)."""
+    from elyra.memory.edges import DurableEdge, new_edge_id, open_edge_store
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.weights import EDGE_IN_MOMENT, EDGE_SAME_MOMENT
+
+    mid = "m_pri"
+    a = store.put_atom(_atom(atom_id="a_p0", text="seed peer", moment_id=mid))
+    b = store.put_atom(_atom(atom_id="a_p1", text="dual peer", moment_id=mid))
+    edge_store = open_edge_store(
+        paths, MemorySettings(write_atoms=True, backend="jsonl"), fail_soft=False
+    )
+    try:
+        hub = moment_hub_id(mid)
+        for src in (a, b):
+            edge_store.put_edge(
+                DurableEdge(
+                    edge_id=new_edge_id(),
+                    src_atom_id=src.atom_id,
+                    dst_atom_id=hub,
+                    edge_kind=EDGE_IN_MOMENT,
+                    created_at="2026-07-28T10:00:00Z",
+                    updated_at="2026-07-28T10:00:00Z",
+                    reason="membership",
+                )
+            )
+        settings = _enabled_settings(durable_edges_enabled=True)
+        gv = GraphView(
+            store,
+            settings=settings,
+            edge_store=edge_store,
+            now="2026-07-28T10:05:00Z",
+        )
+        edges = gv.neighbors(a.atom_id, k=16, allow_semantic=False)
+        to_b = [e for e in edges if e.dst_atom_id == b.atom_id]
+        kinds = {e.edge_kind for e in to_b}
+        # Collapsed to single preferred kind: in_moment (not both).
+        assert EDGE_IN_MOMENT in kinds
+        assert EDGE_SAME_MOMENT not in kinds
+        assert len(to_b) == 1
+    finally:
+        edge_store.close()
+
+
 # ── worker wiring ───────────────────────────────────────────────────────────
 
 
