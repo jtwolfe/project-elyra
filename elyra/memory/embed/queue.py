@@ -296,6 +296,7 @@ class EncodeQueue:
         settings: Any | None = None,
         gate: Any | None = None,
         gate_bulk_timeout_s: float = 0.05,
+        edge_store: Any | None = None,
     ) -> dict[str, int]:
         """Drain up to ``max_items`` within ``max_ms``. Never raises.
 
@@ -312,7 +313,9 @@ class EncodeQueue:
         - empty / kind skip → ``skipped``
         - encode exception / invalid → ``failed`` (or stay pending while
           attempts < max_attempts)
-        - encode ok + index upsert → ``ready`` (tests / PR3 index only)
+        - encode ok + index upsert → ``ready`` (tests / PR3 index only);
+          when ready, best-effort ``has_channel`` durable edges for present
+          channels (PR4 / design §2.4; soft-fail under durable_edges_enabled)
         - encode ok without index → leave ``pending``; set meta.embed_encode_ok
           so we do not re-encode every tick (KD8 — no false ready)
 
@@ -404,6 +407,8 @@ class EncodeQueue:
                     single_modality_joint=single_modality_joint,
                     gate=gate,
                     gate_bulk_timeout_s=gate_bulk_timeout_s,
+                    edge_store=edge_store,
+                    settings=settings,
                 )
                 if outcome == "yielded":
                     deferred.append((atom_id, pri))
@@ -460,6 +465,8 @@ class EncodeQueue:
         single_modality_joint: bool = True,
         gate: Any | None = None,
         gate_bulk_timeout_s: float = 0.05,
+        edge_store: Any | None = None,
+        settings: Any | None = None,
     ) -> str:
         atom = store.get_atom(atom_id)
         if atom is None:
@@ -592,6 +599,14 @@ class EncodeQueue:
                     _mark_atom_status(
                         store, atom, status="ready", meta_updates=updates
                     )
+                    # PR4: durable has_channel for each ready emb channel (soft-fail).
+                    _maybe_write_has_channel(
+                        edge_store,
+                        atom_id,
+                        emb,
+                        settings=settings,
+                        channels_fallback=updates.get(_META_CHANNELS),
+                    )
                     return "ok"
             except Exception:  # noqa: BLE001
                 _LOG.exception(
@@ -604,6 +619,41 @@ class EncodeQueue:
         # Production path without durable index → stay pending (KD8).
         _mark_atom_status(store, atom, status="pending", meta_updates=updates)
         return "ok"
+
+
+def _maybe_write_has_channel(
+    edge_store: Any | None,
+    atom_id: str,
+    emb: Any,
+    *,
+    settings: Any | None,
+    channels_fallback: Any = None,
+) -> None:
+    """Best-effort has_channel edges after encode ready. Never raises."""
+    if edge_store is None:
+        return
+    try:
+        from elyra.memory.edges import write_has_channel_edges
+
+        channels: list[str] = []
+        present = getattr(emb, "channels_present", None)
+        if present:
+            channels = [str(c) for c in present if c]
+        elif channels_fallback:
+            channels = [str(c) for c in channels_fallback if c]
+        if not channels:
+            return
+        write_has_channel_edges(
+            edge_store,
+            atom_id,
+            channels,
+            settings=settings,
+            reason="encode_ready",
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.exception(
+            "has_channel write failed atom_id=%s", atom_id
+        )
 
 
 def scan_pending_into_queue(

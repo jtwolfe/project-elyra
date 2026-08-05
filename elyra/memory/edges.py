@@ -1,9 +1,10 @@
 """Durable EdgeStore: Protocol, JSONL + Lance backends, budget FIFO helpers.
 
-Scope (PR1 / design-memory-edges-and-traversal): sibling EdgeStore next to
-atom MemoryStore; put/list/delete/count parity on both backends; kind unique
-keys; outgoing budget FIFO for created_with (≤100) and total (~150).
-Out of scope: promote writes, GraphView, traverse, retarget-to-ladder (PR3+).
+Scope (PR1 + PR4 / design-memory-edges-and-traversal): sibling EdgeStore next
+to atom MemoryStore; put/list/delete/count parity on both backends; kind unique
+keys; outgoing budget FIFO for created_with (≤100) and total (~150); speak-time
+``recalls`` + encode-ready ``has_channel`` write helpers (soft-fail).
+Out of scope: created_with/in_moment retarget (PR3), GraphView, traverse start.
 """
 
 from __future__ import annotations
@@ -12,10 +13,18 @@ import json
 import logging
 import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import (
+    AbstractSet,
+    Any,
+    Mapping,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 from elyra.config import ElyraPaths
 from elyra.memory.config import (
@@ -34,7 +43,20 @@ from elyra.memory.weights import (
     EDGE_HAS_CHANNEL,
     EDGE_IN_MOMENT,
     EDGE_RECALLS,
+    edge_weight,
 )
+
+# Spoken atom kinds eligible as recalls ANN destinations (design §2.2).
+RECALLS_DST_KINDS: tuple[str, ...] = ("speak", "observation")
+# has_channel modality tokens (aligned with embed CHANNELS).
+HAS_CHANNEL_NAMES: tuple[str, ...] = (
+    "text",
+    "image",
+    "audio",
+    "video",
+    "joint",
+)
+_HAS_CHANNEL_SET: frozenset[str] = frozenset(HAS_CHANNEL_NAMES)
 
 _LOG = logging.getLogger(__name__)
 
@@ -418,6 +440,325 @@ def put_edge_with_budget(
     stored = store.put_edge(edge)
     dropped = enforce_outgoing_budgets(store, stored.src_atom_id, settings)
     return stored, dropped
+
+
+# ── Write helpers: has_channel + recalls (PR4) ─────────────────────────────
+
+
+def channel_virtual_id(atom_id: str, channel: str) -> str:
+    """Storage-only destination for ``has_channel``: ``{atom_id}:{channel}``."""
+    aid = str(atom_id or "").strip()
+    ch = str(channel or "").strip().lower()
+    if not aid or not ch:
+        raise ValueError("atom_id and channel are required for channel_virtual_id")
+    # Avoid double-suffix if caller already passed a virtual id.
+    suffix = f":{ch}"
+    if aid.endswith(suffix):
+        return aid
+    return f"{aid}:{ch}"
+
+
+def rank_recalls_candidates(
+    candidates: Sequence[tuple[str, float, str]],
+    *,
+    ann_k: int = 15,
+    keep: int = 5,
+) -> list[tuple[str, float]]:
+    """Select durable recalls targets from ANN hits (atom_id, score, t_start).
+
+    v1 ranking policy (OQ-E3 / design §2.2): take the top ``ann_k`` by
+    similarity among spoken hits, then among those keep the newest ``keep``
+    by ``dst.t_start`` (ISO-Z descending; equal timestamps → higher score,
+    then atom_id). This is **not** a fused score.
+
+    # IMPLEMENTATION NOTE (required by design): v1 ranking is sim-filter then
+    # recency among survivors. Later improve with weighted sim×recency
+    # (Stretch 2 Phase 3 / #117 adjacent) without changing the edge kind.
+    """
+    if not candidates or keep <= 0 or ann_k <= 0:
+        return []
+    # Score first (desc), stable by atom_id for ties.
+    by_sim = sorted(
+        candidates,
+        key=lambda row: (-float(row[1]), str(row[0])),
+    )
+    top = by_sim[: max(0, int(ann_k))]
+    # Newest first among survivors.
+    by_recency = sorted(
+        top,
+        key=lambda row: (
+            str(row[2] or ""),
+            float(row[1]),
+            str(row[0]),
+        ),
+        reverse=True,
+    )
+    out: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for atom_id, score, _t in by_recency:
+        if atom_id in seen:
+            continue
+        seen.add(atom_id)
+        out.append((atom_id, float(score)))
+        if len(out) >= int(keep):
+            break
+    return out
+
+
+def _embedder_is_warm(embedder: Any) -> bool:
+    """True when embedder is healthy and already loaded (no cold load)."""
+    if embedder is None:
+        return False
+    try:
+        health = embedder.health()
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(health, Mapping) or not health.get("ok"):
+        return False
+    if hasattr(embedder, "is_loaded") and not bool(getattr(embedder, "is_loaded")):
+        return False
+    if hasattr(embedder, "loaded") and not bool(getattr(embedder, "loaded")):
+        return False
+    return True
+
+
+def _encode_queue_depth(encode_queue: Any | None) -> int:
+    if encode_queue is None:
+        return 0
+    try:
+        if hasattr(encode_queue, "qsize"):
+            return int(encode_queue.qsize())
+        return int(len(encode_queue))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def write_has_channel_edges(
+    edge_store: EdgeStore | None,
+    atom_id: str,
+    channels: Sequence[str],
+    *,
+    settings: MemorySettings | None = None,
+    reason: str = "encode_ready",
+) -> list[DurableEdge]:
+    """Write durable ``has_channel`` edges for each ready channel (soft-fail).
+
+    One edge per channel name: ``src=atom_id``, ``dst={atom_id}:{channel}``.
+    Idempotent unique key. Never raises; returns stored edges (may be empty).
+    Gated by ``durable_edges_enabled``.
+    """
+    cfg = settings or MemorySettings()
+    if not is_durable_edges_enabled(cfg):
+        return []
+    if edge_store is None or not atom_id:
+        return []
+    aid = str(atom_id)
+    ready: list[str] = []
+    for raw in channels or ():
+        ch = str(raw or "").strip().lower()
+        if ch in _HAS_CHANNEL_SET and ch not in ready:
+            ready.append(ch)
+    if not ready:
+        return []
+
+    now = utc_now_iso()
+    stored_out: list[DurableEdge] = []
+    try:
+        for ch in ready:
+            try:
+                dst = channel_virtual_id(aid, ch)
+            except ValueError:
+                continue
+            edge = DurableEdge(
+                edge_id=new_edge_id(),
+                src_atom_id=aid,
+                dst_atom_id=dst,
+                edge_kind=EDGE_HAS_CHANNEL,
+                created_at=now,
+                updated_at=now,
+                weight=edge_weight(EDGE_HAS_CHANNEL),
+                reason=reason or "encode_ready",
+                meta={"channel": ch},
+                schema_version=EDGE_SCHEMA_VERSION,
+            )
+            try:
+                stored, _dropped = put_edge_with_budget(edge_store, edge, cfg)
+                stored_out.append(stored)
+            except MemoryUnavailable:
+                _LOG.debug(
+                    "has_channel put skipped atom_id=%s channel=%s (edge store unavailable)",
+                    aid,
+                    ch,
+                )
+                return stored_out
+            except Exception:  # noqa: BLE001 — never block encode
+                _LOG.exception(
+                    "has_channel put failed atom_id=%s channel=%s",
+                    aid,
+                    ch,
+                )
+    except Exception:  # noqa: BLE001
+        _LOG.exception("write_has_channel_edges failed atom_id=%s", aid)
+    return stored_out
+
+
+def write_speak_recalls(
+    *,
+    src_atom_id: str,
+    spoken_text: str,
+    settings: MemorySettings | None = None,
+    edge_store: EdgeStore | None = None,
+    index: Any | None = None,
+    embedder: Any | None = None,
+    encode_queue: Any | None = None,
+    exclude_atom_ids: AbstractSet[str] | None = None,
+    store: Any | None = None,
+) -> list[DurableEdge]:
+    """Write speak-time ``recalls`` edges (soft-fail; never blocks promote).
+
+    Design §2.2 / KD-E3 / OQ-E3:
+    - Gate: durable_edges_enabled + semantic_enabled; warm embedder; index;
+      encode queue depth under skip threshold; ANN wall under max_ms.
+    - ANN k≈15 over spoken kinds (speak|observation); rank newest keep≈5.
+    - Soft-fail on any error — returns [] rather than raising.
+    """
+    cfg = settings or MemorySettings()
+    if not is_durable_edges_enabled(cfg):
+        return []
+    if not bool(getattr(cfg, "semantic_enabled", False)):
+        return []
+    if edge_store is None or index is None or not src_atom_id:
+        return []
+    text = (spoken_text or "").strip()
+    if not text:
+        # Media-only without text: soft-skip in v1 (MM media-as-query is PR5 path).
+        return []
+
+    # Encode pressure / cold gates — never block speak.
+    skip_depth = int(getattr(cfg, "edge_recalls_skip_queue_depth", 64) or 64)
+    if skip_depth > 0 and _encode_queue_depth(encode_queue) >= skip_depth:
+        _LOG.debug(
+            "recalls skipped reason=encode_pressure depth>=%s src=%s",
+            skip_depth,
+            src_atom_id,
+        )
+        return []
+    if not _embedder_is_warm(embedder):
+        _LOG.debug("recalls skipped reason=encoder_cold src=%s", src_atom_id)
+        return []
+
+    ann_k = max(1, int(getattr(cfg, "edge_recalls_ann_k", 15) or 15))
+    keep = max(1, int(getattr(cfg, "edge_recalls_keep", 5) or 5))
+    max_ms = max(0, int(getattr(cfg, "edge_recalls_max_ms", 40) or 40))
+
+    t0 = time.monotonic()
+    try:
+        query_vec = embedder.encode_text(text)
+    except Exception:  # noqa: BLE001
+        _LOG.debug(
+            "recalls skipped reason=encode_failed src=%s",
+            src_atom_id,
+            exc_info=True,
+        )
+        return []
+    if max_ms > 0 and (time.monotonic() - t0) * 1000.0 > max_ms:
+        _LOG.debug("recalls skipped reason=ann_timeout_encode src=%s", src_atom_id)
+        return []
+
+    exclude: set[str] = {str(src_atom_id)}
+    if exclude_atom_ids:
+        exclude.update(str(x) for x in exclude_atom_ids if x)
+
+    try:
+        hits = index.search(
+            query_vec,
+            k=ann_k,
+            channel="joint",
+            kinds=list(RECALLS_DST_KINDS),
+            exclude_atom_ids=exclude,
+        )
+    except Exception:  # noqa: BLE001
+        _LOG.debug(
+            "recalls skipped reason=search_failed src=%s",
+            src_atom_id,
+            exc_info=True,
+        )
+        return []
+    if max_ms > 0 and (time.monotonic() - t0) * 1000.0 > max_ms:
+        _LOG.debug("recalls skipped reason=ann_timeout_search src=%s", src_atom_id)
+        return []
+    if not hits:
+        return []
+
+    candidates: list[tuple[str, float, str]] = []
+    for hit in hits:
+        try:
+            aid = str(getattr(hit, "atom_id", "") or "")
+            if not aid or aid in exclude:
+                continue
+            score = float(getattr(hit, "score", 0.0) or 0.0)
+            t_start = ""
+            atom = getattr(hit, "atom", None)
+            if atom is not None:
+                t_start = str(getattr(atom, "t_start", "") or "")
+                kind = str(getattr(atom, "kind", "") or "")
+                if kind and kind not in RECALLS_DST_KINDS:
+                    continue
+            if not t_start and store is not None:
+                try:
+                    row = store.get_atom(aid)
+                    if row is not None:
+                        t_start = str(getattr(row, "t_start", "") or "")
+                        kind = str(getattr(row, "kind", "") or "")
+                        if kind and kind not in RECALLS_DST_KINDS:
+                            continue
+                except Exception:  # noqa: BLE001
+                    pass
+            candidates.append((aid, score, t_start))
+        except Exception:  # noqa: BLE001
+            continue
+
+    # v1 ranking site (OQ-E3): sim top-k then newest keep — see rank_recalls_candidates.
+    # Later: weighted sim×recency (Phase 3 / #117 adjacent).
+    chosen = rank_recalls_candidates(candidates, ann_k=ann_k, keep=keep)
+    if not chosen:
+        return []
+
+    now = utc_now_iso()
+    stored_out: list[DurableEdge] = []
+    try:
+        for dst_id, cosine in chosen:
+            w = edge_weight(EDGE_RECALLS, cosine=cosine)
+            edge = DurableEdge(
+                edge_id=new_edge_id(),
+                src_atom_id=str(src_atom_id),
+                dst_atom_id=str(dst_id),
+                edge_kind=EDGE_RECALLS,
+                created_at=now,
+                updated_at=now,
+                weight=w,  # optional cache only; expand recomputes from meta.cosine
+                reason="speak_recalls",
+                meta={"cosine": float(cosine)},
+                schema_version=EDGE_SCHEMA_VERSION,
+            )
+            try:
+                stored, _dropped = put_edge_with_budget(edge_store, edge, cfg)
+                stored_out.append(stored)
+            except MemoryUnavailable:
+                _LOG.debug(
+                    "recalls put skipped src=%s (edge store unavailable)",
+                    src_atom_id,
+                )
+                return stored_out
+            except Exception:  # noqa: BLE001
+                _LOG.exception(
+                    "recalls put failed src=%s dst=%s",
+                    src_atom_id,
+                    dst_id,
+                )
+    except Exception:  # noqa: BLE001
+        _LOG.exception("write_speak_recalls failed src=%s", src_atom_id)
+    return stored_out
 
 
 # ── Shared index mixin helpers ─────────────────────────────────────────────
@@ -1369,9 +1710,12 @@ __all__ = [
     "DurableEdge",
     "EdgeRecord",
     "EdgeStore",
+    "HAS_CHANNEL_NAMES",
     "JsonlEdgeStore",
     "LanceEdgeStore",
+    "RECALLS_DST_KINDS",
     "UnavailableEdgeStore",
+    "channel_virtual_id",
     "durable_edge_from_dict",
     "durable_edge_to_dict",
     "edge_identity_key",
@@ -1383,6 +1727,9 @@ __all__ = [
     "plan_budget_drops",
     "prepare_edge_for_put",
     "put_edge_with_budget",
+    "rank_recalls_candidates",
     "select_fifo_overflow",
     "total_outgoing_cap",
+    "write_has_channel_edges",
+    "write_speak_recalls",
 ]

@@ -1,9 +1,10 @@
-"""Normative beat → atom promotion rules (Phase 1).
+"""Normative beat → atom promotion rules (Phase 1 + durable edge writes).
 
 Scope: pure promote_beat / promote_wake_observation + control-kind filters.
 In scope: R1–R10, KD16 tool density, ledger one-liners, sequential link,
-idempotency. Best-effort: never raise into the do-loop.
-Out of scope: doloop/presence hooks, GoalsStore, meal, ladder.
+idempotency; speak-time ``recalls`` edges (user/Elyra speak only — design §2.2).
+Best-effort: never raise into the do-loop.
+Out of scope: doloop/presence hooks, GoalsStore, meal, ladder, created_with (PR3).
 """
 
 from __future__ import annotations
@@ -605,6 +606,44 @@ def _speak_text_from_content(content: str, ok: bool, error_reason: Any) -> str:
     return ""
 
 
+def _maybe_write_speak_recalls(
+    store: MemoryStore,
+    atom: Atom | None,
+    spoken_text: str,
+    *,
+    settings: MemorySettings,
+    edge_store: Any | None = None,
+    embedder: Any | None = None,
+    index: Any | None = None,
+    encode_queue: Any | None = None,
+) -> None:
+    """Best-effort recalls write after user/Elyra speak promote (design §2.5).
+
+    Soft-fail only — never raises into the do-loop. View/tool/model paths
+    must not call this (speak-only sources).
+    """
+    if atom is None:
+        return
+    try:
+        from elyra.memory.edges import write_speak_recalls
+
+        write_speak_recalls(
+            src_atom_id=atom.atom_id,
+            spoken_text=spoken_text,
+            settings=settings,
+            edge_store=edge_store,
+            index=index,
+            embedder=embedder,
+            encode_queue=encode_queue,
+            store=store,
+        )
+    except Exception:  # noqa: BLE001 — never block promote/speak
+        _LOG.exception(
+            "memory speak recalls write failed atom_id=%s",
+            getattr(atom, "atom_id", "?"),
+        )
+
+
 def _promote_speak(
     store: MemoryStore,
     moment_id: str,
@@ -612,6 +651,10 @@ def _promote_speak(
     *,
     settings: MemorySettings,
     state: PromoteState | MutableMapping[str, Any] | None,
+    edge_store: Any | None = None,
+    embedder: Any | None = None,
+    index: Any | None = None,
+    encode_queue: Any | None = None,
 ) -> Atom | None:
     ok = bool(beat.get("ok"))
     content = str(beat.get("content") or "")
@@ -651,6 +694,17 @@ def _promote_speak(
         base_meta=meta,
     )
     _remember_key(state, key)
+    # Elyra speak → recalls (design §2.5); soft-fail under encode pressure.
+    _maybe_write_speak_recalls(
+        store,
+        stored,
+        text,
+        settings=settings,
+        edge_store=edge_store,
+        embedder=embedder,
+        index=index,
+        encode_queue=encode_queue,
+    )
     return stored
 
 
@@ -892,11 +946,19 @@ def promote_beat(
     *,
     settings: MemorySettings | None = None,
     moment_tool_counts: PromoteState | MutableMapping[str, Any] | None = None,
+    edge_store: Any | None = None,
+    embedder: Any | None = None,
+    index: Any | None = None,
+    encode_queue: Any | None = None,
 ) -> Atom | None:
     """Promote a single tape beat to an atom when rules fire (R1–R10).
 
     Pure w.r.t. GoalsStore / wake claim policy. Best-effort: logs and returns
     None on errors; never raises into the caller.
+
+    Optional EdgeStore / embedder / index / encode_queue enable speak-time
+    ``recalls`` writes (Elyra speak only here; user chat via
+    ``promote_wake_observation``). Soft-fail under encode pressure.
     """
     cfg = _settings_or_default(settings)
     if store is None or not moment_id or not _write_enabled(cfg):
@@ -932,6 +994,10 @@ def promote_beat(
                     beat,
                     settings=cfg,
                     state=moment_tool_counts,
+                    edge_store=edge_store,
+                    embedder=embedder,
+                    index=index,
+                    encode_queue=encode_queue,
                 )
             if name in LEDGER_TOOL_NAMES:
                 return _promote_ledger(
@@ -978,6 +1044,10 @@ def promote_wake_observation(
     media_ids: Sequence[str] = (),
     why_now: str = "",
     settings: MemorySettings | None = None,
+    edge_store: Any | None = None,
+    embedder: Any | None = None,
+    index: Any | None = None,
+    encode_queue: Any | None = None,
 ) -> Atom | None:
     """Promote a social wake user observation (call once at moment open).
 
@@ -1019,7 +1089,7 @@ def promote_wake_observation(
         if why_now:
             meta["why_now"] = why_now
 
-        return _link_and_put_with_parcels(
+        stored = _link_and_put_with_parcels(
             store,
             moment_id=moment_id,
             settings=cfg,
@@ -1031,6 +1101,18 @@ def promote_wake_observation(
             source_beat_type="wake",
             base_meta=meta,
         )
+        # User speak (social wake) → recalls (design §2.5).
+        _maybe_write_speak_recalls(
+            store,
+            stored,
+            text,
+            settings=cfg,
+            edge_store=edge_store,
+            embedder=embedder,
+            index=index,
+            encode_queue=encode_queue,
+        )
+        return stored
     except Exception:  # noqa: BLE001
         _LOG.exception(
             "memory promote_wake_observation failed moment_id=%s", moment_id
