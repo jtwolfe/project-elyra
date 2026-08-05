@@ -8,7 +8,7 @@
     "expand_ids": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Frontier atom ids to expand this step (capped by traverse_max_expand_per_step)."
+      "description": "Frontier atom ids to expand this step (capped by traverse_max_expand_per_step). Prefer multi-id structural expand for bloom/fan; host allows at most one semantic_hop ANN per step."
     },
     "keep_ids": {
       "type": "array",
@@ -21,7 +21,7 @@
     },
     "include_noisy_kinds": {
       "type": "boolean",
-      "description": "When true, include tool/ledger/model atoms in local_map ring and edges. Default false: sequential bridges only for noisy kinds."
+      "description": "When true, include tool/ledger/model atoms in local_map ring and edges. Default false: sequential bridges only for noisy kinds. Prefer speak/observation; set true only when goal needs noisy kinds."
     }
   },
   "required": [],

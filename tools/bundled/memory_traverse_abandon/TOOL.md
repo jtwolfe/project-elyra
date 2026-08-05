@@ -9,7 +9,8 @@ kind: read
 Abandon **active** session only (KD-A9 / KD-A19):
 
 - Provisional keep discarded
-- `last_session` and `last_confirmed_keep` **retained**
+- `last_session` and `last_confirmed_keep` **retained** (process-life glass sticky;
+  not disk-durable across restart)
 
 - Optional: `session_id`
 - Optional: `reason` — default `abandoned`

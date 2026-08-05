@@ -1,12 +1,13 @@
 ---
 name: memory_traverse_step
-description: Expand selected frontier memory nodes and/or mark provisional keeps. Returns updated thin surface with previews for newly expanded atoms.
+description: Expand selected frontier memory nodes and/or mark provisional keeps. Returns updated thin surface with previews and host local_map. At most one semantic_hop ANN per step; prefer structural multi-expand.
 kind: read
 ---
 
 # memory_traverse_step
 
-One tool step of an active directed traversal.
+One tool step of an active directed traversal. Prefer skill `memory-traverse`
+maneuvers (moment bloom, context fan, time spine, associative enter, anchor+dig).
 
 - Optional: `session_id` — defaults to the sole active session
 - Optional: `expand_ids` — frontier atoms to expand (cap per step)
@@ -16,10 +17,15 @@ One tool step of an active directed traversal.
 
 Newly expanded destinations include **preview** (≤400 chars). Prefer
 `memory_traverse_inspect` before keep when the 80-char label is insufficient.
+Prefer keep **speak / observation / summary**; noisy kinds only when goal demands.
 
 When focus moves (`expand_ids`), the host returns **`local_map`** for the first
 successfully expanded id and optional **`local_maps`** (≤3) when multiple
-expand sources succeed. Prefer reading the map before further expand.
+expand sources succeed. Prefer reading the map compass before further expand.
+
+**Semantic hop budget (host):** at most **one** `semantic_hop` ANN call per step
+(first expand_id with ANN budget). Further expand_ids in the same step are
+structural-only — prefer multi-id structural expand for bloom/fan maneuvers.
 
 Does **not** call `compose_meal` or rebuild outer context.
 

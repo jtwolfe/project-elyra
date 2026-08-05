@@ -1,13 +1,14 @@
 ---
 name: memory_traverse_start
-description: Start a temporary multi-hop memory walk. Seeds from explicit ids, multimodal semantic query, and dual/temporal anchors. Fail-closed when directed_traversal_enabled is false.
+description: Start a temporary multi-hop memory walk. Seeds from explicit ids, multimodal semantic query, and dual/temporal anchors. Fail-closed when directed_traversal_enabled is false. Prefer skill memory-traverse maneuvers; read local_map before expand.
 kind: read
 ---
 
 # memory_traverse_start
 
 Open a **temporary** directed-traversal session (Phase 2a). Prefer skill
-`memory-traverse` for when/how to walk; this tool is the thin start entry.
+`memory-traverse` for when/how to walk (named maneuvers); this tool is the thin
+start entry.
 
 - Required: `goal` — short walk goal string
 - Optional: `seed_query` — semantic seed text (defaults to `goal` in auto/semantic_only)
@@ -26,12 +27,15 @@ Open a **temporary** directed-traversal session (Phase 2a). Prefer skill
 | `temporal_only` | skip | strip fill |
 | `explicit_only` | skip | skip |
 
-**Nudge:** use `semantic_only` when you already know the focused topic; keep
-`auto` for open-ended digs that benefit from recent temporal anchors.
+**Nudge:** use `semantic_only` when you already know the focused topic (associative
+enter); keep `auto` for open-ended digs that benefit from recent temporal anchors
+(anchor+dig). Explicit seeds suit moment bloom / context fan / time spine starts.
 
 Start counts as step 0. Seeds get frontier **labels** (≤80) and **previews** (≤400).
-Semantic seed may surface `encoder_cold` / `no_index` / `expand_truncated` without failing.
-Start never cold-loads the encoder.
+Semantic seed may surface `encoder_cold` / `no_index` / `expand_truncated` /
+`semantic_reason=timeout` without failing — **timeout/truncated ≠ empty memory** under
+a warm slow embedder; prefer structural maneuvers or wait. Start never cold-loads
+the encoder.
 
 ## Result
 
@@ -42,9 +46,10 @@ Thin decision surface: `session_id`, `status`, `budget`, `frontier`, `keep_set`,
 null), **`local_maps`** (null on start).
 
 Read `local_map` before blind expand: filtered edges/weights, ring of primary
-nodes (prefer speak/observation/summary), and compass (sequential, moment
-peers, ladder, associative). Noisy kinds (tool/ledger/model) are omitted from
-the ring by default; sequential bridges keep a short label (`tool:name`, `ok`).
+nodes (prefer speak/observation/summary), and **compass** (sequential, moment
+peers, ladder, associative) for steering. Noisy kinds (tool/ledger/model) are
+omitted from the ring by default; sequential bridges keep a short label
+(`tool:name`, `ok`). Pass `include_noisy_kinds: true` only when the goal needs them.
 
 ## Errors (`ok: false`)
 

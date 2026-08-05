@@ -22,7 +22,7 @@
     "seed_mode": {
       "type": "string",
       "enum": ["auto", "semantic_only", "temporal_only", "explicit_only"],
-      "description": "Seed policy. Default auto (dual temporal anchors when semantic hits). Prefer semantic_only when the goal is already focused."
+      "description": "Seed policy. Default auto (anchor+dig dual temporal when semantic hits). Prefer semantic_only for focused associative enter; explicit_only for known-id maneuvers (moment bloom / context fan / time spine)."
     },
     "budgets": {
       "type": "object",
@@ -40,7 +40,7 @@
     },
     "include_noisy_kinds": {
       "type": "boolean",
-      "description": "When true, include tool/ledger/model atoms in local_map ring and edges. Default false: only sequential bridges to noisy kinds (bridge_noisy)."
+      "description": "When true, include tool/ledger/model atoms in local_map ring and edges. Default false: only sequential bridges to noisy kinds (bridge_noisy). Prefer speak/observation; set true only when goal needs noisy kinds."
     }
   },
   "required": ["goal"],
