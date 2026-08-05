@@ -15,6 +15,7 @@ Open a **temporary** directed-traversal session (Phase 2a). Prefer skill
 - Optional: `seed_media_ids` — media attachment ids for multimodal semantic seed
 - Optional: `seed_mode` — `auto` (default) | `semantic_only` | `temporal_only` | `explicit_only`
 - Optional: `budgets` — `{max_steps, max_nodes, max_depth, max_keep, frontier_max, max_expand_per_step, neighbor_k}` (clamped to HARD_MAX; may raise above product defaults)
+- Optional: `include_noisy_kinds` — default false; when true, tool/ledger/model appear in `local_map` ring (otherwise sequential bridges only)
 
 ## Seed modes
 
@@ -37,7 +38,13 @@ Start never cold-loads the encoder.
 Thin decision surface: `session_id`, `status`, `budget`, `frontier`, `keep_set`,
 `seed_ids`, `seed_reasons`, `seed_sources`, `seed_mode`, `dual_n`,
 `semantic_reason`, `start_ms_budget`, `start_ms_spent`, `considered_count`,
-`expand_truncated`.
+`expand_truncated`, **`local_map`** (host ~d2.5 map for primary seed; may be
+null), **`local_maps`** (null on start).
+
+Read `local_map` before blind expand: filtered edges/weights, ring of primary
+nodes (prefer speak/observation/summary), and compass (sequential, moment
+peers, ladder, associative). Noisy kinds (tool/ledger/model) are omitted from
+the ring by default; sequential bridges keep a short label (`tool:name`, `ok`).
 
 ## Errors (`ok: false`)
 

@@ -17,7 +17,13 @@ from elyra.memory.store import open_memory_store
 from elyra.memory.traverse import (
     ERROR_NO_ACTIVE,
     ERROR_TRAVERSE_DISABLED,
+    LOCAL_MAP_ASSOCIATIVE_CAP,
+    LOCAL_MAP_EDGES_CAP,
+    LOCAL_MAP_MOMENT_PEERS_CAP,
+    LOCAL_MAP_RING_CAP,
+    LOCAL_MAPS_STEP_CAP,
     TraversalRegistry,
+    build_local_map,
     build_walk_summary_nl,
     inspect_atoms,
 )
@@ -1461,3 +1467,327 @@ def test_worker_graph_view_and_traversal_registry(tmp_path):
     meal_ids, meal_summary = w._last_confirmed_keep_for_meal("other_moment")
     assert a.atom_id in meal_ids
     assert meal_summary
+
+
+# ── Host d2.5 local_map + kind filters (polish1 KD-P2 / PR2) ─────────────────
+
+
+def _mixed_chain(store) -> list[Atom]:
+    """Observation / tool / speak / ledger / model sequential spine for filters."""
+    atoms = [
+        _atom(
+            atom_id="lm_obs",
+            t="2026-07-28T10:00:00Z",
+            kind="observation",
+            text="user asked about the garden plan",
+            moment_id="m_lm",
+        ),
+        _atom(
+            atom_id="lm_tool",
+            t="2026-07-28T10:01:00Z",
+            kind="tool",
+            text='{"raw":"huge json dump should not appear"}',
+            moment_id="m_lm",
+            meta={"tool_name": "run_cmd"},
+        ),
+        _atom(
+            atom_id="lm_speak",
+            t="2026-07-28T10:02:00Z",
+            kind="speak",
+            text="I remember planting tomatoes last week",
+            moment_id="m_lm",
+        ),
+        _atom(
+            atom_id="lm_ledger",
+            t="2026-07-28T10:03:00Z",
+            kind="ledger",
+            text='{"ledger":"noise"}',
+            moment_id="m_lm",
+            meta={"tool_name": "todo"},
+        ),
+        _atom(
+            atom_id="lm_model",
+            t="2026-07-28T10:04:00Z",
+            kind="model",
+            text='{"thinking":"raw model chain"}',
+            moment_id="m_lm",
+        ),
+        _atom(
+            atom_id="lm_obs2",
+            t="2026-07-28T10:05:00Z",
+            kind="observation",
+            text="follow-up about watering schedule",
+            moment_id="m_lm",
+        ),
+    ]
+    return _link_chain(store, atoms)
+
+
+def test_start_includes_local_map_for_primary_seed(store):
+    atoms = _chain_store(store, 5)
+    settings = _enabled_settings()
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="topic",
+        seed_atom_ids=[atoms[2].atom_id],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    assert start["ok"] is True
+    assert "local_map" in start
+    assert start["local_maps"] is None
+    lm = start["local_map"]
+    assert lm is not None
+    assert lm["focus"]["atom_id"] == atoms[2].atom_id
+    assert "edges" in lm and "ring" in lm and "compass" in lm
+    assert "filters" in lm and lm["filters"]["include_noisy"] is False
+    # Sequential neighbors present.
+    edge_dsts = {e["dst"] for e in lm["edges"]}
+    assert atoms[1].atom_id in edge_dsts or atoms[3].atom_id in edge_dsts
+    # Caps.
+    assert len(lm["edges"]) <= LOCAL_MAP_EDGES_CAP
+    assert len(lm["ring"]) <= LOCAL_MAP_RING_CAP
+    assert len(lm["compass"]["moment_peers"]) <= LOCAL_MAP_MOMENT_PEERS_CAP
+    assert len(lm["compass"]["associative"]) <= LOCAL_MAP_ASSOCIATIVE_CAP
+    # Compass sequential from focus prev/next.
+    seq = lm["compass"]["sequential"]
+    assert "prev" in seq or "next" in seq
+
+
+def test_local_map_filters_noisy_kinds_default(store):
+    atoms = _mixed_chain(store)
+    settings = _enabled_settings()
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:10:00Z")
+    # Focus speak: sequential neighbors are tool (prev) and ledger (next).
+    start = reg.start(
+        gv,
+        goal="garden",
+        seed_atom_ids=["lm_speak"],
+        seed_mode="explicit_only",
+        moment_id="m_lm",
+        include_noisy_kinds=False,
+    )
+    lm = start["local_map"]
+    assert lm is not None
+    ring_ids = {n["atom_id"] for n in lm["ring"]}
+    ring_kinds = {n.get("kind") for n in lm["ring"]}
+    # Noisy kinds must not appear on the ring by default.
+    assert "tool" not in ring_kinds
+    assert "ledger" not in ring_kinds
+    assert "model" not in ring_kinds
+    assert "lm_tool" not in ring_ids
+    assert "lm_ledger" not in ring_ids
+    # Sequential bridges to noisy dsts are listed with bridge_noisy.
+    bridge_edges = [e for e in lm["edges"] if e.get("bridge_noisy")]
+    assert bridge_edges, "expected sequential bridges to noisy neighbors"
+    for e in bridge_edges:
+        assert e["edge_kind"] == "sequential"
+        assert e["dst_kind"] in ("tool", "ledger", "model")
+        # Hygiene labels — not raw JSON.
+        assert "{" not in (e.get("dst_label") or "")
+        if e["dst_kind"] == "tool":
+            assert (e.get("dst_label") or "").startswith("tool:")
+        if e["dst_kind"] == "ledger":
+            assert (e.get("dst_label") or "").startswith("ledger:")
+    omitted = set(lm["filters"]["noisy_kinds_omitted"])
+    assert omitted & {"tool", "ledger", "model"}
+
+
+def test_local_map_include_noisy_kinds(store):
+    _mixed_chain(store)
+    settings = _enabled_settings()
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:10:00Z")
+    start = reg.start(
+        gv,
+        goal="garden",
+        seed_atom_ids=["lm_speak"],
+        seed_mode="explicit_only",
+        moment_id="m_lm",
+        include_noisy_kinds=True,
+    )
+    lm = start["local_map"]
+    assert lm is not None
+    assert lm["filters"]["include_noisy"] is True
+    ring_kinds = {n.get("kind") for n in lm["ring"]}
+    # With include_noisy, tool/ledger may sit on the ring.
+    assert ring_kinds & {"tool", "ledger", "model"}
+
+
+def test_local_map_non_sequential_noisy_edges_omitted(store):
+    """Non-sequential edges to tool/ledger are dropped when filtering."""
+    # Build speak + tool with same_moment path only (no sequential between them
+    # for the focus pair we care about). Use mixed chain focus obs2 which has
+    # sequential prev=model only.
+    _mixed_chain(store)
+    settings = _enabled_settings()
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:10:00Z")
+    # Direct unit: build_local_map on speak filters created_with-like noise via
+    # only keeping sequential bridges — model is sequential next of ledger, not of speak.
+    lm = build_local_map(
+        gv, "lm_speak", include_noisy=False, expand_deadline_ms=80
+    )
+    assert lm is not None
+    for e in lm["edges"]:
+        if e.get("dst_kind") in ("tool", "ledger", "model"):
+            assert e["edge_kind"] == "sequential"
+            assert e.get("bridge_noisy") is True
+
+
+def test_step_local_map_and_local_maps(store):
+    atoms = _chain_store(store, 6)
+    settings = _enabled_settings(traverse_max_expand_per_step=3)
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="multi",
+        seed_atom_ids=[a.atom_id for a in atoms[:3]],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    assert start["local_map"] is not None
+    sid = start["session_id"]
+    # Expand two seeds → local_map for first + local_maps length 2.
+    step = reg.step(
+        gv,
+        session_id=sid,
+        expand_ids=[atoms[0].atom_id, atoms[1].atom_id],
+    )
+    assert step["ok"] is True
+    assert step["local_map"] is not None
+    assert step["local_map"]["focus"]["atom_id"] == atoms[0].atom_id
+    maps = step["local_maps"]
+    assert maps is not None
+    assert 1 < len(maps) <= LOCAL_MAPS_STEP_CAP
+    assert maps[0]["focus_id"] == atoms[0].atom_id
+    assert maps[1]["focus_id"] == atoms[1].atom_id
+    assert maps[0]["map"]["focus"]["atom_id"] == atoms[0].atom_id
+
+
+def test_step_single_expand_local_maps_null(store):
+    atoms = _chain_store(store, 4)
+    settings = _enabled_settings()
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="single",
+        seed_atom_ids=[atoms[1].atom_id],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    step = reg.step(
+        gv,
+        session_id=start["session_id"],
+        expand_ids=[atoms[1].atom_id],
+    )
+    assert step["local_map"] is not None
+    assert step["local_maps"] is None  # single expand → null, not 1-length array
+
+
+def test_local_map_disabled_frontier_only(store):
+    atoms = _chain_store(store, 3)
+    settings = _enabled_settings(traverse_local_map_enabled=False)
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="off",
+        seed_atom_ids=[atoms[0].atom_id],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    assert start["ok"] is True
+    assert start["local_map"] is None
+    assert start["frontier"]  # frontier still present
+    step = reg.step(
+        gv,
+        session_id=start["session_id"],
+        expand_ids=[atoms[0].atom_id],
+    )
+    assert step["local_map"] is None
+    assert step["local_maps"] is None
+
+
+def test_build_local_map_caps_edges_and_ring(store):
+    # Long sequential chain to pressure edge/ring caps.
+    n = 40
+    atoms = [
+        _atom(
+            atom_id=f"cap_{i}",
+            t=f"2026-07-28T11:{i:02d}:00Z",
+            kind="observation" if i % 2 == 0 else "speak",
+            text=f"cap body {i}",
+            moment_id="m_cap",
+        )
+        for i in range(n)
+    ]
+    _link_chain(store, atoms)
+    settings = _enabled_settings(traverse_neighbor_k=32)
+    gv = GraphView(store, settings=settings, now="2026-07-28T12:00:00Z")
+    # Focus middle — sequential only yields 2 edges, so also need same_moment peers.
+    # same_moment projects up to traverse_same_moment_k — still small.
+    # Unit-level: call build_local_map and assert caps are respected even if
+    # under-full (hard invariant).
+    lm = build_local_map(
+        gv,
+        atoms[n // 2].atom_id,
+        include_noisy=False,
+        expand_deadline_ms=200,
+        neighbor_k=32,
+    )
+    assert lm is not None
+    assert len(lm["edges"]) <= LOCAL_MAP_EDGES_CAP
+    assert len(lm["ring"]) <= LOCAL_MAP_RING_CAP
+    assert lm["focus"]["atom_id"] == atoms[n // 2].atom_id
+    # Prefer primary kinds on ring.
+    for node in lm["ring"]:
+        assert node.get("kind") in (
+            "speak",
+            "observation",
+            "summary",
+            "parcel",
+            None,
+        ) or node.get("kind") not in ("tool", "ledger", "model")
+
+
+def test_local_map_prefer_primary_kinds_on_ring(store):
+    atoms = _mixed_chain(store)
+    settings = _enabled_settings()
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:10:00Z")
+    lm = build_local_map(gv, "lm_obs", include_noisy=True, expand_deadline_ms=80)
+    assert lm is not None
+    # With include_noisy, ring still ranks speak/observation ahead of tool when both present.
+    ring = lm["ring"]
+    if len(ring) >= 2:
+        # First ring entries should prefer primary when mixed weights similar.
+        primary_idxs = [
+            i
+            for i, n in enumerate(ring)
+            if n.get("kind") in ("speak", "observation", "summary")
+        ]
+        noisy_idxs = [
+            i for i, n in enumerate(ring) if n.get("kind") in ("tool", "ledger", "model")
+        ]
+        if primary_idxs and noisy_idxs:
+            assert min(primary_idxs) < min(noisy_idxs)
+
+
+def test_start_empty_seeds_local_map_null(store):
+    settings = _enabled_settings()
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="empty",
+        seed_mode="explicit_only",
+        seed_atom_ids=["missing_id"],
+        moment_id="m1",
+    )
+    assert start["ok"] is True
+    assert start["local_map"] is None
+    assert start["local_maps"] is None

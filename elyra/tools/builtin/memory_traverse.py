@@ -251,6 +251,8 @@ def memory_traverse_start(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
                         ERROR_INVALID_ARGS, detail=f"budgets.{key} must be an integer"
                     )
 
+    include_noisy = bool(args.get("include_noisy_kinds", False))
+
     moment_id = (ctx.moment_id or "").strip() or None
     out = reg.start(
         graph,
@@ -261,6 +263,7 @@ def memory_traverse_start(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         seed_mode=seed_mode,
         moment_id=moment_id,
         budget_overrides=budget_overrides,
+        include_noisy_kinds=include_noisy,
     )
     return _from_registry_dict(out)
 
@@ -287,6 +290,7 @@ def memory_traverse_step(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     scratchpad = args.get("scratchpad")
     if scratchpad is not None and not isinstance(scratchpad, str):
         return _err(ERROR_INVALID_ARGS, detail="scratchpad must be a string")
+    include_noisy = bool(args.get("include_noisy_kinds", False))
 
     out = reg.step(
         graph,
@@ -294,6 +298,7 @@ def memory_traverse_step(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         expand_ids=expand_ids or None,
         keep_ids=keep_ids or None,
         scratchpad=scratchpad,
+        include_noisy_kinds=include_noisy,
     )
     return _from_registry_dict(out)
 

@@ -37,6 +37,10 @@
         "neighbor_k": { "type": "integer" }
       },
       "additionalProperties": false
+    },
+    "include_noisy_kinds": {
+      "type": "boolean",
+      "description": "When true, include tool/ledger/model atoms in local_map ring and edges. Default false: only sequential bridges to noisy kinds (bridge_noisy)."
     }
   },
   "required": ["goal"],

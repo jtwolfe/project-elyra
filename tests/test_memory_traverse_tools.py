@@ -318,6 +318,51 @@ def test_start_step_inspect_finish_structural(paths, store):
     assert atoms[0].atom_id in reg.last_confirmed_keep.keep_ids
 
 
+def test_start_step_surface_local_map(paths, store):
+    """Tools pass include_noisy_kinds and return host local_map (KD-P2)."""
+    atoms = _chain(store, 4)
+    ctx = _ctx(paths, store=store)
+    start = memory_traverse_start(
+        {
+            "goal": "map walk",
+            "seed_atom_ids": [atoms[1].atom_id],
+            "seed_mode": "explicit_only",
+            "include_noisy_kinds": False,
+        },
+        ctx,
+    )
+    assert start.ok is True
+    assert "local_map" in start.payload
+    lm = start.payload["local_map"]
+    assert lm is not None
+    assert lm["focus"]["atom_id"] == atoms[1].atom_id
+    assert "edges" in lm and "ring" in lm and "compass" in lm
+    assert start.payload.get("local_maps") is None
+
+    step = memory_traverse_step(
+        {
+            "session_id": start.payload["session_id"],
+            "expand_ids": [atoms[1].atom_id],
+            "include_noisy_kinds": False,
+        },
+        ctx,
+    )
+    assert step.ok is True
+    assert step.payload.get("local_map") is not None
+    assert step.payload["local_map"]["focus"]["atom_id"] == atoms[1].atom_id
+    # Single expand → local_maps null
+    assert step.payload.get("local_maps") is None
+
+
+def test_schema_documents_include_noisy_kinds(paths):
+    reg = ToolRegistry(paths, bundled_root=resolve_bundled_tools_root())
+    for name in ("memory_traverse_start", "memory_traverse_step"):
+        pkg = reg.get(name)
+        assert pkg is not None
+        props = (pkg.meta.parameters or {}).get("properties") or {}
+        assert "include_noisy_kinds" in props, name
+
+
 def test_abandon_retains_sticky(paths, store):
     atoms = _chain(store, 2)
     ctx = _ctx(paths, store=store)

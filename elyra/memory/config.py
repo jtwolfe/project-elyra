@@ -425,6 +425,9 @@ class MemorySettings:
     traverse_inspect_max_ids: int = 4
     traverse_inspect_max_total_chars: int = 2400
     traverse_scratchpad_chars: int = 200
+    # Host-assembled ~d2.5 local map on start/step focus (polish1 KD-P2).
+    # Off → frontier-only thin surface (rollback).
+    traverse_local_map_enabled: bool = True
 
     # --- Durable EdgeStore (default OFF writes — KD-E / edges design) ---
     # Store open is independent of this flag; promote write path gates on it.

@@ -80,6 +80,28 @@ _SEED_MODES = frozenset(
     {"auto", "semantic_only", "temporal_only", "temporal", "explicit_only"}
 )
 
+# Host ~d2.5 local map caps (polish1 KD-P2 / design §2.5).
+LOCAL_MAP_EDGES_CAP = 16
+LOCAL_MAP_RING_CAP = 12
+LOCAL_MAP_MOMENT_PEERS_CAP = 8
+LOCAL_MAP_ASSOCIATIVE_CAP = 5
+LOCAL_MAP_LADDER_CHILD_TIPS_CAP = 4
+LOCAL_MAP_D2_FANOUT = 3
+LOCAL_MAP_D1_TO_D2 = 4
+LOCAL_MAPS_STEP_CAP = 3
+# Default-filtered atom kinds (ring / primary); sequential bridge only.
+NOISY_ATOM_KINDS: frozenset[str] = frozenset({"tool", "ledger", "model"})
+# Prefer for ring / keep / primary map nodes (KD-P2).
+PRIMARY_MAP_KINDS: frozenset[str] = frozenset(
+    {"speak", "observation", "summary"}
+)
+_ASSOCIATIVE_EDGE_KINDS: frozenset[str] = frozenset(
+    {"recalls", "semantic_hop"}
+)
+_MOMENT_PEER_EDGE_KINDS: frozenset[str] = frozenset(
+    {"in_moment", "same_moment"}
+)
+
 # Budget keys accepted on start (tool/session overrides).
 _BUDGET_OVERRIDE_KEYS = frozenset(
     {
@@ -161,6 +183,458 @@ def _atom_body(store: MemoryStore, atom: Atom) -> str:
         if parent is not None and (parent.content_text or "").strip():
             return (parent.content_text or "").strip()
     return text
+
+
+def _is_noisy_kind(kind: str | None) -> bool:
+    return bool(kind) and str(kind) in NOISY_ATOM_KINDS
+
+
+def _primary_kind_rank(kind: str | None) -> int:
+    """Lower = preferred for ring ranking (speak > observation > summary)."""
+    k = str(kind or "")
+    if k == "speak":
+        return 0
+    if k == "observation":
+        return 1
+    if k == "summary":
+        return 2
+    if k in NOISY_ATOM_KINDS:
+        return 90
+    if k == "parcel":
+        return 40
+    return 50
+
+
+def _noisy_short_label(atom: Atom, label_n: int) -> str:
+    """Hygiene labels for noisy bridges — not raw JSON body clip (§2.3)."""
+    kind = str(atom.kind or "")
+    meta = atom.meta if isinstance(atom.meta, Mapping) else {}
+    if kind == "tool":
+        name = (
+            meta.get("tool_name")
+            or meta.get("name")
+            or "tool"
+        )
+        return _clip(f"tool:{name}", label_n)
+    if kind == "ledger":
+        name = (
+            meta.get("tool_name")
+            or meta.get("ledger_name")
+            or meta.get("name")
+            or "ledger"
+        )
+        return _clip(f"ledger:{name}", label_n)
+    if kind == "model":
+        if meta.get("error_reason") or meta.get("transport_ok") is False:
+            return _clip("fail", label_n)
+        return _clip("ok", label_n)
+    return _clip(kind or "noisy", label_n)
+
+
+def _map_node_label(
+    store: MemoryStore,
+    atom: Atom,
+    *,
+    label_n: int,
+    bridge_noisy: bool = False,
+) -> str:
+    if bridge_noisy or _is_noisy_kind(atom.kind):
+        return _noisy_short_label(atom, label_n)
+    return _clip(_atom_body(store, atom), label_n)
+
+
+def _compass_node(
+    store: MemoryStore,
+    atom: Atom,
+    *,
+    label_n: int,
+    weight: float | None = None,
+    edge_kind: str | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "atom_id": atom.atom_id,
+        "kind": atom.kind,
+        "label": _map_node_label(store, atom, label_n=label_n),
+    }
+    if weight is not None:
+        out["weight"] = float(weight)
+    if edge_kind is not None:
+        out["edge_kind"] = edge_kind
+    return out
+
+
+def build_local_map(
+    graph: GraphView,
+    focus_id: str,
+    *,
+    include_noisy: bool = False,
+    expand_deadline_ms: int | None = None,
+    label_n: int = _DEFAULT_LABEL_CHARS,
+    preview_n: int = _DEFAULT_PREVIEW_CHARS,
+    neighbor_k: int = _DEFAULT_NEIGHBOR_K,
+    associative_extra: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Host-assembled ~d2.5 local map for one focus atom (KD-P2).
+
+    Structural-only neighbors + capped d2 compass fanout. Default kind filter
+    omits tool/ledger/model from the ring; sequential bridges to noisy dsts
+    are kept with ``bridge_noisy=true`` and short hygiene labels.
+    """
+    store = graph._store  # noqa: SLF001
+    focus_id = str(focus_id or "").strip()
+    if not focus_id:
+        return None
+    focus = store.get_atom(focus_id)
+    if focus is None:
+        return None
+
+    t0 = _now_ms()
+    map_truncated = False
+    membership_source: str | None = None
+    noisy_omitted: set[str] = set()
+
+    # One structural expand for the focus (no ANN for map build — §2.4).
+    edges_raw = graph.neighbors(
+        focus_id,
+        k=max(1, int(neighbor_k)),
+        allow_semantic=False,
+        expand_deadline_ms=expand_deadline_ms,
+        semantic_deadline_ms=0,
+    )
+    meta = graph.last_expand_meta
+    if meta.get("expand_truncated") or meta.get("structural_truncated"):
+        map_truncated = True
+    ms = meta.get("membership_source")
+    if ms:
+        membership_source = str(ms)
+
+    edge_rows: list[dict[str, Any]] = []
+    ring_candidates: list[dict[str, Any]] = []
+    # Track best weight per dst for ranking.
+    seen_edge_keys: set[tuple[str, str]] = set()
+
+    for e in edges_raw:
+        dst_id = str(e.dst_atom_id)
+        ek = str(e.edge_kind or "")
+        key = (dst_id, ek)
+        if key in seen_edge_keys:
+            continue
+        seen_edge_keys.add(key)
+        dst = store.get_atom(dst_id)
+        if dst is None:
+            continue
+        dst_kind = str(dst.kind or "")
+        noisy = _is_noisy_kind(dst_kind)
+        bridge = False
+        if noisy and not include_noisy:
+            # Bridge rule: only sequential edges listed; omit dst from ring.
+            if ek != "sequential":
+                noisy_omitted.add(dst_kind)
+                continue
+            bridge = True
+            noisy_omitted.add(dst_kind)
+        label = _map_node_label(
+            store, dst, label_n=label_n, bridge_noisy=bridge or noisy
+        )
+        row: dict[str, Any] = {
+            "dst": dst_id,
+            "edge_kind": ek,
+            "weight": float(e.weight),
+            "reason": str(e.reason or ""),
+            "dst_kind": dst_kind or None,
+            "dst_label": label,
+        }
+        if bridge:
+            row["bridge_noisy"] = True
+        edge_rows.append(row)
+
+        if bridge:
+            continue
+        if noisy and not include_noisy:
+            continue
+        # Prefer primary kinds; parcels use parent body via _atom_body.
+        ring_candidates.append(
+            {
+                "atom_id": dst_id,
+                "kind": dst_kind or None,
+                "label": label,
+                "depth": 1,
+                "weight": float(e.weight),
+                "_rank": _primary_kind_rank(dst_kind),
+            }
+        )
+
+    # Sort edges by weight desc, then kind, then dst; cap.
+    edge_rows.sort(
+        key=lambda r: (-float(r["weight"]), str(r["edge_kind"]), str(r["dst"]))
+    )
+    if len(edge_rows) > LOCAL_MAP_EDGES_CAP:
+        edge_rows = edge_rows[:LOCAL_MAP_EDGES_CAP]
+        map_truncated = True
+
+    # Ring: prefer speak/observation/summary, then weight; unique by atom_id.
+    ring_candidates.sort(
+        key=lambda r: (int(r["_rank"]), -float(r["weight"]), str(r["atom_id"]))
+    )
+    ring: list[dict[str, Any]] = []
+    ring_ids: set[str] = set()
+    for cand in ring_candidates:
+        aid = str(cand["atom_id"])
+        if aid in ring_ids:
+            continue
+        ring_ids.add(aid)
+        ring.append(
+            {
+                "atom_id": aid,
+                "kind": cand["kind"],
+                "label": cand["label"],
+                "depth": 1,
+                "weight": float(cand["weight"]),
+            }
+        )
+        if len(ring) >= LOCAL_MAP_RING_CAP:
+            break
+    if len(ring_candidates) > LOCAL_MAP_RING_CAP:
+        # More candidates than cap → truncated ring.
+        map_truncated = map_truncated or len(ring_ids) < len(
+            {str(c["atom_id"]) for c in ring_candidates}
+        )
+
+    # ── Compass from d1 ──────────────────────────────────────────────────
+    sequential: dict[str, Any] = {}
+    # Prefer live prev/next fields on focus (honest direction).
+    if focus.prev_atom_id:
+        prev_a = store.get_atom(focus.prev_atom_id)
+        if prev_a is not None and (
+            include_noisy or not _is_noisy_kind(prev_a.kind)
+        ):
+            sequential["prev"] = _compass_node(
+                store, prev_a, label_n=label_n, edge_kind="sequential"
+            )
+        elif prev_a is not None and _is_noisy_kind(prev_a.kind):
+            # Sequential bridge always listed in compass for time spine.
+            sequential["prev"] = _compass_node(
+                store, prev_a, label_n=label_n, edge_kind="sequential"
+            )
+            sequential["prev"]["bridge_noisy"] = True
+            sequential["prev"]["label"] = _noisy_short_label(prev_a, label_n)
+    if focus.next_atom_id:
+        next_a = store.get_atom(focus.next_atom_id)
+        if next_a is not None:
+            sequential["next"] = _compass_node(
+                store, next_a, label_n=label_n, edge_kind="sequential"
+            )
+            if _is_noisy_kind(next_a.kind) and not include_noisy:
+                sequential["next"]["bridge_noisy"] = True
+                sequential["next"]["label"] = _noisy_short_label(next_a, label_n)
+
+    moment_peers: list[dict[str, Any]] = []
+    moment_ids: set[str] = set()
+    associative: list[dict[str, Any]] = []
+    assoc_ids: set[str] = set()
+    parent_summary: dict[str, Any] | None = None
+    child_tips: list[dict[str, Any]] = []
+    child_ids: set[str] = set()
+
+    def _maybe_peer(dst: Atom, w: float, ek: str) -> None:
+        if len(moment_peers) >= LOCAL_MAP_MOMENT_PEERS_CAP:
+            return
+        if dst.atom_id in moment_ids or dst.atom_id == focus_id:
+            return
+        if _is_noisy_kind(dst.kind) and not include_noisy:
+            return
+        moment_ids.add(dst.atom_id)
+        moment_peers.append(
+            _compass_node(
+                store, dst, label_n=label_n, weight=w, edge_kind=ek
+            )
+        )
+
+    def _maybe_assoc(dst: Atom, w: float, ek: str) -> None:
+        if len(associative) >= LOCAL_MAP_ASSOCIATIVE_CAP:
+            return
+        if dst.atom_id in assoc_ids or dst.atom_id == focus_id:
+            return
+        if _is_noisy_kind(dst.kind) and not include_noisy:
+            return
+        assoc_ids.add(dst.atom_id)
+        associative.append(
+            _compass_node(
+                store, dst, label_n=label_n, weight=w, edge_kind=ek
+            )
+        )
+
+    for e in edges_raw:
+        dst = store.get_atom(e.dst_atom_id)
+        if dst is None:
+            continue
+        ek = str(e.edge_kind or "")
+        w = float(e.weight)
+        if ek in _MOMENT_PEER_EDGE_KINDS:
+            _maybe_peer(dst, w, ek)
+        if ek in _ASSOCIATIVE_EDGE_KINDS:
+            _maybe_assoc(dst, w, ek)
+        if ek in ("parent_of", "summary_source", "child_of") and dst.kind == "summary":
+            if parent_summary is None and ek in ("parent_of", "summary_source"):
+                parent_summary = _compass_node(
+                    store, dst, label_n=label_n, weight=w, edge_kind=ek
+                )
+        if ek in ("summary_child", "child_of", "parent_of"):
+            # child tips: children / sources under ladder (cap).
+            if (
+                len(child_tips) < LOCAL_MAP_LADDER_CHILD_TIPS_CAP
+                and dst.atom_id not in child_ids
+                and dst.atom_id != focus_id
+                and (include_noisy or not _is_noisy_kind(dst.kind))
+            ):
+                # Prefer summary_child / child destinations over parent link.
+                if ek in ("summary_child", "child_of") or (
+                    ek == "parent_of" and focus.kind == "summary"
+                ):
+                    child_ids.add(dst.atom_id)
+                    child_tips.append(
+                        _compass_node(
+                            store, dst, label_n=label_n, weight=w, edge_kind=ek
+                        )
+                    )
+
+    # Optional associative extras already computed this call (seed semantic).
+    for extra in associative_extra or ():
+        if len(associative) >= LOCAL_MAP_ASSOCIATIVE_CAP:
+            break
+        aid = str(extra.get("atom_id") or extra.get("dst") or "").strip()
+        if not aid or aid in assoc_ids or aid == focus_id:
+            continue
+        atom = store.get_atom(aid)
+        if atom is None:
+            continue
+        if _is_noisy_kind(atom.kind) and not include_noisy:
+            continue
+        assoc_ids.add(aid)
+        associative.append(
+            _compass_node(
+                store,
+                atom,
+                label_n=label_n,
+                weight=float(extra.get("weight") or 0.0),
+                edge_kind=str(extra.get("edge_kind") or "semantic_hop"),
+            )
+        )
+
+    # ── d2 structural fanout for compass (§2.1 / §2.5) ────────────────────
+    # Best d1 primary nodes by weight (prefer primary kinds).
+    d1_for_d2 = sorted(
+        ring,
+        key=lambda r: (
+            _primary_kind_rank(r.get("kind")),
+            -float(r.get("weight") or 0.0),
+            str(r.get("atom_id")),
+        ),
+    )[:LOCAL_MAP_D1_TO_D2]
+
+    struct_budget = (
+        float(expand_deadline_ms)
+        if expand_deadline_ms is not None and expand_deadline_ms > 0
+        else None
+    )
+    spent = _now_ms() - t0
+    for d1 in d1_for_d2:
+        if struct_budget is not None and spent >= struct_budget:
+            map_truncated = True
+            break
+        remaining: int | None
+        if struct_budget is not None:
+            remaining = max(0, int(struct_budget - spent))
+            if remaining <= 0:
+                map_truncated = True
+                break
+        else:
+            remaining = expand_deadline_ms
+        d1_id = str(d1["atom_id"])
+        hop2 = graph.neighbors(
+            d1_id,
+            k=LOCAL_MAP_D2_FANOUT,
+            allow_semantic=False,
+            expand_deadline_ms=remaining,
+            semantic_deadline_ms=0,
+            exclude_ids={focus_id, d1_id, *ring_ids},
+        )
+        hop_meta = graph.last_expand_meta
+        spent = _now_ms() - t0
+        if hop_meta.get("expand_truncated") or hop_meta.get("structural_truncated"):
+            map_truncated = True
+        for e2 in hop2:
+            dst2 = store.get_atom(e2.dst_atom_id)
+            if dst2 is None:
+                continue
+            ek2 = str(e2.edge_kind or "")
+            w2 = float(e2.weight)
+            if ek2 in _MOMENT_PEER_EDGE_KINDS:
+                _maybe_peer(dst2, w2, ek2)
+            if ek2 in ("summary_child", "child_of") and (
+                include_noisy or not _is_noisy_kind(dst2.kind)
+            ):
+                if (
+                    len(child_tips) < LOCAL_MAP_LADDER_CHILD_TIPS_CAP
+                    and dst2.atom_id not in child_ids
+                ):
+                    child_ids.add(dst2.atom_id)
+                    child_tips.append(
+                        _compass_node(
+                            store,
+                            dst2,
+                            label_n=label_n,
+                            weight=w2,
+                            edge_kind=ek2,
+                        )
+                    )
+            if ek2 in _ASSOCIATIVE_EDGE_KINDS:
+                _maybe_assoc(dst2, w2, ek2)
+
+    ladder: dict[str, Any] = {}
+    if parent_summary is not None:
+        ladder["parent_summary"] = parent_summary
+    if child_tips:
+        ladder["child_tips"] = child_tips[:LOCAL_MAP_LADDER_CHILD_TIPS_CAP]
+
+    focus_label = _map_node_label(store, focus, label_n=label_n)
+    focus_preview = _clip(_atom_body(store, focus), preview_n)
+    # Noisy focus still gets hygiene label when kind is tool/ledger/model.
+    if _is_noisy_kind(focus.kind):
+        focus_label = _noisy_short_label(focus, label_n)
+        focus_preview = focus_label
+
+    filters = {
+        "noisy_kinds_omitted": sorted(noisy_omitted) if not include_noisy else [],
+        "include_noisy": bool(include_noisy),
+    }
+    meta_out: dict[str, Any] = {
+        "structural_ms_spent": int(_now_ms() - t0),
+        "map_truncated": map_truncated,
+    }
+    if membership_source:
+        meta_out["membership_source"] = membership_source
+    if expand_deadline_ms is not None:
+        meta_out["structural_ms_budget"] = int(expand_deadline_ms)
+
+    return {
+        "focus": {
+            "atom_id": focus_id,
+            "kind": focus.kind,
+            "label": focus_label,
+            "preview": focus_preview,
+        },
+        "edges": edge_rows,
+        "ring": ring,
+        "compass": {
+            "sequential": sequential,
+            "moment_peers": moment_peers[:LOCAL_MAP_MOMENT_PEERS_CAP],
+            "ladder": ladder,
+            "associative": associative[:LOCAL_MAP_ASSOCIATIVE_CAP],
+        },
+        "filters": filters,
+        "meta": meta_out,
+    }
 
 
 def _now_ms() -> float:
@@ -815,6 +1289,7 @@ class TraversalRegistry:
         seed_mode: str | None = None,
         moment_id: str | None = None,
         budget_overrides: Mapping[str, int] | None = None,
+        include_noisy_kinds: bool = False,
     ) -> dict[str, Any]:
         """Create an active session; abandon any previous active only.
 
@@ -831,6 +1306,9 @@ class TraversalRegistry:
         Dual start reserves ``dual_n`` slots **before** semantic fill so
         temporal anchors are not starved when ANN returns a full top-k.
         Start never cold-loads the encoder (GraphView ``encoder_cold`` honesty).
+
+        Host-assembled ``local_map`` (KD-P2) is built for the primary seed under
+        remaining structural start budget; ANN is not re-run for the map.
         """
         if not self.enabled():
             return {
@@ -1119,6 +1597,47 @@ class TraversalRegistry:
         self._rebuild_frontier(session, frontier_max=frontier_max)
         self._active = session
 
+        # KD-P2: host local_map for primary focus (first seed). No re-ANN.
+        local_map: dict[str, Any] | None = None
+        map_enabled = _bool_cfg(cfg, "traverse_local_map_enabled", True)
+        if map_enabled and seed_order:
+            primary_focus = seed_order[0]
+            remaining_struct: int | None
+            if start_ms > 0:
+                remaining_struct = max(0, int(start_ms) - int(expand_ms_spent))
+            else:
+                remaining_struct = expand_ms if expand_ms > 0 else None
+            # Associative extras: other semantic seeds already computed this start.
+            assoc_extra: list[dict[str, Any]] = []
+            for sid in seed_order[1:]:
+                node = session.considered.get(sid)
+                if node is None:
+                    continue
+                if node.via_edge_kind == "semantic_hop" or (
+                    node.via_reason or ""
+                ).startswith("semantic"):
+                    assoc_extra.append(
+                        {
+                            "atom_id": sid,
+                            "weight": float(node.weight or 0.0),
+                            "edge_kind": "semantic_hop",
+                        }
+                    )
+            try:
+                local_map = build_local_map(
+                    graph,
+                    primary_focus,
+                    include_noisy=bool(include_noisy_kinds),
+                    expand_deadline_ms=remaining_struct,
+                    label_n=label_n,
+                    preview_n=preview_n,
+                    neighbor_k=neighbor_k,
+                    associative_extra=assoc_extra or None,
+                )
+            except Exception:  # noqa: BLE001 — map failure must not kill start
+                _LOG.debug("local_map build failed on start", exc_info=True)
+                local_map = None
+
         view = session.to_thin_surface()
         view["ok"] = True
         view["seed_ids"] = list(session.seed_ids)
@@ -1130,6 +1649,8 @@ class TraversalRegistry:
         view["start_ms_spent"] = expand_ms_spent
         view["semantic_ms_budget"] = int(semantic_deadline)
         view["semantic_ms_spent"] = semantic_ms_spent
+        view["local_map"] = local_map
+        view["local_maps"] = None
         return view
 
     def step(
@@ -1140,8 +1661,13 @@ class TraversalRegistry:
         expand_ids: Sequence[str] | None = None,
         keep_ids: Sequence[str] | None = None,
         scratchpad: str | None = None,
+        include_noisy_kinds: bool = False,
     ) -> dict[str, Any]:
-        """One tool step: expand selected frontier nodes + optional keep."""
+        """One tool step: expand selected frontier nodes + optional keep.
+
+        When focus moves (expand_ids processed), attach host ``local_map`` for
+        the first successfully expanded id and optional ``local_maps`` (≤3).
+        """
         if not self.enabled():
             return {
                 "ok": False,
@@ -1221,6 +1747,11 @@ class TraversalRegistry:
                 if next_depth > session.budgets.depth_spent:
                     session.budgets.depth_spent = next_depth
 
+        # Focuses we successfully ran expand on (for local_map / local_maps).
+        expanded_focus_ids: list[str] = []
+        # Semantic/recalls hits from this step's first ANN (associative compass).
+        step_assoc_by_focus: dict[str, list[dict[str, Any]]] = {}
+
         if can_expand and expand_ids:
             picks = [str(x) for x in expand_ids][: max(0, expand_per)]
             struct_budget = float(expand_ms) if expand_ms > 0 else None
@@ -1271,6 +1802,7 @@ class TraversalRegistry:
                 ):
                     expand_truncated = True
                 _pack_edges(src_id, next_depth, edges_struct)
+                expanded_focus_ids.append(src_id)
 
                 # Phase B: at most one semantic_hop under independent ANN budget.
                 if (
@@ -1297,6 +1829,15 @@ class TraversalRegistry:
                     # Pack ANN results always — do not apply expand_ms wall.
                     # semantic_timeout is honesty only, not discard.
                     _pack_edges(src_id, next_depth, edges_sem)
+                    if edges_sem:
+                        step_assoc_by_focus[src_id] = [
+                            {
+                                "atom_id": e.dst_atom_id,
+                                "weight": float(e.weight),
+                                "edge_kind": e.edge_kind,
+                            }
+                            for e in edges_sem
+                        ]
 
             # expand_ms honesty: structural spend only (ANN is separate budget).
             expand_ms_spent = int(struct_spent_total)
@@ -1317,9 +1858,44 @@ class TraversalRegistry:
             session, frontier_max=frontier_max, prefer_new=newly
         )
 
+        # KD-P2: local_map for first expanded focus; local_maps when multi.
+        local_map: dict[str, Any] | None = None
+        local_maps: list[dict[str, Any]] | None = None
+        map_enabled = _bool_cfg(cfg, "traverse_local_map_enabled", True)
+        if map_enabled and expanded_focus_ids:
+            map_struct_budget = expand_ms if expand_ms > 0 else None
+            built: list[dict[str, Any]] = []
+            for fid in expanded_focus_ids[:LOCAL_MAPS_STEP_CAP]:
+                try:
+                    m = build_local_map(
+                        graph,
+                        fid,
+                        include_noisy=bool(include_noisy_kinds),
+                        expand_deadline_ms=map_struct_budget,
+                        label_n=label_n,
+                        preview_n=preview_n,
+                        neighbor_k=neighbor_k,
+                        associative_extra=step_assoc_by_focus.get(fid),
+                    )
+                except Exception:  # noqa: BLE001
+                    _LOG.debug(
+                        "local_map build failed on step focus=%s",
+                        fid,
+                        exc_info=True,
+                    )
+                    m = None
+                if m is not None:
+                    built.append({"focus_id": fid, "map": m})
+            if built:
+                local_map = built[0]["map"]
+                if len(built) > 1:
+                    local_maps = built
+
         view = session.to_thin_surface()
         view["ok"] = True
         view["newly_expanded"] = newly
+        view["local_map"] = local_map
+        view["local_maps"] = local_maps
         return view
 
     def finish(
@@ -1713,6 +2289,16 @@ __all__ = [
     "ERROR_SESSION_NOT_ACTIVE",
     "ERROR_TRAVERSE_DISABLED",
     "ERROR_UNKNOWN_SESSION",
+    "LOCAL_MAP_ASSOCIATIVE_CAP",
+    "LOCAL_MAP_D1_TO_D2",
+    "LOCAL_MAP_D2_FANOUT",
+    "LOCAL_MAP_EDGES_CAP",
+    "LOCAL_MAP_LADDER_CHILD_TIPS_CAP",
+    "LOCAL_MAP_MOMENT_PEERS_CAP",
+    "LOCAL_MAP_RING_CAP",
+    "LOCAL_MAPS_STEP_CAP",
+    "NOISY_ATOM_KINDS",
+    "PRIMARY_MAP_KINDS",
     "AtomPreview",
     "BudgetState",
     "ConfirmedKeepSnapshot",
@@ -1721,6 +2307,7 @@ __all__ = [
     "GraphSessionView",
     "TraversalRegistry",
     "TraversalSession",
+    "build_local_map",
     "build_walk_summary_nl",
     "clamp_budget",
     "inspect_atoms",

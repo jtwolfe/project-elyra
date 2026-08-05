@@ -18,6 +18,10 @@
     "scratchpad": {
       "type": "string",
       "description": "Optional model-owned notes (capped by traverse_scratchpad_chars)."
+    },
+    "include_noisy_kinds": {
+      "type": "boolean",
+      "description": "When true, include tool/ledger/model atoms in local_map ring and edges. Default false: sequential bridges only for noisy kinds."
     }
   },
   "required": [],
