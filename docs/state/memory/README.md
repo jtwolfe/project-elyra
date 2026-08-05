@@ -66,8 +66,8 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | **1** | Temporal / episodic foundation + meal spine | Must stand alone without vectors | **Done** (2026-07-28) — see caveats below |
 | **2** | Semantic / Nemotron / vector search | Portability + freshness + product-path honesty | **Code rectified (PR-R1–R5)** + **continuous encode** + **MM loop code-complete (#124 PR0–PR7, 2026-08-05)**; **operator smoke / live dogfood still pending**; flags default **off** — see close-out |
 | **2a** | Directed traversal | Temporary context hygiene | **Code shipped (PR-A1–A5, 2026-07-29)**; architecture note PR-A6; **operator smoke dogfood pending**; flags default **off** — see close-out |
-| **Edges + traverse extension** | Durable EdgeStore fabric + pure semantic start + raised budgets | Restart-stable weave; cold-seed honesty | **Code complete (PR0–PR7, 2026-08-05)** on edges stack; **live dogfood open** — [edges-traversal-dogfood.md](edges-traversal-dogfood.md); `durable_edges_enabled` / traversal flags default **off** — see close-out |
-| **Edges polish1** | Unified semantic wait + deferred recalls + local_map + backfill + glass sticky + skill maneuvers | Long-path ANN usable under slow embedder; history fabric; walk surface honesty | **Code complete (PR0–PR5, 2026-08-05)** on `feature/edge-enrichment-polish1`; **live dogfood open** — [edges-traversal-dogfood.md](edges-traversal-dogfood.md); **not** Gate B / `durable_edges_enabled` factory default-on — see polish1 close-out |
+| **Edges + traverse extension** | Durable EdgeStore fabric + pure semantic start + raised budgets | Restart-stable weave; cold-seed honesty | **Code on `working`/`main` (PR0–PR8, 2026-08-05)**; **live dogfood partial** — [edges-traversal-dogfood.md](edges-traversal-dogfood.md); flags default **off** — see close-out |
+| **Edges polish1** | Unified semantic wait + deferred recalls + local_map + backfill + glass sticky + skill maneuvers | Long-path ANN usable under slow embedder; history fabric; walk surface honesty | **Code on `working`/`main` (PR0–PR6, 2026-08-05)** @ `161a820`; **live dogfood partial**; **not** Gate B; residuals **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** polish2 — see polish1 close-out |
 | **3** | Procedural / success-path | Evaluation plan + synthetic data before default-on | Planned |
 
 ### Phase 2 close-out (updated 2026-08-05)
@@ -87,7 +87,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 **Continuous encode (embed-async PR1–PR4, 2026-08-03) — code landed:** EncodeWorker + EmbedderGate; corpus drain while PE runs when flags on; idle-only is rollback.
 
-**Multimodal embed buildout (#124 PR0–PR7, 2026-08-05) — code complete on `feature/mm-embed-buildout` (ready for `working` merge):**
+**Multimodal embed buildout (#124 PR0–PR7, 2026-08-05) — code on `working`/`main` (dogfood open):**
 
 | PR | What |
 |----|------|
@@ -147,9 +147,9 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 **Docs:** [design-phase-2a-implementation.md](../../design/memory/design-phase-2a-implementation.md) (normative design + KD-A*), [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) (shipped map), [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) (intent sketch).
 
-### Edges + traversal extension close-out (2026-08-05)
+### Edges + traversal extension close-out (2026-08-05; land touch same day)
 
-**Ship stack (PR0–PR7 on edges tip):** durable EdgeStore fabric + pure semantic start + raised traverse budgets. Design: [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code)**). Operator checklist (open): [edges-traversal-dogfood.md](edges-traversal-dogfood.md).
+**Ship stack (PR0–PR8; tip on `working`/`main` @ `161a820`):** durable EdgeStore fabric + pure semantic start + raised traverse budgets + free-browse graph. Design: [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code; dogfood partial)**). Operator checklist (partial live): [edges-traversal-dogfood.md](edges-traversal-dogfood.md).
 
 | PR | What |
 |----|------|
@@ -162,7 +162,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | **E6** | Raised product budgets + HARD_MAX clamp-up + frontier/moment cache + `neighbor_k` (#105) |
 | **E7** | STATE dogfood checklist + Graph glass overview edge-count polish; design **Shipped (code)** (this close-out) |
 
-**Honesty:** code + hermetic green ≠ live dogfood signed ≠ Gate B. **`durable_edges_enabled` factory default remains `false`.** Traversal/keep/semantic/embed stay default **off**. #61 free-browse visual graph landed as PR8 on edges tip (not a Gate B gate). Prefer MM encode smoke ([mm-embed-dogfood.md](mm-embed-dogfood.md)) before claiming rich multi-hop quality under Nemotron.
+**Honesty:** code + hermetic green ≠ full live dogfood sign-off ≠ Gate B. **`durable_edges_enabled` factory default remains `false`.** Traversal/keep/semantic/embed stay default **off**. #61 free-browse visual graph landed as PR8 (not a Gate B gate). Prefer MM encode smoke ([mm-embed-dogfood.md](mm-embed-dogfood.md)) before claiming rich multi-hop quality under Nemotron.
 
 **Defaults stay safe:** edges write **false**; tools still require `directed_traversal_enabled`. Raised depth/nodes/steps are product defaults for sessions when traversal is on — they do **not** enable writes alone.
 
@@ -170,18 +170,18 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 | Topic | Notes |
 |-------|--------|
-| Live dogfood | [edges-traversal-dogfood.md](edges-traversal-dogfood.md) unchecked until operator sign-off (#98/#120/#103/#105) — prefer polish1 tip for long-path ANN claims |
+| Live dogfood | [edges-traversal-dogfood.md](edges-traversal-dogfood.md) **partial** 2026-08-05; full sign-off open (#98/#120/#103/#105) |
 | MM order | Operator sequence still MM → edges → traversal polish for quality claims |
-| #61 visual free-browse | PR8 on edges tip — canvas on existing neighbors API; not a Gate B or edges default-on gate |
-| Polish1 residuals | Unified wait / deferred recalls / local_map / backfill / sticky — see polish1 close-out below |
+| #61 visual free-browse | PR8 landed — re-verify snappy defaults under polish1 wait (not full 120s hang) |
+| Polish1 / polish2 | Polish1 shipped — see close-out below; residuals **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** |
 | Gate B / default-on | Separate decision after signed dogfood; do **not** flip `durable_edges_enabled` from hermetic green alone |
 | Phase 3 | Success-path weights hang on edges/sessions later (#117) |
 
 **Docs:** [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md), [edges-traversal-dogfood.md](edges-traversal-dogfood.md), [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md).
 
-### Edges polish1 close-out (2026-08-05)
+### Edges polish1 close-out (2026-08-05; land + partial dogfood)
 
-**Ship stack (PR0–PR5 on `feature/edge-enrichment-polish1`; STATE dogfood PR6):** dogfood residuals → product polish without Gate B. Design: [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) (**Shipped (code)**). Operator checklist (open): [edges-traversal-dogfood.md](edges-traversal-dogfood.md) (polish1 sections + sign-off).
+**Ship stack (PR0–PR6 landed on `working`/`main` @ `161a820`):** dogfood residuals → product polish without Gate B. Design: [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) (**Shipped (code; dogfood partial)**). Operator checklist: [edges-traversal-dogfood.md](edges-traversal-dogfood.md) (polish1 sections + sign-off).
 
 | PR | What |
 |----|------|
@@ -194,7 +194,7 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 | **P5** | Glass last finished walk sticky across moment close (process-life) + expand budget honesty |
 | **P6** | STATE dogfood checklist + this close-out (not Gate B; hermetic evidence pointers) |
 
-**Honesty:** polish1 code + hermetic green ≠ live dogfood signed ≠ Gate B. **`durable_edges_enabled` factory default remains `false`.** Traversal/keep/semantic/embed stay default **off**. Operator dogfood may set **semantic wait to 120s** for long-path ANN under ROCm Nemotron — that is an allowed ceiling in the 1s–120s band, not a factory default-on of edges.
+**Honesty:** polish1 code on `working`/`main` + hermetic green ≠ **full** live dogfood sign-off ≠ Gate B. **`durable_edges_enabled` factory default remains `false`.** Traversal/keep/semantic/embed stay default **off**. Operator dogfood may set **semantic wait to 120s** for long-path ANN under ROCm Nemotron — that is an allowed ceiling in the 1s–120s band, not a factory default-on of edges. **Partial live evidence (2026-08-05):** wait wiring + dual budgets on glass; deferred `recalls` store growth; multi-hop walks with `created_with`/`in_moment`; force backfill; sticky last session. **Not proven green:** pure `semantic_only` under warm encoder, rich start `local_map`, `recalls` as expand `via_edge_kind` — **[#125](https://github.com/jtwolfe/project-elyra/issues/125) polish2**.
 
 **Defaults stay safe (Gate B unchanged):**
 
@@ -210,10 +210,10 @@ Composition, dedup, labels, slide-off, re-gather: [design-context-meal-compositi
 
 | Topic | Notes |
 |-------|--------|
-| Live polish1 dogfood | Unified wait 120s, deferred recalls, local_map, backfill, sticky, skill — [edges-traversal-dogfood.md](edges-traversal-dogfood.md) polish1 boxes |
-| Pre-polish edges dogfood | Partial 2026-08-05; re-run long-path ANN claims on polish1 tip |
+| Live polish1 dogfood | **Partial** — [edges-traversal-dogfood.md](edges-traversal-dogfood.md) polish1 boxes; not full sign-off |
+| Polish2 residuals | Cold `semantic_only`, start `local_map` budget, recalls on expand, structural budget honesty — **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** |
 | Stickiness durability | Process-life only (OQ-P3: no disk last_session in polish1) |
-| Gate B / default-on | **Still separate** — do **not** flip `durable_edges_enabled` from polish1 hermetic green |
+| Gate B / default-on | **Still separate** — do **not** flip `durable_edges_enabled` from polish1 land alone |
 | Phase 3 | Success-path weights later (#117) |
 
 **Docs:** [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md), [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md), [edges-traversal-dogfood.md](edges-traversal-dogfood.md).
@@ -266,9 +266,9 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-mm-embed-buildout.md](../../design/memory/design-mm-embed-buildout.md) | **MM semantic loop** (ingest→encode→search→glass) — **Shipped (code)** #124; dogfood open |
 | [mm-embed-dogfood.md](mm-embed-dogfood.md) | **Operator MM dogfood checklist** (unchecked until live sign-off) |
 | [mm-view-dogfood.md](mm-view-dogfood.md) | **Operator view_media + meal rebalance dogfood checklist** (unchecked until live sign-off) |
-| [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) | **Durable edges + pure semantic start + raised budgets** — **Shipped (code)** #98/#120/#103/#105; dogfood open |
-| [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) | **Edges polish1** (unified wait, deferred recalls, local_map, backfill, glass sticky, skill) — **Shipped (code)**; dogfood open |
-| [edges-traversal-dogfood.md](edges-traversal-dogfood.md) | **Operator edges + traversal + polish1 dogfood checklist** (unchecked until live sign-off) |
+| [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) | **Durable edges + pure semantic start + raised budgets** — **Shipped (code; dogfood partial)** #98/#120/#103/#105; on `working`/`main` |
+| [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) | **Edges polish1** (unified wait, deferred recalls, local_map, backfill, glass sticky, skill) — **Shipped (code; dogfood partial)**; residuals [#125](https://github.com/jtwolfe/project-elyra/issues/125) |
+| [edges-traversal-dogfood.md](edges-traversal-dogfood.md) | **Operator edges + traversal + polish1 dogfood checklist** (partial live; full sign-off open) |
 | [design-view-media-meal-rebalance.md](../../design/memory/design-view-media-meal-rebalance.md) | **view_media + Completions expand + outer meal rebalance** design (PR0–PR6) |
 | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped + rectified + MM loop: structure ↔ essay, activities, invariants) |
 | [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) | Phase 2a intent sketch (points at implementation + architecture) |
@@ -310,12 +310,12 @@ Philosophical soft guidance is **not** a checklist item for phase done. Meal com
 
 ## Next steps
 
-1. **Merge MM tip to `working`** when hermetic suite green on the stack tip (no auto-promote to `main`).
+1. ~~**Merge MM / edges / polish1 tips to `working`**~~ — **done** 2026-08-05 (`working`/`main` @ `161a820`; **no** default-on of semantic or `durable_edges_enabled`).
 2. **Smoke dogfood Phase 2 + MM** (flags on, `backend=lance`): neighbors/meal under `auto`, joint repair, **media attach → encode → media-as-query** — [mm-embed-dogfood.md](mm-embed-dogfood.md), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md).
-3. **Merge edges + polish1 tip** (`feature/edge-enrichment-polish1` / stack) to `working` when hermetic green (no `main` promote; **no** default-on of `durable_edges_enabled`).
-4. **Smoke dogfood edges + traverse + polish1** (opt-in flags; semantic wait **120s** OK for long-path ANN): created_with / deferred recalls / expand_moment / pure semantic start / raised budgets / local_map / backfill / glass sticky — [edges-traversal-dogfood.md](edges-traversal-dogfood.md).
+3. **Finish edges + polish1 dogfood sign-off** (opt-in flags; semantic wait **120s** OK): remaining boxes — [edges-traversal-dogfood.md](edges-traversal-dogfood.md); partial live already noted.
+4. **Polish2** — [#125](https://github.com/jtwolfe/project-elyra/issues/125): cold `semantic_only`, start `local_map` budget, recalls on expand, structural budget honesty.
 5. **Smoke dogfood Phase 2a** residual (flags on): structural walk on JSONL; full multi-hop with Lance + semantic seeds; finish → glass considered/kept → next meal directed_keep — [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md).
-6. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on of semantic **or** edges — [design-nemotron-runtime.md](../../design/memory/design-nemotron-runtime.md). **Not** opened by edges or polish1 code-complete alone.
-7. **#61 free-browse graph** — PR8 on edges tip; re-verify free-browse snappy defaults under polish1 wait (not full 120s hang).
+6. **Gate B** checklist (mock → Nemotron quality/latency) before any product default-on of semantic **or** edges — [design-nemotron-runtime.md](../../design/memory/design-nemotron-runtime.md). **Not** opened by polish1 land alone.
+7. **#61 free-browse graph** — re-verify free-browse snappy defaults under polish1 wait (not full 120s hang).
 8. **Phase 3** procedural / success-path evaluation-first (uses edges/sessions from 2a + fabric).
 9. Keep architecture manuals updated when behaviour changes. Do not claim product-complete without dogfood; do not claim Gate B from hermetic green alone.

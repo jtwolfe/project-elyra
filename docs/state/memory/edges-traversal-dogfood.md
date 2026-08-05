@@ -3,13 +3,16 @@
 | Field | Value |
 |-------|--------|
 | **Class** | STATE |
-| **Audience** | Operators dogfooding EdgeStore fabric + pure semantic start + raised traverse budgets + **polish1** (unified wait, deferred recalls, local_map, backfill, glass sticky, skill maneuvers) |
-| **Design (edges stack)** | [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code)**) |
-| **Design (polish1)** | [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) (**Shipped (code)** — PR0–PR5; this checklist is PR6) |
+| **Audience** | Operators |
+| **Status** | Active (living checklist) |
+| **Normative?** | No — prefer code on `working`; boxes are ops evidence, not product default-on |
+| **Last verified** | 2026-08-05 (code on `working`/`main` @ `161a820`; live dogfood **partial**) |
+| **Design (edges stack)** | [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code; dogfood partial)**) |
+| **Design (polish1)** | [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) (**Shipped (code; dogfood partial)** — PR0–PR6) |
 | **Architecture priors** | [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
 | **Program** | [README.md](README.md) — edges/traversal + polish1 close-out |
-| **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98) source/context edges; [#120](https://github.com/jtwolfe/project-elyra/issues/120) C14 edges dogfood; [#103](https://github.com/jtwolfe/project-elyra/issues/103) semantic seed timeout; [#105](https://github.com/jtwolfe/project-elyra/issues/105) frontier cache + dual start |
-| **Claim today (2026-08-05)** | **Edges stack code complete + hermetic green** (PR0–PR7). **Polish1 code complete + hermetic green** on `feature/edge-enrichment-polish1` (PR0 design, PR1a unified wait, PR1b deferred recalls, PR2 local_map, PR3 skill maneuvers, PR4 dev backfill, PR5 glass sticky). **Live operator dogfood not signed** (partial edges dogfood pre-polish; polish1 boxes open). **Not** Gate B / product default-on of `durable_edges_enabled`. |
+| **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98), [#120](https://github.com/jtwolfe/project-elyra/issues/120), [#103](https://github.com/jtwolfe/project-elyra/issues/103), [#105](https://github.com/jtwolfe/project-elyra/issues/105); polish2 residuals **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** |
+| **Claim today (2026-08-05)** | **Edges + polish1 code on `working`/`main` @ `161a820`** (hermetic green). **Live dogfood partial** — fabric/wait/sticky/backfill/multi-hop `created_with` proven; full boxes not signed. **Polish2** residuals on #125 (cold `semantic_only`, start `local_map` budget, recalls on expand). **Not** Gate B / product default-on of `durable_edges_enabled`. |
 
 ---
 
@@ -28,23 +31,23 @@
 | Graph API `edge_count` / `edges_by_kind` / `durable_edges_enabled` | **Code** (PR2+) |
 | Glass overview edge counts polish | **Code** (PR7) |
 | Visual free-browse graph (#61) | **Code** (PR8 on edges tip) |
-| Live promote → edges → multi-hop walk on operator machine | **Open** — boxes below (partial pre-polish dogfood 2026-08-05) |
+| Live promote → edges → multi-hop walk on operator machine | **Partial live** 2026-08-05 — multi-hop + durable kinds proven; boxes below still open for full sign-off |
 | Gate B / `durable_edges_enabled` factory default-on | **Not** this checklist’s done bar |
 
-### Polish1 (PR0–PR5)
+### Polish1 (PR0–PR6)
 
 | Claim | Status |
 |-------|--------|
-| Unified semantic wait ceiling for long-path ANN (meal / traverse start / step hop / deferred recalls; band 1s–120s) | **Code** (PR1a) |
+| Unified semantic wait ceiling for long-path ANN (meal / traverse start / step hop / deferred recalls; band 1s–120s) | **Code** (PR1a) + **partial live** (`semantic_wait.applies_to`, 120s dogfood) |
 | Dual deadlines: structural `expand_ms` vs semantic wait; free-browse / HTTP snappy or structural default | **Code** (PR1a) |
-| Speak `recalls` **deferred** product default (promote never waits; idle-tick drain) | **Code** (PR1b) |
+| Speak `recalls` **deferred** product default (promote never waits; idle-tick drain) | **Code** (PR1b) + **partial live** (store `recalls` count grew under dogfood) |
 | `edge_recalls_max_ms` deprecated no-op for live ANN ceiling | **Code** (PR1b) |
-| Host ~d2.5 `local_map` + kind filters (noisy kinds default-off) | **Code** (PR2) |
-| Skill walk maneuvers + tool surface `local_map` / `include_noisy_kinds` | **Code** (PR3) |
-| Dev force edge backfill (`in_moment` structural-first) + Graph button | **Code** (PR4) |
-| Glass last finished walk sticky across moment close (process-life) | **Code** (PR5) |
-| Expand / walk budget honesty (structural vs semantic spent) | **Code** (PR5 + PR1a) |
-| Live polish1 dogfood (120s wait, deferred recalls, map, backfill, sticky) | **Open** — polish1 boxes below |
+| Host ~d2.5 `local_map` + kind filters (noisy kinds default-off) | **Code** (PR2) + **partial live** (map present; start often budget-starved — #125) |
+| Skill walk maneuvers + tool surface `local_map` / `include_noisy_kinds` | **Code** (PR3) + **partial live** (model used named maneuvers) |
+| Dev force edge backfill (`in_moment` structural-first) + Graph button | **Code** (PR4) + **partial live** (force backfill wrote `in_moment`) |
+| Glass last finished walk sticky across moment close (process-life) | **Code** (PR5) + **partial live** (`has_last_session` after moment end) |
+| Expand / walk budget honesty (structural vs semantic spent) | **Code** (PR5 + PR1a); accounting noise residual #125 |
+| Live polish1 dogfood (120s wait, deferred recalls, map, backfill, sticky) | **Partial** — not full sign-off; polish2 [#125](https://github.com/jtwolfe/project-elyra/issues/125) |
 | Gate B / factory default-on | **Still not** — polish1 does not flip flags |
 
 **Factory defaults stay off:** `durable_edges_enabled` / `directed_traversal_enabled` / `directed_keep_enabled` / `semantic_enabled` / `embed_enabled` **false**. Dogfood must opt in via operator `elyra.toml`. Raised traverse *product defaults* (depth 5, nodes 80, …) apply when traversal is on; they do **not** enable writes or tools by themselves.
@@ -62,7 +65,7 @@
 
 ## Prep
 
-- [ ] Tip of **`feature/edge-enrichment-polish1`** (or edges tip after polish1 merge) with hermetic suite green
+- [ ] Tip of **`working` / `main`** (or post-merge pin) with edges + polish1; hermetic suite green
 - [ ] `backend=lance` + `elyra[memory-lance]` (preferred dogfood path; JSONL structural-only is ok for edge fabric without ANN)
 - [ ] Operator `elyra.toml` (or equivalent) includes:
   ```toml
@@ -299,7 +302,7 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 |-------|--------|
 | Operator | |
 | Date | |
-| Tip SHA | (`feature/edge-enrichment-polish1` or post-merge tip) |
+| Tip SHA | (`working`/`main` @ land, e.g. `161a820`, or operating pin) |
 | Encoder backend | mock / nemotron |
 | `semantic_wait.max_ms` (dogfood) | e.g. 120000 |
 | Deferred recalls | observed / not observed |
@@ -311,14 +314,15 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 | Result | pass / fail / partial |
 | Notes | |
 
-**Done for “polish1 green” product claim:** unified wait (120s dogfood OK) + deferred recalls + local_map + backfill + glass sticky + skill boxes checked with notes, or residual filed against polish1 design / edges issues with explicit defer. **Still not** Gate B or factory default-on of `durable_edges_enabled`.
+**Done for “polish1 green” product claim:** unified wait (120s dogfood OK) + deferred recalls + local_map + backfill + glass sticky + skill boxes checked with notes, **or** residual filed with explicit defer. **Polish2 residuals filed:** [#125](https://github.com/jtwolfe/project-elyra/issues/125). **Still not** Gate B or factory default-on of `durable_edges_enabled`.
 
 ---
 
 ## Related
 
 - [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) — KD-E* + PR0–PR8 edges stack
-- [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) — KD-P* + PR0–PR5 polish1 (this checklist extends STATE for PR6)
+- [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) — KD-P* + PR0–PR6 polish1
+- [#125](https://github.com/jtwolfe/project-elyra/issues/125) — edges **polish2** residuals (cold semantic_only, start local_map budget, recalls on expand)
 - [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) — base 2a walk / Graph glass
 - [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — semantic seeds / MM loop
 - [mm-embed-dogfood.md](mm-embed-dogfood.md) — prefer MM encode smoke before rich multi-hop quality claims

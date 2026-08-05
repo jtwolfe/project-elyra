@@ -6,21 +6,25 @@
 | **Document** | Unified semantic wait + host d≈2.5 local map + walk maneuvers + dev edge backfill + glass honesty |
 | **Product** | project-elyra |
 | **Author** | design-doc-writer (Elyra) |
+| **Audience** | Implementers |
 | **Date** | 2026-08-05 |
-| **Status** | **Ready for implement** |
-| **Revision** | **R2** (review e7f82022) — PR mermaid aligned with Depends tables (PR4 ‖ PR1a; PR5 from PR1a; PR1b optional); R1 locks retained |
-| **Topic branch** | `feature/edge-enrichment-polish1` (created from `feature/edge-enrichment` @ ~e672367) |
-| **PR base / stack tip** | All PRs stack onto **`feature/edge-enrichment-polish1`**. Branch law: `main` ← `working` ← `feature/*`. **Do not merge to main.** Merge to `working` is a later operator decision. |
+| **Status** | **Shipped (code; dogfood partial)** — PR0–PR6 landed; merged to `working` and `main` @ `161a820` (2026-08-05). Hermetic memory suite green. **Live dogfood partial** (not full checklist sign-off). **`durable_edges_enabled` factory default remains `false`.** **Not** Gate B. |
+| **Revision** | **R3 (docs touch 2026-08-05)** — land honesty after merge + partial dogfood; polish2 residuals → [#125](https://github.com/jtwolfe/project-elyra/issues/125). R2 locks retained. |
+| **Normative?** | No for product default-on — prefer code on `working`; body is contract/archaeology for polish1 |
+| **Topic branch (history)** | `feature/edge-enrichment-polish1` (from `feature/edge-enrichment` @ ~e672367); stack tip landed |
+| **Landed tip** | `working` / `main` @ `161a820` (branch law: `main` ← `working` ← `feature/*`) |
 | **Prior shipped design** | [design-memory-edges-and-traversal.md](design-memory-edges-and-traversal.md) (PR0–PR8 on edge-enrichment; **Shipped code**) |
 | **Dogfood (STATE)** | [edges-traversal-dogfood.md](../../state/memory/edges-traversal-dogfood.md) — live dogfood **partial** 2026-08-05; **not** Gate B |
-| **Depends on** | Edges stack code-complete on tip ~e672367; warm encoder path optional for quality claims |
-| **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98), [#120](https://github.com/jtwolfe/project-elyra/issues/120), [#103](https://github.com/jtwolfe/project-elyra/issues/103), [#105](https://github.com/jtwolfe/project-elyra/issues/105) residuals; glass last-session; expand honesty |
-| **Normative priors** | Edges design KD-E*; Phase 2a architecture; [engineering-principles.md](../../dev/engineering-principles.md), [branch-law.md](../../dev/branch-law.md) |
+| **Follow-up** | [#125](https://github.com/jtwolfe/project-elyra/issues/125) edges **polish2** (cold `semantic_only`, start `local_map` budget, recalls on expand) |
+| **Depends on** | Edges stack code-complete; warm encoder path optional for quality claims |
+| **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98), [#120](https://github.com/jtwolfe/project-elyra/issues/120), [#103](https://github.com/jtwolfe/project-elyra/issues/103), [#105](https://github.com/jtwolfe/project-elyra/issues/105); glass last-session; expand honesty; **#125 polish2** |
+| **Normative priors** | Edges design KD-E*; Phase 2a architecture; [engineering-principles.md](../../dev/engineering-principles.md) §10, [branch-law.md](../../dev/branch-law.md) |
 
 > **Charter (one line):** *One semantic wait max for all embed work; every traverse focus is a host-built filtered ~d2.5 map; Graph can force dev backfill so history joins the fabric; skill teaches named walk handles.*
 
-> **Factory defaults honesty:** `durable_edges_enabled` / `directed_traversal_enabled` / `semantic_enabled` / `embed_enabled` remain **factory default off** except where this design **explicitly** changes product defaults for **timeouts / wait ceilings** (not Gate B flag-on). Dev edge-backfill UI flag is **ON for dogfood era** (toggleable; marked dev).
+> **Ship honesty (2026-08-05):** PR0–PR6 code is on `working`/`main`. Operator dogfood proved long-path wait, deferred `recalls` counts, multi-hop `created_with`/`in_moment`, sticky last walk, and force backfill — **not** full checklist sign-off. Residuals filed on **#125** (polish2). Body PR plan below is **archaeology** — do not re-open polish1 as unfixed. **Do not** flip Gate B / `durable_edges_enabled` factory default-on from this ship alone.
 
+> **Factory defaults honesty:** `durable_edges_enabled` / `directed_traversal_enabled` / `semantic_enabled` / `embed_enabled` remain **factory default off** except where this design **explicitly** changes product defaults for **timeouts / wait ceilings** (not Gate B flag-on). Dev edge-backfill UI flag is **ON for dogfood era** (toggleable; marked dev).
 ---
 
 ## Overview

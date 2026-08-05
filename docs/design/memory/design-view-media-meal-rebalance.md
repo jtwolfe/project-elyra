@@ -7,9 +7,13 @@
 | **Product** | project-elyra |
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-05 |
-| **Status** | Draft (rev 3 — OQ-V5/V6 user lock) |
-| **Topic branch** | Prefer `feature/view-media-meal-rebalance` off `working` tip after `feature/mm-embed-buildout` merges; may stack on `feature/mm-embed-buildout` if still open. **Execute-plan stacks** may use `feature/mm-consumption-improvement` as the stack base (same tip family as mm-embed-buildout when open). |
-| **PR base** | `working` (house branch law: `main` ← `working` ← `feature/*`); stacked execute-plan PRs land onto the stack base (`feature/mm-consumption-improvement` / topic feature), not `main` |
+| **Status** | **Shipped (code; dogfood pending)** — PR0–PR6 on consumption tip; landed with MM stack on `working`/`main` (2026-08-05). **Operator live dogfood not signed** — [mm-view-dogfood.md](../../state/memory/mm-view-dogfood.md). |
+| **Audience** | Implementers |
+| **Normative?** | No for product default-on — prefer code on `working` |
+| **Revision** | rev 3 OQ-V5/V6 lock; docs touch 2026-08-05 (land honesty) |
+| **Topic branch (history)** | `feature/mm-consumption-improvement` / view-media stack |
+| **Landed tip** | `working` / `main` (with edges/polish1 land) |
+| **PR base** | `working` (branch law: `main` ← `working` ← `feature/*`) |
 | **Depends on** | Glass multimodal attachments (MediaStore, speak ingest, `expand_meal_for_provider`); MM encode buildout (#124) for breadcrumb encode path (`media_encode` true after qwen-omni-utils) |
 | **Normative priors** | [design-glass-multimodal-attachments.md](../glass/design-glass-multimodal-attachments.md), [design-mm-embed-buildout.md](design-mm-embed-buildout.md), [design-instance-continuity-glass-tail-directed-keep.md](design-instance-continuity-glass-tail-directed-keep.md), [design-context-meal-composition.md](design-context-meal-composition.md) |
 | **Engineering** | [engineering-principles.md](../../dev/engineering-principles.md), [branch-law.md](../../dev/branch-law.md) |

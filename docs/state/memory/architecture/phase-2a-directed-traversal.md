@@ -420,7 +420,7 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 | Work | Role |
 |------|------|
 | **Operator smoke dogfood** | Flags on; structural JSONL path first; full path with Lance + semantic for multi-hop seeds; verify finish → glass → next meal directed_keep |
-| **Edges + traverse extension dogfood** | Durable fabric + pure semantic start + raised budgets — [edges-traversal-dogfood.md](../edges-traversal-dogfood.md) (#98/#120/#103/#105); code complete; live sign-off open; `durable_edges_enabled` default **off** |
+| **Edges + traverse + polish1 dogfood** | Durable fabric + pure semantic start + raised budgets + polish1 wait/map/sticky — [edges-traversal-dogfood.md](../edges-traversal-dogfood.md) (#98/#120/#103/#105; polish1); code on `working`/`main`; **live dogfood partial**; polish2 [#125](https://github.com/jtwolfe/project-elyra/issues/125); `durable_edges_enabled` default **off** |
 | **Phase 2 dogfood / Gate B** | Prefer rectified semantic seeds before claiming rich multi-hop quality |
 | **Product default-on traversal** | **Not** automatic — only after dogfood quality + operator sign-off |
 | **Phase 3** | Procedural / success-path eval-first; hang weights on edges/sessions |

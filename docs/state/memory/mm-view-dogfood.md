@@ -3,11 +3,13 @@
 | Field | Value |
 |-------|--------|
 | **Class** | STATE |
-| **Audience** | Operators dogfooding `view_media` + force re-outer + meal tip rebalance |
-| **Design** | [design-view-media-meal-rebalance.md](../../design/memory/design-view-media-meal-rebalance.md) |
-| **Topic branch** | Prefer `feature/view-media-meal-rebalance` / `feature/mm-consumption-improvement` after PR0–PR6 land |
+| **Audience** | Operators |
+| **Status** | Active (living checklist) |
+| **Normative?** | No — prefer code on `working` |
+| **Last verified** | 2026-08-05 (code on `working`/`main`; dogfood open) |
+| **Design** | [design-view-media-meal-rebalance.md](../../design/memory/design-view-media-meal-rebalance.md) (**Shipped (code; dogfood pending)**) |
 | **Related** | [mm-embed-dogfood.md](mm-embed-dogfood.md) (encode/search — separate path) |
-| **Claim today** | **Code + hermetic tests** for viewing set, expand (image+AV), URL fetch, rebalance, observability. **Live operator dogfood not signed.** **Not** Gate B / product default-on for semantic encode. |
+| **Claim today** | **Code on `working`/`main` + hermetic tests** for viewing set, expand (image+AV), URL fetch, rebalance, observability. **Live operator dogfood not signed** (partial path/att_id dogfood in edges sessions). **Not** Gate B / product default-on for semantic encode. |
 
 ---
 

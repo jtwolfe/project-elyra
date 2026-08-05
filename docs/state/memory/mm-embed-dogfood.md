@@ -3,12 +3,15 @@
 | Field | Value |
 |-------|--------|
 | **Class** | STATE |
-| **Audience** | Operators dogfooding Phase 2 semantic + multimodal loop |
-| **Design** | [design-mm-embed-buildout.md](../../design/memory/design-mm-embed-buildout.md) (**Shipped (code)**) |
+| **Audience** | Operators |
+| **Status** | Active (living checklist) |
+| **Normative?** | No — prefer code on `working` |
+| **Last verified** | 2026-08-05 (code on `working`/`main`; dogfood open) |
+| **Design** | [design-mm-embed-buildout.md](../../design/memory/design-mm-embed-buildout.md) (**Shipped (code; dogfood pending)**) |
 | **Architecture** | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
 | **Umbrella** | [#124](https://github.com/jtwolfe/project-elyra/issues/124) |
 | **Related** | [#80](https://github.com/jtwolfe/project-elyra/issues/80) text residual; [#114](https://github.com/jtwolfe/project-elyra/issues/114) busy encode; [#115](https://github.com/jtwolfe/project-elyra/issues/115) GPU packaging (peer) |
-| **Claim today (2026-08-05)** | **Code complete + hermetic tests green** on `feature/mm-embed-buildout` (PR0–PR7). **Live operator dogfood not signed.** **Not** Gate B / product default-on. |
+| **Claim today (2026-08-05)** | **Code on `working`/`main` + hermetic tests green** (#124 PR0–PR7). **Live operator dogfood not signed.** **Not** Gate B / product default-on. |
 
 ---
 

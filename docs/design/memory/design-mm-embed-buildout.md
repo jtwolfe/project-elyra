@@ -7,7 +7,9 @@
 | **Product** | project-elyra |
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-05 |
-| **Status** | **Shipped (code)** — PR0–PR7 landed on `feature/mm-embed-buildout` (2026-08-05); **ready for merge to `working`**. Hermetic tests green. **Operator live dogfood still pending** (checklist recorded, not signed). **Not** Gate B / product default-on. |
+| **Status** | **Shipped (code; dogfood pending)** — PR0–PR7 landed; tip on `working`/`main` (2026-08-05 land with edges/polish1 stack). Hermetic tests green. **Operator live dogfood still pending** (checklist recorded, not signed). **Not** Gate B / product default-on. |
+| **Audience** | Implementers |
+| **Normative?** | No for product default-on — prefer code on `working` |
 | **Topic branch** | `feature/mm-embed-buildout` (from `working`) |
 | **PR base** | `working` (integration tip; house branch law) |
 | **Depends on** | Phase 2 PR1–PR9 + rectification PR-R1–R5 + continuous encode (embed-async PR1–PR4) **shipped in code** |
