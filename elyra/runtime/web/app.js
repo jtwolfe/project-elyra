@@ -4414,7 +4414,14 @@ function formatEdgeBackfillStatus(res) {
   const written = res.written != null ? res.written : "?";
   const skipped = res.skipped != null ? res.skipped : "?";
   const ms = res.elapsed_ms != null ? res.elapsed_ms : "?";
-  const trunc = res.truncated ? " · truncated" : "";
+  let trunc = "";
+  if (res.truncated) {
+    const maxA = res.max_atoms != null ? res.max_atoms : null;
+    trunc =
+      maxA != null
+        ? ` · truncated (max_atoms=${maxA})`
+        : " · truncated";
+  }
   const errs =
     res.errors != null && Number(res.errors) > 0 ? ` · errors=${res.errors}` : "";
   return `Done: scanned=${scanned} written=${written} skipped=${skipped} · ${ms}ms${trunc}${errs}`;

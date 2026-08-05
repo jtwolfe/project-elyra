@@ -2034,6 +2034,27 @@ def open_edge_store(
         raise MemoryUnavailable("edge_backend_unavailable") from exc
 
 
+def _list_atoms_for_backfill(atom_store: Any, max_atoms: int) -> list[Any]:
+    """Newest-first bulk list for operator backfill (bypasses glass LIST_ATOMS_MAX).
+
+    Prefers ``list_atoms(..., glass_cap=False)`` when the store supports it;
+    falls back to default glass-capped listing for older/mock stores.
+    """
+    list_fn = getattr(atom_store, "list_atoms", None)
+    if not callable(list_fn):
+        raise RuntimeError("list_atoms_unavailable")
+    lim = max(0, int(max_atoms))
+    if lim == 0:
+        return []
+    try:
+        return list(
+            list_fn(newest_first=True, limit=lim, glass_cap=False) or []
+        )
+    except TypeError:
+        # Older mocks / Protocol stubs without glass_cap kwarg.
+        return list(list_fn(newest_first=True, limit=lim) or [])
+
+
 def backfill_durable_edges(
     atom_store: Any,
     edge_store: EdgeStore | None,
@@ -2050,10 +2071,11 @@ def backfill_durable_edges(
     soft-fails per atom. Never reconstructs ``created_with`` / ``recalls``.
 
     Requires ``durable_edges_enabled`` and ``edge_backfill_dev_enabled``.
+    Scans up to ``max_atoms`` (default 2000) newest-first without the glass
+    ``LIST_ATOMS_MAX`` ceiling when the store supports ``glass_cap=False``.
     """
     from elyra.memory.graph import moment_hub_id
-    from elyra.memory.promote import _write_in_moment_edge
-    from elyra.memory.store import LIST_ATOMS_MAX
+    from elyra.memory.promote import write_in_moment_edge
 
     cfg = settings or MemorySettings()
     t0 = time.monotonic()
@@ -2102,8 +2124,11 @@ def backfill_durable_edges(
         result["error"] = "durable_edges_disabled"
         result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
         return result
-    if edge_store is None:
-        result["error"] = "edge_store_unavailable"
+    if edge_store is None or isinstance(edge_store, UnavailableEdgeStore):
+        reason = "edge_store_unavailable"
+        if isinstance(edge_store, UnavailableEdgeStore):
+            reason = str(getattr(edge_store, "reason", None) or reason)
+        result["error"] = reason
         result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
         return result
     if atom_store is None:
@@ -2122,24 +2147,17 @@ def backfill_durable_edges(
     errors = 0
     truncated = False
 
-    list_fn = getattr(atom_store, "list_atoms", None)
-    if not callable(list_fn):
-        result["error"] = "list_atoms_unavailable"
+    try:
+        atoms = _list_atoms_for_backfill(atom_store, max_atoms_eff)
+    except RuntimeError as exc:
+        result["error"] = str(exc) or "list_atoms_unavailable"
         result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
         return result
-
-    # Glass list_atoms hard-caps at LIST_ATOMS_MAX; request min(max, cap).
-    list_limit = min(max_atoms_eff, int(LIST_ATOMS_MAX)) if max_atoms_eff else 0
-    try:
-        atoms = list(list_fn(newest_first=True, limit=list_limit) or [])
     except Exception as exc:  # noqa: BLE001
         _LOG.exception("backfill list_atoms failed")
         result["error"] = str(exc) or type(exc).__name__
         result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
         return result
-
-    # When max_atoms exceeds list cap and we filled the cap, more may exist.
-    list_capped = max_atoms_eff > list_limit and len(atoms) >= list_limit > 0
 
     for atom in atoms:
         if scanned >= max_atoms_eff:
@@ -2167,7 +2185,7 @@ def backfill_durable_edges(
             if any(getattr(e, "dst_atom_id", None) == hub for e in existing):
                 skipped += 1
                 continue
-            _write_in_moment_edge(
+            write_in_moment_edge(
                 edge_store,
                 src_atom_id=src_id,
                 moment_id=moment_id,
@@ -2192,8 +2210,21 @@ def backfill_durable_edges(
             )
             errors += 1
 
-    if list_capped and not truncated:
-        truncated = True
+    # Truncated when wall or max_atoms stop mid-scan, or store returned a
+    # full page while more may exist (caller can raise max_atoms).
+    if not truncated and len(atoms) >= max_atoms_eff > 0:
+        # May or may not have more atoms; honest when we hit the request cap.
+        try:
+            health = getattr(atom_store, "health", None)
+            total = None
+            if callable(health):
+                h = health() or {}
+                if isinstance(h, dict) and h.get("atom_count") is not None:
+                    total = int(h["atom_count"])
+            if total is not None and total > scanned:
+                truncated = True
+        except Exception:  # noqa: BLE001
+            pass
 
     result.update(
         {
@@ -2205,7 +2236,6 @@ def backfill_durable_edges(
             "errors": errors,
             "elapsed_ms": int((time.monotonic() - t0) * 1000),
             "truncated": truncated,
-            "list_cap": int(LIST_ATOMS_MAX),
         }
     )
     return result

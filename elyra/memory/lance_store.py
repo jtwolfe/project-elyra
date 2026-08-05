@@ -1761,12 +1761,18 @@ class LanceMemoryStore:
         kinds: Sequence[AtomKind | str] | None = None,
         limit: int = 50,
         newest_first: bool = True,
+        glass_cap: bool = True,
     ) -> list[Atom]:
-        """Glass/admin listing by embedding_status / kinds (scan ``_by_id``)."""
+        """Glass/admin listing by embedding_status / kinds (scan ``_by_id``).
+
+        ``glass_cap=True`` (default) hard-caps at LIST_ATOMS_MAX. Operator bulk
+        paths may pass ``glass_cap=False`` to honor ``limit`` fully.
+        """
         with self._lock:
             self._check_open()
             kind_set = set(kinds) if kinds is not None else None
-            cap = max(0, min(int(limit), LIST_ATOMS_MAX))
+            lim = max(0, int(limit))
+            cap = min(lim, LIST_ATOMS_MAX) if glass_cap else lim
             rows = list(self._by_id.values())
             out: list[Atom] = []
             for atom in rows:

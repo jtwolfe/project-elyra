@@ -413,7 +413,7 @@ def _filter_created_with_destinations(
     return out
 
 
-def _write_in_moment_edge(
+def write_in_moment_edge(
     edge_store: Any,
     *,
     src_atom_id: str,
@@ -421,7 +421,10 @@ def _write_in_moment_edge(
     settings: MemorySettings,
     atom_store: MemoryStore | None = None,
 ) -> None:
-    """Idempotent atom → moment:{id} hub edge (membership index only)."""
+    """Idempotent atom → moment:{id} hub edge (membership index only).
+
+    Shared by promote and operator force-backfill (polish1 KD-P-backfill).
+    """
     from elyra.memory.edges import DurableEdge, new_edge_id, put_edge_with_budget
     from elyra.memory.graph import moment_hub_id
     from elyra.memory.weights import EDGE_IN_MOMENT, base_weight
@@ -442,6 +445,10 @@ def _write_in_moment_edge(
     put_edge_with_budget(
         edge_store, edge, settings, atom_store=atom_store, retarget=False
     )
+
+
+# Private alias retained for in-module call sites / older imports.
+_write_in_moment_edge = write_in_moment_edge
 
 
 def _write_created_with_edges(
@@ -1510,4 +1517,5 @@ __all__ = [
     "promote_beat",
     "promote_view_observation",
     "promote_wake_observation",
+    "write_in_moment_edge",
 ]
