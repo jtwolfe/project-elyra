@@ -1090,32 +1090,85 @@ def test_walk_summary_template():
     assert "haiku collection" in nl
     assert "Considered 1 atoms across 2 steps" in nl
     assert "sequential=3" in nl
+    assert "edges walked: sequential=3" in nl
     assert "Kept 1" in nl
     assert "nice finds" in nl
+
+
+def test_walk_summary_edges_walked_none_honesty():
+    """KD-P-glass §5.2: empty hist says 'edges walked: none' not bare 'none'."""
+    from elyra.memory.traverse import (
+        BudgetState,
+        ConsideredNode,
+        TraversalSession,
+    )
+
+    sess = TraversalSession(
+        session_id="s-empty-edges",
+        goal="quiet walk",
+        status="confirmed",
+        seed_ids=("a1",),
+        considered={
+            "a1": ConsideredNode(
+                atom_id="a1",
+                kind="observation",
+                label="seed only",
+                preview="seed",
+                via_edge_kind=None,
+                via_reason="seed",
+                depth=0,
+                weight=1.0,
+            )
+        },
+        frontier=[],
+        keep_ids=["a1"],
+        scratchpad="",
+        budgets=BudgetState(steps_spent=0),
+        created_at="t0",
+        updated_at="t1",
+        seed_reasons=["explicit"],
+        edge_kind_counts={},
+    )
+    nl = build_walk_summary_nl(sess)
+    assert "edges walked: none" in nl
+    assert "edges: none" not in nl
 
 
 # ── moment close + clear ────────────────────────────────────────────────────
 
 
-def test_moment_close_clears_last_session_retains_meal_tray(store):
-    """S3 / B5: moment close clears last_session (KD-A19); retains meal tray."""
+def test_moment_close_retains_last_session_and_meal_tray(store):
+    """KD-P-glass §5.1: moment close abandons active only; last_session sticky.
+
+    Meal tray retained (B5 / KD-A16). Glass last walk process-life sticky.
+    """
     atoms = _chain_store(store, 2)
     reg = _reg(_enabled_settings(traverse_keep_adjacent=False))
     gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
     reg.start(gv, goal="g", seed_atom_ids=[atoms[0].atom_id], moment_id="m1")
     reg.finish(keep_ids=[atoms[0].atom_id])
     assert reg.last_session is not None
+    last_sid = reg.last_session.session_id
     assert reg.last_confirmed_keep is not None
     ids_before, _ = reg.get_meal_keep_ids()
     assert atoms[0].atom_id in ids_before
     reg.on_moment_close("m1")
     assert reg.active_session is None
-    assert reg.last_session is None  # KD-A19 glass walk view cleared
+    # KD-P-glass: last finished walk retained across moment close.
+    assert reg.last_session is not None
+    assert reg.last_session.session_id == last_sid
+    assert reg.last_session.status == "confirmed"
     # Meal keep retained (tray + thin snap for compat).
     assert reg.last_confirmed_keep is not None
     ids_after, summary = reg.get_meal_keep_ids()
     assert atoms[0].atom_id in ids_after
     assert summary is not None
+    # Graph GET default shows sticky last walk.
+    view = reg.get_graph_session_view()
+    assert view.which == "last"
+    assert view.has_last_session is True
+    assert view.session is not None
+    assert view.session["session_id"] == last_sid
 
 
 def test_directed_keep_survives_moment_close(store):
@@ -1170,6 +1223,59 @@ def test_clear_confirmed_keep_optional_glass(store):
     assert reg.last_session is not None  # glass retained
     reg.clear_confirmed_keep(clear_glass=True)
     assert reg.last_session is None
+
+
+def test_moment_close_abandons_active_retains_prior_last(store):
+    """Active mid-walk abandoned on moment close; prior finished last sticky."""
+    atoms = _chain_store(store, 3)
+    reg = _reg(_enabled_settings(traverse_keep_adjacent=False))
+    gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
+    reg.start(gv, goal="finished", seed_atom_ids=[atoms[0].atom_id], moment_id="m1")
+    reg.finish(keep_ids=[atoms[0].atom_id])
+    last_sid = reg.last_session.session_id
+    reg.start(gv, goal="mid-walk", seed_atom_ids=[atoms[1].atom_id], moment_id="m1")
+    assert reg.active_session is not None
+    reg.on_moment_close("m1")
+    assert reg.active_session is None
+    assert reg.last_session is not None
+    assert reg.last_session.session_id == last_sid
+    assert reg.last_session.goal == "finished"
+
+
+def test_budget_surface_structural_vs_semantic_honesty(store):
+    """KD-P-glass §5.2: budgets expose structural_* and semantic_* aliases."""
+    atoms = _chain_store(store, 3)
+    reg = _reg(
+        _enabled_settings(
+            traverse_keep_adjacent=False,
+            traverse_expand_max_ms=90,
+            semantic_wait_for_select=True,
+            semantic_wait_max_ms=5_000,
+        )
+    )
+    gv = GraphView(store, settings=reg.settings, now="2026-07-28T10:05:00Z")
+    out = reg.start(gv, goal="honesty", seed_atom_ids=[atoms[1].atom_id], moment_id="m1")
+    assert out["ok"] is True
+    reg.step(gv, expand_ids=[atoms[1].atom_id])
+    fin = reg.finish(keep_ids=[atoms[1].atom_id])
+    assert fin["ok"] is True
+    budgets = fin["budgets"]
+    assert "expand_ms_budget" in budgets
+    assert budgets["structural_ms_budget"] == budgets["expand_ms_budget"]
+    assert "structural_ms_spent" in budgets
+    assert "semantic_ms_budget" in budgets
+    assert "semantic_ms_spent" in budgets
+    assert "semantic_ann_calls_last" in budgets
+    # Glass enrich path also aliases.
+    from elyra.memory.inspect import enrich_session_for_glass
+
+    view = reg.get_graph_session_view()
+    enriched = enrich_session_for_glass(view.session)
+    assert enriched is not None
+    eb = enriched["budgets"]
+    assert eb["structural_ms_budget"] == budgets["expand_ms_budget"]
+    assert "semantic_ms_budget" in eb
+    assert "semantic_ann_calls_last" in eb
 
 
 def test_step_without_active_errors(store):
@@ -1454,8 +1560,11 @@ def test_worker_graph_view_and_traversal_registry(tmp_path):
     assert out2["ok"] is True
     w.traversal.finish(keep_ids=[a.atom_id])
     assert w.traversal.last_confirmed_keep is not None
+    last_sid = w.traversal.last_session.session_id
     w._close_traversal_for_moment("mw")
-    assert w.traversal.last_session is None  # KD-A19
+    # KD-P-glass: last_session sticky across moment close (process-life).
+    assert w.traversal.last_session is not None
+    assert w.traversal.last_session.session_id == last_sid
     # Meal tray retained (B5); worker meal path delegates to registry tray.
     assert w.traversal.last_confirmed_keep is not None
     meal_ids, meal_summary = w._last_confirmed_keep_for_meal("other_moment")

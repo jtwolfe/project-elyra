@@ -2077,6 +2077,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         sess = payload.get("session")
         no_session = sess is None and which != "meal"
+        has_last = bool(payload.get("has_last_session"))
         note = None
         if not trav_flags["directed_traversal_enabled"]:
             note = (
@@ -2087,6 +2088,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             note = "no walk session yet (active or last)"
         elif which == "meal":
             note = "meal-thin keep ids only (not full glass last walk)"
+        elif (
+            payload.get("which") == "last"
+            and has_last
+            and not payload.get("has_active")
+        ):
+            # KD-P-glass: last finished walk is process-life sticky across
+            # moment close — badge/readout should not imply "no session".
+            note = "last finished walk (sticky across moment close; process-life)"
 
         payload.update(
             {
@@ -2096,6 +2105,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "honesty": {
                     "flag_off": not trav_flags["directed_traversal_enabled"],
                     "no_session": no_session,
+                    "sticky_last_session": has_last,
                     "note": note,
                 },
             }

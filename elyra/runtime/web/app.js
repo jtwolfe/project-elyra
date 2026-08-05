@@ -5528,8 +5528,16 @@ function renderGraphOverview(data) {
         trav.traverse_max_steps != null ? `steps≤${trav.traverse_max_steps}` : null,
         trav.traverse_max_nodes != null ? `nodes≤${trav.traverse_max_nodes}` : null,
         trav.traverse_max_depth != null ? `depth≤${trav.traverse_max_depth}` : null,
-        trav.traverse_expand_max_ms != null
-          ? `expand_ms≤${trav.traverse_expand_max_ms}`
+        // Dual-deadline honesty: structural soft wall ≠ semantic ANN ceiling.
+        trav.structural_ms_budget != null
+          ? `struct_ms≤${trav.structural_ms_budget}`
+          : trav.traverse_expand_max_ms != null
+            ? `struct_ms≤${trav.traverse_expand_max_ms}`
+            : null,
+        trav.semantic_ms_budget != null
+          ? `sem_ms≤${trav.semantic_ms_budget}${
+              trav.semantic_wait_enabled ? " (wait)" : " (snappy)"
+            }`
           : null,
         trav.traverse_session_ttl_s != null
           ? `idle_ttl=${trav.traverse_session_ttl_s}s`
@@ -5974,7 +5982,21 @@ function mergeNeighborsIntoFreeBrowse(data, focusId) {
       `+${neighbors.length} hop`,
       q.k != null ? `k=${q.k}` : null,
       q.allow_semantic === false ? "semantic=off" : "semantic=on",
-      em.elapsed_ms != null ? `ms=${em.elapsed_ms}` : null,
+      // Dual-deadline expand honesty (KD-P-glass §5.2).
+      em.structural_ms_spent != null || em.structural_ms_budget != null
+        ? `struct_ms=${em.structural_ms_spent != null ? em.structural_ms_spent : "—"}/${
+            em.structural_ms_budget != null ? em.structural_ms_budget : "—"
+          }`
+        : em.elapsed_ms != null
+          ? `ms=${em.elapsed_ms}`
+          : null,
+      em.semantic_ms_spent != null || em.semantic_ms_budget != null
+        ? `sem_ms=${em.semantic_ms_spent != null ? em.semantic_ms_spent : "—"}/${
+            em.semantic_ms_budget != null ? em.semantic_ms_budget : "—"
+          }`
+        : null,
+      em.structural_truncated ? "struct_trunc" : null,
+      em.semantic_truncated ? "sem_trunc" : null,
       em.semantic_reason ? `sem=${em.semantic_reason}` : null,
       data.omitted_reason ? `omit=${data.omitted_reason}` : null,
       kinds.size ? `kinds=${[...kinds].join(",")}` : null,
@@ -6188,11 +6210,44 @@ function renderGraphSession(data) {
   const budgets = sess.budgets || {};
   const budgetRow = document.createElement("div");
   budgetRow.className = "memory-graph-budgets";
-  // KD-A18: steps/nodes/depth + expand_ms + idle age — NOT multi-hop wall-clock.
+  // KD-A18 + KD-P-glass: steps/nodes/depth + structural vs semantic expand
+  // honesty + idle age — NOT multi-hop wall-clock.
   const idle =
     sess.idle_age_s != null
       ? sess.idle_age_s
       : data.session && data.session.idle_age_s;
+  const structSpent =
+    budgets.structural_ms_spent != null
+      ? budgets.structural_ms_spent
+      : budgets.expand_ms_spent_last != null
+        ? budgets.expand_ms_spent_last
+        : 0;
+  const structBudget =
+    budgets.structural_ms_budget != null
+      ? budgets.structural_ms_budget
+      : budgets.expand_ms_budget != null
+        ? budgets.expand_ms_budget
+        : "—";
+  const semSpent =
+    budgets.semantic_ms_spent != null
+      ? budgets.semantic_ms_spent
+      : budgets.semantic_ms_spent_last != null
+        ? budgets.semantic_ms_spent_last
+        : 0;
+  const semBudget =
+    budgets.semantic_ms_budget != null
+      ? budgets.semantic_ms_budget
+      : budgets.semantic_ms_budget_step != null
+        ? budgets.semantic_ms_budget_step
+        : "—";
+  const annCalls =
+    budgets.semantic_ann_calls_last != null
+      ? budgets.semantic_ann_calls_last
+      : 0;
+  const structTrunc =
+    budgets.structural_truncated != null
+      ? budgets.structural_truncated
+      : budgets.expand_truncated;
   const bits = [
     `steps ${budgets.steps_spent != null ? budgets.steps_spent : 0}/${
       budgets.max_steps != null ? budgets.max_steps : "—"
@@ -6203,10 +6258,9 @@ function renderGraphSession(data) {
     `depth ${budgets.depth_spent != null ? budgets.depth_spent : 0}/${
       budgets.max_depth != null ? budgets.max_depth : "—"
     }`,
-    `expand_ms last=${
-      budgets.expand_ms_spent_last != null ? budgets.expand_ms_spent_last : 0
-    }/budget=${budgets.expand_ms_budget != null ? budgets.expand_ms_budget : "—"}`,
-    budgets.expand_truncated ? "expand_truncated" : null,
+    `struct_ms last=${structSpent}/budget=${structBudget}`,
+    `sem_ms last=${semSpent}/budget=${semBudget} (ann=${annCalls})`,
+    structTrunc ? "structural_truncated" : null,
     `idle ${formatIdleAge(idle)}`,
   ].filter(Boolean);
   budgetRow.textContent = bits.join(" · ");
