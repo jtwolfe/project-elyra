@@ -7,17 +7,21 @@
 | **Product** | project-elyra |
 | **Author** | Grok Build (design agent) |
 | **Date** | 2026-08-05 |
-| **Status** | **Draft** — operator + OQ locks closed (2026-08-05); R1 review fixes + R2 OQ lock |
+| **Status** | **Shipped (code)** — PR0–PR7 landed on edges stack / `feature/edge-enrichment` tip (2026-08-05); **ready for merge to `working`**. Hermetic tests green. **Operator live dogfood still pending** (checklist recorded, not signed). **`durable_edges_enabled` factory default remains `false`.** **Not** Gate B / product default-on. |
 | **Revision** | **R2 (OQ lock 2026-08-05)** — empty meal → zero created_with; tool/ledger not created_with dsts (still walkable); recalls score→newest-5 + Phase3 comment; sibling EdgeStore; PR6 hard maxes; seed auto + skill semantic_only nudge; retarget 1h tip + vertical ladder fabric ensure |
 | **OQ lock** | OQ-E1–E7 **Closed** 2026-08-05 (see Open Questions) |
-| **Topic branch (later)** | `feature/memory-edges-and-traversal` (from `working`; stack to `working` only after hermetic green) |
+| **Topic branch** | `feature/edge-enrichment` (stack from `working`; merge to `working` only after hermetic green) |
 | **PR base** | `working` (house branch law: `main` ← `working` ← `feature/*`) |
 | **Depends on** | Phase 1–2a **code shipped**; MM embed loop [#124](https://github.com/jtwolfe/project-elyra/issues/124) code-complete (dogfood optional); continuous encode (embed-async) |
 | **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98) source/context edges; [#120](https://github.com/jtwolfe/project-elyra/issues/120) C14 edges dogfood; [#103](https://github.com/jtwolfe/project-elyra/issues/103) semantic seed timeout; [#105](https://github.com/jtwolfe/project-elyra/issues/105) frontier cache + dual start; [#61](https://github.com/jtwolfe/project-elyra/issues/61) visual graph (**follow-up**, not core PRs); [#117](https://github.com/jtwolfe/project-elyra/issues/117) Phase 3 (**prep only**) |
 | **v0.1 maps** | Meal construction (C13/#119 + #103/#104); Edges (C14/#120 + #98) — see [docs/goal/v0.1.md](../../goal/v0.1.md) |
 | **Architecture priors** | [architecture/phase-2a-directed-traversal.md](../../state/memory/architecture/phase-2a-directed-traversal.md), [architecture/phase-2-semantic.md](../../state/memory/architecture/phase-2-semantic.md), [design-database-choices.md](design-database-choices.md) |
+| **Operator dogfood (STATE)** | [edges-traversal-dogfood.md](../../state/memory/edges-traversal-dogfood.md) — checklist open; code-complete claim only |
+| **Program close-out** | [docs/state/memory/README.md](../../state/memory/README.md) — edges + traversal extension section |
 | **Normative priors** | [design-phase-2a-implementation.md](design-phase-2a-implementation.md) (shipped 2a), [design-mm-embed-buildout.md](design-mm-embed-buildout.md) (MM loop), [design-context-meal-composition.md](design-context-meal-composition.md), [design-phase-3-procedural.md](design-phase-3-procedural.md) (later) |
 | **Engineering** | [engineering-principles.md](../../dev/engineering-principles.md), [branch-law.md](../../dev/branch-law.md) |
+
+> **Ship honesty (2026-08-05):** Durable EdgeStore + promote writes (`created_with` / `in_moment` / retarget / `recalls` / `has_channel`) + GraphView expand_moment + pure semantic start + dual temporal reserve + raised traverse budgets/HARD_MAX clamp + frontier cache are **complete in code** (PR1–PR6). PR7 records STATE dogfood + glass overview edge counts. Body sections below retain **design-time** planning as archaeology — do not re-open PR1 as unfixed. **Do not** claim live operator dogfood complete or flip `durable_edges_enabled` / Gate B defaults without signed checklist evidence.
 
 > **Operator locked decisions (normative):** durable-first edges; `created_with` vs `recalls` split; moment membership durable + `expand_moment`; one-atom multi-channel via `has_channel` (Option B); per-atom ~150 edge budget with kind windows + created_with retarget to ladder; pure semantic start; raised traverse budgets; #61 full visual free-browse deferred. Do not reopen lightly.
 
@@ -1012,13 +1016,14 @@ Ordered stack on `feature/memory-edges-and-traversal`. Prefer merge order below;
 | **Acceptance** | Full §5.4 checklist green |
 | **Tests** | budget clamp 100 with hard 160; frontier cache |
 
-### PR7 — Operator dogfood checklist + glass polish (no Gate B)
+### PR7 — Operator dogfood checklist + glass polish (no Gate B) — **done (docs)**
 
 | | |
 |--|--|
 | **Scope** | STATE checklist #120/#103/#105; overview edge counts; residuals |
 | **Issues** | **#120**, residual #98 |
 | **Depends** | PR3–6 |
+| **Landed** | [edges-traversal-dogfood.md](../../state/memory/edges-traversal-dogfood.md); program README close-out; design **Shipped (code)**; Graph overview UI edge counts / by-kind / durable flag. **No** Gate B; `durable_edges_enabled` default stays **false**. |
 
 ### PR8 — Follow-up: visual free-browse graph (#61)
 

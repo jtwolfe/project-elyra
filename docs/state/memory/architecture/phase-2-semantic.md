@@ -586,8 +586,8 @@ When behaviour changes, update **this** architecture note (and activity map) as 
 | **Gate B / default-on** | Dogfood mock → Nemotron → optional default-on; flip only after operator sign-off ([design-nemotron-runtime.md](../../../design/memory/design-nemotron-runtime.md)). **Do not** flip from MM code-complete alone |
 | **BUG-mem-gpu-01** | Packaging / Tensile / multi-device matrix still Open; continuous encode **code path** shipped (worker + gate) |
 | **Optional 2D projection** | Non-gate polish for Vectors tab (KD18) |
-| **Hyperedge formation** | After MM dogfood (#98-class) — operator sequence MM → edges → traversal polish |
-| **Phase 2a residual** | Graph/traversal polish (#103/#105) — structural walk already shipped separately |
+| **Hyperedge / durable edges** | Code complete on edges stack (#98/#120/#103/#105) — dogfood open: [edges-traversal-dogfood.md](../edges-traversal-dogfood.md); operator sequence still MM smoke → edges smoke → quality claims |
+| **Phase 2a residual** | Graph/traversal polish + free-browse #61 — structural walk already shipped; edges extension raises budgets/start honesty |
 | **Phase 3** | Procedural / success-path (evaluation-first); vector ANN ≠ procedure |
 
 Phase 2 product surface: meal semantic + vector search + **Vectors glass** + continuous background encode + **multimodal media channels + media-as-query** + architecture note, with rectification closing the joint-empty dogfood hole, embed-async closing idle-only corpus starvation, and MM buildout closing the MediaStore/glass product loop. Graph/hypergraph UI is Phase 2a. Flags stay off until dogfood proves latency and quality under `semantic_select_max_ms`.

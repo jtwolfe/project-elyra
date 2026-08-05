@@ -5364,8 +5364,30 @@ function renderGraphOverview(data) {
   memoryGraphOverview.innerHTML = "";
   const trav = data.traversal || {};
   const mem = data.memory || {};
+  const edgeStore = data.edge_store || {};
+  const honesty = data.honesty || {};
   const flagOn = trav.directed_traversal_enabled === true;
   const keepOn = trav.directed_keep_enabled === true;
+  // Durable edges flag: prefer edge_store / honesty, fall back to traversal block.
+  const durableOn =
+    edgeStore.durable_edges_enabled === true ||
+    honesty.durable_edges_enabled === true ||
+    trav.durable_edges_enabled === true;
+  const edgeCount =
+    data.edge_count != null
+      ? data.edge_count
+      : edgeStore.edge_count != null
+        ? edgeStore.edge_count
+        : null;
+  const edgesByKind =
+    data.edges_by_kind && typeof data.edges_by_kind === "object"
+      ? data.edges_by_kind
+      : edgeStore.edges_by_kind && typeof edgeStore.edges_by_kind === "object"
+        ? edgeStore.edges_by_kind
+        : {};
+  const kindParts = Object.keys(edgesByKind)
+    .sort()
+    .map((k) => `${k}=${edgesByKind[k]}`);
   const rows = [
     [
       "traversal",
@@ -5376,6 +5398,21 @@ function renderGraphOverview(data) {
       "directed keep",
       keepOn ? "on" : "off",
       keepOn === true ? true : null,
+    ],
+    [
+      "durable edges",
+      durableOn ? "on" : "off (default)",
+      durableOn === true ? true : null,
+    ],
+    [
+      "edge count",
+      edgeCount != null ? String(edgeCount) : "—",
+      edgeCount != null && Number(edgeCount) > 0 ? true : null,
+    ],
+    [
+      "edges by kind",
+      kindParts.length ? kindParts.join(" · ") : edgeCount === 0 ? "none" : "—",
+      null,
     ],
     [
       "sessions",
@@ -5427,7 +5464,10 @@ function renderGraphOverview(data) {
     if (good === true) val.classList.add("status-ok");
     if (good === false) val.classList.add("status-bad");
     // Flag off is expected default — muted, not status-bad.
-    if (label === "traversal" && !flagOn) {
+    if (
+      (label === "traversal" && !flagOn) ||
+      (label === "durable edges" && !durableOn)
+    ) {
       val.classList.remove("status-bad");
       val.classList.add("memory-vector-stale");
     }
@@ -5436,7 +5476,7 @@ function renderGraphOverview(data) {
     row.appendChild(val);
     memoryGraphOverview.appendChild(row);
   }
-  // Edge-kind legend as a compact line.
+  // Edge-kind legend as a compact line (base weights; not live counts).
   const legend = Array.isArray(data.edge_kind_legend) ? data.edge_kind_legend : [];
   if (legend.length) {
     const row = document.createElement("div");
@@ -5455,7 +5495,6 @@ function renderGraphOverview(data) {
   }
 
   if (memoryGraphHonesty) {
-    const honesty = data.honesty || {};
     const note = honesty.note || null;
     if (note) {
       memoryGraphHonesty.hidden = false;
