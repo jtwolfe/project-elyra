@@ -55,11 +55,15 @@ def _settings(**kwargs: Any) -> MemorySettings:
         backend="jsonl",
         durable_edges_enabled=True,
         semantic_enabled=True,
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=15_000,
         edge_recalls_ann_k=15,
         edge_recalls_keep=5,
         edge_recalls_max=8,
-        edge_recalls_max_ms=5000,  # generous for hermetic mock
+        # edge_recalls_max_ms is deprecated no-op for live ANN ceiling.
         edge_recalls_skip_queue_depth=64,
+        # Inline for hermetic promote tests (product default is deferred).
+        edge_recalls_inline=True,
     )
     base.update(kwargs)
     return MemorySettings(**base)
@@ -390,6 +394,155 @@ def test_promote_tool_does_not_write_recalls(store, edge_store):
     assert atom is not None
     assert atom.kind == "tool"
     assert edge_store.list_edges_from(atom.atom_id, kinds=[EDGE_RECALLS]) == []
+
+
+# ── PR1b: deferred path, promote not blocked, wait ceiling, deprecation ────
+
+
+def test_promote_default_defers_not_inline(store, edge_store):
+    """Product default edge_recalls_inline=false → enqueue only; no edges yet."""
+    past = _atom(text="alpha memory", kind="speak", atom_id="a_past")
+    store.put_atom(past)
+    idx = _FakeIndex(
+        [ScoredAtom(atom_id=past.atom_id, score=0.88, atom=past)]
+    )
+    emb = MockEmbedder()
+    queued: list[tuple[str, str]] = []
+
+    def _enqueue(*, src_atom_id: str, spoken_text: str) -> None:
+        queued.append((src_atom_id, spoken_text))
+
+    atom = promote_beat(
+        store,
+        "m_defer",
+        {
+            "type": "tool",
+            "name": "speak",
+            "ok": True,
+            "content": '{"text": "remember alpha"}',
+            "ts": "2026-08-05T12:00:00Z",
+        },
+        settings=_settings(edge_recalls_inline=False),
+        edge_store=edge_store,
+        embedder=emb,
+        index=idx,
+        enqueue_speak_recalls=_enqueue,
+    )
+    assert atom is not None
+    # Promote returned without writing edges (deferred).
+    assert edge_store.list_edges_from(atom.atom_id, kinds=[EDGE_RECALLS]) == []
+    assert len(queued) == 1
+    assert queued[0][0] == atom.atom_id
+    assert "remember alpha" in queued[0][1]
+
+
+def test_promote_not_blocked_by_slow_enqueue_hook(store, edge_store):
+    """Promote must not wait for ANN; enqueue hook that is slow still returns."""
+    import time as _time
+
+    past = _atom(text="x", kind="speak", atom_id="a_p")
+    store.put_atom(past)
+    slow_calls = {"n": 0}
+
+    def _slow_enqueue(**kwargs: Any) -> None:
+        slow_calls["n"] += 1
+        # Even a "slow" enqueue must not do ANN; we only sleep a tiny amount
+        # to show promote path itself is enqueue-and-return.
+        _time.sleep(0.01)
+
+    t0 = _time.monotonic()
+    atom = promote_beat(
+        store,
+        "m_fast",
+        {
+            "type": "tool",
+            "name": "speak",
+            "ok": True,
+            "content": '{"text": "hi"}',
+            "ts": "2026-08-05T12:00:00Z",
+        },
+        settings=_settings(edge_recalls_inline=False),
+        edge_store=edge_store,
+        embedder=MockEmbedder(),
+        index=_FakeIndex([ScoredAtom(atom_id=past.atom_id, score=0.9, atom=past)]),
+        enqueue_speak_recalls=_slow_enqueue,
+    )
+    elapsed_ms = (_time.monotonic() - t0) * 1000.0
+    assert atom is not None
+    assert slow_calls["n"] == 1
+    # Well under any wait ceiling (15s); enqueue path is not ANN.
+    assert elapsed_ms < 500
+    assert edge_store.list_edges_from(atom.atom_id, kinds=[EDGE_RECALLS]) == []
+
+
+def test_write_speak_recalls_uses_wait_helper_not_edge_recalls_max_ms(edge_store):
+    """edge_recalls_max_ms is deprecated no-op; wait helper / max_ms is authority."""
+    emb = MockEmbedder()
+    past = _atom(atom_id="a1", text="past")
+    idx = _FakeIndex([ScoredAtom(atom_id="a1", score=0.9, atom=past)])
+    # Wait off → snappy recalls deadline 0 → skip even if edge_recalls_max_ms huge.
+    written = write_speak_recalls(
+        src_atom_id="a_src",
+        spoken_text="hello",
+        settings=_settings(
+            semantic_wait_for_select=False,
+            edge_recalls_max_ms=500,  # would have been live ceiling pre-PR1b
+            edge_recalls_inline=False,
+        ),
+        edge_store=edge_store,
+        index=idx,
+        embedder=emb,
+    )
+    assert written == []
+    # Explicit max_ms overrides helper and ignores edge_recalls_max_ms.
+    written2 = write_speak_recalls(
+        src_atom_id="a_src",
+        spoken_text="hello",
+        settings=_settings(
+            semantic_wait_for_select=False,
+            edge_recalls_max_ms=0,
+        ),
+        edge_store=edge_store,
+        index=idx,
+        embedder=emb,
+        max_ms=5_000,
+    )
+    assert len(written2) == 1
+
+
+def test_write_speak_recalls_wait_on_uses_effective_ceiling(edge_store):
+    """When wait on, default max_ms comes from semantic_wait_max_ms band."""
+    from elyra.memory.config import semantic_ann_deadline_ms
+
+    cfg = _settings(semantic_wait_for_select=True, semantic_wait_max_ms=12_000)
+    assert semantic_ann_deadline_ms(cfg, "recalls") == 12_000
+    emb = MockEmbedder()
+    past = _atom(atom_id="a1")
+    written = write_speak_recalls(
+        src_atom_id="a_src",
+        spoken_text="hello",
+        settings=cfg,
+        edge_store=edge_store,
+        index=_FakeIndex([ScoredAtom(atom_id="a1", score=0.9, atom=past)]),
+        embedder=emb,
+        # max_ms omitted → wait helper
+    )
+    assert len(written) == 1
+
+
+def test_write_speak_recalls_skip_metrics_cold(edge_store):
+    skip: dict[str, int] = {}
+    written = write_speak_recalls(
+        src_atom_id="a_src",
+        spoken_text="hello",
+        settings=_settings(),
+        edge_store=edge_store,
+        index=_FakeIndex([ScoredAtom(atom_id="x", score=0.9)]),
+        embedder=_ColdEmbedder(),
+        skip_metrics=skip,
+    )
+    assert written == []
+    assert skip.get("encoder_cold") == 1
 
 
 # ── has_channel on encode ready ────────────────────────────────────────────

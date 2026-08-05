@@ -17,6 +17,7 @@ import logging
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
@@ -60,7 +61,7 @@ from elyra.runtime.meal_budget import (
     save_meal_budget_runtime,
 )
 from elyra.runtime.semantic_wait import (
-    SEMANTIC_WAIT_APPLIES_TO_PR1A,
+    SEMANTIC_WAIT_APPLIES_TO,
     SemanticWaitState,
     load_semantic_wait_runtime,
     save_semantic_wait_runtime,
@@ -548,6 +549,18 @@ class PresenceWorker:
         self._encode_drain_failed_total: int = 0
         self._encode_last_drain_at: float | None = None
         self._encode_last_drain_stats: dict[str, Any] | None = None
+        # Deferred speak-recalls queue (polish1 KD-P0-defer / PR1b).
+        # Process-local; drained on idle tick under semantic wait ceiling.
+        from elyra.memory.config import EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT
+
+        self._deferred_recalls_jobs: deque[tuple[str, str]] = deque()
+        self._deferred_recalls_depth = int(
+            EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT
+        )
+        self._recalls_deferred_queued: int = 0
+        self._recalls_deferred_ok: int = 0
+        self._recalls_deferred_dropped: int = 0
+        self._recalls_skipped: dict[str, int] = {}
         # Last labeled meal package inspect payload (glass Memory Context tab).
         self._last_meal_snapshot: dict[str, Any] | None = None
         # Raw meal atom ids for created_with (edges design PR3 / KD-E17).
@@ -691,7 +704,7 @@ class PresenceWorker:
                     "semantic_wait": semantic_wait_status_block(
                         self._semantic_wait,
                         snappy_max_ms=snappy,
-                        applies_to=SEMANTIC_WAIT_APPLIES_TO_PR1A,
+                        applies_to=SEMANTIC_WAIT_APPLIES_TO,
                     ),
                 }
             prev_en = bool(self._semantic_wait.enabled)
@@ -714,7 +727,7 @@ class PresenceWorker:
             block = semantic_wait_status_block(
                 self._semantic_wait,
                 snappy_max_ms=snappy,
-                applies_to=SEMANTIC_WAIT_APPLIES_TO_PR1A,
+                applies_to=SEMANTIC_WAIT_APPLIES_TO,
             )
             return {
                 "ok": True,
@@ -1235,7 +1248,7 @@ class PresenceWorker:
                     snappy_max_ms=int(
                         self.settings.memory.semantic_select_max_ms
                     ),
-                    applies_to=SEMANTIC_WAIT_APPLIES_TO_PR1A,
+                    applies_to=SEMANTIC_WAIT_APPLIES_TO,
                 ),
                 "meal_budget": meal_budget_block,
                 "context": context_block,
@@ -1282,6 +1295,8 @@ class PresenceWorker:
                         self._idle_memory_optimize()
                         # Phase 2a: abandon idle active TraversalSession (TTL).
                         self._idle_traversal_ttl()
+                        # PR1b: drain deferred speak-recalls (ANN under wait).
+                        self._idle_deferred_recalls()
                         self._stop.wait(timeout=self._poll)
                         continue
                     wake, moment_id = claimed
@@ -1624,6 +1639,16 @@ class PresenceWorker:
         llm_calls) for dogfood observability (#92 design §10).
         """
         mem_cfg = self.settings.memory
+        with self._lock:
+            deferred_pending = len(self._deferred_recalls_jobs)
+            deferred_metrics = {
+                "queued": int(self._recalls_deferred_queued),
+                "ok": int(self._recalls_deferred_ok),
+                "dropped": int(self._recalls_deferred_dropped),
+                "pending": deferred_pending,
+                "skipped": dict(self._recalls_skipped),
+                "queue_depth_max": int(self._deferred_recalls_depth),
+            }
         block: dict[str, Any] = {
             "enabled": bool(mem_cfg.enabled),
             "write_atoms": bool(mem_cfg.write_atoms),
@@ -1631,6 +1656,7 @@ class PresenceWorker:
             "store_open": self._memory is not None,
             "ok": False,
             "has_last_meal": self._last_meal_snapshot is not None,
+            "recalls_deferred": deferred_metrics,
         }
         # Ladder knobs always visible (even when store not yet open).
         try:
@@ -1728,6 +1754,92 @@ class PresenceWorker:
                 semantic_wait_for_select=bool(sw.enabled),
                 semantic_wait_max_ms=int(sw.max_ms),
             )
+
+    def enqueue_deferred_recalls(
+        self,
+        src_atom_id: str = "",
+        spoken_text: str = "",
+        **kwargs: Any,
+    ) -> bool:
+        """Enqueue speak-time recalls for idle drain (KD-P0-defer).
+
+        Product path from promote: never runs ANN. Drop-new when queue depth
+        exceeds default 32 (metric ``recalls_deferred_dropped``). Gates match
+        "would have called recalls" (durable_edges + semantic). Returns True
+        when queued. Accepts positional or keyword ``src_atom_id`` /
+        ``spoken_text`` (promote uses keywords).
+        """
+        aid = str(kwargs.get("src_atom_id", src_atom_id) or "").strip()
+        text = str(kwargs.get("spoken_text", spoken_text) or "").strip()
+        if not aid or not text:
+            return False
+        from elyra.memory.config import is_durable_edges_enabled
+
+        mem = self.settings.memory
+        if not is_durable_edges_enabled(mem):
+            self._bump_recalls_skipped("flag_off")
+            return False
+        if not bool(getattr(mem, "semantic_enabled", False)):
+            self._bump_recalls_skipped("flag_off")
+            return False
+        with self._lock:
+            if len(self._deferred_recalls_jobs) >= self._deferred_recalls_depth:
+                self._recalls_deferred_dropped += 1
+                _LOG.debug(
+                    "recalls deferred dropped (queue full depth=%s) src=%s",
+                    self._deferred_recalls_depth,
+                    aid,
+                )
+                return False
+            self._deferred_recalls_jobs.append((aid, text))
+            self._recalls_deferred_queued += 1
+            return True
+
+    def _bump_recalls_skipped(self, reason: str) -> None:
+        key = str(reason or "unknown")
+        with self._lock:
+            self._recalls_skipped[key] = int(self._recalls_skipped.get(key, 0) or 0) + 1
+
+    def _idle_deferred_recalls(self) -> None:
+        """Drain one deferred speak-recalls job under semantic wait ceiling.
+
+        Idle-only. Soft-skips cold/pressure/flag-off inside write_speak_recalls.
+        Uses :func:`semantic_ann_deadline_ms` (wait helper authority).
+        """
+        with self._lock:
+            if not self._deferred_recalls_jobs:
+                return
+            src_atom_id, spoken_text = self._deferred_recalls_jobs.popleft()
+        try:
+            from elyra.memory.config import semantic_ann_deadline_ms
+            from elyra.memory.edges import write_speak_recalls
+
+            mem_cfg = self._memory_settings_with_wait()
+            max_ms = semantic_ann_deadline_ms(mem_cfg, "recalls")
+            skip_metrics: dict[str, int] = {}
+            written = write_speak_recalls(
+                src_atom_id=src_atom_id,
+                spoken_text=spoken_text,
+                settings=mem_cfg,
+                edge_store=self._ensure_edge_store(),
+                index=self._ensure_embedding_index(),
+                embedder=self._ensure_embedder(role="consumer"),
+                encode_queue=self._encode_queue,
+                store=self._ensure_memory_store(),
+                max_ms=max_ms,
+                skip_metrics=skip_metrics,
+            )
+            if written:
+                with self._lock:
+                    self._recalls_deferred_ok += 1
+            else:
+                reason = next(iter(skip_metrics), "empty")
+                self._bump_recalls_skipped(str(reason))
+        except Exception:  # noqa: BLE001 — never kill worker on recalls
+            _LOG.exception(
+                "deferred speak recalls failed src=%s", src_atom_id
+            )
+            self._bump_recalls_skipped("error")
 
     def graph_view(self) -> Any | None:
         """Build a GraphView from the open store + warm embedder if available.
@@ -2629,6 +2741,7 @@ class PresenceWorker:
                 embedder=self._ensure_embedder(role="consumer"),
                 index=self._ensure_embedding_index(),
                 encode_queue=self._encode_queue,
+                enqueue_speak_recalls=self.enqueue_deferred_recalls,
             )
         except Exception:  # noqa: BLE001 — never abort claim/open
             _LOG.exception(
@@ -2959,6 +3072,7 @@ class PresenceWorker:
             embedder=self._ensure_embedder(role="consumer"),
             index=self._ensure_embedding_index(),
             encode_queue=self._encode_queue,
+            enqueue_speak_recalls=self.enqueue_deferred_recalls,
             viewing_dirty_fn=self._is_viewing_dirty,
             clear_viewing_dirty_fn=self._clear_viewing_dirty,
         )

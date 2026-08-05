@@ -48,10 +48,17 @@ EDGE_RECALLS_ANN_K_DEFAULT = 15
 EDGE_RECALLS_ANN_K_MAX = 32
 EDGE_RECALLS_KEEP_DEFAULT = 5
 EDGE_RECALLS_KEEP_MAX = 10
+# Deprecated no-op for live ANN ceiling (polish1 KD-P0-deprec). Kept for toml
+# compat / validation only — write_speak_recalls uses semantic wait helper.
 EDGE_RECALLS_MAX_MS_DEFAULT = 40
 EDGE_RECALLS_MAX_MS_MAX = 500
 EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT = 64
 EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX = 4096
+# Product default: deferred recalls on idle tick (KD-P0-defer). Inline is
+# tests/emergency only (edge_recalls_inline=true).
+EDGE_RECALLS_INLINE_DEFAULT = False
+# Presence-worker deferred recalls queue (OQ-P7: 32 drop-new).
+EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT = 32
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
 # Kept below atom_max_chars (8000) so spill is reachable under default settings
@@ -438,8 +445,12 @@ class MemorySettings:
     edge_recalls_max: int = EDGE_RECALLS_MAX_DEFAULT
     edge_recalls_ann_k: int = EDGE_RECALLS_ANN_K_DEFAULT
     edge_recalls_keep: int = EDGE_RECALLS_KEEP_DEFAULT
+    # Deprecated: ignored as live ANN ceiling (use semantic wait helper).
     edge_recalls_max_ms: int = EDGE_RECALLS_MAX_MS_DEFAULT
     edge_recalls_skip_queue_depth: int = EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT
+    # When True, promote runs write_speak_recalls inline (tests / emergency).
+    # Product default False: enqueue deferred job on presence worker.
+    edge_recalls_inline: bool = EDGE_RECALLS_INLINE_DEFAULT
     edge_retarget_enabled: bool = True
     edge_retarget_ensure_vertical: bool = True
     # When True, default GraphView expand includes has_channel kind filter
@@ -509,6 +520,8 @@ __all__ = [
     "EDGE_RECALLS_KEEP_MAX",
     "EDGE_RECALLS_MAX_DEFAULT",
     "EDGE_RECALLS_MAX_MAX",
+    "EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT",
+    "EDGE_RECALLS_INLINE_DEFAULT",
     "EDGE_RECALLS_MAX_MS_DEFAULT",
     "EDGE_RECALLS_MAX_MS_MAX",
     "EDGE_RECALLS_SKIP_QUEUE_DEPTH_DEFAULT",

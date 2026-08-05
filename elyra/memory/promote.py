@@ -890,15 +890,34 @@ def _maybe_write_speak_recalls(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> None:
-    """Best-effort recalls write after user/Elyra speak promote (design §2.5).
+    """Best-effort recalls after user/Elyra speak promote (design §2.5 / KD-P0-defer).
 
-    Soft-fail only — never raises into the do-loop. View/tool/model paths
-    must not call this (speak-only sources).
+    Product default: **enqueue** a deferred job (never waits for ANN). Inline
+    ``write_speak_recalls`` only when ``edge_recalls_inline=true`` (tests /
+    emergency). Soft-fail only — never raises into the do-loop. View/tool/
+    model paths must not call this (speak-only sources).
     """
     if atom is None:
         return
     try:
+        inline = bool(getattr(settings, "edge_recalls_inline", False))
+        if not inline:
+            # Product path: enqueue and return immediately (KD-E3 / KD-P0-sched).
+            if enqueue_speak_recalls is not None:
+                try:
+                    enqueue_speak_recalls(
+                        src_atom_id=atom.atom_id,
+                        spoken_text=spoken_text,
+                    )
+                except TypeError:
+                    # Allow positional-style hooks: fn(src, text)
+                    enqueue_speak_recalls(atom.atom_id, spoken_text)
+            return
+
+        # Inline path (hermetic tests / emergency debug only).
+        from elyra.memory.config import semantic_ann_deadline_ms
         from elyra.memory.edges import write_speak_recalls
 
         write_speak_recalls(
@@ -910,6 +929,7 @@ def _maybe_write_speak_recalls(
             embedder=embedder,
             encode_queue=encode_queue,
             store=store,
+            max_ms=semantic_ann_deadline_ms(settings, "recalls"),
         )
     except Exception:  # noqa: BLE001 — never block promote/speak
         _LOG.exception(
@@ -930,6 +950,7 @@ def _promote_speak(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> Atom | None:
     ok = bool(beat.get("ok"))
     content = str(beat.get("content") or "")
@@ -971,7 +992,7 @@ def _promote_speak(
         write_created_with=True,
     )
     _remember_key(state, key)
-    # Elyra speak → recalls (design §2.5); soft-fail under encode pressure.
+    # Elyra speak → recalls (design §2.5 / KD-P0-defer); never blocks promote.
     _maybe_write_speak_recalls(
         store,
         stored,
@@ -981,6 +1002,7 @@ def _promote_speak(
         embedder=embedder,
         index=index,
         encode_queue=encode_queue,
+        enqueue_speak_recalls=enqueue_speak_recalls,
     )
     return stored
 
@@ -1247,15 +1269,17 @@ def promote_beat(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> Atom | None:
     """Promote a single tape beat to an atom when rules fire (R1–R10).
 
     Pure w.r.t. GoalsStore / wake claim policy. Best-effort: logs and returns
     None on errors; never raises into the caller.
 
-    Optional EdgeStore / embedder / index / encode_queue enable speak-time
-    ``recalls`` writes (Elyra speak only here; user chat via
-    ``promote_wake_observation``). Soft-fail under encode pressure.
+    Optional EdgeStore / embedder / index / encode_queue enable **inline**
+    speak-time ``recalls`` when ``edge_recalls_inline`` is true. Product
+    default enqueues via ``enqueue_speak_recalls`` (deferred idle drain).
+    Soft-fail; never blocks promote (KD-E3).
     """
     cfg = _settings_or_default(settings)
     if store is None or not moment_id or not _write_enabled(cfg):
@@ -1297,6 +1321,7 @@ def promote_beat(
                     embedder=embedder,
                     index=index,
                     encode_queue=encode_queue,
+                    enqueue_speak_recalls=enqueue_speak_recalls,
                 )
             if name in LEDGER_TOOL_NAMES:
                 return _promote_ledger(
@@ -1351,6 +1376,7 @@ def promote_wake_observation(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> Atom | None:
     """Promote a social wake user observation (call once at moment open).
 
@@ -1406,7 +1432,7 @@ def promote_wake_observation(
             promote_context=promote_context,
             write_created_with=True,
         )
-        # User speak (social wake) → recalls (design §2.5).
+        # User speak (social wake) → recalls (design §2.5 / KD-P0-defer).
         _maybe_write_speak_recalls(
             store,
             stored,
@@ -1416,6 +1442,7 @@ def promote_wake_observation(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
         return stored
     except Exception:  # noqa: BLE001

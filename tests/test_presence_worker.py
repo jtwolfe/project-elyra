@@ -696,13 +696,157 @@ def test_memory_settings_with_wait_helper(paths):
     # Bare settings unchanged.
     assert worker.settings.memory.semantic_wait_for_select is True
     assert worker.settings.memory.semantic_wait_max_ms == 15_000
-    # Status applies_to lists PR1a wired sites (not deferred recalls yet).
+    # Status applies_to lists long-path sites including deferred recalls (PR1b).
     sw = worker.status_snapshot()["semantic_wait"]
     assert "meal_select" in sw["applies_to"]
     assert "traverse_start" in sw["applies_to"]
     assert "traverse_step_semantic" in sw["applies_to"]
     assert "http_neighbors_opt_in" in sw["applies_to"]
-    assert "speak_recalls_deferred" not in sw["applies_to"]
+    assert "speak_recalls_deferred" in sw["applies_to"]
+
+
+def test_deferred_recalls_enqueue_drop_new_and_idle_drain(paths, tmp_path):
+    """PR1b: queue depth 32 drop-new; idle drain uses wait ceiling + metrics."""
+    from dataclasses import replace
+
+    from elyra.memory.config import (
+        EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT,
+        MemorySettings,
+        semantic_ann_deadline_ms,
+    )
+    from elyra.memory.edges import open_edge_store
+    from elyra.memory.embed.mock import MockEmbedder
+    from elyra.memory.index import ScoredAtom
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+    from elyra.memory.weights import EDGE_RECALLS
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            semantic_enabled=True,
+            embed_enabled=True,
+            semantic_wait_for_select=True,
+            semantic_wait_max_ms=15_000,
+            edge_recalls_inline=False,
+        ),
+    )
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+
+    # Open stores on worker and seed a past speak for ANN hits.
+    store = worker._ensure_memory_store()  # noqa: SLF001
+    assert store is not None
+    past = Atom(
+        atom_id="a_past_recall",
+        t_start="2026-07-01T00:00:00Z",
+        kind="speak",
+        content_text="alpha memory",
+        content_ref="inline",
+        moment_id="m_past",
+        embedding_status="ready",
+    )
+    store.put_atom(past)
+
+    # Enqueue gates: durable + semantic on → queued.
+    assert worker.enqueue_deferred_recalls(
+        src_atom_id="a_src1", spoken_text="remember alpha"
+    )
+    assert worker._recalls_deferred_queued == 1  # noqa: SLF001
+    assert len(worker._deferred_recalls_jobs) == 1  # noqa: SLF001
+
+    # Drop-new at depth 32.
+    worker._deferred_recalls_jobs.clear()  # noqa: SLF001
+    worker._recalls_deferred_queued = 0  # noqa: SLF001
+    worker._deferred_recalls_depth = EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT  # noqa: SLF001
+    for i in range(EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT):
+        assert worker.enqueue_deferred_recalls(
+            src_atom_id=f"a_{i}", spoken_text=f"text {i}"
+        )
+    assert (
+        worker.enqueue_deferred_recalls(src_atom_id="a_overflow", spoken_text="drop me")
+        is False
+    )
+    assert worker._recalls_deferred_dropped == 1  # noqa: SLF001
+    assert len(worker._deferred_recalls_jobs) == EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT  # noqa: SLF001
+
+    # Idle drain one job with mocked index/embedder under wait ceiling.
+    worker._deferred_recalls_jobs.clear()  # noqa: SLF001
+    worker._recalls_deferred_dropped = 0  # noqa: SLF001
+    worker.enqueue_deferred_recalls(src_atom_id="a_src_drain", spoken_text="recall past")
+
+    class _FakeIndex:
+        def search(self, query, **kwargs):
+            return [
+                ScoredAtom(atom_id=past.atom_id, score=0.91, atom=past),
+            ]
+
+    worker._embedding_index = _FakeIndex()  # noqa: SLF001
+    worker._embedder = MockEmbedder()  # noqa: SLF001
+    worker._embedder_state = "warm"  # noqa: SLF001
+    # edge store already open via ensure
+    assert worker._ensure_edge_store() is not None  # noqa: SLF001
+
+    mem_cfg = worker._memory_settings_with_wait()  # noqa: SLF001
+    assert semantic_ann_deadline_ms(mem_cfg, "recalls") == 15_000
+
+    worker._idle_deferred_recalls()  # noqa: SLF001
+    assert worker._recalls_deferred_ok == 1  # noqa: SLF001
+    assert len(worker._deferred_recalls_jobs) == 0  # noqa: SLF001
+    es = worker._edge_store  # noqa: SLF001
+    edges = es.list_edges_from("a_src_drain", kinds=[EDGE_RECALLS])
+    assert len(edges) == 1
+    assert edges[0].dst_atom_id == past.atom_id
+
+    # Status surfaces deferred metrics.
+    mem_block = worker.status_snapshot()["memory"]
+    rd = mem_block["recalls_deferred"]
+    assert rd["ok"] >= 1
+    assert rd["queue_depth_max"] == EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT
+    assert "pending" in rd
+
+
+def test_deferred_recalls_soft_skip_cold_on_drain(paths):
+    """Idle drain soft-skips cold encoder; metric recalls_skipped{encoder_cold}."""
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            semantic_enabled=True,
+            semantic_wait_for_select=True,
+            semantic_wait_max_ms=15_000,
+        ),
+    )
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+    worker._ensure_memory_store()  # noqa: SLF001
+    worker._ensure_edge_store()  # noqa: SLF001
+    worker.enqueue_deferred_recalls(src_atom_id="a_c", spoken_text="hello cold")
+
+    class _Cold:
+        def health(self):
+            return {"ok": False, "reason": "cold"}
+
+        def encode_text(self, text: str):
+            raise AssertionError("must not encode when cold")
+
+    class _Idx:
+        def search(self, *a, **k):
+            return []
+
+    worker._embedder = _Cold()  # noqa: SLF001
+    worker._embedder_state = "absent"  # noqa: SLF001
+    worker._embedding_index = _Idx()  # noqa: SLF001
+    worker._idle_deferred_recalls()  # noqa: SLF001
+    assert worker._recalls_deferred_ok == 0  # noqa: SLF001
+    assert worker._recalls_skipped.get("encoder_cold", 0) >= 1  # noqa: SLF001
 
 
 def test_why_now_moment_continue():

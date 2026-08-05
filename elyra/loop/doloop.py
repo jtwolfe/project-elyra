@@ -508,6 +508,7 @@ def _record_beat(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> None:
     """Append a moment tape beat, then optionally promote to memory atoms.
 
@@ -518,8 +519,9 @@ def _record_beat(
     ``promote_context`` / ``promote_context_fn`` supply durable-edge write
     context (raw meal atom ids + EdgeStore). ``promote_context_fn`` is called
     at promote time so re-outer meal ids are fresh.
-    Optional edge_store / embedder / index / encode_queue enable speak-time
-    recalls writes (soft-fail; never block the loop).
+    Optional edge_store / embedder / index / encode_queue enable **inline**
+    speak-time recalls when edge_recalls_inline. Product default uses
+    ``enqueue_speak_recalls`` for deferred idle drain (soft-fail; never blocks).
     """
     if moments is not None and moment_id:
         try:
@@ -557,6 +559,7 @@ def _record_beat(
                 embedder=embedder,
                 index=index,
                 encode_queue=encode_queue,
+                enqueue_speak_recalls=enqueue_speak_recalls,
             )
         except Exception:  # noqa: BLE001 — never raise into do-loop
             _LOG.exception(
@@ -650,6 +653,7 @@ def _drain_interjections(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> None:
     if drain is None:
         return
@@ -680,6 +684,7 @@ def _drain_interjections(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
 
 
@@ -709,6 +714,7 @@ def run_do_loop(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
     viewing_dirty_fn: Callable[[], bool] | None = None,
     clear_viewing_dirty_fn: Callable[[], None] | None = None,
 ) -> DoLoopResult:
@@ -848,6 +854,7 @@ def run_do_loop(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
             viewing_dirty_fn=viewing_dirty_fn,
             clear_viewing_dirty_fn=clear_viewing_dirty_fn,
         )
@@ -872,6 +879,7 @@ def run_do_loop(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
         return DoLoopResult(
             stop_reason=STOP_POLICY,
@@ -918,6 +926,7 @@ def run_do_loop(
                 embedder=embedder,
                 index=index,
                 encode_queue=encode_queue,
+                enqueue_speak_recalls=enqueue_speak_recalls,
             )
             return DoLoopResult(
                 stop_reason=STOP_ERROR,
@@ -965,6 +974,7 @@ def run_do_loop(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
         return DoLoopResult(
             stop_reason=STOP_ERROR,
@@ -999,6 +1009,7 @@ def run_do_loop(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
         return DoLoopResult(
             stop_reason=STOP_ERROR,
@@ -1057,6 +1068,7 @@ def _run_loop_body(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
     viewing_dirty_fn: Callable[[], bool] | None = None,
     clear_viewing_dirty_fn: Callable[[], None] | None = None,
 ) -> DoLoopResult:
@@ -1073,6 +1085,7 @@ def _run_loop_body(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
 
     while True:
@@ -1107,6 +1120,7 @@ def _run_loop_body(
                 embedder=embedder,
                 index=index,
                 encode_queue=encode_queue,
+                enqueue_speak_recalls=enqueue_speak_recalls,
             )
 
         # Continue inject (only when not already declined by precheck).
@@ -1250,6 +1264,7 @@ def _run_loop_body(
                 embedder=embedder,
                 index=index,
                 encode_queue=encode_queue,
+                enqueue_speak_recalls=enqueue_speak_recalls,
             )
             if stop is not None:
                 return _finish(
@@ -1266,6 +1281,7 @@ def _run_loop_body(
                     embedder=embedder,
                     index=index,
                     encode_queue=encode_queue,
+                    enqueue_speak_recalls=enqueue_speak_recalls,
                 )
             continue
 
@@ -1290,6 +1306,7 @@ def _run_loop_body(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
 
         # Free-text inject order (K8 extended): skill_commit → no_speak →
@@ -1425,6 +1442,7 @@ def _run_loop_body(
                 embedder=embedder,
                 index=index,
                 encode_queue=encode_queue,
+                enqueue_speak_recalls=enqueue_speak_recalls,
             )
 
 
@@ -1463,6 +1481,7 @@ def _handle_tool_batch(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> str | None:
     """Execute tool_calls serially. Returns stop_reason or None to continue."""
     state.chain_messages.append(assistant_message_from_result(result))
@@ -1592,6 +1611,7 @@ def _handle_tool_batch(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
         if skipped:
             _record_beat(
@@ -1615,6 +1635,7 @@ def _handle_tool_batch(
                 embedder=embedder,
                 index=index,
                 encode_queue=encode_queue,
+                enqueue_speak_recalls=enqueue_speak_recalls,
             )
             _LOG.info(
                 "skip-identical moment_id=%s tool=%s streak=%s skip_count=%s fp=%s",
@@ -1677,6 +1698,7 @@ def _handle_tool_batch(
         embedder=embedder,
         index=index,
         encode_queue=encode_queue,
+        enqueue_speak_recalls=enqueue_speak_recalls,
     )
 
     # Post-batch thrash HOST (tool path — NOT free-text order). Last-fp only (v1).
@@ -1724,6 +1746,7 @@ def _handle_tool_batch(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
 
     # Phase C: arm thrash lesson request once after thrash HOST is in play
@@ -1752,6 +1775,7 @@ def _handle_tool_batch(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
 
     # Phase C: HOST-synthesized lesson after K additional *identical* fails.
@@ -1778,6 +1802,7 @@ def _handle_tool_batch(
             embedder=embedder,
             index=index,
             encode_queue=encode_queue,
+            enqueue_speak_recalls=enqueue_speak_recalls,
         )
 
     return None
@@ -1809,6 +1834,7 @@ def _store_and_pin_lesson(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> None:
     """Store compact lesson, set pin HOST, mark captured. No auto-stop."""
     body = (lesson or "").strip()
@@ -1846,6 +1872,7 @@ def _store_and_pin_lesson(
         embedder=embedder,
         index=index,
         encode_queue=encode_queue,
+        enqueue_speak_recalls=enqueue_speak_recalls,
     )
 
 
@@ -1864,6 +1891,7 @@ def _maybe_capture_free_text_lesson(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> None:
     """Capture non-flood free-text as lesson after request; do not force stop."""
     if not state.lesson_request_sent or state.lesson_captured:
@@ -1890,6 +1918,7 @@ def _maybe_capture_free_text_lesson(
         embedder=embedder,
         index=index,
         encode_queue=encode_queue,
+        enqueue_speak_recalls=enqueue_speak_recalls,
     )
 
 
@@ -1908,6 +1937,7 @@ def _finish(
     embedder: Any | None = None,
     index: Any | None = None,
     encode_queue: Any | None = None,
+    enqueue_speak_recalls: Any | None = None,
 ) -> DoLoopResult:
     _record_beat(
         moments,
@@ -1932,6 +1962,7 @@ def _finish(
         embedder=embedder,
         index=index,
         encode_queue=encode_queue,
+        enqueue_speak_recalls=enqueue_speak_recalls,
     )
     return DoLoopResult(
         stop_reason=stop_reason,

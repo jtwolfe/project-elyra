@@ -16,7 +16,7 @@ from elyra.memory.config import (
 from elyra.runtime.semantic_wait import (
     DEFAULT_ENABLED,
     DEFAULT_MAX_MS,
-    SEMANTIC_WAIT_APPLIES_TO_PR1A,
+    SEMANTIC_WAIT_APPLIES_TO,
     SemanticWaitState,
     clamp_wait_max_ms,
     effective_select_max_ms,
@@ -109,14 +109,14 @@ def test_status_block_shape() -> None:
         "max_max_ms": 120_000,
         "snappy_select_max_ms": 50,
         "effective_select_max_ms": 9_000,
-        "applies_to": list(SEMANTIC_WAIT_APPLIES_TO_PR1A),
+        "applies_to": list(SEMANTIC_WAIT_APPLIES_TO),
     }
     assert "meal_select" in block["applies_to"]
     assert "traverse_start" in block["applies_to"]
     assert "traverse_step_semantic" in block["applies_to"]
     assert "http_neighbors_opt_in" in block["applies_to"]
-    # PR1b site not yet listed in PR1a.
-    assert "speak_recalls_deferred" not in block["applies_to"]
+    # PR1b: deferred speak recalls under wait helper.
+    assert "speak_recalls_deferred" in block["applies_to"]
 
 
 def test_effective_semantic_wait_helper_runtime_overlay() -> None:
