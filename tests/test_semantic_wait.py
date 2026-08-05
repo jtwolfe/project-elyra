@@ -8,10 +8,15 @@ from elyra.memory.config import (
     SEMANTIC_WAIT_MAX_MS_DEFAULT,
     MemorySettings,
     clamp_semantic_wait_max_ms,
+    effective_semantic_wait_max_ms,
+    semantic_ann_deadline_ms,
+    semantic_wait_enabled,
+    snappy_ann_max_ms,
 )
 from elyra.runtime.semantic_wait import (
     DEFAULT_ENABLED,
     DEFAULT_MAX_MS,
+    SEMANTIC_WAIT_APPLIES_TO_PR1A,
     SemanticWaitState,
     clamp_wait_max_ms,
     effective_select_max_ms,
@@ -104,7 +109,59 @@ def test_status_block_shape() -> None:
         "max_max_ms": 120_000,
         "snappy_select_max_ms": 50,
         "effective_select_max_ms": 9_000,
+        "applies_to": list(SEMANTIC_WAIT_APPLIES_TO_PR1A),
     }
+    assert "meal_select" in block["applies_to"]
+    assert "traverse_start" in block["applies_to"]
+    assert "traverse_step_semantic" in block["applies_to"]
+    assert "http_neighbors_opt_in" in block["applies_to"]
+    # PR1b site not yet listed in PR1a.
+    assert "speak_recalls_deferred" not in block["applies_to"]
+
+
+def test_effective_semantic_wait_helper_runtime_overlay() -> None:
+    """Helper prefers runtime_state over settings for ceiling identity."""
+    settings = MemorySettings(
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=8_000,
+        semantic_select_max_ms=40,
+        traverse_expand_max_ms=120,
+    )
+    assert semantic_wait_enabled(settings) is True
+    assert effective_semantic_wait_max_ms(settings) == 8_000
+    runtime = SemanticWaitState(enabled=True, max_ms=30_000)
+    assert effective_semantic_wait_max_ms(settings, runtime_state=runtime) == 30_000
+    runtime_off = SemanticWaitState(enabled=False, max_ms=30_000)
+    assert semantic_wait_enabled(settings, runtime_state=runtime_off) is False
+    # Wait off → snappy table, not 40ms island or start_ms 250.
+    assert snappy_ann_max_ms(settings, "meal") == 40
+    assert snappy_ann_max_ms(settings, "traverse") == min(120, 40)
+    assert snappy_ann_max_ms(settings, "http") == min(120, 40)
+    assert snappy_ann_max_ms(settings, "recalls") == min(40, 100)
+    assert semantic_ann_deadline_ms(settings, "traverse") == 8_000
+    assert (
+        semantic_ann_deadline_ms(
+            settings, "traverse", runtime_state=runtime_off
+        )
+        == min(120, 40)
+    )
+
+
+def test_snappy_ann_empty_settings_defaults() -> None:
+    """Zero-state / None settings → product snappy defaults (no crash)."""
+    assert snappy_ann_max_ms(None, "meal") == 50
+    assert snappy_ann_max_ms(None, "traverse") == min(120, 50)
+    assert snappy_ann_max_ms(None, "http") == min(120, 50)
+    assert snappy_ann_max_ms(None, "recalls") == min(50, 100)
+    assert semantic_wait_enabled(None) is True
+    assert effective_semantic_wait_max_ms(None) == SEMANTIC_WAIT_MAX_MS_DEFAULT
+
+
+def test_effective_wait_clamps_band() -> None:
+    settings = MemorySettings(semantic_wait_max_ms=50)
+    assert effective_semantic_wait_max_ms(settings) == 1_000
+    settings_hi = MemorySettings(semantic_wait_max_ms=999_999)
+    assert effective_semantic_wait_max_ms(settings_hi) == 120_000
 
 
 def test_glass_assets_wire_semantic_wait() -> None:

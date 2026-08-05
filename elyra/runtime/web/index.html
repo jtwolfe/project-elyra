@@ -488,8 +488,8 @@
                   min="1"
                   max="50"
                 />
-                <label class="status-label memory-graph-sem-label" for="memory-graph-browse-sem">
-                  <input id="memory-graph-browse-sem" type="checkbox" checked />
+                <label class="status-label memory-graph-sem-label" for="memory-graph-browse-sem" title="Off by default (structural free-browse). Full wait only via API semantic_wait=1.">
+                  <input id="memory-graph-browse-sem" type="checkbox" />
                   semantic
                 </label>
                 <label class="status-label memory-graph-sem-label" for="memory-graph-browse-session" title="Highlight considered/kept from last walk session">
@@ -575,8 +575,8 @@
                   min="1"
                   max="50"
                 />
-                <label class="status-label memory-graph-sem-label" for="memory-graph-neighbor-sem">
-                  <input id="memory-graph-neighbor-sem" type="checkbox" checked />
+                <label class="status-label memory-graph-sem-label" for="memory-graph-neighbor-sem" title="Off by default (structural probe). Snappy ANN when checked; full wait needs semantic_wait=1.">
+                  <input id="memory-graph-neighbor-sem" type="checkbox" />
                   semantic
                 </label>
                 <button type="button" id="memory-graph-neighbors-run" class="btn-secondary btn-sm">

@@ -346,6 +346,114 @@ def test_graph_neighbors_soft_empty_unknown_reasons(paths):
         h.close()
 
 
+def test_graph_neighbors_default_allow_semantic_off(paths):
+    """API default allow_semantic=0 (structural free-browse; KD-P0-http)."""
+    h = _ApiHarness(paths, memory=_enabled_memory())
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        atoms = _link_chain(
+            store,
+            ["alpha default", "beta default", "gamma default"],
+        )
+        mid = atoms[1].atom_id
+        code, body = h.get(f"/api/memory/graph/neighbors?atom_id={mid}&k=8")
+        assert code == 200, body
+        assert body["ok"] is True
+        q = body["query"]
+        assert q["allow_semantic"] is False
+        assert q.get("semantic_wait") is False
+        assert q["semantic_deadline_ms"] == 0
+        assert q["expand_deadline_ms"] > 0
+        # Structural neighbors still present without semantic.
+        assert body["count"] >= 1
+        kinds = {n["edge_kind"] for n in body["neighbors"]}
+        assert "semantic_hop" not in kinds
+    finally:
+        h.close()
+
+
+def test_graph_neighbors_allow_semantic_snappy_not_full_wait(paths):
+    """allow_semantic=1 without semantic_wait → snappy http ANN budget."""
+    from elyra.memory.config import snappy_ann_max_ms
+
+    mem = _enabled_memory()
+    h = _ApiHarness(paths, memory=mem)
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        atoms = _link_chain(store, ["s1 body", "s2 body", "s3 body"])
+        mid = atoms[1].atom_id
+        code, body = h.get(
+            f"/api/memory/graph/neighbors?atom_id={mid}&k=8&allow_semantic=1"
+        )
+        assert code == 200, body
+        q = body["query"]
+        assert q["allow_semantic"] is True
+        assert q["semantic_wait"] is False
+        expected = snappy_ann_max_ms(h.worker._memory_settings_with_wait(), "http")  # noqa: SLF001
+        assert q["semantic_deadline_ms"] == expected
+        # Not the full wait ceiling (15s product default).
+        assert q["semantic_deadline_ms"] < 1_000
+        em = body.get("expand_meta") or {}
+        assert em.get("dual_deadline") is True
+        assert em.get("semantic_ms_budget") == expected
+    finally:
+        h.close()
+
+
+def test_graph_neighbors_semantic_wait_opt_in_full_ceiling(paths):
+    """semantic_wait=1 + allow_semantic=1 → effective wait max as ANN budget."""
+    from elyra.memory.config import effective_semantic_wait_max_ms
+
+    mem = replace(
+        _enabled_memory(),
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=20_000,
+    )
+    h = _ApiHarness(paths, memory=mem)
+    try:
+        h.worker.set_semantic_wait(enabled=True, max_ms=20_000)
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        atoms = _link_chain(store, ["w1", "w2", "w3"])
+        mid = atoms[1].atom_id
+        code, body = h.get(
+            f"/api/memory/graph/neighbors?atom_id={mid}&k=4"
+            f"&allow_semantic=1&semantic_wait=1"
+        )
+        assert code == 200, body
+        q = body["query"]
+        assert q["allow_semantic"] is True
+        assert q["semantic_wait"] is True
+        overlaid = h.worker._memory_settings_with_wait()  # noqa: SLF001
+        assert q["semantic_deadline_ms"] == effective_semantic_wait_max_ms(
+            overlaid
+        )
+        assert q["semantic_deadline_ms"] == 20_000
+    finally:
+        h.close()
+
+
+def test_glass_free_browse_semantic_checkbox_default_off() -> None:
+    """Static glass: free-browse + neighbor probe semantic boxes unchecked."""
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "elyra" / "runtime" / "web" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    # Unchecked: no `checked` attribute on the free-browse semantic input.
+    assert 'id="memory-graph-browse-sem"' in html
+    assert 'id="memory-graph-neighbor-sem"' in html
+    # Neither checkbox should default to checked (polish1 KD-P0-http).
+    import re
+
+    for cid in ("memory-graph-browse-sem", "memory-graph-neighbor-sem"):
+        m = re.search(
+            rf'<input[^>]*id="{cid}"[^>]*>',
+            html,
+        )
+        assert m is not None, cid
+        tag = m.group(0)
+        assert "checked" not in tag, f"{cid} should default unchecked: {tag}"
+
+
 # ── POST debug: flags-off fail-closed + budget parity ────────────────────────
 
 

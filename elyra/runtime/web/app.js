@@ -6005,8 +6005,8 @@ async function runFreeBrowseExpand(opts = {}) {
     const raw = parseInt(memoryGraphBrowseK.value, 10);
     if (Number.isFinite(raw)) k = raw;
   }
-  const allowSem =
-    !memoryGraphBrowseSem || memoryGraphBrowseSem.checked !== false;
+  // Default unchecked (structural free-browse); only send 1 when box is on.
+  const allowSem = !!(memoryGraphBrowseSem && memoryGraphBrowseSem.checked);
   if (!atomId) {
     if (memoryGraphBrowseMeta) {
       memoryGraphBrowseMeta.hidden = false;
@@ -6444,8 +6444,8 @@ async function runGraphNeighborSearch() {
     if (Number.isFinite(rawB)) k = rawB;
   }
   params.set("k", String(k));
-  const allowSem =
-    !memoryGraphNeighborSem || memoryGraphNeighborSem.checked !== false;
+  // Default unchecked; snappy ANN only when operator opts in.
+  const allowSem = !!(memoryGraphNeighborSem && memoryGraphNeighborSem.checked);
   params.set("allow_semantic", allowSem ? "1" : "0");
   if (!atomId) {
     if (memoryGraphNeighborsMeta) {

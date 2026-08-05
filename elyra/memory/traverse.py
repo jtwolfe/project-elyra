@@ -31,6 +31,7 @@ from elyra.memory.config import (
     TRAVERSE_MAX_STEPS_MAX,
     TRAVERSE_NEIGHBOR_K_MAX,
     is_directed_traversal_enabled,
+    semantic_ann_deadline_ms,
 )
 from elyra.memory.graph import GraphView
 from elyra.memory.keep_tray import (
@@ -190,6 +191,10 @@ class BudgetState:
     depth_spent: int = 0
     expand_ms_spent_last: int = 0
     expand_truncated: bool = False
+    # Polish1 dual deadline honesty (per-step ANN bound — KD-P0-step-ann).
+    semantic_ms_budget_step: int = 0
+    semantic_ms_spent_last: int = 0
+    semantic_ann_calls_last: int = 0
 
     @property
     def steps_remaining(self) -> int:
@@ -216,6 +221,9 @@ class BudgetState:
             "expand_ms_budget": self.expand_ms_budget,
             "expand_ms_spent_last": self.expand_ms_spent_last,
             "expand_truncated": self.expand_truncated,
+            "semantic_ms_budget_step": self.semantic_ms_budget_step,
+            "semantic_ms_spent_last": self.semantic_ms_spent_last,
+            "semantic_ann_calls_last": self.semantic_ann_calls_last,
             "nodes_spent": self.nodes_spent,
             "depth_spent": self.depth_spent,
             "steps_spent": self.steps_spent,
@@ -243,6 +251,9 @@ class BudgetState:
             "depth_spent": self.depth_spent,
             "expand_ms_spent_last": self.expand_ms_spent_last,
             "expand_truncated": self.expand_truncated,
+            "semantic_ms_budget_step": self.semantic_ms_budget_step,
+            "semantic_ms_spent_last": self.semantic_ms_spent_last,
+            "semantic_ann_calls_last": self.semantic_ann_calls_last,
             "steps_remaining": self.steps_remaining,
             "nodes_remaining": self.nodes_remaining,
             "depth_remaining": self.depth_remaining,
@@ -979,7 +990,8 @@ class TraversalRegistry:
                 weight=1.0,
             )
 
-        # 2) Semantic seed_from_query under start expand_ms (room after dual reserve).
+        # 2) Semantic seed_from_query under unified wait / snappy ANN ceiling
+        # (KD-P0: start_ms is structural/reporting only — NOT the ANN cap).
         want_semantic = mode in ("auto", "semantic_only")
         media_list = [str(m) for m in (seed_media_ids or ()) if str(m).strip()]
         q = ""
@@ -987,6 +999,12 @@ class TraversalRegistry:
             q = str(seed_query).strip()
         elif want_semantic:
             q = session.goal.strip()
+
+        # Wait-on: effective_semantic_wait_max_ms; wait-off: snappy traverse.
+        # Settings already overlay runtime wait via worker _memory_settings_with_wait.
+        semantic_deadline = semantic_ann_deadline_ms(cfg, "traverse")
+        session.budgets.semantic_ms_budget_step = int(semantic_deadline)
+        semantic_ms_spent = 0
 
         if want_semantic and (q or media_list) and len(seed_order) < max_seeds:
             # RESERVE dual_n slots so temporal anchors cannot be starved.
@@ -999,10 +1017,12 @@ class TraversalRegistry:
                     k=semantic_room,
                     exclude_moment_id=moment_id,
                     expand_deadline_ms=start_ms,
+                    semantic_deadline_ms=semantic_deadline,
                 )
                 expand_ms_spent = int(_now_ms() - t0)
+                semantic_ms_spent = expand_ms_spent
                 meta = graph.last_expand_meta
-                if meta.get("expand_truncated"):
+                if meta.get("expand_truncated") or meta.get("semantic_truncated"):
                     expand_truncated = True
                 sem_reason = meta.get("semantic_reason")
                 if sem_reason:
@@ -1087,6 +1107,11 @@ class TraversalRegistry:
         session.expand_truncated = expand_truncated
         session.budgets.expand_ms_spent_last = expand_ms_spent
         session.budgets.expand_truncated = expand_truncated
+        session.budgets.semantic_ms_spent_last = semantic_ms_spent
+        # ANN call counted when seed_from_query was invoked (spent or reason set).
+        session.budgets.semantic_ann_calls_last = (
+            1 if (semantic_ms_spent > 0 or bool(semantic_reason)) else 0
+        )
         session.budgets.nodes_spent = len(session.considered)
         session.budgets.depth_spent = 0
 
@@ -1103,6 +1128,8 @@ class TraversalRegistry:
         view["semantic_reason"] = semantic_reason
         view["start_ms_budget"] = start_ms
         view["start_ms_spent"] = expand_ms_spent
+        view["semantic_ms_budget"] = int(semantic_deadline)
+        view["semantic_ms_spent"] = semantic_ms_spent
         return view
 
     def step(
@@ -1154,6 +1181,12 @@ class TraversalRegistry:
         expand_truncated = False
         expand_ms_spent = 0
         newly: list[str] = []
+        # KD-P0-step-ann: one shared semantic ANN budget per step; at most one
+        # semantic_hop call (first expand_id that still has ANN budget).
+        step_semantic_budget = int(semantic_ann_deadline_ms(cfg, "traverse"))
+        session.budgets.semantic_ms_budget_step = step_semantic_budget
+        ann_calls_this_step = 0
+        semantic_ms_spent = 0
 
         if can_expand and expand_ids:
             picks = [str(x) for x in expand_ids][: max(0, expand_per)]
@@ -1180,16 +1213,28 @@ class TraversalRegistry:
                     if remaining_ms <= 0:
                         expand_truncated = True
                         break
+                # Structural first always; ANN only on first expand_id with budget.
+                allow_sem = ann_calls_this_step == 0 and step_semantic_budget > 0
                 edges = graph.neighbors(
                     src_id,
                     k=neighbor_k,
                     exclude_ids=set(session.considered.keys()),
+                    allow_semantic=allow_sem,
                     expand_deadline_ms=remaining_ms,
+                    semantic_deadline_ms=(
+                        step_semantic_budget if allow_sem else 0
+                    ),
                 )
+                if allow_sem:
+                    ann_calls_this_step += 1
+                    meta_sem = graph.last_expand_meta
+                    semantic_ms_spent += int(meta_sem.get("semantic_ms_spent") or 0)
+                    # Shared budget consumed (not reused for further ids).
+                    step_semantic_budget = 0
                 # Sync GraphView moment_member_cache → session frontier cache.
                 self._sync_moment_cache(session, graph)
                 meta = graph.last_expand_meta
-                if meta.get("expand_truncated"):
+                if meta.get("expand_truncated") or meta.get("structural_truncated"):
                     expand_truncated = True
                 for e in edges:
                     if session.budgets.nodes_remaining <= 0:
@@ -1231,6 +1276,8 @@ class TraversalRegistry:
         session.budgets.nodes_spent = len(session.considered)
         session.budgets.expand_ms_spent_last = expand_ms_spent
         session.budgets.expand_truncated = expand_truncated
+        session.budgets.semantic_ms_spent_last = semantic_ms_spent
+        session.budgets.semantic_ann_calls_last = ann_calls_this_step
         session.expand_truncated = expand_truncated or session.expand_truncated
 
         self._rebuild_frontier(

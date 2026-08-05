@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Literal
 
 from elyra.config import ElyraPaths
 from elyra.memory.embed.types import (
@@ -17,6 +18,9 @@ from elyra.memory.embed.types import (
     EMBED_DEVICE_PREFS,
     SEARCH_CHANNEL_SET,
 )
+
+# Long-path / snappy ANN sites (polish1 unified wait — design §1.1).
+SemanticAnnSite = Literal["meal", "traverse", "recalls", "http"]
 
 MEMORY_DIRNAME = "memory"
 ATOMS_JSONL = "atoms.jsonl"
@@ -110,6 +114,101 @@ def clamp_semantic_wait_max_ms(value: float | int) -> int:
     if v > SEMANTIC_WAIT_MAX_MS_MAX:
         return SEMANTIC_WAIT_MAX_MS_MAX
     return v
+
+
+def semantic_wait_enabled(
+    settings: MemorySettings | None,
+    *,
+    runtime_state: Any | None = None,
+) -> bool:
+    """True when long-path semantic wait is on (runtime overlays settings).
+
+    Prefer ``runtime_state.enabled`` when a process-level SemanticWaitState is
+    available; otherwise read ``settings.semantic_wait_for_select`` (product
+    default True).
+    """
+    if runtime_state is not None:
+        return bool(getattr(runtime_state, "enabled", False))
+    if settings is None:
+        return True
+    return bool(getattr(settings, "semantic_wait_for_select", True))
+
+
+def effective_semantic_wait_max_ms(
+    settings: MemorySettings | None,
+    *,
+    runtime_state: Any | None = None,
+) -> int:
+    """Clamped long-path ANN/embed ceiling (ms).
+
+    Prefer ``runtime_state.max_ms`` when provided, else
+    ``settings.semantic_wait_max_ms``, else product default. Always clamped to
+    ``[SEMANTIC_WAIT_MAX_MS_MIN, SEMANTIC_WAIT_MAX_MS_MAX]``.
+
+    Callers should use this as the ANN deadline **only when**
+    :func:`semantic_wait_enabled` is True; when wait is off use
+    :func:`snappy_ann_max_ms` for the site. Normative: no long-path call site
+    hardcodes 40 / 120 / 250 as the ANN ceiling.
+    """
+    if runtime_state is not None:
+        raw = getattr(runtime_state, "max_ms", SEMANTIC_WAIT_MAX_MS_DEFAULT)
+    elif settings is not None:
+        raw = getattr(settings, "semantic_wait_max_ms", SEMANTIC_WAIT_MAX_MS_DEFAULT)
+    else:
+        raw = SEMANTIC_WAIT_MAX_MS_DEFAULT
+    try:
+        return clamp_semantic_wait_max_ms(int(raw))
+    except (TypeError, ValueError):
+        return SEMANTIC_WAIT_MAX_MS_DEFAULT
+
+
+def snappy_ann_max_ms(
+    settings: MemorySettings | None,
+    site: SemanticAnnSite,
+) -> int:
+    """Snappy ANN budget (ms) when wait is **disabled** — per-site table.
+
+    | site     | budget |
+    |----------|--------|
+    | meal     | ``semantic_select_max_ms`` |
+    | traverse | ``min(traverse_expand_max_ms, semantic_select_max_ms)`` |
+    | recalls  | ``min(semantic_select_max_ms, 100)`` |
+    | http     | ``min(traverse_expand_max_ms, semantic_select_max_ms)`` |
+    """
+    select_ms = 50
+    expand_ms = 120
+    if settings is not None:
+        try:
+            select_ms = max(0, int(getattr(settings, "semantic_select_max_ms", 50) or 0))
+        except (TypeError, ValueError):
+            select_ms = 50
+        try:
+            expand_ms = max(0, int(getattr(settings, "traverse_expand_max_ms", 120) or 0))
+        except (TypeError, ValueError):
+            expand_ms = 120
+    site_key = str(site or "").strip().lower()
+    if site_key == "meal":
+        return select_ms
+    if site_key == "recalls":
+        return min(select_ms, 100)
+    # traverse + http (and unknown → traverse/http snappy)
+    return min(expand_ms, select_ms)
+
+
+def semantic_ann_deadline_ms(
+    settings: MemorySettings | None,
+    site: SemanticAnnSite,
+    *,
+    runtime_state: Any | None = None,
+) -> int:
+    """ANN deadline for a call site: wait ceiling when on, else snappy table.
+
+    Convenience over :func:`semantic_wait_enabled` +
+    :func:`effective_semantic_wait_max_ms` / :func:`snappy_ann_max_ms`.
+    """
+    if semantic_wait_enabled(settings, runtime_state=runtime_state):
+        return effective_semantic_wait_max_ms(settings, runtime_state=runtime_state)
+    return snappy_ann_max_ms(settings, site)
 
 
 def is_directed_traversal_enabled(settings: MemorySettings | None) -> bool:
@@ -449,11 +548,13 @@ __all__ = [
     "TRAVERSE_SEMANTIC_K_MAX",
     "TRAVERSE_SESSION_TTL_S_MAX",
     "MemorySettings",
+    "SemanticAnnSite",
     "atoms_blob_root",
     "atoms_jsonl_path",
     "blob_relpath_for_atom",
     "clamp_semantic_wait_max_ms",
     "edges_jsonl_path",
+    "effective_semantic_wait_max_ms",
     "ensure_memory_dirs",
     "is_directed_keep_enabled",
     "is_directed_traversal_enabled",
@@ -462,4 +563,7 @@ __all__ = [
     "lance_root",
     "memory_meta_path",
     "memory_root",
+    "semantic_ann_deadline_ms",
+    "semantic_wait_enabled",
+    "snappy_ann_max_ms",
 ]

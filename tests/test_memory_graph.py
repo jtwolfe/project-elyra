@@ -823,6 +823,141 @@ def test_semantic_disabled_allow_flag_reason(store):
     assert gv.last_expand_meta.get("semantic_reason") == REASON_SEMANTIC_DISABLED
 
 
+def test_dual_deadline_structural_complete_semantic_timeout(store, monkeypatch):
+    """Structural finishes under short expand_ms; independent semantic times out."""
+    a, b = (
+        _atom(atom_id="a_dd1", t="2026-07-28T10:00:00Z", text="seed theme alpha"),
+        _atom(atom_id="a_dd2", t="2026-07-28T10:01:00Z", text="seed theme beta"),
+    )
+    _link_chain(store, [a, b])
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    for atom in (a, b):
+        vec = mock_vector(f"text|{atom.content_text}", dim=EMBED_DIM)
+        idx.upsert(
+            EmbeddingSet(
+                atom_id=atom.atom_id,
+                dim=EMBED_DIM,
+                emb_text=vec,
+                emb_joint=vec,
+                model_id="mock",
+                encoded_at="2026-07-28T10:00:00Z",
+            )
+        )
+
+    phase = {"n": 0}
+
+    def fake_now() -> float:
+        # Dual mode: structural phase stays under 50ms; semantic clock starts
+        # fresh and immediately exceeds a 1ms semantic budget.
+        phase["n"] += 1
+        n = phase["n"]
+        # neighbors t0 + structural work: small times
+        if n <= 12:
+            return float(n)  # 1..12 ms range
+        # semantic phase t_sem0 then over
+        if n == 13:
+            return 100.0  # t_sem0
+        return 200.0  # over 1ms semantic budget
+
+    monkeypatch.setattr("elyra.memory.graph._now_ms", fake_now)
+    gv = GraphView(
+        store, index=idx, embedder=emb, now="2026-07-28T10:05:00Z"
+    )
+    edges = gv.neighbors(
+        "a_dd1",
+        kinds=[EDGE_SEQUENTIAL, EDGE_SEMANTIC_HOP],
+        k=10,
+        allow_semantic=True,
+        expand_deadline_ms=50,
+        semantic_deadline_ms=1,
+    )
+    meta = gv.last_expand_meta
+    assert meta.get("dual_deadline") is True
+    # Structural sequential still present.
+    assert any(
+        e.dst_atom_id == "a_dd2" and e.edge_kind == EDGE_SEQUENTIAL for e in edges
+    )
+    assert meta.get("structural_truncated") is False
+    assert meta.get("structural_ms_budget") == 50
+    assert meta.get("semantic_ms_budget") == 1
+    # Semantic timed out independently.
+    assert meta.get("semantic_reason") == REASON_TIMEOUT
+    assert meta.get("semantic_truncated") is True
+    assert EDGE_SEMANTIC_HOP not in {e.edge_kind for e in edges}
+
+
+def test_dual_deadline_zero_semantic_skips_ann(store):
+    """semantic_deadline_ms=0 → no ANN even when allow_semantic=True."""
+    store.put_atom(_atom(atom_id="a_z0", text="hello theme"))
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    vec = mock_vector("text|hello theme", dim=EMBED_DIM)
+    idx.upsert(
+        EmbeddingSet(
+            atom_id="a_z0",
+            dim=EMBED_DIM,
+            emb_text=vec,
+            emb_joint=vec,
+            model_id="mock",
+            encoded_at="2026-07-28T10:00:00Z",
+        )
+    )
+    gv = GraphView(store, index=idx, embedder=emb)
+    edges = gv.neighbors(
+        "a_z0",
+        kinds=[EDGE_SEMANTIC_HOP],
+        k=5,
+        allow_semantic=True,
+        expand_deadline_ms=100,
+        semantic_deadline_ms=0,
+    )
+    assert edges == []
+    assert gv.last_expand_meta.get("dual_deadline") is True
+    assert gv.last_expand_meta.get("semantic_ms_budget") == 0
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_TIMEOUT
+
+
+def test_seed_from_query_prefers_semantic_deadline(store, monkeypatch):
+    """semantic_deadline_ms overrides expand_deadline_ms for seed ANN wall."""
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    ticks = {"n": 0}
+
+    def fake_now() -> float:
+        ticks["n"] += 1
+        return 0.0 if ticks["n"] == 1 else 50.0
+
+    monkeypatch.setattr("elyra.memory.graph._now_ms", fake_now)
+    gv = GraphView(store, index=idx, embedder=emb)
+    # expand_deadline large but semantic_deadline tiny → timeout
+    seeds = gv.seed_from_query(
+        "any query",
+        k=5,
+        expand_deadline_ms=10_000,
+        semantic_deadline_ms=1,
+    )
+    assert seeds == []
+    assert gv.last_expand_meta.get("semantic_reason") == REASON_TIMEOUT
+    assert gv.last_expand_meta.get("semantic_ms_budget") == 1
+
+
+def test_neighbors_default_omits_full_wait(store):
+    """Args omitted: structural uses expand_max; no silent dual full-wait."""
+    a, b = (
+        _atom(atom_id="a_df1", t="2026-07-28T10:00:00Z"),
+        _atom(atom_id="a_df2", t="2026-07-28T10:01:00Z"),
+    )
+    _link_chain(store, [a, b])
+    settings = MemorySettings(traverse_expand_max_ms=90)
+    gv = GraphView(store, settings=settings)
+    edges = gv.neighbors("a_df1", allow_semantic=False)
+    meta = gv.last_expand_meta
+    assert meta.get("dual_deadline") is False  # legacy shared when omitted
+    assert meta.get("structural_ms_budget") == 90
+    assert any(e.dst_atom_id == "a_df2" for e in edges)
+
+
 def test_graph_edge_is_frozen():
     e = GraphEdge(
         src_atom_id="a",

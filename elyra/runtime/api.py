@@ -2095,9 +2095,19 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def _get_memory_graph_neighbors(self, qs: dict[str, list[str]]) -> None:
         """GET /api/memory/graph/neighbors?atom_id= — 1-hop multi-kind expand.
 
-        Structural always (when store open). Semantic hops only if index + warm
-        encoder. Snippets only — no raw vectors. Soft-empty with reasons.
+        Structural always (when store open). Semantic hops only if
+        ``allow_semantic=1`` **and** index + warm encoder.
+
+        Defaults (polish1 KD-P0-http): ``allow_semantic=0`` (structural-first
+        free-browse). When semantic is on, ANN uses snappy http budget unless
+        ``semantic_wait=1`` opts into the unified wait ceiling. Never full wait
+        by default.
         """
+        from elyra.memory.config import (
+            effective_semantic_wait_max_ms,
+            semantic_wait_enabled,
+            snappy_ann_max_ms,
+        )
         from elyra.memory.inspect import (
             directed_traversal_flags,
             graph_edge_to_inspect,
@@ -2105,7 +2115,15 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         )
 
         flags = self._memory_flags_block()
-        mem_cfg = self._memory_settings()
+        # Prefer worker overlay so wait max tracks glass set_semantic_wait.
+        mem_with_wait = getattr(self.worker, "_memory_settings_with_wait", None)
+        if callable(mem_with_wait):
+            try:
+                mem_cfg = mem_with_wait()
+            except Exception:  # noqa: BLE001
+                mem_cfg = self._memory_settings()
+        else:
+            mem_cfg = self._memory_settings()
         trav_flags = directed_traversal_flags(mem_cfg)
         atom_id_raw = (qs.get("atom_id") or [None])[0]
         atom_id = (
@@ -2114,13 +2132,47 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             else None
         )
         k = resolve_neighbor_k((qs.get("k") or ["16"])[0])
-        allow_sem_raw = (qs.get("allow_semantic") or ["1"])[0]
+        # Product default allow_semantic=0 (structural-first glass / free-browse).
+        allow_sem_raw = (qs.get("allow_semantic") or ["0"])[0]
         allow_semantic = str(allow_sem_raw).strip().lower() not in (
             "0",
             "false",
             "no",
             "off",
+            "",
         )
+        wait_raw = (qs.get("semantic_wait") or ["0"])[0]
+        use_full_wait = str(wait_raw).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+
+        # Dual deadlines: structural under traverse_expand_max_ms; ANN snappy
+        # unless explicit semantic_wait=1 and wait enabled.
+        try:
+            expand_ms = int(
+                getattr(mem_cfg, "traverse_expand_max_ms", 120) or 120
+            )
+        except (TypeError, ValueError):
+            expand_ms = 120
+        if allow_semantic:
+            if use_full_wait and semantic_wait_enabled(mem_cfg):
+                semantic_ms = effective_semantic_wait_max_ms(mem_cfg)
+            else:
+                semantic_ms = snappy_ann_max_ms(mem_cfg, "http")
+        else:
+            semantic_ms = 0
+
+        query_echo = {
+            "atom_id": atom_id,
+            "k": k,
+            "allow_semantic": allow_semantic,
+            "semantic_wait": use_full_wait,
+            "expand_deadline_ms": expand_ms,
+            "semantic_deadline_ms": semantic_ms if allow_semantic else 0,
+        }
 
         if not atom_id:
             self._json(
@@ -2147,11 +2199,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "neighbors": [],
                     "count": 0,
                     "omitted_reason": "store_unavailable",
-                    "query": {
-                        "atom_id": atom_id,
-                        "k": k,
-                        "allow_semantic": allow_semantic,
-                    },
+                    "query": query_echo,
                     "memory": flags,
                     "traversal": trav_flags,
                 },
@@ -2172,11 +2220,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         "ok": False,
                         "error": "atom not found",
                         "neighbors": [],
-                        "query": {
-                            "atom_id": atom_id,
-                            "k": k,
-                            "allow_semantic": allow_semantic,
-                        },
+                        "query": query_echo,
                         "memory": flags,
                         "traversal": trav_flags,
                     },
@@ -2188,6 +2232,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 atom_id,
                 k=k,
                 allow_semantic=allow_semantic,
+                expand_deadline_ms=expand_ms,
+                semantic_deadline_ms=semantic_ms if allow_semantic else 0,
             )
             expand_meta = dict(getattr(graph, "last_expand_meta", None) or {})
         except Exception as exc:  # noqa: BLE001
@@ -2200,11 +2246,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "neighbors": [],
                     "count": 0,
                     "omitted_reason": "expand_failed",
-                    "query": {
-                        "atom_id": atom_id,
-                        "k": k,
-                        "allow_semantic": allow_semantic,
-                    },
+                    "query": query_echo,
                     "memory": flags,
                     "traversal": trav_flags,
                 },
@@ -2232,15 +2274,26 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "omitted_reason": omit if not neighbors else None,
                 "expand_meta": {
                     "expand_truncated": bool(expand_meta.get("expand_truncated")),
+                    "structural_truncated": bool(
+                        expand_meta.get("structural_truncated")
+                    ),
+                    "semantic_truncated": bool(
+                        expand_meta.get("semantic_truncated")
+                    ),
                     "elapsed_ms": expand_meta.get("elapsed_ms"),
+                    "structural_ms_budget": expand_meta.get(
+                        "structural_ms_budget"
+                    ),
+                    "structural_ms_spent": expand_meta.get(
+                        "structural_ms_spent"
+                    ),
+                    "semantic_ms_budget": expand_meta.get("semantic_ms_budget"),
+                    "semantic_ms_spent": expand_meta.get("semantic_ms_spent"),
                     "semantic_reason": expand_meta.get("semantic_reason"),
                     "parent_of_reason": expand_meta.get("parent_of_reason"),
+                    "dual_deadline": bool(expand_meta.get("dual_deadline")),
                 },
-                "query": {
-                    "atom_id": atom_id,
-                    "k": k,
-                    "allow_semantic": allow_semantic,
-                },
+                "query": query_echo,
                 "memory": flags,
                 "traversal": trav_flags,
             },

@@ -686,6 +686,25 @@ def test_semantic_wait_rebuild_outer_overlay_contract(paths):
     assert worker.settings.memory.semantic_wait_for_select is True
 
 
+def test_memory_settings_with_wait_helper(paths):
+    """_memory_settings_with_wait overlays runtime wait for graph/meal/tools."""
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_semantic_wait(enabled=False, max_ms=11_000)
+    overlaid = worker._memory_settings_with_wait()  # noqa: SLF001
+    assert overlaid.semantic_wait_for_select is False
+    assert overlaid.semantic_wait_max_ms == 11_000
+    # Bare settings unchanged.
+    assert worker.settings.memory.semantic_wait_for_select is True
+    assert worker.settings.memory.semantic_wait_max_ms == 15_000
+    # Status applies_to lists PR1a wired sites (not deferred recalls yet).
+    sw = worker.status_snapshot()["semantic_wait"]
+    assert "meal_select" in sw["applies_to"]
+    assert "traverse_start" in sw["applies_to"]
+    assert "traverse_step_semantic" in sw["applies_to"]
+    assert "http_neighbors_opt_in" in sw["applies_to"]
+    assert "speak_recalls_deferred" not in sw["applies_to"]
+
+
 def test_why_now_moment_continue():
     from elyra.presence.queue import WakeItem
     from elyra.presence.worker import _why_now

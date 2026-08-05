@@ -462,6 +462,129 @@ def test_pr5_defaults_max_seeds_and_start_ms():
     assert s.traverse_default_seed_mode == "auto"
 
 
+def test_start_semantic_deadline_uses_wait_not_start_ms(store):
+    """Semantic start ANN budget = wait ceiling, not traverse_start_expand_max_ms."""
+    from elyra.memory.config import effective_semantic_wait_max_ms
+    from elyra.memory.embed.mock import MockEmbedder, mock_vector
+    from elyra.memory.embed.types import EMBED_DIM, EmbeddingSet
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    atoms = _chain_store(store, 3)
+    settings = _enabled_settings(
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=12_000,
+        traverse_start_expand_max_ms=250,
+        traverse_expand_max_ms=120,
+        traverse_dual_start=False,
+    )
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(store=store)
+    for a in atoms:
+        text = a.content_text or "theme"
+        vec = mock_vector(f"text|{text}", dim=EMBED_DIM)
+        idx.upsert(
+            EmbeddingSet(
+                atom_id=a.atom_id,
+                dim=EMBED_DIM,
+                emb_text=vec,
+                emb_joint=vec,
+                model_id="mock",
+                encoded_at="2026-07-28T10:00:00Z",
+            )
+        )
+    reg = _reg(settings)
+    gv = GraphView(
+        store,
+        index=idx,
+        embedder=emb,
+        settings=settings,
+        now="2026-07-28T10:05:00Z",
+    )
+    out = reg.start(
+        gv,
+        goal="memory about topic",
+        seed_query="memory about topic",
+        seed_mode="semantic_only",
+        moment_id="m1",
+    )
+    assert out["ok"] is True
+    assert out["start_ms_budget"] == 250  # structural/reporting only
+    assert out["semantic_ms_budget"] == effective_semantic_wait_max_ms(settings)
+    assert out["semantic_ms_budget"] == 12_000
+    assert out["semantic_ms_budget"] != out["start_ms_budget"]
+    assert out["budget"]["semantic_ms_budget_step"] == 12_000
+
+
+def test_start_semantic_snappy_when_wait_off(store):
+    """Wait disabled → traverse snappy ANN budget, not 250 start_ms."""
+    from elyra.memory.config import snappy_ann_max_ms
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    _chain_store(store, 3)
+    settings = _enabled_settings(
+        semantic_wait_for_select=False,
+        semantic_select_max_ms=40,
+        traverse_expand_max_ms=120,
+        traverse_start_expand_max_ms=250,
+        traverse_dual_start=False,
+    )
+    reg = _reg(settings)
+    gv = GraphView(
+        store,
+        index=MemoryEmbeddingIndex(store=store),
+        embedder=None,  # cold → empty but budgets still reported
+        settings=settings,
+        now="2026-07-28T10:05:00Z",
+    )
+    out = reg.start(
+        gv,
+        goal="anything",
+        seed_query="anything",
+        seed_mode="semantic_only",
+        moment_id="m1",
+    )
+    assert out["ok"] is True
+    assert out["semantic_ms_budget"] == snappy_ann_max_ms(settings, "traverse")
+    assert out["semantic_ms_budget"] == min(120, 40)
+    assert out["semantic_ms_budget"] != 250
+
+
+def test_step_at_most_one_semantic_ann_call(store):
+    """Multi expand_ids → at most one semantic_hop ANN; structural multi-id."""
+    atoms = _chain_store(store, 6)
+    settings = _enabled_settings(
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=9_000,
+        traverse_max_expand_per_step=5,
+        traverse_keep_adjacent=False,
+    )
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="walk",
+        seed_atom_ids=[atoms[1].atom_id, atoms[2].atom_id, atoms[3].atom_id],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    assert start["ok"] is True
+    sid = start["session_id"]
+    # Expand three ids in one step — ANN bound is one shared call.
+    step = reg.step(
+        gv,
+        session_id=sid,
+        expand_ids=[atoms[1].atom_id, atoms[2].atom_id, atoms[3].atom_id],
+    )
+    assert step["ok"] is True
+    budget = step["budget"]
+    assert budget["semantic_ms_budget_step"] == 9_000
+    # One ANN attempt (allow_semantic on first expand_id only).
+    assert budget["semantic_ann_calls_last"] == 1
+    # Structural multi-id still expands neighbors.
+    assert step["considered_count"] >= 3
+    assert len(step.get("newly_expanded") or []) >= 1
+
+
 def test_seed_mode_semantic_only_encoder_cold_empty_frontier(store):
     """Cold encoder + semantic_only → empty seeds; encoder_cold honesty; no temporal."""
     from elyra.memory.index import MemoryEmbeddingIndex

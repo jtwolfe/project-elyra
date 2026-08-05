@@ -66,18 +66,37 @@ def effective_select_max_ms(
     return clamp_wait_max_ms(state.max_ms)
 
 
+# Call sites that honor the unified wait ceiling (polish1 §1.1.1).
+# PR1a: meal + traverse + http opt-in. PR1b adds speak_recalls_deferred.
+SEMANTIC_WAIT_APPLIES_TO_PR1A: tuple[str, ...] = (
+    "meal_select",
+    "traverse_start",
+    "traverse_step_semantic",
+    "http_neighbors_opt_in",
+)
+
+
 def semantic_wait_status_block(
     state: SemanticWaitState,
     *,
     snappy_max_ms: int = 50,
+    applies_to: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any]:
     """Build the ``semantic_wait`` object for /api/status.
 
     ``snappy_max_ms`` should be ``settings.memory.semantic_select_max_ms`` so
     glass “off” copy matches the live snappy budget.
+
+    ``applies_to`` lists long-path sites wired to the unified ceiling; omit
+    sites not yet live during partial PR landings (default: PR1a set).
     """
     max_ms = clamp_wait_max_ms(state.max_ms)
     snappy = max(0, int(snappy_max_ms))
+    sites = (
+        list(applies_to)
+        if applies_to is not None
+        else list(SEMANTIC_WAIT_APPLIES_TO_PR1A)
+    )
     return {
         "enabled": bool(state.enabled),
         "max_ms": max_ms,
@@ -87,6 +106,7 @@ def semantic_wait_status_block(
         "effective_select_max_ms": effective_select_max_ms(
             state, snappy_max_ms=snappy
         ),
+        "applies_to": sites,
     }
 
 

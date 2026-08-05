@@ -60,6 +60,7 @@ from elyra.runtime.meal_budget import (
     save_meal_budget_runtime,
 )
 from elyra.runtime.semantic_wait import (
+    SEMANTIC_WAIT_APPLIES_TO_PR1A,
     SemanticWaitState,
     load_semantic_wait_runtime,
     save_semantic_wait_runtime,
@@ -688,7 +689,9 @@ class PresenceWorker:
                     "ok": False,
                     "error": "resetting",
                     "semantic_wait": semantic_wait_status_block(
-                        self._semantic_wait, snappy_max_ms=snappy
+                        self._semantic_wait,
+                        snappy_max_ms=snappy,
+                        applies_to=SEMANTIC_WAIT_APPLIES_TO_PR1A,
                     ),
                 }
             prev_en = bool(self._semantic_wait.enabled)
@@ -709,7 +712,9 @@ class PresenceWorker:
             except OSError as exc:
                 _LOG.warning("persist semantic_wait.json failed: %s", exc)
             block = semantic_wait_status_block(
-                self._semantic_wait, snappy_max_ms=snappy
+                self._semantic_wait,
+                snappy_max_ms=snappy,
+                applies_to=SEMANTIC_WAIT_APPLIES_TO_PR1A,
             )
             return {
                 "ok": True,
@@ -1230,6 +1235,7 @@ class PresenceWorker:
                     snappy_max_ms=int(
                         self.settings.memory.semantic_select_max_ms
                     ),
+                    applies_to=SEMANTIC_WAIT_APPLIES_TO_PR1A,
                 ),
                 "meal_budget": meal_budget_block,
                 "context": context_block,
@@ -1707,6 +1713,22 @@ class PresenceWorker:
             _LOG.exception("edge store open failed; durable expand disabled")
             return None
 
+    def _memory_settings_with_wait(self) -> Any:
+        """MemorySettings snapshot with runtime semantic_wait overlaid.
+
+        Single path for meal rebuild_outer, graph_view, and any long-path
+        consumer that must honor glass/API ``set_semantic_wait`` without
+        using bare ``self.settings.memory`` as the ANN ceiling source.
+        """
+        mem_cfg = self.settings.memory
+        with self._lock:
+            sw = self._semantic_wait
+            return replace(
+                mem_cfg,
+                semantic_wait_for_select=bool(sw.enabled),
+                semantic_wait_max_ms=int(sw.max_ms),
+            )
+
     def graph_view(self) -> Any | None:
         """Build a GraphView from the open store + warm embedder if available.
 
@@ -1715,6 +1737,8 @@ class PresenceWorker:
         a non-null index and already-warm embedder (GraphView policy).
         Injects EdgeStore when open so durable kinds union into neighbors.
         Injects MediaStore for multimodal ``seed_from_query`` (PR5).
+        Settings include runtime semantic_wait overlay so traverse start/step
+        ANN ceilings track glass wait (polish1 KD-P0 wiring).
         """
         store = self._ensure_memory_store()
         if store is None:
@@ -1722,7 +1746,7 @@ class PresenceWorker:
         try:
             from elyra.memory.graph import GraphView
 
-            mem_cfg = self.settings.memory
+            mem_cfg = self._memory_settings_with_wait()
             self._traversal.bind_settings(mem_cfg)
             index = self._ensure_embedding_index()
             # Consumer gated handle only (KD-E5); never cold-load for graph.
@@ -2803,16 +2827,9 @@ class PresenceWorker:
                         skill_catalog=skill_catalog_s,
                         skill_bias=skill_bias_s,
                     )
-                    mem_cfg = self.settings.memory
                     # Overlay runtime wait toggle so first outer + re-outer both
                     # honor glass/API wait-for-select (CPU dogfood).
-                    with self._lock:
-                        sw = self._semantic_wait
-                        mem_cfg = replace(
-                            mem_cfg,
-                            semantic_wait_for_select=bool(sw.enabled),
-                            semantic_wait_max_ms=int(sw.max_ms),
-                        )
+                    mem_cfg = self._memory_settings_with_wait()
                     # Semantic select: index + gated consumer embedder only
                     # (KD12 — no cold load; KD-E5 — lookup priority via gate).
                     meal_index = None

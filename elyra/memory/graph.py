@@ -1135,6 +1135,7 @@ class GraphView:
         exclude_ids: AbstractSet[str] | None = None,
         allow_semantic: bool = True,
         expand_deadline_ms: int | None = None,
+        semantic_deadline_ms: int | None = None,
     ) -> list[GraphEdge]:
         """1-hop expand sorted by weight desc (then kind priority, dst id).
 
@@ -1149,6 +1150,17 @@ class GraphView:
         appear as destinations. Semantic hops only if index present AND
         embedder warm AND ``allow_semantic`` and settings allow.
 
+        **Dual deadlines (polish1 / KD-P0-structural):**
+
+        - ``expand_deadline_ms`` — structural soft wall (default:
+          ``traverse_expand_max_ms``). ``0`` = no structural soft wall.
+        - ``semantic_deadline_ms`` — ANN/embed wall for this call. When
+          **provided**, structural and semantic clocks are independent
+          (structural first under expand budget; then ANN under semantic
+          budget). When **omitted**, legacy single shared wall: semantic
+          shares ``expand_deadline_ms`` from the same t0 (backward compat;
+          never silently promotes callers to full wait).
+
         Dual ``same_moment`` + ``in_moment`` peers for the same dst collapse
         to the higher-priority kind (``in_moment`` wins — design §1.4 / §5.3).
 
@@ -1157,8 +1169,12 @@ class GraphView:
         - ``semantic_disabled`` — settings off or ``allow_semantic=False``
         - ``no_index`` — missing / Null index
         - ``encoder_cold`` — embedder cold / encode fail
-        - ``timeout`` — expand deadline exceeded on semantic leg
+        - ``timeout`` — semantic deadline exceeded / zero budget
         - ``no_hits`` — empty body / empty search / all below min weight
+
+        Meta also reports ``structural_ms_budget/spent``,
+        ``semantic_ms_budget/spent``, ``structural_truncated``,
+        ``semantic_truncated``, ``dual_deadline``.
 
         On deadline exceed returns structural edges gathered so far (+ partial
         semantic if any); ``last_expand_meta["expand_truncated"]`` is set.
@@ -1177,17 +1193,31 @@ class GraphView:
         t0 = _now_ms()
         if k is None:
             k = self._neighbor_k()
-        deadline = (
+        struct_budget = (
             float(expand_deadline_ms)
             if expand_deadline_ms is not None
             else float(self._expand_max_ms())
         )
-        # 0 means no soft wall for this call.
-        deadline_cap: float | None = deadline if deadline > 0 else None
+        # Dual mode when semantic_deadline_ms is explicitly provided.
+        dual = semantic_deadline_ms is not None
+        if dual:
+            sem_budget = float(semantic_deadline_ms)
+        else:
+            # Legacy single wall: semantic shares structural budget from t0.
+            sem_budget = struct_budget
+        # 0 means no soft wall (legacy) for structural; for dual semantic, 0 = skip ANN.
+        struct_cap: float | None = struct_budget if struct_budget > 0 else None
 
         expand_meta: dict[str, Any] = {
             "atom_id": atom_id,
             "expand_truncated": False,
+            "structural_truncated": False,
+            "semantic_truncated": False,
+            "dual_deadline": dual,
+            "structural_ms_budget": int(struct_budget) if struct_budget > 0 else 0,
+            "semantic_ms_budget": int(sem_budget) if sem_budget > 0 else 0,
+            "structural_ms_spent": 0,
+            "semantic_ms_spent": 0,
             "elapsed_ms": 0,
         }
         self._last_expand_meta = expand_meta
@@ -1209,31 +1239,35 @@ class GraphView:
 
         edges: list[GraphEdge] = []
 
-        def over() -> bool:
-            return deadline_cap is not None and (_now_ms() - t0) > deadline_cap
+        def over_struct() -> bool:
+            return struct_cap is not None and (_now_ms() - t0) > struct_cap
 
-        if EDGE_SEQUENTIAL in wanted and not over():
+        # Legacy shared-wall over() used by semantic when not dual.
+        def over() -> bool:
+            return over_struct()
+
+        if EDGE_SEQUENTIAL in wanted and not over_struct():
             edges.extend(
                 self._project_sequential(
-                    atom, exclude=exclude, deadline=deadline_cap, t0=t0
+                    atom, exclude=exclude, deadline=struct_cap, t0=t0
                 )
             )
-        if EDGE_CHILD_OF in wanted and not over():
+        if EDGE_CHILD_OF in wanted and not over_struct():
             edges.extend(self._project_child_of(atom, exclude=exclude))
-        if EDGE_PARENT_OF in wanted and not over():
+        if EDGE_PARENT_OF in wanted and not over_struct():
             edges.extend(
                 self._project_parent_of(
                     atom,
                     exclude=exclude,
-                    deadline=deadline_cap,
+                    deadline=struct_cap,
                     t0=t0,
                     expand_meta=expand_meta,
                 )
             )
-        if EDGE_SAME_MOMENT in wanted and not over():
+        if EDGE_SAME_MOMENT in wanted and not over_struct():
             edges.extend(
                 self._project_same_moment(
-                    atom, exclude=exclude, deadline=deadline_cap, t0=t0
+                    atom, exclude=exclude, deadline=struct_cap, t0=t0
                 )
             )
 
@@ -1244,19 +1278,19 @@ class GraphView:
         summary_mode = self._summary_expand_mode()
         expand_meta["summary_expand"] = summary_mode
         if atom.kind == "summary":
-            if EDGE_SUMMARY_CHILD in wanted and not over():
+            if EDGE_SUMMARY_CHILD in wanted and not over_struct():
                 edges.extend(
                     self._project_summary_child(
-                        atom, exclude=exclude, deadline=deadline_cap, t0=t0
+                        atom, exclude=exclude, deadline=struct_cap, t0=t0
                     )
                 )
-            if EDGE_SUMMARY_SOURCE in wanted and not over():
+            if EDGE_SUMMARY_SOURCE in wanted and not over_struct():
                 edges.extend(
                     self._project_summary_source(
-                        atom, exclude=exclude, deadline=deadline_cap, t0=t0
+                        atom, exclude=exclude, deadline=struct_cap, t0=t0
                     )
                 )
-            if EDGE_SUPERSEDES in wanted and not over():
+            if EDGE_SUPERSEDES in wanted and not over_struct():
                 # lite default expand skips supersedes; explicit kinds= still ok.
                 walk_supersedes = summary_mode == "deep" or (
                     kinds is not None and EDGE_SUPERSEDES in kinds
@@ -1269,36 +1303,79 @@ class GraphView:
                     expand_meta["supersedes_skipped"] = "lite"
 
         # Durable EdgeStore union + in_moment hub rewrite (Option A).
-        if not over():
+        if not over_struct():
             edges.extend(
                 self._project_durable(
                     atom,
                     wanted=wanted,
                     exclude=exclude,
-                    deadline=deadline_cap,
+                    deadline=struct_cap,
                     t0=t0,
                     expand_meta=expand_meta,
                 )
             )
 
-        if EDGE_SEMANTIC_HOP in wanted and allow_semantic and not over():
-            edges.extend(
-                self._project_semantic_hop(
-                    atom,
-                    exclude=exclude,
-                    deadline=deadline_cap,
-                    t0=t0,
-                    expand_meta=expand_meta,
-                )
-            )
-        elif EDGE_SEMANTIC_HOP in wanted and allow_semantic and over():
+        t_struct_end = _now_ms()
+        expand_meta["structural_ms_spent"] = int(t_struct_end - t0)
+        if over_struct():
+            expand_meta["structural_truncated"] = True
             expand_meta["expand_truncated"] = True
-            expand_meta.setdefault("semantic_reason", REASON_TIMEOUT)
+
+        # Semantic ANN under independent (dual) or shared (legacy) deadline.
+        if EDGE_SEMANTIC_HOP in wanted and allow_semantic:
+            if dual:
+                # Independent semantic clock after structural gather.
+                if sem_budget <= 0:
+                    expand_meta.setdefault("semantic_reason", REASON_TIMEOUT)
+                    expand_meta["semantic_truncated"] = True
+                    expand_meta["semantic_ms_spent"] = 0
+                else:
+                    t_sem0 = _now_ms()
+                    sem_cap: float | None = sem_budget
+                    edges.extend(
+                        self._project_semantic_hop(
+                            atom,
+                            exclude=exclude,
+                            deadline=sem_cap,
+                            t0=t_sem0,
+                            expand_meta=expand_meta,
+                        )
+                    )
+                    expand_meta["semantic_ms_spent"] = int(_now_ms() - t_sem0)
+                    if expand_meta.get("semantic_reason") == REASON_TIMEOUT:
+                        expand_meta["semantic_truncated"] = True
+                        expand_meta["expand_truncated"] = True
+                    elif expand_meta.get("expand_truncated") and not expand_meta.get(
+                        "structural_truncated"
+                    ):
+                        # semantic hop set expand_truncated for its own timeout
+                        expand_meta["semantic_truncated"] = True
+            elif not over():
+                # Legacy: shared wall from t0
+                edges.extend(
+                    self._project_semantic_hop(
+                        atom,
+                        exclude=exclude,
+                        deadline=struct_cap,
+                        t0=t0,
+                        expand_meta=expand_meta,
+                    )
+                )
+                expand_meta["semantic_ms_spent"] = max(
+                    0, int(_now_ms() - t0) - int(expand_meta["structural_ms_spent"])
+                )
+                if expand_meta.get("semantic_reason") == REASON_TIMEOUT:
+                    expand_meta["semantic_truncated"] = True
+            else:
+                expand_meta["expand_truncated"] = True
+                expand_meta["semantic_truncated"] = True
+                expand_meta.setdefault("semantic_reason", REASON_TIMEOUT)
         elif EDGE_SEMANTIC_HOP in wanted and not allow_semantic:
             expand_meta.setdefault("semantic_reason", REASON_SEMANTIC_DISABLED)
 
-        if over():
+        if over_struct():
             expand_meta["expand_truncated"] = True
+            expand_meta["structural_truncated"] = True
 
         # Defense: drop any virtual destinations that slipped through.
         edges = [
@@ -1363,6 +1440,7 @@ class GraphView:
         k: int = DEFAULT_SEED_K,
         exclude_moment_id: str | None = None,
         expand_deadline_ms: int | None = None,
+        semantic_deadline_ms: int | None = None,
     ) -> list[tuple[str, float, str]]:
         """Text-only vector seeds — thin wrapper over :meth:`seed_from_query`."""
         return self.seed_from_query(
@@ -1370,6 +1448,7 @@ class GraphView:
             k=k,
             exclude_moment_id=exclude_moment_id,
             expand_deadline_ms=expand_deadline_ms,
+            semantic_deadline_ms=semantic_deadline_ms,
         )
 
     def seed_from_query(
@@ -1380,6 +1459,7 @@ class GraphView:
         k: int = DEFAULT_SEED_K,
         exclude_moment_id: str | None = None,
         expand_deadline_ms: int | None = None,
+        semantic_deadline_ms: int | None = None,
         channel: str | None = None,
         media_store: Any | None = None,
     ) -> list[tuple[str, float, str]]:
@@ -1390,25 +1470,34 @@ class GraphView:
         encode_text / encode_{image,audio,video} / encode_joint). **Never**
         cold-loads the encoder — cold/missing embedder → ``encoder_cold``.
 
+        Deadline: prefer ``semantic_deadline_ms`` (ANN/embed wall); fall back
+        to ``expand_deadline_ms`` for backward compat; else
+        ``traverse_expand_max_ms``. Long-path callers (traverse start) must
+        pass the unified wait ceiling via ``semantic_deadline_ms``.
+
         Empty reasons in ``last_expand_meta["semantic_reason"]``:
         ``no_index`` | ``encoder_cold`` | ``timeout`` | ``no_hits`` |
         ``semantic_disabled`` | ``media_missing`` |
         ``media_encode_unavailable`` | ``query_required``.
         """
         t0 = _now_ms()
-        deadline = (
-            float(expand_deadline_ms)
-            if expand_deadline_ms is not None
-            else float(self._expand_max_ms())
-        )
+        if semantic_deadline_ms is not None:
+            deadline = float(semantic_deadline_ms)
+        elif expand_deadline_ms is not None:
+            deadline = float(expand_deadline_ms)
+        else:
+            deadline = float(self._expand_max_ms())
         deadline_cap: float | None = deadline if deadline > 0 else None
         q = (query or "").strip()
         mids = [str(m).strip() for m in (media_ids or ()) if str(m).strip()]
         meta: dict[str, Any] = {
             "expand_truncated": False,
+            "semantic_truncated": False,
             "seed": "query",
             "has_text": bool(q),
             "media_ids": list(mids),
+            "semantic_ms_budget": int(deadline) if deadline > 0 else 0,
+            "semantic_ms_spent": 0,
             "elapsed_ms": 0,
         }
         self._last_expand_meta = meta
@@ -1418,13 +1507,18 @@ class GraphView:
         ) -> list[tuple[str, float, str]]:
             if reason and not rows:
                 meta["semantic_reason"] = reason
-            meta["elapsed_ms"] = int(_now_ms() - t0)
+            spent = int(_now_ms() - t0)
+            meta["elapsed_ms"] = spent
+            meta["semantic_ms_spent"] = spent
+            if meta.get("expand_truncated"):
+                meta["semantic_truncated"] = True
             meta["returned"] = len(rows)
             self._last_expand_meta = meta
             return rows
 
         if deadline_cap is not None and (_now_ms() - t0) > deadline_cap:
             meta["expand_truncated"] = True
+            meta["semantic_truncated"] = True
             return finish([], reason=REASON_TIMEOUT)
 
         skip = self._semantic_unavailable_reason()
