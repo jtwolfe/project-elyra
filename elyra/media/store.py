@@ -438,6 +438,26 @@ class MediaStore:
                 out.append(child.stem)
         return out
 
+    def find_first_by_sha256(self, sha256: str) -> Attachment | None:
+        """Return the first attachment meta whose blob sha matches (best-effort).
+
+        Used by view_media path resolve to reuse durable ids (content-idempotent
+        re-view) instead of allocating a new att_* for the same bytes.
+        Prefers non-``tts_cache`` when multiple metas share a sha.
+        """
+        if not isinstance(sha256, str) or not sha256:
+            return None
+        fallback: Attachment | None = None
+        for aid in self.list_meta_ids():
+            att = self.get(aid)
+            if att is None or att.sha256 != sha256:
+                continue
+            if att.kind != "tts_cache":
+                return att
+            if fallback is None:
+                fallback = att
+        return fallback
+
     def delete_attachment(
         self, att_id: str, *, remove_blob_if_orphan: bool = True
     ) -> bool:

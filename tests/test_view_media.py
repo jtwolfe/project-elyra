@@ -221,6 +221,7 @@ def test_dual_source_different_sha_ambiguous(
     viewing: dict,
 ) -> None:
     a = media.put_bytes(b"bytes-a-not-png-xxx", filename="a.bin", origin="tool")
+    meta_before = set(media.list_meta_ids())
     _write_sandbox_png(sandbox, "tmp/other.png")
     result = view_media({"path": "tmp/other.png", "att_id": a.id}, ctx)
     assert result.ok is False
@@ -228,6 +229,67 @@ def test_dual_source_different_sha_ambiguous(
     assert result.payload["reason"] == "ambiguous_source"
     # Conflict must not pollute viewing set.
     assert list_viewing_att_ids(viewing) == []
+    # No orphan path ingest on conflict (sha compared before put).
+    assert set(media.list_meta_ids()) == meta_before
+
+
+def test_dual_source_path_ok_missing_att_uses_path(
+    ctx: ToolContext,
+    sandbox: Sandbox,
+) -> None:
+    """KD-V14 soft multi-source: only path resolves → use path."""
+    _write_sandbox_png(sandbox, "tmp/soft.png")
+    missing = "att_" + "f" * 32
+    result = view_media({"path": "tmp/soft.png", "att_id": missing}, ctx)
+    assert result.ok is True
+    assert result.payload["source"] == "path"
+    assert result.payload["att_id"].startswith("att_")
+
+
+def test_dual_source_att_ok_missing_path_uses_att(
+    ctx: ToolContext,
+    media: MediaStore,
+) -> None:
+    """KD-V14 soft multi-source: only att_id resolves → use att_id."""
+    att = media.put_bytes(FIXTURE_PNG.read_bytes(), filename="x.png", origin="tool")
+    result = view_media(
+        {"path": "tmp/does-not-exist-soft.png", "att_id": att.id},
+        ctx,
+    )
+    assert result.ok is True
+    assert result.payload["source"] == "att_id"
+    assert result.payload["att_id"] == att.id
+
+
+def test_path_re_view_reuses_same_att_id(
+    ctx: ToolContext,
+    sandbox: Sandbox,
+    media: MediaStore,
+    mem_store,
+    viewing: dict,
+) -> None:
+    """Path re-view is content-idempotent (reuse meta by sha)."""
+    _write_sandbox_png(sandbox, "tmp/reuse.png")
+    r1 = view_media({"path": "tmp/reuse.png"}, ctx)
+    assert r1.ok is True
+    aid = r1.payload["att_id"]
+    assert r1.payload["promoted"] is True
+
+    r2 = view_media({"path": "tmp/reuse.png"}, ctx)
+    assert r2.ok is True
+    assert r2.payload["att_id"] == aid
+    assert r2.payload["viewing"] == [aid]
+    assert r2.payload["viewing_count"] == 1
+    assert r2.payload["promoted"] is False  # first-wins same media_ids
+    # Only one durable meta for these bytes (plus no extras).
+    matches = [
+        media.get(i)
+        for i in media.list_meta_ids()
+        if (m := media.get(i)) is not None and m.sha256 == media.get(aid).sha256  # type: ignore[union-attr]
+    ]
+    assert len([m for m in matches if m is not None]) == 1
+    atoms = mem_store.list_by_moment("moment-view-1", kinds=["observation"])
+    assert len(atoms) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +340,18 @@ def test_list_drop_clear(
     assert list_viewing_att_ids(viewing) == []
 
 
+def test_clear_empty_does_not_dirty(
+    ctx: ToolContext,
+    dirty_flag: list[bool],
+) -> None:
+    dirty_flag[0] = False
+    result = view_media({"op": "clear"}, ctx)
+    assert result.ok is True
+    assert result.payload["cleared"] == 0
+    assert result.payload["viewing_dirty"] is False
+    assert dirty_flag[0] is False
+
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -317,6 +391,31 @@ def test_path_not_found(ctx: ToolContext) -> None:
     result = view_media({"path": "tmp/nope-missing.png"}, ctx)
     assert result.ok is False
     assert result.error_reason == "not_found"
+
+
+def test_path_escape(ctx: ToolContext) -> None:
+    result = view_media({"path": "../etc/passwd"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "path_escape"
+
+
+def test_path_escape_absolute(ctx: ToolContext) -> None:
+    result = view_media({"path": "/etc/passwd"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "path_escape"
+
+
+def test_unsupported_kind_tts_cache(ctx: ToolContext, media: MediaStore) -> None:
+    att = media.put_bytes(
+        b"fake-tts-audio",
+        filename="voice.wav",
+        kind="tts_cache",
+        origin="tts_cache",
+        mime="audio/wav",
+    )
+    result = view_media({"att_id": att.id}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "unsupported_kind"
 
 
 def test_url_not_yet_wired(ctx: ToolContext) -> None:
@@ -475,6 +574,51 @@ def test_mark_viewing_port_used(paths, sandbox, media) -> None:
     assert len(calls) == 1
     assert calls[0]["att_id"] == att.id
     assert att.id in viewing
+
+
+def test_drop_clear_ports_used(paths, sandbox, media) -> None:
+    """Locked drop_viewing / clear_viewing ports are preferred when injected."""
+    viewing: dict[str, ViewingEntry] = {}
+    drop_calls: list[str] = []
+    clear_calls: list[int] = []
+
+    def drop_port(att_id: str) -> bool:
+        drop_calls.append(att_id)
+        from elyra.media.viewing import drop_viewing as dv
+
+        return dv(viewing, att_id)
+
+    def clear_port() -> int:
+        from elyra.media.viewing import clear_viewing as cv
+
+        n = cv(viewing)
+        clear_calls.append(n)
+        return n
+
+    att = media.put_bytes(FIXTURE_PNG.read_bytes(), filename="p.png", origin="tool")
+    from elyra.media.viewing import add_viewing
+
+    add_viewing(viewing, att.id, kind="image")
+    ctx = ToolContext(
+        paths=paths,
+        sandbox=sandbox,
+        moment_id="m-ports",
+        extras={
+            "moment_viewing": viewing,
+            "drop_viewing": drop_port,
+            "clear_viewing": clear_port,
+        },
+    )
+    dropped = view_media({"op": "drop", "att_id": att.id}, ctx)
+    assert dropped.ok is True
+    assert drop_calls == [att.id]
+    assert dropped.payload["removed"] is True
+
+    add_viewing(viewing, att.id, kind="image")
+    cleared = view_media({"op": "clear"}, ctx)
+    assert cleared.ok is True
+    assert clear_calls == [1]
+    assert cleared.payload["cleared"] == 1
 
 
 def test_invalid_op(ctx: ToolContext) -> None:

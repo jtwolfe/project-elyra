@@ -31,7 +31,12 @@ before the next hop (`expand_next_hop: true`).
 
 Provide at least one of `path` / `att_id` / `url` for `op=view`. Combinations are
 allowed when they refer to the **same** durable media (matching sha); different
-media → `ambiguous_source`.
+media → `ambiguous_source`. When multiple sources are named and only one
+resolves (e.g. good path + missing att_id), the host uses the successful source.
+
+**Path re-view is content-idempotent:** if the sandbox file's blob sha already
+has a MediaStore meta, that `att_*` is reused (no extra durable id / no second
+breadcrumb for the same media). Prefer `att_id` when you already have one.
 
 ## Modalities (honesty)
 

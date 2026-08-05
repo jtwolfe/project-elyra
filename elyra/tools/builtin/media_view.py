@@ -11,13 +11,15 @@ KD-V1, V11, V13–V16. Tool results stay text-only JSON (KD-V9).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from typing import Any
 
-from elyra.media.ingest import IngestError, ingest_sandbox_path
-from elyra.media.store import MediaStore, validate_att_id
+from elyra.media.ingest import IngestError, ingest_sandbox_path, resolve_sandbox_file
+from elyra.media.store import MediaStore, sniff_mime_and_kind, validate_att_id
 from elyra.media.types import Attachment
+from elyra.media.upload import MAX_FILE_BYTES, max_bytes_for_kind
 from elyra.media.viewing import (
     add_viewing,
     clear_viewing,
@@ -34,8 +36,6 @@ _DEFAULT_OP = "view"
 
 # Soft guidance thresholds (design KD-V18 / soft large-media).
 _SOFT_SIZE_BYTES = 8_000_000
-_SOFT_VIDEO_DURATION_S = 10.0
-_SOFT_AUDIO_DURATION_S = 15.0
 
 _SOFT_VIDEO_WARN = (
     "Prefer short media: video perception is reliable around ≤10 seconds; "
@@ -50,6 +50,20 @@ _SOFT_LARGE_WARN = (
 
 # Image Completions expand is live (PR2). AV wire parts land in PR4.
 _AV_EXPAND_WIRED = False
+
+# Soft multi-source miss reasons (KD-V14: if only one resolves → use it).
+_SOFT_MISS_REASONS = frozenset({"not_found", "unsupported_kind"})
+# Always hard even when another source is present.
+_HARD_ARG_REASONS = frozenset(
+    {
+        "invalid_att_id",
+        "path_escape",
+        "invalid_path",
+        "is_directory",
+        "file_too_large",
+        "invalid_attachment",
+    }
+)
 
 
 def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -79,14 +93,13 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return _ok(_list_payload(entries))
 
     if op == "clear":
-        n = clear_viewing(entries)
-        _set_viewing_dirty(ctx)
+        n = _clear_viewing_port(ctx, entries)
         return _ok(
             {
                 "op": "clear",
                 "cleared": n,
                 **_list_payload(entries),
-                "viewing_dirty": True,
+                "viewing_dirty": n > 0,
             }
         )
 
@@ -99,9 +112,7 @@ def view_media(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             validate_att_id(aid)
         except ValueError:
             return _err("invalid_att_id", att_id=aid)
-        removed = drop_viewing(entries, aid)
-        if removed:
-            _set_viewing_dirty(ctx)
+        removed = _drop_viewing_port(ctx, entries, aid)
         return _ok(
             {
                 "op": "drop",
@@ -214,30 +225,62 @@ def _resolve_view_attachment(
     att_id: str | None,
     ctx: ToolContext,
 ) -> tuple[Attachment, str]:
-    """Resolve path and/or att_id to one Attachment; raise on conflict/miss."""
-    path_att: Attachment | None = None
+    """Resolve path and/or att_id to one Attachment (KD-V14 soft multi-source).
+
+    - Soft-miss (``not_found`` / ``unsupported_kind``): skip that source when
+      another is present; if only one resolves, use it.
+    - Hard failures (``invalid_att_id``, ``path_escape``, size, …): always raise.
+    - Path resolve hashes first: reuses existing meta by sha (content-idempotent
+      re-view); dual-source conflict compares sha **before** durable put (no orphan).
+    """
     id_att: Attachment | None = None
-    sources_used: list[str] = []
+    id_err: _ViewResolveError | None = None
+    path_att: Attachment | None = None
+    path_err: Exception | None = None
 
     if att_id is not None:
-        id_att = _get_existing_att(att_id, ctx)
-        sources_used.append("att_id")
+        try:
+            id_att = _get_existing_att(att_id, ctx)
+        except _ViewResolveError as exc:
+            if exc.reason in _HARD_ARG_REASONS or (
+                path is None and exc.reason not in _SOFT_MISS_REASONS
+            ):
+                raise
+            if path is None:
+                # Sole source soft miss → surface the error.
+                raise
+            id_err = exc
 
     if path is not None:
-        user_id = _uploader_user_id(ctx)
-        path_att = ingest_sandbox_path(
-            path,
-            paths=ctx.paths,
-            sandbox=ctx.sandbox,
-            origin="view",
-            uploader_user_id=user_id,
-        )
-        sources_used.append("path")
+        try:
+            # When att_id already resolved, compare sha before any put.
+            path_att = _resolve_path_attachment(
+                path,
+                ctx,
+                peer=id_att,
+            )
+        except _ViewResolveError as exc:
+            if exc.reason == "ambiguous_source":
+                raise
+            if exc.reason in _HARD_ARG_REASONS or id_att is None:
+                raise
+            path_err = exc
+        except IngestError as exc:
+            reason = exc.reason
+            hard = (
+                reason in _HARD_ARG_REASONS
+                or reason.startswith("os_error:")
+                or id_att is None
+            )
+            if hard:
+                raise
+            path_err = exc
 
     if path_att is not None and id_att is not None:
+        # Same durable media (id or sha) — prefer explicit att_id.
         if path_att.id == id_att.id or path_att.sha256 == id_att.sha256:
-            # Same durable media — prefer the explicit att_id (stable id).
             return id_att, "path+att_id"
+        # Should be unreachable: _resolve_path_attachment raises on conflict.
         raise _ViewResolveError(
             "ambiguous_source",
             detail=(
@@ -252,18 +295,105 @@ def _resolve_view_attachment(
         return id_att, "att_id"
     if path_att is not None:
         return path_att, "path"
+
+    # Zero resolved — surface the most specific soft error.
+    if id_err is not None:
+        raise id_err
+    if isinstance(path_err, IngestError):
+        raise path_err
+    if isinstance(path_err, _ViewResolveError):
+        raise path_err
     raise _ViewResolveError("missing_source")
+
+
+def _resolve_path_attachment(
+    path: str,
+    ctx: ToolContext,
+    *,
+    peer: Attachment | None = None,
+) -> Attachment:
+    """Hash sandbox path; compare peer / reuse by sha / put origin=view.
+
+    When ``peer`` is set and sha differs → ``ambiguous_source`` without put.
+    When sha already has meta → reuse that att (content-idempotent re-view).
+    """
+    data, fname, mime, kind = _read_sandbox_media_bytes(path, ctx)
+    sha = hashlib.sha256(data).hexdigest()
+
+    if peer is not None:
+        if peer.sha256 == sha:
+            return peer
+        raise _ViewResolveError(
+            "ambiguous_source",
+            detail=(
+                f"path and att_id resolve to different media "
+                f"(sha {sha[:12]}… vs {peer.sha256[:12]}…)"
+            ),
+            att_id=peer.id,
+        )
+
+    store = MediaStore(ctx.paths)
+    existing = store.find_first_by_sha256(sha)
+    if existing is not None and existing.kind != "tts_cache":
+        return existing
+
+    # First sight of these bytes — durable put with origin view.
+    return ingest_sandbox_path(
+        path,
+        paths=ctx.paths,
+        sandbox=ctx.sandbox,
+        filename=fname,
+        kind=kind,
+        origin="view",
+        uploader_user_id=_uploader_user_id(ctx),
+        mime=mime,
+    )
+
+
+def _read_sandbox_media_bytes(
+    path: str,
+    ctx: ToolContext,
+) -> tuple[bytes, str, str, str]:
+    """Resolve + read sandbox file with size gates; return (data, name, mime, kind)."""
+    host_path = resolve_sandbox_file(path, paths=ctx.paths, sandbox=ctx.sandbox)
+    fname = (host_path.name or "file").strip() or "file"
+    try:
+        size = host_path.stat().st_size
+    except OSError as exc:
+        raise IngestError(f"os_error:{type(exc).__name__}", detail=str(exc)) from exc
+    if size > MAX_FILE_BYTES:
+        raise IngestError(
+            "file_too_large",
+            detail=f"{size} bytes exceeds max {MAX_FILE_BYTES}",
+        )
+    try:
+        data = host_path.read_bytes()
+    except OSError as exc:
+        raise IngestError(f"os_error:{type(exc).__name__}", detail=str(exc)) from exc
+
+    mime, sniffed_kind = sniff_mime_and_kind(data, filename=fname)
+    limit = max_bytes_for_kind(sniffed_kind)
+    if len(data) > limit:
+        raise IngestError(
+            "file_too_large",
+            detail=f"{len(data)} bytes exceeds {sniffed_kind} max {limit}",
+        )
+    return data, fname, mime, sniffed_kind
 
 
 def _get_existing_att(att_id: str, ctx: ToolContext) -> Attachment:
     try:
         aid = validate_att_id(att_id)
     except ValueError as exc:
-        raise _ViewResolveError("invalid_att_id", detail=str(exc), att_id=att_id) from exc
+        raise _ViewResolveError(
+            "invalid_att_id", detail=str(exc), att_id=att_id
+        ) from exc
     store = MediaStore(ctx.paths)
     att = store.get(aid)
     if att is None:
-        raise _ViewResolveError("not_found", detail=f"attachment not found: {aid!r}", att_id=aid)
+        raise _ViewResolveError(
+            "not_found", detail=f"attachment not found: {aid!r}", att_id=aid
+        )
     if att.kind == "tts_cache":
         raise _ViewResolveError(
             "unsupported_kind",
@@ -313,6 +443,40 @@ def _add_to_viewing(
         byte_size=att.byte_size,
     )
     _set_viewing_dirty(ctx)
+
+
+def _drop_viewing_port(
+    ctx: ToolContext,
+    entries: dict[str, Any],
+    att_id: str,
+) -> bool:
+    extras = ctx.extras if isinstance(ctx.extras, dict) else {}
+    port = extras.get("drop_viewing")
+    if callable(port):
+        try:
+            return bool(port(att_id))
+        except Exception:  # noqa: BLE001
+            _LOG.exception("drop_viewing port failed")
+            return False
+    removed = drop_viewing(entries, att_id)
+    if removed:
+        _set_viewing_dirty(ctx)
+    return removed
+
+
+def _clear_viewing_port(ctx: ToolContext, entries: dict[str, Any]) -> int:
+    extras = ctx.extras if isinstance(ctx.extras, dict) else {}
+    port = extras.get("clear_viewing")
+    if callable(port):
+        try:
+            return int(port())
+        except Exception:  # noqa: BLE001
+            _LOG.exception("clear_viewing port failed")
+            return 0
+    n = clear_viewing(entries)
+    if n > 0:
+        _set_viewing_dirty(ctx)
+    return n
 
 
 def _set_viewing_dirty(ctx: ToolContext) -> None:
@@ -408,7 +572,6 @@ def _soft_warnings(att: Attachment) -> list[str]:
         warns.append(_SOFT_AUDIO_WARN)
     if int(att.byte_size or 0) > _SOFT_SIZE_BYTES:
         warns.append(_SOFT_LARGE_WARN)
-    # duration_s not on Attachment yet — ViewingEntry may carry it later.
     return warns
 
 

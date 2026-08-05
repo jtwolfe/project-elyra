@@ -3317,6 +3317,26 @@ class PresenceWorker:
             self._viewing_dirty = True
             return list(self._moment_viewing.keys())
 
+    def drop_from_viewing(self, att_id: str) -> bool:
+        """Remove one att_id under lock. Dirties only when something was removed."""
+        from elyra.media.viewing import drop_viewing
+
+        with self._lock:
+            removed = drop_viewing(self._moment_viewing, att_id)
+            if removed:
+                self._viewing_dirty = True
+            return removed
+
+    def clear_moment_viewing(self) -> int:
+        """Empty viewing set under lock. Dirties only when set was non-empty."""
+        from elyra.media.viewing import clear_viewing
+
+        with self._lock:
+            n = clear_viewing(self._moment_viewing)
+            if n > 0:
+                self._viewing_dirty = True
+            return n
+
     def _build_tool_context(self, wake: WakeItem, moment_id: str) -> ToolContext:
         user_id = _user_id_from_wake(wake)  # may be None — do not force "operator"
         return ToolContext(
@@ -3348,6 +3368,8 @@ class PresenceWorker:
                 "viewing_dirty_ref": lambda: self._viewing_dirty,
                 "set_viewing_dirty": self._set_viewing_dirty,
                 "mark_viewing": self.mark_viewing,
+                "drop_viewing": self.drop_from_viewing,
+                "clear_viewing": self.clear_moment_viewing,
                 "memory_store": self._ensure_memory_store(),
             },
         )
