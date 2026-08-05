@@ -119,6 +119,7 @@ Stretch-2 memory designs (PR2b / KD4). Architecture manuals: [docs/state/memory/
 | [design-phase-2a-directed-traversal.md](memory/design-phase-2a-directed-traversal.md) | Shipped (code; dogfood pending) | Phase 2a design |
 | [design-phase-2a-implementation.md](memory/design-phase-2a-implementation.md) | Shipped (code; dogfood pending) | Phase 2a PR plan |
 | [design-memory-edges-and-traversal.md](memory/design-memory-edges-and-traversal.md) | **Shipped (code; dogfood pending)** | Durable edges + pure semantic start + raised budgets (#98/#120/#103/#105); checklist [edges-traversal-dogfood.md](../state/memory/edges-traversal-dogfood.md); **not** Gate B / `durable_edges_enabled` default-on; #61 free-browse is PR8 follow-up |
+| [design-memory-edges-polish1.md](memory/design-memory-edges-polish1.md) | **Ready for implement** | Edge enrichment polish1: unified semantic wait + host ~d2.5 local map + walk maneuvers + dev edge backfill + glass honesty; stacks on `feature/edge-enrichment-polish1`; **not** Gate B / `durable_edges_enabled` factory default-on |
 | [design-phase-3-procedural.md](memory/design-phase-3-procedural.md) | Draft / experimental | Phase 3 design |
 | [design-context-meal-composition.md](memory/design-context-meal-composition.md) | Provisional / Active | Meal design only (not STATE; KD14) |
 | [design-database-choices.md](memory/design-database-choices.md) | Shipped / planning baseline | Storage choices |
