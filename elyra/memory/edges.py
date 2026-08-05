@@ -938,26 +938,39 @@ def write_speak_recalls(
     encode_queue: Any | None = None,
     exclude_atom_ids: AbstractSet[str] | None = None,
     store: Any | None = None,
+    max_ms: int | None = None,
+    skip_metrics: dict[str, int] | None = None,
 ) -> list[DurableEdge]:
     """Write speak-time ``recalls`` edges (soft-fail; never blocks promote).
 
-    Design §2.2 / KD-E3 / OQ-E3:
+    Design §2.2 / KD-E3 / KD-P0-defer / OQ-E3:
     - Gate: durable_edges_enabled + semantic_enabled; warm embedder; index;
-      encode queue depth under skip threshold; ANN wall under max_ms.
+      encode queue depth under skip threshold; ANN wall under wait helper.
     - ANN k≈15 over spoken kinds (speak|observation); rank newest keep≈5.
     - Soft-fail on any error — returns [] rather than raising.
+    - ``max_ms``: explicit ceiling (ms). When None, uses
+      :func:`semantic_ann_deadline_ms` for site ``recalls`` (wait helper;
+      wait-off → 0 = skip ANN). ``edge_recalls_max_ms`` is **not** the
+      live ceiling (KD-P0-deprec).
+    - ``skip_metrics``: optional mutable map reason→count for worker metrics.
     """
     cfg = settings or MemorySettings()
+
+    def _skip(reason: str) -> list[DurableEdge]:
+        if skip_metrics is not None:
+            skip_metrics[reason] = int(skip_metrics.get(reason, 0) or 0) + 1
+        return []
+
     if not is_durable_edges_enabled(cfg):
-        return []
+        return _skip("flag_off")
     if not bool(getattr(cfg, "semantic_enabled", False)):
-        return []
+        return _skip("flag_off")
     if edge_store is None or index is None or not src_atom_id:
-        return []
+        return _skip("missing_deps")
     text = (spoken_text or "").strip()
     if not text:
         # Media-only without text: soft-skip in v1 (MM media-as-query is PR5 path).
-        return []
+        return _skip("empty_text")
 
     # Encode pressure / cold gates — never block speak.
     skip_depth = int(getattr(cfg, "edge_recalls_skip_queue_depth", 64) or 64)
@@ -967,14 +980,26 @@ def write_speak_recalls(
             skip_depth,
             src_atom_id,
         )
-        return []
+        return _skip("encode_pressure")
     if not _embedder_is_warm(embedder):
         _LOG.debug("recalls skipped reason=encoder_cold src=%s", src_atom_id)
-        return []
+        return _skip("encoder_cold")
 
     ann_k = max(1, int(getattr(cfg, "edge_recalls_ann_k", 15) or 15))
     keep = max(1, int(getattr(cfg, "edge_recalls_keep", 5) or 5))
-    max_ms = max(0, int(getattr(cfg, "edge_recalls_max_ms", 40) or 40))
+    # Live ANN ceiling: explicit arg or unified wait helper (not edge_recalls_max_ms).
+    if max_ms is not None:
+        deadline_ms = max(0, int(max_ms))
+    else:
+        from elyra.memory.config import semantic_ann_deadline_ms
+
+        deadline_ms = max(0, int(semantic_ann_deadline_ms(cfg, "recalls")))
+    if deadline_ms <= 0:
+        _LOG.debug(
+            "recalls skipped reason=zero_budget src=%s (wait-off snappy=0)",
+            src_atom_id,
+        )
+        return _skip("zero_budget")
 
     t0 = time.monotonic()
     try:
@@ -985,10 +1010,10 @@ def write_speak_recalls(
             src_atom_id,
             exc_info=True,
         )
-        return []
-    if max_ms > 0 and (time.monotonic() - t0) * 1000.0 > max_ms:
+        return _skip("encode_failed")
+    if (time.monotonic() - t0) * 1000.0 > deadline_ms:
         _LOG.debug("recalls skipped reason=ann_timeout_encode src=%s", src_atom_id)
-        return []
+        return _skip("ann_timeout")
 
     exclude: set[str] = {str(src_atom_id)}
     if exclude_atom_ids:
@@ -1008,12 +1033,12 @@ def write_speak_recalls(
             src_atom_id,
             exc_info=True,
         )
-        return []
-    if max_ms > 0 and (time.monotonic() - t0) * 1000.0 > max_ms:
+        return _skip("search_failed")
+    if (time.monotonic() - t0) * 1000.0 > deadline_ms:
         _LOG.debug("recalls skipped reason=ann_timeout_search src=%s", src_atom_id)
-        return []
+        return _skip("ann_timeout")
     if not hits:
-        return []
+        return _skip("no_hits")
 
     candidates: list[tuple[str, float, str]] = []
     for hit in hits:

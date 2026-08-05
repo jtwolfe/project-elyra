@@ -67,13 +67,16 @@ def effective_select_max_ms(
 
 
 # Call sites that honor the unified wait ceiling (polish1 §1.1.1).
-# PR1a: meal + traverse + http opt-in. PR1b adds speak_recalls_deferred.
-SEMANTIC_WAIT_APPLIES_TO_PR1A: tuple[str, ...] = (
+# PR1b: includes speak_recalls_deferred (idle-drained ANN under wait helper).
+SEMANTIC_WAIT_APPLIES_TO: tuple[str, ...] = (
     "meal_select",
     "traverse_start",
     "traverse_step_semantic",
+    "speak_recalls_deferred",
     "http_neighbors_opt_in",
 )
+# Back-compat alias (PR1a name); prefer SEMANTIC_WAIT_APPLIES_TO.
+SEMANTIC_WAIT_APPLIES_TO_PR1A: tuple[str, ...] = SEMANTIC_WAIT_APPLIES_TO
 
 
 def semantic_wait_status_block(
@@ -95,7 +98,7 @@ def semantic_wait_status_block(
     sites = (
         list(applies_to)
         if applies_to is not None
-        else list(SEMANTIC_WAIT_APPLIES_TO_PR1A)
+        else list(SEMANTIC_WAIT_APPLIES_TO)
     )
     return {
         "enabled": bool(state.enabled),
