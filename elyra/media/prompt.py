@@ -526,6 +526,14 @@ def _av_skip_notice(
     return f"{base}]"
 
 
+def _av_duration_unknown_notice(*, kind: str, att_id: str) -> str:
+    """Soft notice when expand proceeds under byte caps only (design §4)."""
+    return (
+        f"[host notice: {kind} expand duration_unknown for {att_id}; "
+        "applied byte caps only]"
+    )
+
+
 def audio_format_from_att(att: Mapping[str, Any]) -> str | None:
     """Map attachment mime/filename to OpenAI ``input_audio.format`` (wav|mp3).
 
@@ -833,6 +841,10 @@ def _build_audio_parts(
                 )
             )
             continue
+        if duration is None:
+            notices.append(
+                _av_duration_unknown_notice(kind="audio", att_id=aid)
+            )
         b64 = base64.b64encode(data).decode("ascii")
         parts.append(
             {
@@ -947,6 +959,10 @@ def _build_video_parts(
                 )
             )
             continue
+        if duration is None:
+            notices.append(
+                _av_duration_unknown_notice(kind="video", att_id=aid)
+            )
         use_mime = mime if mime.startswith("video/") else "video/mp4"
         b64 = base64.b64encode(data).decode("ascii")
         parts.append(
@@ -1418,13 +1434,8 @@ def expand_meal_for_provider(
                     )
                     if av_off not in text:
                         text = f"{text}\n\n{av_off}"
-                elif not _env_flag_enabled("ELYRA_MEDIA"):
-                    media_off = (
-                        "[host notice: ELYRA_MEDIA=0; "
-                        "audio/video expansion skipped]"
-                    )
-                    if media_off not in text:
-                        text = f"{text}\n\n{media_off}"
+                # ELYRA_MEDIA=0 never reaches full-expand notice assembly
+                # (media_on short-circuits earlier); no dead media-off branch.
 
             extra_parts: list[dict[str, Any]] = []
             if vision_ok:

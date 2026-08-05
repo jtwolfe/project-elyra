@@ -1181,3 +1181,170 @@ def test_viewing_entries_duration_cap(store):
     assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
     carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
     assert "duration_over_cap" in _text_of(carrier)
+
+
+def test_viewing_entry_duration_wins_over_store_meta(store):
+    """ViewingEntry.duration_s overrides store/glass under-cap stamp (Issue 1)."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+    from elyra.media.viewing import VIEWING_CARRIER_ID, ViewingEntry, viewing_att_dicts
+
+    att = _put_mp4(store)
+
+    class _MetaWithDuration:
+        def to_dict(self):
+            d = _att_dict(att)
+            d["duration_s"] = 5.0  # under-cap lie from store
+            return d
+
+    class _StoreWrap:
+        def get(self, aid: str):
+            if aid == att.id:
+                return _MetaWithDuration()
+            return store.get(aid)
+
+        def read_bytes(self, aid: str) -> bytes:
+            return store.read_bytes(aid)
+
+    wrap = _StoreWrap()
+    entries = {
+        att.id: ViewingEntry(
+            att_id=att.id,
+            kind="video",
+            mime="video/mp4",
+            filename="long.mp4",
+            byte_size=att.byte_size,
+            duration_s=45.0,
+        )
+    }
+    # Unit: ViewingEntry wins on the attachment dict.
+    rows = viewing_att_dicts(entries, wrap)
+    assert rows[0]["duration_s"] == 45.0
+
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        viewing_att_ids=[att.id],
+        viewing_entries=entries,
+        media_store=wrap,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    assert "duration_over_cap" in _text_of(carrier)
+
+
+def test_video_duration_unknown_notice_on_stub_mp4(store):
+    """Stub mp4 without mvhd expands under byte caps + duration_unknown soft notice."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+
+    att = _put_mp4(store)  # fixtures/mm_embed/tiny.mp4 — ftyp only
+    glass = [_glass_row("wake-unk", content="?", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-unk",
+        wake_content="?",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-unk",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 1
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-unk"))
+    assert "duration_unknown" in text
+    assert att.id in text
+
+
+def test_plain_dict_viewing_entries_safe(store):
+    """Plain-dict viewing_entries must not crash expand (Issue 3)."""
+    from elyra.media.prompt import VIDEO_PART_TYPE
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    att = _put_mp4(store)
+    entries = {
+        att.id: {
+            "att_id": att.id,
+            "kind": "video",
+            "mime": "video/mp4",
+            "filename": "plain.mp4",
+            "byte_size": att.byte_size,
+            "duration_s": 45.0,
+        }
+    }
+    meal = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": "orient"},
+    ]
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id={},
+        viewing_att_ids=[att.id],
+        viewing_entries=entries,
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    carrier = next(m for m in expanded if m.get("id") == VIEWING_CARRIER_ID)
+    assert "duration_over_cap" in _text_of(carrier)
+
+
+def _mp4_with_mvhd_duration_s(seconds: float, *, timescale: int = 1000) -> bytes:
+    """Minimal ftyp+moov/mvhd blob for hermetic duration probe tests."""
+    import struct
+
+    def box(typ: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I", 8 + len(payload)) + typ + payload
+
+    duration_ticks = int(round(seconds * timescale))
+    # mvhd v0: ver+flags(4) + ctime(4) + mtime(4) + timescale(4) + duration(4)
+    mvhd = (
+        bytes([0, 0, 0, 0])
+        + struct.pack(">II", 0, 0)
+        + struct.pack(">I", timescale)
+        + struct.pack(">I", duration_ticks)
+        + b"\x00" * 80
+    )
+    moov = box(b"moov", box(b"mvhd", mvhd))
+    ftyp = box(b"ftyp", b"isom\x00\x00\x00\x00isomiso2mp41")
+    return ftyp + moov
+
+
+def test_probe_mp4_mvhd_duration_over_cap_expand(store):
+    """Expand path uses probe_mp4 duration (no stamped duration_s) for hard cap."""
+    from elyra.media.prompt import VIDEO_PART_TYPE, probe_mp4_duration_s
+
+    blob = _mp4_with_mvhd_duration_s(15.0)
+    assert probe_mp4_duration_s(blob) == 15.0
+    att = store.put_bytes(blob, filename="long15.mp4", origin="user_upload")
+    # No duration_s on attachment dict — probe only.
+    glass = [_glass_row("wake-probe", content="long", attachments=[_att_dict(att)])]
+    meal = assemble_outer_meal(
+        glass_history=glass,
+        system_text=SYSTEM,
+        orient_template=ORIENT,
+        wake_message_id="wake-probe",
+        wake_content="long",
+        retain_ids=True,
+        sliding_input_tokens=24_000,
+    )
+    expanded = expand_meal_for_provider(
+        meal,
+        glass_by_id=index_glass(glass),
+        wake_message_id="wake-probe",
+        media_store=store,
+        provider="xai",
+    )
+    assert _count_parts(expanded, VIDEO_PART_TYPE) == 0
+    text = _text_of(next(m for m in expanded if m.get("id") == "wake-probe"))
+    assert "duration_over_cap" in text
+    assert "duration_unknown" not in text

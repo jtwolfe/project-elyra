@@ -146,22 +146,35 @@ def clear_viewing(entries: MutableMapping[str, ViewingEntry]) -> int:
     return n
 
 
+def _entry_field(entry: Any, key: str, default: Any = None) -> Any:
+    """Read a field from ViewingEntry or plain mapping (fail-closed callers)."""
+    if entry is None:
+        return default
+    if isinstance(entry, Mapping):
+        val = entry.get(key, default)
+        return default if val is None else val
+    return getattr(entry, key, default)
+
+
 def viewing_att_dicts(
-    entries: Mapping[str, ViewingEntry] | Sequence[str] | None,
+    entries: Mapping[str, Any] | Sequence[str] | None,
     media_store: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve viewing membership to attachment dicts for expand / glass seed.
 
-    Accepts either a ViewingEntry map or a plain list of att_ids.
+    Accepts either a ViewingEntry (or plain-dict) map or a plain list of att_ids.
     Missing media meta yields a minimal ``{"id": att_id}`` row.
+
+    When a viewing entry has ``duration_s``, it **wins** over store/glass meta
+    (tool-stamped duration is authoritative for expand hard caps).
     """
     ids: list[str]
-    meta_by_id: dict[str, ViewingEntry] = {}
+    meta_by_id: dict[str, Any] = {}
     if entries is None:
         return []
     if isinstance(entries, Mapping):
         ids = list(entries.keys())
-        meta_by_id = dict(entries)  # type: ignore[arg-type]
+        meta_by_id = dict(entries)
     else:
         ids = [str(x) for x in entries if x]
 
@@ -198,18 +211,25 @@ def viewing_att_dicts(
             if ve is not None:
                 d = {
                     "id": aid,
-                    "filename": ve.filename,
-                    "kind": ve.kind,
-                    "mime": ve.mime,
-                    "byte_size": ve.byte_size,
+                    "filename": str(_entry_field(ve, "filename", "file") or "file"),
+                    "kind": str(_entry_field(ve, "kind", "file") or "file"),
+                    "mime": str(
+                        _entry_field(ve, "mime", "application/octet-stream")
+                        or "application/octet-stream"
+                    ),
+                    "byte_size": int(_entry_field(ve, "byte_size", 0) or 0),
                     "sandbox_relpath": None,
                 }
             else:
                 d = {"id": aid}
-        # ViewingEntry duration wins when known (expand duration caps).
+        # Viewing-entry duration is authoritative when known (expand hard caps).
         ve = meta_by_id.get(aid)
-        if ve is not None and ve.duration_s is not None:
-            d.setdefault("duration_s", ve.duration_s)
+        ve_dur = _entry_field(ve, "duration_s", None) if ve is not None else None
+        if ve_dur is not None:
+            try:
+                d["duration_s"] = float(ve_dur)
+            except (TypeError, ValueError):
+                pass
         out.append(d)
     return out
 
@@ -221,7 +241,7 @@ def inject_viewing_carrier(
     viewing_att_ids: Sequence[str] | None,
     media_store: Any | None = None,
     carrier_id: str = VIEWING_CARRIER_ID,
-    entries: Mapping[str, ViewingEntry] | None = None,
+    entries: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Mapping[str, Any]], str | None]:
     """Inject a synthetic full-expand row for the viewing set (before orient).
 
