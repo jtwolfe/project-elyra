@@ -118,6 +118,7 @@ Stretch-2 memory designs (PR2b / KD4). Architecture manuals: [docs/state/memory/
 | [design-view-media-meal-rebalance.md](memory/design-view-media-meal-rebalance.md) | **Draft** | Host `view_media` + moment viewing set + expand(wake ∪ viewing) + conservative outer meal rebalance |
 | [design-phase-2a-directed-traversal.md](memory/design-phase-2a-directed-traversal.md) | Shipped (code; dogfood pending) | Phase 2a design |
 | [design-phase-2a-implementation.md](memory/design-phase-2a-implementation.md) | Shipped (code; dogfood pending) | Phase 2a PR plan |
+| [design-memory-edges-and-traversal.md](memory/design-memory-edges-and-traversal.md) | **Draft** | Durable edges (`created_with`/`recalls`/`in_moment`/`has_channel`) + pure semantic start + raised traverse budgets (#98/#120/#103/#105; #61 follow-up) |
 | [design-phase-3-procedural.md](memory/design-phase-3-procedural.md) | Draft / experimental | Phase 3 design |
 | [design-context-meal-composition.md](memory/design-context-meal-composition.md) | Provisional / Active | Meal design only (not STATE; KD14) |
 | [design-database-choices.md](memory/design-database-choices.md) | Shipped / planning baseline | Storage choices |
