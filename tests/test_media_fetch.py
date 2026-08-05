@@ -111,6 +111,10 @@ def _png_urlopen_factory(
         "192.168.1.1",
         "169.254.169.254",
         "169.254.0.1",
+        # CGNAT / shared space 100.64/10 (incl. Alibaba metadata 100.100.100.200)
+        "100.64.0.1",
+        "100.100.100.200",
+        "100.127.255.255",
         "::1",
         "fc00::1",
         "fe80::1",
@@ -121,13 +125,18 @@ def test_is_blocked_ip(ip_str: str) -> None:
     assert is_blocked_ip(ipaddress.ip_address(ip_str)) is True
 
 
-@pytest.mark.parametrize("ip_str", ["93.184.216.34", "1.1.1.1", "8.8.8.8"])
+@pytest.mark.parametrize("ip_str", ["93.184.216.34", "1.1.1.1", "8.8.8.8", "100.128.0.1"])
 def test_public_ip_not_blocked(ip_str: str) -> None:
     assert is_blocked_ip(ipaddress.ip_address(ip_str)) is False
 
 
 def test_ipv4_mapped_loopback_blocked() -> None:
     assert is_blocked_ip(ipaddress.ip_address("::ffff:127.0.0.1")) is True
+
+
+def test_ipv4_mapped_cgnat_blocked() -> None:
+    assert is_blocked_ip(ipaddress.ip_address("::ffff:100.64.0.1")) is True
+    assert is_blocked_ip(ipaddress.ip_address("::ffff:100.100.100.200")) is True
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +171,18 @@ def test_10_x_literal_blocked() -> None:
 def test_metadata_ip_literal_blocked() -> None:
     with pytest.raises(FetchError) as ei:
         fetch_url_bytes("https://169.254.169.254/latest/meta-data/")
+    assert ei.value.reason == "url_ssrf_blocked"
+
+
+def test_cgnat_literal_blocked() -> None:
+    with pytest.raises(FetchError) as ei:
+        fetch_url_bytes("https://100.64.0.1/x.png")
+    assert ei.value.reason == "url_ssrf_blocked"
+
+
+def test_alibaba_metadata_literal_blocked() -> None:
+    with pytest.raises(FetchError) as ei:
+        fetch_url_bytes("https://100.100.100.200/latest/meta-data/")
     assert ei.value.reason == "url_ssrf_blocked"
 
 
@@ -365,6 +386,83 @@ def test_redirect_to_private_ip_blocked() -> None:
     assert len(calls) == 1  # never opened loopback
 
 
+def test_redirect_to_http_rejected() -> None:
+    def urlopen(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        raise urllib.error.HTTPError(
+            req.full_url,
+            302,
+            "Found",
+            hdrs=_FakeHeaders({"Location": "http://example.com/insecure.png"}),  # type: ignore[arg-type]
+            fp=io.BytesIO(b""),
+        )
+
+    with pytest.raises(FetchError) as ei:
+        fetch_url_bytes(
+            "https://example.com/start",
+            urlopen=urlopen,
+            getaddrinfo=_public_getaddrinfo,
+        )
+    assert ei.value.reason == "url_invalid"
+
+
+def test_redirect_to_file_rejected() -> None:
+    def urlopen(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        raise urllib.error.HTTPError(
+            req.full_url,
+            302,
+            "Found",
+            hdrs=_FakeHeaders({"Location": "file:///etc/passwd"}),  # type: ignore[arg-type]
+            fp=io.BytesIO(b""),
+        )
+
+    with pytest.raises(FetchError) as ei:
+        fetch_url_bytes(
+            "https://example.com/start",
+            urlopen=urlopen,
+            getaddrinfo=_public_getaddrinfo,
+        )
+    assert ei.value.reason == "url_invalid"
+
+
+def test_redirect_hostname_resolving_private_blocked() -> None:
+    """Redirect Location hostname that DNS-resolves private is blocked."""
+    calls: list[str] = []
+
+    def gai(host: str, port: int, *a: Any, **k: Any):
+        if host == "evil.internal":
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    0,
+                    "",
+                    ("10.0.0.55", 443),
+                )
+            ]
+        return _public_getaddrinfo(host, port)
+
+    def urlopen(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        calls.append(req.full_url)
+        if req.full_url.endswith("/start"):
+            raise urllib.error.HTTPError(
+                req.full_url,
+                302,
+                "Found",
+                hdrs=_FakeHeaders({"Location": "https://evil.internal/x.png"}),  # type: ignore[arg-type]
+                fp=io.BytesIO(b""),
+            )
+        return _FakeResp(FIXTURE_PNG.read_bytes())
+
+    with pytest.raises(FetchError) as ei:
+        fetch_url_bytes(
+            "https://example.com/start",
+            urlopen=urlopen,
+            getaddrinfo=gai,
+        )
+    assert ei.value.reason == "url_ssrf_blocked"
+    assert len(calls) == 1  # never opened evil.internal
+
+
 def test_redirect_success_public() -> None:
     data = FIXTURE_PNG.read_bytes()
 
@@ -435,3 +533,86 @@ def test_redacted_url_strips_query() -> None:
 
 def test_url_max_bytes_constant_aligned() -> None:
     assert URL_MAX_BYTES == 48 * 1024 * 1024
+
+
+def test_default_path_pins_connect_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default (non-inject) path dials allowlisted IP, not a second DNS on hostname."""
+    import elyra.media.fetch as fetch_mod
+
+    data = FIXTURE_PNG.read_bytes()
+    seen: dict[str, Any] = {}
+
+    class _FakePinned:
+        def __init__(
+            self,
+            host: str,
+            port: int | None = None,
+            *args: Any,
+            connect_to: str | None = None,
+            **kwargs: Any,
+        ) -> None:
+            seen["host"] = host
+            seen["port"] = port
+            seen["connect_to"] = connect_to
+            self.host = host
+            self.port = port or 443
+
+        def request(self, method: str, path: str, headers: dict | None = None) -> None:
+            seen["method"] = method
+            seen["path"] = path
+            seen["headers"] = dict(headers or {})
+
+        def getresponse(self) -> _FakeResp:
+            return _FakeResp(
+                data,
+                headers={
+                    "Content-Type": "image/png",
+                    "Content-Length": str(len(data)),
+                },
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(fetch_mod, "_PinnedHTTPSConnection", _FakePinned)
+
+    result = fetch_url_bytes(
+        "https://example.com/cat.png",
+        getaddrinfo=_public_getaddrinfo,
+        # no urlopen inject → production pin path
+    )
+    assert result.data == data
+    assert seen["host"] == "example.com"
+    assert seen["connect_to"] == "93.184.216.34"
+    assert seen["path"] == "/cat.png"
+    assert seen["method"] == "GET"
+    # Host header is original hostname (not the dial IP).
+    assert seen["headers"].get("Host") == "example.com"
+
+
+def test_http_error_body_closed() -> None:
+    """Non-redirect HTTPError responses are closed (Issue 3)."""
+    closed: list[bool] = []
+
+    class _CloseableFP(io.BytesIO):
+        def close(self) -> None:  # noqa: A003
+            closed.append(True)
+            super().close()
+
+    def urlopen(req: urllib.request.Request, timeout: float = 20.0) -> _FakeResp:
+        raise urllib.error.HTTPError(
+            "https://example.com/x",
+            500,
+            "Server Error",
+            hdrs=_FakeHeaders(),  # type: ignore[arg-type]
+            fp=_CloseableFP(b"err"),
+        )
+
+    with pytest.raises(FetchError) as ei:
+        fetch_url_bytes(
+            "https://example.com/x",
+            urlopen=urlopen,
+            getaddrinfo=_public_getaddrinfo,
+        )
+    assert ei.value.reason == "url_fetch_failed"
+    assert closed == [True]

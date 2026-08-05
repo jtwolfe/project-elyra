@@ -5,7 +5,9 @@ forwarded operator secrets, no arbitrary model-supplied headers.
 
 Security controls (normative):
 - HTTPS only
-- DNS resolve + block loopback / link-local / private / metadata / multicast
+- DNS resolve + block non-global IPs (private / CGNAT / link-local / metadata / …)
+- **IP-pin connect**: TCP to allowlisted IP; ``Host`` + TLS SNI = original hostname
+  (closes DNS rebinding TOCTOU on the default path)
 - Redirect revalidation (scheme + IP) with max hops
 - Connect+read timeout
 - Streamed size budget (URL max then per-kind cap after sniff)
@@ -14,10 +16,13 @@ Security controls (normative):
 from __future__ import annotations
 
 import hashlib
+import http.client
+import io
 import ipaddress
 import logging
 import re
 import socket
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -99,15 +104,20 @@ def redacted_source_url(url: str) -> str:
 
 
 def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    """True if IP must not be contacted (SSRF private/metadata surface)."""
+    """True if IP must not be contacted (SSRF private/metadata surface).
+
+    After IPv4-mapped unwrap, any **non-global** address is blocked. That covers
+    RFC1918, loopback, link-local (incl. ``169.254.169.254``), multicast,
+    unspecified, reserved/documentation, **CGNAT ``100.64.0.0/10``** (incl.
+    Alibaba metadata ``100.100.100.200``), and IPv6 ULA / unique-local.
+    """
     # Unwrap IPv4-mapped IPv6 so ::ffff:127.0.0.1 is blocked as loopback.
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    if ip.is_private or ip.is_loopback or ip.is_link_local:
+    # is_global is False for CGNAT 100.64/10, private, link-local, etc.
+    if not ip.is_global:
         return True
-    if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
-        return True
-    # Explicit cloud metadata (also link-local, defense in depth).
+    # Defense in depth for known cloud metadata unicast (if ever classified global).
     if ip == ipaddress.ip_address("169.254.169.254"):
         return True
     if ip == ipaddress.ip_address("fd00:ec2::254"):
@@ -142,8 +152,8 @@ def _resolve_host_ips(
     *,
     getaddrinfo: GetAddrInfoFn | None = None,
 ) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    """Resolve hostname; return unique IPs. Raises FetchError on failure/blocked."""
-    # Literal IP in host — no DNS, still block private.
+    """Resolve hostname; return unique allowlisted IPs. Raises FetchError."""
+    # Literal IP in host — no DNS, still block non-global.
     try:
         literal = ipaddress.ip_address(hostname)
     except ValueError:
@@ -203,13 +213,13 @@ def _validate_url_target(
     url: str,
     *,
     getaddrinfo: GetAddrInfoFn | None = None,
-) -> urllib.parse.ParseResult:
-    """Parse + HTTPS check + DNS/IP block. Returns parsed URL."""
+) -> tuple[urllib.parse.ParseResult, list[ipaddress.IPv4Address | ipaddress.IPv6Address]]:
+    """Parse + HTTPS check + DNS/IP block. Returns (parsed, allowlisted IPs)."""
     parsed = _parse_https_url(url)
     port = parsed.port or 443
     assert parsed.hostname is not None
-    _resolve_host_ips(parsed.hostname, port, getaddrinfo=getaddrinfo)
-    return parsed
+    ips = _resolve_host_ips(parsed.hostname, port, getaddrinfo=getaddrinfo)
+    return parsed, ips
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -227,9 +237,155 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _default_urlopen(req: urllib.request.Request, timeout: float) -> Any:
+def _default_urlopen_unpinned(req: urllib.request.Request, timeout: float) -> Any:
+    """Legacy opener (hostname re-resolve). Used only if pin path is bypassed."""
     opener = urllib.request.build_opener(_NoRedirectHandler())
     return opener.open(req, timeout=timeout)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that dials ``connect_to`` IP while SNI/Host use ``host``.
+
+    Closes DNS rebinding TOCTOU: TCP never re-resolves the original hostname.
+    Certificate validation still uses the original hostname as ``server_hostname``.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int | None = None,
+        *args: Any,
+        connect_to: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._connect_to = connect_to
+        super().__init__(host, port, *args, **kwargs)
+
+    def connect(self) -> None:  # type: ignore[override]
+        if not self._connect_to:
+            super().connect()
+            return
+        timeout = self.timeout
+        sock = socket.create_connection(
+            (self._connect_to, self.port),
+            timeout,
+            self.source_address,
+        )
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            return
+        context = self._context
+        if context is None:
+            context = ssl.create_default_context()
+        # SNI + cert hostname check use original host (not the dial IP).
+        self.sock = context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedResponse:
+    """Thin adapter so pinned http.client responses match urlopen responses."""
+
+    def __init__(self, resp: http.client.HTTPResponse, conn: http.client.HTTPSConnection) -> None:
+        self._resp = resp
+        self._conn = conn
+        self.status = int(resp.status)
+        self.headers = resp.headers
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, n: int = -1) -> bytes:
+        return self._resp.read(n)
+
+    def close(self) -> None:
+        try:
+            self._resp.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _request_path(parsed: urllib.parse.ParseResult) -> str:
+    path = parsed.path or "/"
+    if parsed.query:
+        return f"{path}?{parsed.query}"
+    return path
+
+
+def _close_http_error(exc: urllib.error.HTTPError) -> None:
+    try:
+        exc.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _pinned_https_open(
+    url: str,
+    *,
+    connect_ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    timeout: float,
+    headers: Mapping[str, str],
+) -> Any:
+    """GET ``url`` over TLS dialed to ``connect_ip``; Host/SNI = original hostname.
+
+    Mirrors urllib ``urlopen`` error behavior for status codes: raises
+    ``HTTPError`` for redirects and 4xx/5xx so the caller loop is unified.
+    """
+    parsed = _parse_https_url(url)
+    hostname = parsed.hostname
+    assert hostname is not None
+    port = parsed.port or 443
+    path = _request_path(parsed)
+    context = ssl.create_default_context()
+    # IPv6: socket.create_connection wants bare address string (no brackets).
+    dial = str(connect_ip)
+    conn = _PinnedHTTPSConnection(
+        hostname,
+        port,
+        connect_to=dial,
+        timeout=timeout,
+        context=context,
+    )
+    try:
+        conn.request("GET", path, headers=dict(headers))
+        resp = conn.getresponse()
+    except TimeoutError:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    except OSError as exc:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        # Map to URLError-like for fetch_url_bytes handler.
+        raise urllib.error.URLError(exc) from exc
+
+    code = int(resp.status)
+    if _is_redirect_status(code) or code >= 400:
+        # Drain small error/redirect body then raise HTTPError (caller closes).
+        try:
+            body = resp.read(64 * 1024)
+        except Exception:  # noqa: BLE001
+            body = b""
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        fp = io.BytesIO(body)
+        raise urllib.error.HTTPError(
+            url,
+            code,
+            getattr(resp, "reason", "") or "",
+            hdrs=resp.headers,  # type: ignore[arg-type]
+            fp=fp,
+        )
+    return _PinnedResponse(resp, conn)
 
 
 def _join_redirect(base_url: str, location: str) -> str:
@@ -326,6 +482,10 @@ def fetch_url_bytes(
 ) -> FetchedBytes:
     """SSRF-aware HTTPS GET → bytes (no MediaStore write).
 
+    Default path **pins** TCP to the allowlisted resolve IP and sets Host + TLS
+    SNI to the original hostname (no second DNS at connect). Injectable
+    ``urlopen`` is for hermetic tests and still runs resolve/IP checks first.
+
     Raises:
         FetchError: stable ``reason`` codes for tools
             (url_invalid, url_ssrf_blocked, url_redirect_blocked,
@@ -334,8 +494,9 @@ def fetch_url_bytes(
     budget = URL_MAX_BYTES if max_bytes is None else int(max_bytes)
     if budget < 1:
         raise FetchError("url_invalid", detail="max_bytes must be >= 1")
-    open_fn = urlopen if urlopen is not None else _default_urlopen
     timeout = float(timeout_s)
+    use_inject = urlopen is not None
+    open_fn = urlopen if use_inject else None
 
     current = url.strip()
     hops = 0
@@ -345,20 +506,37 @@ def fetch_url_bytes(
         if current in seen:
             raise FetchError("url_redirect_blocked", detail="redirect loop")
         seen.add(current)
-        _validate_url_target(current, getaddrinfo=getaddrinfo)
+        _parsed, allow_ips = _validate_url_target(current, getaddrinfo=getaddrinfo)
         safe = redacted_url_for_log(current)
+        connect_ip = allow_ips[0]
 
-        req = urllib.request.Request(
-            current,
-            data=None,
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Accept": "image/*,audio/*,video/*,application/pdf,*/*;q=0.8",
-            },
-            method="GET",
-        )
+        req_headers = {
+            "User-Agent": _USER_AGENT,
+            "Accept": "image/*,audio/*,video/*,application/pdf,*/*;q=0.8",
+            # Host is also set by the connection for pin path; explicit for inject.
+            "Host": _parsed.hostname or "",
+        }
+        # Prefer original host:port when non-default port for Host header.
+        if _parsed.hostname and _parsed.port and _parsed.port != 443:
+            req_headers["Host"] = f"{_parsed.hostname}:{_parsed.port}"
+
         try:
-            resp = open_fn(req, timeout=timeout)
+            if use_inject:
+                assert open_fn is not None
+                req = urllib.request.Request(
+                    current,
+                    data=None,
+                    headers=req_headers,
+                    method="GET",
+                )
+                resp = open_fn(req, timeout=timeout)
+            else:
+                resp = _pinned_https_open(
+                    current,
+                    connect_ip=connect_ip,
+                    timeout=timeout,
+                    headers=req_headers,
+                )
         except FetchError:
             raise
         except TimeoutError as exc:
@@ -366,32 +544,31 @@ def fetch_url_bytes(
             raise FetchError("url_timeout", detail="connect/read timeout") from exc
         except urllib.error.HTTPError as exc:
             code = int(exc.code)
-            if _is_redirect_status(code):
-                loc = None
-                try:
-                    loc = exc.headers.get("Location") if exc.headers else None
-                finally:
+            try:
+                if _is_redirect_status(code):
+                    loc = None
                     try:
-                        exc.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                hops += 1
-                if hops > max_redirects:
-                    raise FetchError(
-                        "url_redirect_blocked",
-                        detail=f"exceeded max_redirects={max_redirects}",
-                    )
-                try:
+                        loc = exc.headers.get("Location") if exc.headers else None
+                    finally:
+                        _close_http_error(exc)
+                    hops += 1
+                    if hops > max_redirects:
+                        raise FetchError(
+                            "url_redirect_blocked",
+                            detail=f"exceeded max_redirects={max_redirects}",
+                        )
                     current = _join_redirect(current, loc or "")
-                except FetchError:
-                    raise
-                # Re-loop with revalidation of next hop.
-                continue
-            _LOG.info("media fetch http_error code=%s url=%s", code, safe)
-            raise FetchError(
-                "url_fetch_failed",
-                detail=f"http_{code}",
-            ) from exc
+                    # Re-loop with revalidation of next hop.
+                    continue
+                _LOG.info("media fetch http_error code=%s url=%s", code, safe)
+                raise FetchError(
+                    "url_fetch_failed",
+                    detail=f"http_{code}",
+                ) from exc
+            finally:
+                # Non-redirect path: always close body (redirect already closed).
+                if not _is_redirect_status(code):
+                    _close_http_error(exc)
         except urllib.error.URLError as exc:
             reason = getattr(exc, "reason", None)
             # socket.timeout often wrapped
