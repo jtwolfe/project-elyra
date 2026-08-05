@@ -829,7 +829,12 @@ class BudgetState:
         return max(0, self.max_keep - keep_count)
 
     def to_surface(self, *, keep_count: int = 0) -> dict[str, Any]:
-        """Thin decision surface budget block (no session wall countdown)."""
+        """Thin decision surface budget block (no session wall countdown).
+
+        Dual-deadline honesty (KD-P-glass / KD-P0-structural): structural
+        expand wall vs semantic ANN budget are separate fields (aliases
+        included for glass naming).
+        """
         return {
             "nodes_remaining": self.nodes_remaining,
             "depth_remaining": self.depth_remaining,
@@ -838,9 +843,16 @@ class BudgetState:
             "expand_ms_budget": self.expand_ms_budget,
             "expand_ms_spent_last": self.expand_ms_spent_last,
             "expand_truncated": self.expand_truncated,
+            # Structural aliases (expand_ms is the structural soft wall).
+            "structural_ms_budget": self.expand_ms_budget,
+            "structural_ms_spent": self.expand_ms_spent_last,
+            "structural_truncated": self.expand_truncated,
             "semantic_ms_budget_step": self.semantic_ms_budget_step,
             "semantic_ms_spent_last": self.semantic_ms_spent_last,
             "semantic_ann_calls_last": self.semantic_ann_calls_last,
+            # Glass-facing aliases (KD-P-glass §5.2).
+            "semantic_ms_budget": self.semantic_ms_budget_step,
+            "semantic_ms_spent": self.semantic_ms_spent_last,
             "nodes_spent": self.nodes_spent,
             "depth_spent": self.depth_spent,
             "steps_spent": self.steps_spent,
@@ -868,9 +880,14 @@ class BudgetState:
             "depth_spent": self.depth_spent,
             "expand_ms_spent_last": self.expand_ms_spent_last,
             "expand_truncated": self.expand_truncated,
+            "structural_ms_budget": self.expand_ms_budget,
+            "structural_ms_spent": self.expand_ms_spent_last,
+            "structural_truncated": self.expand_truncated,
             "semantic_ms_budget_step": self.semantic_ms_budget_step,
             "semantic_ms_spent_last": self.semantic_ms_spent_last,
             "semantic_ann_calls_last": self.semantic_ann_calls_last,
+            "semantic_ms_budget": self.semantic_ms_budget_step,
+            "semantic_ms_spent": self.semantic_ms_spent_last,
             "steps_remaining": self.steps_remaining,
             "nodes_remaining": self.nodes_remaining,
             "depth_remaining": self.depth_remaining,
@@ -1085,8 +1102,10 @@ def build_walk_summary_nl(
     hist = session.edge_kind_counts
     if hist:
         edges = ", ".join(f"{k}={v}" for k, v in sorted(hist.items()))
+        edges_clause = f"edges walked: {edges}"
     else:
-        edges = "none"
+        # KD-P-glass §5.2: honest zero walked (not "memory has no edges").
+        edges_clause = "edges walked: none"
     n_kept = len(session.keep_ids)
     labels: list[str] = []
     for kid in session.keep_ids[:labels_max]:
@@ -1101,7 +1120,7 @@ def build_walk_summary_nl(
     lines = [
         f"I walked through memories about {goal_short}.",
         f"Considered {n_considered} atoms across {n_steps} steps "
-        f"(seeds: {seed_kinds}; edges: {edges}).",
+        f"(seeds: {seed_kinds}; {edges_clause}).",
         f"Kept {n_kept}: {kept_part}.",
     ]
     hint = (summary_hint or "").strip()
@@ -1182,10 +1201,12 @@ class TraversalRegistry:
     """Process-local session registry: active + last_session + keep tray.
 
     Single active session (one open moment at a time in the worker). Sticky
-    ``last_session`` (glass KD-A19) survives abandon / idle TTL / new start;
-    moment-close clears ``last_session`` only. Meal directed_keep is owned by
-    the registry tray (KD-TRAY-SOT) — survives moment close; reloads from disk.
-    Thin ``last_confirmed_keep`` snapshot remains for compat/inspect.
+    ``last_session`` (glass KD-P-glass §5.1) survives abandon / idle TTL /
+    new start **and** moment close (process-life only). Moment close abandons
+    active only. Clear last_session via ``reset()``, newer ``finish``, or
+    ``clear_confirmed_keep(clear_glass=True)``. Meal directed_keep is owned by
+    the registry tray (KD-TRAY-SOT / KD-A16) — survives moment close; reloads
+    from disk. Thin ``last_confirmed_keep`` snapshot remains for compat/inspect.
     """
 
     def __init__(
@@ -2228,19 +2249,21 @@ class TraversalRegistry:
         )
 
     def on_moment_close(self, moment_id: str | None = None) -> None:
-        """Moment end: abandon active; clear last_session only (KD-A19).
+        """Moment end: abandon active only; retain glass last_session (KD-P-glass).
 
-        Retains registry tray and meal-thin last_confirmed_keep (B5 fix).
-        Meal path reads tray via get_meal_keep_ids — no moment equality (B5b).
+        Retains:
+        - registry tray + meal-thin last_confirmed_keep (B5 / KD-A16 meal path)
+        - ``_last_session`` process-life sticky walk for Graph GET (polish1 §5.1)
+
+        Clear ``_last_session`` only via ``reset()``, newer ``finish`` replace,
+        process death, or ``clear_confirmed_keep(clear_glass=True)``.
         """
         now = self._now_fn()
         if self._active is not None:
             if moment_id is None or self._active.moment_id in (None, moment_id):
                 self._drop_active(status="abandoned", now=now)
         # B5: do NOT clear _directed_keep_tray or last_confirmed_keep.
-        if self._last_session is not None:
-            if moment_id is None or self._last_session.moment_id in (None, moment_id):
-                self._last_session = None
+        # KD-P-glass: do NOT clear _last_session (process-life stickiness).
 
     def reset(self) -> None:
         """Process RAM reset: clear sessions + snap + tray RAM (file survives)."""

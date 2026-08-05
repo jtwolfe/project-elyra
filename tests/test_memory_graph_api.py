@@ -583,9 +583,18 @@ def test_graph_traverse_start_step_finish_session_view(paths):
         assert any(c.get("kept") for c in sess["considered"]) or atoms[1].atom_id in sess[
             "keep_ids"
         ]
-        # meal_keep_ids present as thin side field (KD-A19 separation).
+        # meal_keep_ids present as thin side field (KD-A19 / KD-P-glass SOT split).
         assert last["meal_keep_count"] >= 1
         assert atoms[1].atom_id in last["meal_keep_ids"]
+        # Expand honesty aliases on glass session budgets (KD-P-glass §5.2).
+        b = sess["budgets"]
+        assert "structural_ms_budget" in b
+        assert "structural_ms_spent" in b
+        assert "semantic_ms_budget" in b
+        assert "semantic_ms_spent" in b
+        assert "semantic_ann_calls_last" in b
+        assert last["honesty"]["sticky_last_session"] is True
+        assert last["honesty"]["no_session"] is False
 
         # which=meal never collapses glass to keep-only session body.
         code, meal = h.get("/api/memory/graph/session?which=meal")
@@ -593,6 +602,63 @@ def test_graph_traverse_start_step_finish_session_view(paths):
         assert meal["which"] == "none"
         assert meal["session"] is None
         assert meal["meal_keep_count"] >= 1
+    finally:
+        h.close()
+
+
+def test_graph_session_sticky_after_moment_close(paths):
+    """KD-P-glass: Graph GET shows last finished walk after moment end."""
+    h = _ApiHarness(paths, memory=_enabled_memory())
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        atoms = _link_chain(store, ["sticky a", "sticky b", "sticky c"])
+        code, start = h.post(
+            "/api/memory/graph/traverse",
+            {
+                "action": "start",
+                "goal": "sticky walk",
+                "seed_atom_ids": [atoms[0].atom_id],
+                "moment_id": "moment_close_me",
+            },
+        )
+        assert code == 200, start
+        assert start["ok"] is True
+        sid = start["session_id"]
+        code, fin = h.post(
+            "/api/memory/graph/traverse",
+            {
+                "action": "finish",
+                "session_id": sid,
+                "keep_ids": [atoms[0].atom_id],
+            },
+        )
+        assert code == 200, fin
+        assert fin["ok"] is True
+
+        # Simulate moment end (worker close path).
+        h.worker._close_traversal_for_moment("moment_close_me")  # noqa: SLF001
+
+        code, overview = h.get("/api/memory/graph")
+        assert code == 200, overview
+        assert overview["has_last_session"] is True
+        assert overview["has_active"] is False
+        # Dual-deadline caps on overview traversal block.
+        trav = overview.get("traversal") or {}
+        assert "structural_ms_budget" in trav
+        assert "semantic_ms_budget" in trav
+
+        code, last = h.get("/api/memory/graph/session")
+        assert code == 200, last
+        assert last["which"] == "last"
+        assert last["has_last_session"] is True
+        assert last["session"] is not None
+        assert last["session"]["session_id"] == sid
+        assert last["session"]["status"] == "confirmed"
+        assert last["honesty"]["sticky_last_session"] is True
+        assert last["honesty"]["no_session"] is False
+        # Meal tray still present (KD-A16 path unchanged).
+        assert last["meal_keep_count"] >= 1
+        assert atoms[0].atom_id in last["meal_keep_ids"]
     finally:
         h.close()
 

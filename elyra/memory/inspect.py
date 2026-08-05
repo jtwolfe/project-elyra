@@ -1110,6 +1110,9 @@ def enrich_session_for_glass(session: dict[str, Any] | None) -> dict[str, Any] |
 
     Marks considered rows that are in ``keep_ids``; attaches idle_age_s from
     ``updated_at``. Does not invent multi-hop wall-clock countdowns (KD-A18).
+
+    Ensures dual-deadline expand honesty aliases on ``budgets`` (KD-P-glass §5.2):
+    structural_ms_* vs semantic_ms_* / semantic_ann_calls_last.
     """
     if not isinstance(session, dict):
         return None
@@ -1131,6 +1134,29 @@ def enrich_session_for_glass(session: dict[str, Any] | None) -> dict[str, Any] |
         out["considered"] = enriched
     age = idle_age_seconds(out.get("updated_at") if isinstance(out.get("updated_at"), str) else None)
     out["idle_age_s"] = age
+    # Dual-deadline budget honesty on glass session surface.
+    budgets = out.get("budgets")
+    if isinstance(budgets, dict):
+        b = dict(budgets)
+        expand_budget = b.get("expand_ms_budget")
+        expand_spent = b.get("expand_ms_spent_last")
+        expand_trunc = b.get("expand_truncated")
+        if "structural_ms_budget" not in b and expand_budget is not None:
+            b["structural_ms_budget"] = expand_budget
+        if "structural_ms_spent" not in b and expand_spent is not None:
+            b["structural_ms_spent"] = expand_spent
+        if "structural_truncated" not in b and expand_trunc is not None:
+            b["structural_truncated"] = expand_trunc
+        sem_budget = b.get("semantic_ms_budget_step")
+        sem_spent = b.get("semantic_ms_spent_last")
+        if "semantic_ms_budget" not in b and sem_budget is not None:
+            b["semantic_ms_budget"] = sem_budget
+        if "semantic_ms_spent" not in b and sem_spent is not None:
+            b["semantic_ms_spent"] = sem_spent
+        # Ensure ann-call counter is always present for honesty (0 if missing).
+        if "semantic_ann_calls_last" not in b:
+            b["semantic_ann_calls_last"] = 0
+        out["budgets"] = b
     # Explicitly omit any wall-clock fields if present on older payloads.
     out.pop("wall_ms_remaining", None)
     out.pop("wall_clock_ms", None)
@@ -1174,18 +1200,49 @@ def graph_session_view_to_inspect(view: Any) -> dict[str, Any]:
 
 
 def directed_traversal_flags(settings: Any | None) -> dict[str, Any]:
-    """Flag block for Graph overview honesty (defaults off)."""
+    """Flag block for Graph overview honesty (defaults off).
+
+    Surfaces structural expand cap vs semantic ANN ceiling separately
+    (KD-P0-structural / KD-P-glass §5.2) so glass does not conflate them.
+    """
     from elyra.memory.config import (
+        effective_semantic_wait_max_ms,
         is_directed_keep_enabled,
         is_directed_traversal_enabled,
         is_durable_edges_enabled,
         is_edge_backfill_dev_enabled,
+        semantic_wait_enabled,
+        snappy_ann_max_ms,
     )
 
     trav = is_directed_traversal_enabled(settings)
     keep = is_directed_keep_enabled(settings)
     durable = is_durable_edges_enabled(settings)
     backfill_dev = is_edge_backfill_dev_enabled(settings)
+    expand_ms = (
+        int(getattr(settings, "traverse_expand_max_ms", 120) or 120)
+        if settings is not None
+        else 120
+    )
+    wait_on = bool(semantic_wait_enabled(settings)) if settings is not None else False
+    try:
+        semantic_ceiling = (
+            int(effective_semantic_wait_max_ms(settings))
+            if settings is not None
+            else 15_000
+        )
+    except Exception:  # noqa: BLE001
+        semantic_ceiling = 15_000
+    try:
+        snappy_traverse = (
+            int(snappy_ann_max_ms(settings, "traverse"))
+            if settings is not None
+            else min(expand_ms, 40)
+        )
+    except Exception:  # noqa: BLE001
+        snappy_traverse = min(expand_ms, 40)
+    # Live ANN budget class for traverse when wait on vs snappy.
+    semantic_budget_live = semantic_ceiling if wait_on else snappy_traverse
     return {
         "directed_traversal_enabled": trav,
         "directed_keep_enabled": keep,
@@ -1198,11 +1255,13 @@ def directed_traversal_flags(settings: Any | None) -> dict[str, Any]:
         if settings is not None
         else False,
         # Surface key budgets so glass can explain caps without a separate call.
-        "traverse_expand_max_ms": int(
-            getattr(settings, "traverse_expand_max_ms", 120) or 120
-        )
-        if settings is not None
-        else 120,
+        "traverse_expand_max_ms": expand_ms,
+        # Dual-deadline honesty: structural soft wall ≠ semantic ANN ceiling.
+        "structural_ms_budget": expand_ms,
+        "semantic_ms_budget": semantic_budget_live,
+        "semantic_wait_enabled": wait_on,
+        "semantic_wait_max_ms": semantic_ceiling,
+        "snappy_ann_max_ms_traverse": snappy_traverse,
         "traverse_max_steps": int(getattr(settings, "traverse_max_steps", 12) or 12)
         if settings is not None
         else 12,
