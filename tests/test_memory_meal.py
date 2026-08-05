@@ -10,9 +10,12 @@ import pytest
 from elyra.config import resolve_paths
 from elyra.memory.config import MemorySettings
 from elyra.memory.meal import (
+    EPISODIC_MAX_PRIOR_MOMENTS,
     MealPackage,
+    _rebuild_prior_moment_item,
     _shrink_episodic,
     _summary_meal_item,
+    _trim_speak_obs_per_moment,
     compose_meal,
     compose_outer_messages,
     format_atom_line,
@@ -126,6 +129,55 @@ def test_estimate_tokens_len_div_4():
 
 def test_default_budget_is_sliding_style():
     assert DEFAULT_MEAL_BUDGET_TOKENS == 250_000
+
+
+def test_kd_v8_episodic_horizon_defaults():
+    """KD-V8: prior-moment scan soft cap and speak/obs keep_last under pressure."""
+    assert EPISODIC_MAX_PRIOR_MOMENTS == 18
+    # Product default episodic residual share (phase-1 / semantic-off).
+    _f, epi, temp = split_memory_budget(10_000)
+    assert epi == int(10_000 * 0.24)
+    assert temp == 10_000 - epi
+
+
+def test_kd_v8_trim_speak_obs_keeps_last_three_under_pressure():
+    """Under pressure, keep_last=3 retains the three newest speak/obs per moment."""
+    mid = "m_prior"
+    atoms = [
+        _atom(
+            t=f"2026-07-28T10:0{i}:00Z",
+            kind="speak" if i % 2 == 0 else "observation",
+            text=("X" * 200) + f" line{i}",
+            moment_id=mid,
+            atom_id=f"a_so_{i}",
+        )
+        for i in range(6)
+    ]
+    item = _rebuild_prior_moment_item(mid, atoms)
+    assert item is not None
+    full_tok = item.token_estimate
+    # Cap between 3-atom and 6-atom size so 3b fires but block is not deleted.
+    three = _rebuild_prior_moment_item(mid, atoms[-3:])
+    assert three is not None
+    cap = three.token_estimate  # exact fit for newest three
+    assert cap < full_tok
+
+    out = _trim_speak_obs_per_moment([item], keep_last=3, cap=cap)
+    assert len(out) == 1
+    snaps = (out[0].meta or {}).get("atom_snapshots") or []
+    kept_ids = [s["atom_id"] for s in snaps]
+    # Oldest three dropped; newest three kept.
+    assert kept_ids == ["a_so_3", "a_so_4", "a_so_5"]
+    assert out[0].token_estimate <= cap
+
+    # Product shrink path (_shrink_episodic 3b) uses keep_last=3.
+    shrunk = _shrink_episodic([item], summary_atoms=[], cap=cap)
+    assert len(shrunk) == 1
+    shrunk_ids = [
+        s["atom_id"]
+        for s in ((shrunk[0].meta or {}).get("atom_snapshots") or [])
+    ]
+    assert shrunk_ids == ["a_so_3", "a_so_4", "a_so_5"]
 
 
 def test_split_memory_budget_fraction():

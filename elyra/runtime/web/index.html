@@ -408,9 +408,50 @@
                   Search
                 </button>
               </div>
+              <div class="memory-neighbors-media-row">
+                <span class="status-label">Media query</span>
+                <button
+                  type="button"
+                  id="memory-neighbor-attach"
+                  class="btn-secondary btn-sm"
+                  title="Upload image, audio, or video → encode as query vector (POST neighbors)"
+                >
+                  Attach media
+                </button>
+                <input
+                  id="memory-neighbor-file"
+                  type="file"
+                  accept="image/*,audio/*,video/*"
+                  hidden
+                />
+                <label class="status-label" for="memory-neighbor-att">or att_id</label>
+                <input
+                  id="memory-neighbor-att"
+                  type="text"
+                  class="status-input memory-filter memory-neighbor-att"
+                  placeholder="att_…"
+                  spellcheck="false"
+                  autocomplete="off"
+                  title="Existing MediaStore id (from chat attach or prior upload)"
+                />
+                <button
+                  type="button"
+                  id="memory-neighbor-media-clear"
+                  class="link-btn"
+                  hidden
+                >
+                  clear media
+                </button>
+                <div id="memory-neighbor-media-chip" class="memory-neighbor-media-chip" hidden></div>
+              </div>
+              <p class="muted status-helper memory-neighbors-media-hint">
+                Media-as-query: attach or paste an <code>att_id</code>, then Search.
+                Optional free-text + media uses joint encode. Atom id alone still uses
+                the stored embedding path. Requires <code>media_encode</code> on the encoder.
+              </p>
               <div id="memory-neighbors-meta" class="muted status-helper memory-neighbors-meta" hidden></div>
               <div id="memory-neighbors-list" class="list-panel list-panel-auto memory-neighbors-list">
-                <p class="muted empty memory-empty">Pick an atom id or free-text query.</p>
+                <p class="muted empty memory-empty">Pick an atom id, free-text query, or media seed.</p>
               </div>
             </div>
           </div>

@@ -23,15 +23,19 @@ browser = ["playwright>=1.49"]
 # Optional LanceDB MemoryStore backend (Phase 1 fields; no ANN required).
 # CI stays on jsonl; enable with memory.backend = "lance".
 memory-lance = ["lancedb>=0.20,<0.21", "pyarrow>=14"]
-# Optional Omni-Embed-Nemotron encode path (Phase 2 PR8). Hermetic CI never
-# requires these; mock encoder always available. Full multimodal may need a
-# transformers build with Qwen2.5-Omni support — see spike note.
+# Optional Omni-Embed-Nemotron encode path (Phase 2 PR8 / #124). Hermetic CI
+# never requires these; mock encoder always available. Multimodal packing uses
+# qwen-omni-utils (module qwen_omni_utils) soft-imported at runtime — without
+# it Nemotron text encode continues and media channels soft-skip (OQ-M1/M6).
 memory-embed = [
     "torch>=2.2",
     "torchvision>=0.17",  # Qwen2VL video processor path (Nemotron Omni)
     "transformers>=4.51",
     "accelerate>=0.33",
     "Pillow>=10.0",
+    # Soft import: process_mm_info for image/audio/video packing. Lower-bound
+    # only (upper unbound); text-only installs omit this extra entirely.
+    "qwen-omni-utils>=0.0.4",
 ]
 
 [project.scripts]

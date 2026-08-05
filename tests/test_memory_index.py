@@ -1644,6 +1644,68 @@ def test_resolve_search_channel_explicit_and_auto():
     assert reason == "auto_empty"
 
 
+def test_resolve_search_channel_seed_aware_media_kd_m20():
+    """KD-M20: media-only seed prefers modality channel when covered."""
+    from elyra.memory.index import resolve_search_channel
+
+    counts = {"text": 2, "image": 3, "audio": 0, "video": 0, "joint": 5}
+
+    # Sole image seed → image when covered.
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel=counts,
+        seed_channels=("image",),
+    )
+    assert ch == "image"
+    assert reason == "auto_seed_image"
+
+    # No image coverage → joint fallback.
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel={"text": 1, "image": 0, "joint": 4},
+        seed_channels=("image",),
+    )
+    assert ch == "joint"
+    assert reason == "auto_joint_seed_fallback"
+
+    # Audio seed with coverage.
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel={"audio": 2, "joint": 2, "image": 0},
+        seed_channels=("audio",),
+    )
+    assert ch == "audio"
+    assert reason == "auto_seed_audio"
+
+    # text+image seed → joint-primary (not modality-first).
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel=counts,
+        seed_channels=("text", "image"),
+    )
+    assert ch == "joint"
+    assert reason == "auto_joint"
+
+    # Explicit channel always wins over seed.
+    ch, reason = resolve_search_channel(
+        "joint",
+        vectors_by_channel=counts,
+        seed_channels=("image",),
+    )
+    assert ch == "joint"
+    assert reason == "explicit"
+
+    # Repair pending + image seed: prefer image if covered.
+    ch, reason = resolve_search_channel(
+        "auto",
+        vectors_by_channel=counts,
+        joint_repair_remaining=3,
+        seed_channels=("image",),
+    )
+    assert ch == "image"
+    assert reason == "auto_seed_image_repair_pending"
+
+
 def test_search_channel_auto_does_not_early_return_empty(store):
     """Footgun: channel=auto must not hit CHANNEL_SET reject before resolve."""
     atom = store.put_atom(_atom(text="alpha", status="pending"))

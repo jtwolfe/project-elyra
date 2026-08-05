@@ -74,7 +74,7 @@ def test_default_settings_match_design():
     assert s.memory.enabled is True
     assert s.memory.write_atoms is True
     assert s.memory.backend == "jsonl"
-    assert s.memory.episodic_fraction == 0.20
+    assert s.memory.episodic_fraction == 0.24
     assert s.memory.episodic_horizon_hours == 24.0
     assert s.memory.ladder_enabled is True
     assert s.memory.ladder_max_ms_per_tick == 200
@@ -95,7 +95,7 @@ def test_default_settings_match_design():
     assert s.memory.embed_model_id == "nvidia/omni-embed-nemotron-3b"
     assert s.memory.embed_preload is False
     assert s.memory.semantic_fraction == 0.12
-    assert s.memory.episodic_fraction_with_semantic == 0.18
+    assert s.memory.episodic_fraction_with_semantic == 0.22
     assert s.memory.temporal_min_fraction == 0.55
     assert s.memory.semantic_horizon_hours == 168.0
     assert s.memory.semantic_top_k == 12
@@ -131,6 +131,10 @@ def test_default_settings_match_design():
     assert s.memory.directed_traversal_enabled is False
     assert s.memory.directed_keep_enabled is False
     assert s.memory.directed_keep_fraction == 0.08
+    # KD-V8 conservative outer rebalance (glass_tail + episodic tip).
+    assert s.memory.glass_tail_fraction == 0.10
+    assert s.memory.glass_tail_floor_messages == 6
+    assert s.memory.glass_tail_max_messages == 20
     assert s.memory.traverse_expand_max_ms == 80
     assert s.memory.traverse_start_expand_max_ms == 0
     assert s.memory.traverse_max_depth == 3

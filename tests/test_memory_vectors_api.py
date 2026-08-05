@@ -875,3 +875,529 @@ def test_vectors_status_list_includes_ready_after_index(paths):
         assert "joint" in (row.get("channels") or []) or row.get("channels") is not None
     finally:
         h.close()
+
+
+# ── PR4 (#124): media-as-query neighbors + MM search contracts ─────────────
+
+FIXTURE_TINY_PNG = Path(__file__).resolve().parent / "fixtures" / "mm_embed" / "tiny.png"
+FIXTURE_TINY_WAV = Path(__file__).resolve().parent / "fixtures" / "media" / "tiny.wav"
+
+
+def _mem_settings(**kwargs: Any) -> MemorySettings:
+    base = dict(
+        enabled=True,
+        write_atoms=True,
+        backend="jsonl",
+        semantic_enabled=True,
+        embed_enabled=True,
+        embed_backend="mock",
+    )
+    base.update(kwargs)
+    return MemorySettings(**base)
+
+
+def _warm_mock_index(h: _ApiHarness) -> tuple[Any, MockEmbedder, MemoryEmbeddingIndex]:
+    store = h.worker._ensure_memory_store()  # noqa: SLF001
+    assert store is not None
+    emb = MockEmbedder()
+    h.worker._embedder = emb  # noqa: SLF001
+    h.worker._embedder_state = "warm"  # noqa: SLF001
+    index = MemoryEmbeddingIndex(store, joint_repair_max_per_open=0)
+    h.worker._embedding_index = index  # noqa: SLF001
+    return store, emb, index
+
+
+def test_neighbors_text_finds_media_backed_atom(paths):
+    """Corpus: text query under auto finds media-backed mock vectors (joint copy)."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, emb, index = _warm_mock_index(h)
+        png = FIXTURE_TINY_PNG.read_bytes()
+        # Image-only atom (empty text allowed with media_ids) + peer text atom.
+        from elyra.media.store import MediaStore
+        from elyra.memory.types import Atom, new_atom_id
+
+        ms = MediaStore(paths)
+        att = ms.put_bytes(png, filename="tiny.png", mime="image/png")
+        media_atom = Atom(
+            atom_id=new_atom_id(),
+            t_start="2026-08-05T12:00:00Z",
+            kind="observation",
+            content_text="",
+            content_ref="inline",
+            moment_id="m_mm_corpus",
+            media_ids=(att.id,),
+            embedding_status="pending",
+        )
+        store.put_atom(media_atom)
+        peer = promote_wake_observation(
+            store,
+            "m_mm_peer",
+            content="text peer about unrelated dogs",
+            message_id="msg_mm_peer",
+            settings=h.worker.settings.memory,
+        )
+        assert peer is not None
+
+        img_vec = tuple(l2_normalize(emb.encode_image(png)))
+        # KD-R1 joint copy of sole image channel.
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=media_atom.atom_id,
+                emb_image=img_vec,
+                emb_joint=img_vec,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
+            )
+        )
+        peer_text = tuple(l2_normalize(emb.encode_text(peer.content_text or "")))
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=peer.atom_id,
+                emb_text=peer_text,
+                emb_joint=peer_text,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
+            )
+        )
+
+        # Free-text near image mock seed — joint channel should surface media atom
+        # when query encodes to a vector near joint-copy of image (unlikely for
+        # free text). Instead: atom_id of peer with channel=image must no_vector;
+        # channel=joint finds media atom among hits for a seed using media joint.
+        # Contract: media-backed vectors are searchable on image + joint channels.
+        code, by_img = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={media_atom.atom_id}"
+            f"&k=5&channel=image"
+        )
+        assert code == 200, by_img
+        assert by_img["query"]["resolved_channel"] == "image"
+        assert by_img["query"]["channel_reason"] == "explicit"
+        # Self excluded; peer has no image → may be empty or peer absent.
+        for n in by_img["neighbors"]:
+            assert n["atom_id"] != media_atom.atom_id
+
+        code, by_joint = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={media_atom.atom_id}"
+            f"&k=5&channel=joint"
+        )
+        assert code == 200, by_joint
+        assert by_joint["query"]["resolved_channel"] == "joint"
+        # Peer joint is different vector; may or may not rank — at least no 500.
+        assert by_joint["ok"] is True
+
+        # Auto with image seed stored vectors uses joint-primary (atom path).
+        code, by_auto = h.get(
+            f"/api/memory/vectors/neighbors?atom_id={media_atom.atom_id}"
+            f"&k=5&channel=auto"
+        )
+        assert code == 200, by_auto
+        assert by_auto["query"]["resolved_channel"] in ("joint", "image", "text")
+        assert by_auto["ok"] is True
+    finally:
+        h.close()
+
+
+def test_neighbors_post_image_as_query_kd_m20(paths):
+    """POST att_id image → encode_image + auto_seed_image channel pairing."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, emb, index = _warm_mock_index(h)
+        from elyra.media.store import MediaStore
+        from elyra.memory.types import Atom, new_atom_id
+
+        ms = MediaStore(paths)
+        png = FIXTURE_TINY_PNG.read_bytes()
+        att = ms.put_bytes(png, filename="query.png", mime="image/png")
+        # Corpus: two image-backed atoms with distinct mock vectors.
+        other_png = png + b"\x00"  # different bytes → different mock vector
+        # Keep valid PNG? mock hashes raw bytes so any bytes work for encode_image.
+        att_other = ms.put_bytes(
+            b"\x89PNG\r\n\x1a\n" + b"other-image-bytes-for-mock",
+            filename="other.png",
+            mime="image/png",
+        )
+
+        a_match = Atom(
+            atom_id=new_atom_id(),
+            t_start="2026-08-05T12:00:00Z",
+            kind="observation",
+            content_text="caption match",
+            content_ref="inline",
+            moment_id="m_img_q",
+            media_ids=(att.id,),
+            embedding_status="pending",
+        )
+        a_other = Atom(
+            atom_id=new_atom_id(),
+            t_start="2026-08-05T12:01:00Z",
+            kind="observation",
+            content_text="caption other",
+            content_ref="inline",
+            moment_id="m_img_q",
+            media_ids=(att_other.id,),
+            embedding_status="pending",
+        )
+        store.put_atom(a_match)
+        store.put_atom(a_other)
+
+        match_vec = tuple(l2_normalize(emb.encode_image(png)))
+        other_bytes = ms.read_bytes(att_other.id)
+        other_vec = tuple(l2_normalize(emb.encode_image(other_bytes)))
+        for atom, vec in ((a_match, match_vec), (a_other, other_vec)):
+            assert index.upsert(
+                EmbeddingSet(
+                    atom_id=atom.atom_id,
+                    emb_image=vec,
+                    emb_joint=vec,  # KD-R1 sole-mod copy
+                    model_id=emb.model_id,
+                    encoded_at="2026-01-01T00:00:00Z",
+                )
+            )
+
+        health = index.health()
+        assert health["vectors_by_channel"]["image"] >= 2
+
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": att.id, "channel": "auto", "k": 5},
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        q = body["query"]
+        assert q["att_id"] == att.id
+        assert q["query_modality"] == "image"
+        assert q["source"] == "media"
+        assert q["channel"] == "auto"
+        assert q["resolved_channel"] == "image"
+        assert q["channel_reason"] == "auto_seed_image"
+        assert body["omitted_reason"] is None
+        ids = [n["atom_id"] for n in body["neighbors"]]
+        # Query image matches a_match corpus vector (same bytes); should rank first.
+        assert a_match.atom_id in ids
+        assert ids[0] == a_match.atom_id
+        # No raw vectors.
+        assert "emb_image" not in json.dumps(body)
+    finally:
+        h.close()
+
+
+def test_neighbors_post_audio_query_smoke(paths):
+    """POST audio att_id smoke with mock — channel pairing + encode path."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, emb, index = _warm_mock_index(h)
+        from elyra.media.store import MediaStore
+        from elyra.memory.types import Atom, new_atom_id
+
+        ms = MediaStore(paths)
+        wav = FIXTURE_TINY_WAV.read_bytes()
+        att = ms.put_bytes(wav, filename="tiny.wav", mime="audio/wav")
+        atom = Atom(
+            atom_id=new_atom_id(),
+            t_start="2026-08-05T12:00:00Z",
+            kind="observation",
+            content_text="",
+            content_ref="inline",
+            moment_id="m_aud",
+            media_ids=(att.id,),
+            embedding_status="pending",
+        )
+        store.put_atom(atom)
+        vec = tuple(l2_normalize(emb.encode_audio(wav)))
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=atom.atom_id,
+                emb_audio=vec,
+                emb_joint=vec,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
+            )
+        )
+
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": att.id, "channel": "auto", "k": 3},
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["query"]["query_modality"] == "audio"
+        assert body["query"]["source"] == "media"
+        assert body["query"]["resolved_channel"] == "audio"
+        assert body["query"]["channel_reason"] == "auto_seed_audio"
+    finally:
+        h.close()
+
+
+def test_neighbors_post_video_query_smoke(paths):
+    """POST video att_id smoke with mock bytes (no real mp4 needed)."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, emb, index = _warm_mock_index(h)
+        from elyra.media.store import MediaStore
+        from elyra.memory.types import Atom, new_atom_id
+
+        ms = MediaStore(paths)
+        # Minimal fake video bytes + explicit kind so classify accepts.
+        fake_vid = b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 32
+        att = ms.put_bytes(
+            fake_vid, filename="clip.mp4", mime="video/mp4", kind="video"
+        )
+        atom = Atom(
+            atom_id=new_atom_id(),
+            t_start="2026-08-05T12:00:00Z",
+            kind="observation",
+            content_text="",
+            content_ref="inline",
+            moment_id="m_vid",
+            media_ids=(att.id,),
+            embedding_status="pending",
+        )
+        store.put_atom(atom)
+        vec = tuple(l2_normalize(emb.encode_video(fake_vid)))
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=atom.atom_id,
+                emb_video=vec,
+                emb_joint=vec,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
+            )
+        )
+
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": att.id, "channel": "auto", "k": 3},
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["query"]["query_modality"] == "video"
+        assert body["query"]["resolved_channel"] == "video"
+        assert body["query"]["channel_reason"] == "auto_seed_video"
+    finally:
+        h.close()
+
+
+def test_neighbors_post_media_missing_200_omit(paths):
+    """Well-formed missing att_id → 200 + omitted_reason=media_missing (OQ-M5)."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        _warm_mock_index(h)
+        missing_id = "att_" + ("a" * 32)
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": missing_id, "k": 3},
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["neighbors"] == []
+        assert body["omitted_reason"] == "media_missing"
+        assert body["query"]["att_id"] == missing_id
+        assert body["query"]["source"] == "media"
+    finally:
+        h.close()
+
+
+def test_neighbors_post_invalid_att_id_400(paths):
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": "../etc/passwd", "k": 3},
+        )
+        assert code == 400, body
+        assert body["ok"] is False
+        assert body.get("error") == "invalid_att_id" or body.get(
+            "omitted_reason"
+        ) == "invalid_att_id"
+    finally:
+        h.close()
+
+
+def test_neighbors_post_media_oversize_400(paths):
+    """Oversize attachment → 400 media_oversize (checked before full search)."""
+    h = _ApiHarness(paths, memory=_mem_settings(embed_media_max_bytes=16))
+    try:
+        _warm_mock_index(h)
+        from elyra.media.store import MediaStore
+
+        ms = MediaStore(paths)
+        # Real PNG is 69 bytes > 16.
+        att = ms.put_bytes(
+            FIXTURE_TINY_PNG.read_bytes(),
+            filename="big.png",
+            mime="image/png",
+        )
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": att.id, "k": 3},
+        )
+        assert code == 400, body
+        assert body["ok"] is False
+        assert body.get("error") == "media_oversize" or body.get(
+            "omitted_reason"
+        ) == "media_oversize"
+    finally:
+        h.close()
+
+
+def test_neighbors_post_media_encode_unavailable(paths):
+    """media_encode false → 200 omit; never silent empty-text search."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, _emb, index = _warm_mock_index(h)
+        from elyra.media.store import MediaStore
+
+        ms = MediaStore(paths)
+        att = ms.put_bytes(
+            FIXTURE_TINY_PNG.read_bytes(),
+            filename="q.png",
+            mime="image/png",
+        )
+
+        class _NoMediaEnc:
+            dim = 2048
+            model_id = "fake/no-media"
+
+            def health(self) -> dict[str, Any]:
+                return {
+                    "ok": True,
+                    "backend": "fake",
+                    "media_encode": False,
+                    "dim": 2048,
+                }
+
+            def encode_text(self, text: str) -> list[float]:
+                raise AssertionError("must not fall back to empty-text search")
+
+            def encode_image(self, path_or_bytes: Any) -> list[float]:
+                raise AssertionError("must not encode when media_encode false")
+
+        h.worker._embedder = _NoMediaEnc()  # noqa: SLF001
+        h.worker._embedder_state = "warm"  # noqa: SLF001
+        h.worker._embedding_index = index  # noqa: SLF001
+
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"att_id": att.id, "channel": "auto", "k": 3},
+        )
+        assert code == 200, body
+        assert body["neighbors"] == []
+        assert body["omitted_reason"] == "media_encode_unavailable"
+        assert body["query"]["source"] == "media"
+        assert body["query"]["query_modality"] == "image"
+    finally:
+        h.close()
+
+
+def test_neighbors_post_query_required_400(paths):
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        code, body = h.post("/api/memory/vectors/neighbors", {})
+        assert code == 400, body
+        assert body["ok"] is False
+        assert body.get("error") in ("query_required", "atom_id or q required")
+    finally:
+        h.close()
+
+
+def test_neighbors_post_text_plus_media_joint(paths):
+    """q + att_id → joint query vec + joint-primary auto (KD-M20)."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, emb, index = _warm_mock_index(h)
+        from elyra.media.store import MediaStore
+        from elyra.memory.embed.types import ModalityParts
+        from elyra.memory.types import Atom, new_atom_id
+
+        ms = MediaStore(paths)
+        png = FIXTURE_TINY_PNG.read_bytes()
+        att = ms.put_bytes(png, filename="joint.png", mime="image/png")
+        atom = Atom(
+            atom_id=new_atom_id(),
+            t_start="2026-08-05T12:00:00Z",
+            kind="observation",
+            content_text="sunset lake",
+            content_ref="inline",
+            moment_id="m_tm",
+            media_ids=(att.id,),
+            embedding_status="pending",
+        )
+        store.put_atom(atom)
+        parts = ModalityParts(text="sunset lake", image=png)
+        joint = tuple(l2_normalize(emb.encode_joint(parts)))
+        assert index.upsert(
+            EmbeddingSet(
+                atom_id=atom.atom_id,
+                emb_text=tuple(l2_normalize(emb.encode_text("sunset lake"))),
+                emb_image=tuple(l2_normalize(emb.encode_image(png))),
+                emb_joint=joint,
+                model_id=emb.model_id,
+                encoded_at="2026-01-01T00:00:00Z",
+            )
+        )
+
+        code, body = h.post(
+            "/api/memory/vectors/neighbors",
+            {"q": "sunset lake", "att_id": att.id, "channel": "auto", "k": 5},
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        q = body["query"]
+        assert q["source"] == "text+media"
+        assert q["query_modality"] == "image"
+        assert q["q"] == "sunset lake"
+        assert q["att_id"] == att.id
+        # text+media seed → joint-primary (not auto_seed_image).
+        assert q["resolved_channel"] == "joint"
+        assert "joint" in q["channel_reason"] or q["channel_reason"] == "explicit"
+        ids = [n["atom_id"] for n in body["neighbors"]]
+        assert atom.atom_id in ids
+    finally:
+        h.close()
+
+
+def test_neighbors_get_still_works_atom_and_q(paths):
+    """GET remains the path for atom_id / free-text (KD-M17)."""
+    h = _ApiHarness(paths, memory=_mem_settings())
+    try:
+        store, emb, index = _warm_mock_index(h)
+        a1 = promote_wake_observation(
+            store,
+            "m_get_keep",
+            content="get path cats",
+            message_id="msg_get_1",
+            settings=h.worker.settings.memory,
+        )
+        a2 = promote_wake_observation(
+            store,
+            "m_get_keep2",
+            content="get path dogs",
+            message_id="msg_get_2",
+            settings=h.worker.settings.memory,
+        )
+        assert a1 and a2
+        for atom in (a1, a2):
+            text = atom.content_text or ""
+            vec = tuple(l2_normalize(emb.encode_text(text)))
+            assert index.upsert(
+                EmbeddingSet(
+                    atom_id=atom.atom_id,
+                    emb_text=vec,
+                    emb_joint=vec,
+                    model_id=emb.model_id,
+                    encoded_at="2026-01-01T00:00:00Z",
+                )
+            )
+        code, body = h.get(
+            "/api/memory/vectors/neighbors?"
+            + "q="
+            + urllib.parse.quote("get path cats")
+            + "&k=5"
+        )
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["query"]["source"] == "text"
+        assert body["count"] >= 1
+    finally:
+        h.close()

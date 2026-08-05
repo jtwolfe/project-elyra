@@ -7,6 +7,7 @@ Optional live OpenAI-compat path is reserved via the registered ``llm`` marker
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from dataclasses import replace
@@ -3443,3 +3444,224 @@ def test_client_wrapped_timeout_runtimeerror_is_provider_timeout(
     assert "chat request timed out" in result.error
     stop_beats = [b for b in moments.list_beats(mid) if b.get("type") == "stop"]
     assert stop_beats[0].get("error_class") == "provider_timeout"
+
+
+# ---------------------------------------------------------------------------
+# Viewing dirty force re-outer (PR2 — KD-V13)
+# ---------------------------------------------------------------------------
+
+
+def test_viewing_dirty_forces_reouter_without_budget_pressure(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Dirty + viewing att_ids → next hop force rebuild (no meal pressure).
+
+    Acceptance: mark dirty mid-moment; hop-1 rebuild includes image_url for the
+    viewing attachment without artificial in-turn budget pressure.
+    """
+    from elyra.config import resolve_paths
+    from elyra.media import MediaStore
+    from elyra.media.prompt import expand_meal_for_provider, strip_meal_wire_fields
+    from elyra.media.viewing import VIEWING_CARRIER_ID
+
+    mid = moments.open_moment(why_now="view-dirty", moment_id="m-view-dirty")
+    ctx.moment_id = mid
+
+    # Tiny fixture image in a real MediaStore under the test sandbox paths.
+    paths = ctx.paths
+    store = MediaStore(paths)
+    png = (
+        Path(__file__).parent / "fixtures" / "media" / "1x1.png"
+    ).read_bytes()
+    att = store.put_bytes(png, filename="look.png", origin="user_upload")
+
+    dirty = {"flag": False}
+    viewing_ids: list[str] = []
+    rebuilds = {"n": 0}
+    hop_outers: list[list[dict[str, Any]]] = []
+
+    def rebuild() -> list[dict[str, Any]]:
+        rebuilds["n"] += 1
+        meal = [
+            {"role": "system", "content": f"outer-{rebuilds['n']}"},
+            {"role": "user", "content": "work"},
+            {"role": "user", "content": "orient"},
+        ]
+        expanded = expand_meal_for_provider(
+            meal,
+            glass_by_id={},
+            wake_message_id=None,
+            viewing_att_ids=list(viewing_ids) or None,
+            media_store=store,
+            provider="xai",
+        )
+        return strip_meal_wire_fields(expanded)
+
+    def dirty_fn() -> bool:
+        return bool(dirty["flag"])
+
+    def clear_dirty() -> None:
+        dirty["flag"] = False
+
+    class _RecordingClient:
+        def __init__(self) -> None:
+            self._inner = StubChatClient.scripted(
+                [
+                    # Hop 0: free-text (no tools) — but we need a tool hop to
+                    # mark dirty mid-moment. Use list_dir then text.
+                    _tc("list_dir", {"path": "."}, call_id="c-view"),
+                    _text("I see the image"),
+                ]
+            )
+            self.messages_by_hop: list[list[dict[str, Any]]] = []
+
+        def chat_completion(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            # Snapshot outer+chain for assertions (image_url may be in outer).
+            self.messages_by_hop.append([dict(m) for m in messages])
+            hop_outers.append([dict(m) for m in messages])
+            # After hop 0 tool call is requested, tool runs then hop 1.
+            # Mark dirty + viewing set when tools execute (simulate view_media).
+            return self._inner.chat_completion(messages, **kwargs)
+
+    # Intercept list_dir to mark viewing dirty after hop 0 tool request.
+    class _ViewMarkingRegistry:
+        def __init__(self, inner: ToolRegistry) -> None:
+            self._inner = inner
+
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return self._inner.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, ctx: ToolContext
+        ) -> ToolResult:
+            result = self._inner.execute(name, args, ctx)
+            if name == "list_dir":
+                # Simulate view_media success: membership + dirty for next hop.
+                viewing_ids.clear()
+                viewing_ids.append(att.id)
+                dirty["flag"] = True
+            return result
+
+    client = _RecordingClient()
+    # Generous budget — no artificial pressure; force re-outer is dirty-only.
+    settings = _settings(
+        max_tool_hops=10,
+        in_turn_max_tokens=50_000,
+        sliding_input_tokens=50_000,
+        tool_result_max_chars=8000,
+    )
+    result = run_do_loop(
+        client=client,  # type: ignore[arg-type]
+        registry=_ViewMarkingRegistry(registry),  # type: ignore[arg-type]
+        ctx=ctx,
+        rebuild_outer=rebuild,
+        settings=settings,
+        moments=moments,
+        viewing_dirty_fn=dirty_fn,
+        clear_viewing_dirty_fn=clear_dirty,
+    )
+    assert result.stop_reason == "no_tools"
+    assert result.hop_count >= 2
+    # Initial rebuild (no outer_prefix) + force re-outer on hop 1 when dirty.
+    assert rebuilds["n"] >= 2, rebuilds
+    assert result.reouter_count >= 1, result
+    # Dirty cleared after successful force rebuild.
+    assert dirty["flag"] is False
+
+    # Hop 1 messages must include image_url for the viewing att.
+    assert len(client.messages_by_hop) >= 2
+    hop1 = client.messages_by_hop[1]
+    n_images = 0
+    carrier_seen = False
+    for m in hop1:
+        content = m.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    n_images += 1
+                    url = part["image_url"]["url"]
+                    assert url.startswith("data:image/")
+                    b64 = url.split(",", 1)[1]
+                    assert base64.b64decode(b64) == png
+        # After strip, carrier id is gone — detect via text inventory / data URL.
+        text_blob = content if isinstance(content, str) else ""
+        if isinstance(content, list):
+            text_blob = " ".join(
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        if att.id in text_blob or "look.png" in text_blob:
+            carrier_seen = True
+    assert n_images >= 1, f"hop1 missing image_url: {hop1!r}"
+    assert carrier_seen or n_images >= 1
+
+    # Hop 0 (before dirty) must NOT have had viewing image (status quo).
+    hop0 = client.messages_by_hop[0]
+    n0 = sum(
+        1
+        for m in hop0
+        if isinstance(m.get("content"), list)
+        for p in m["content"]
+        if isinstance(p, dict) and p.get("type") == "image_url"
+    )
+    assert n0 == 0
+
+
+def test_viewing_dirty_clear_not_called_when_rebuild_fails(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """Fail-closed: force rebuild exception must leave dirty set (no clear)."""
+    dirty = {"flag": True}
+    clears = {"n": 0}
+
+    def rebuild() -> list[dict[str, Any]]:
+        raise RuntimeError("rebuild boom")
+
+    def dirty_fn() -> bool:
+        return bool(dirty["flag"])
+
+    def clear_dirty() -> None:
+        clears["n"] += 1
+        dirty["flag"] = False
+
+    client = StubChatClient.scripted([_text("ok")])
+    # outer_prefix supplied so hop-0 starts without initial rebuild; dirty
+    # forces rebuild which fails — loop continues with prior outer.
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        outer_prefix=_outer(),
+        rebuild_outer=rebuild,
+        settings=_settings(max_tool_hops=3),
+        viewing_dirty_fn=dirty_fn,
+        clear_viewing_dirty_fn=clear_dirty,
+    )
+    assert result.stop_reason == "no_tools"
+    assert dirty["flag"] is True
+    assert clears["n"] == 0
+
+
+def test_no_viewing_hooks_status_quo(
+    ctx: ToolContext, registry: ToolRegistry
+) -> None:
+    """Omit dirty hooks → no extra re-outer (status quo)."""
+    rebuilds = {"n": 0}
+
+    def rebuild() -> list[dict[str, Any]]:
+        rebuilds["n"] += 1
+        return [{"role": "system", "content": f"o{rebuilds['n']}"}]
+
+    client = StubChatClient.scripted([_text("hi")])
+    result = run_do_loop(
+        client=client,
+        registry=registry,
+        ctx=ctx,
+        rebuild_outer=rebuild,
+        settings=_settings(max_tool_hops=3),
+    )
+    assert result.stop_reason == "no_tools"
+    # Initial rebuild only.
+    assert rebuilds["n"] == 1
+    assert result.reouter_count == 0

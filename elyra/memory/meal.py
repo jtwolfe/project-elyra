@@ -64,7 +64,7 @@ _NON_SUMMARY_KINDS = (
     "ledger",
 )
 
-EPISODIC_MAX_PRIOR_MOMENTS = 12
+EPISODIC_MAX_PRIOR_MOMENTS = 18
 _RAW_RANGE_LIMIT = 500
 _COMPACT_LINE_CHARS = 80
 _COMPACT_HEADER_LABEL = "temporal/compact"
@@ -626,8 +626,8 @@ def _shrink_episodic(
     if total() <= cap:
         return items
 
-    # 3b: drop raw speak/observation beyond last 2 per prior moment
-    items = _trim_speak_obs_per_moment(items, keep_last=2, cap=cap)
+    # 3b: drop raw speak/observation beyond last 3 per prior moment (KD-V8)
+    items = _trim_speak_obs_per_moment(items, keep_last=3, cap=cap)
     if total() <= cap:
         return items
 
@@ -1528,19 +1528,23 @@ def select_semantic(
         score_f = float(score) if score is not None else None
         label = _semantic_label(via_parcel=via_parcel, score=score_f)
         body = format_atom_line(parent)
+        sem_meta: dict[str, Any] = {
+            "score": score_f,
+            "via_parcel": via_parcel,
+            "hit_atom_id": atom.atom_id,
+            "kind": parent.kind,
+            "moment_id": parent.moment_id,
+        }
+        # Glass Context media marker (MM #124 PR5) — same meta.media_ids path as temporal.
+        if parent.media_ids:
+            sem_meta["media_ids"] = list(parent.media_ids)
         item = _item_from_parts(
             atom_id=parent.atom_id,
             channel="semantic",
             label=label,
             content=body,
             t_start=parent.t_start,
-            meta={
-                "score": score_f,
-                "via_parcel": via_parcel,
-                "hit_atom_id": atom.atom_id,
-                "kind": parent.kind,
-                "moment_id": parent.moment_id,
-            },
+            meta=sem_meta,
         )
         if used + item.token_estimate > cap and packed:
             continue
@@ -1909,8 +1913,8 @@ def _glass_tail_item_from_row(row: Mapping[str, Any]) -> MealItem:
 def estimate_glass_tail_floor_tokens(
     glass_rows: Sequence[Mapping[str, Any]],
     *,
-    floor_messages: int = 4,
-    max_messages: int = 16,
+    floor_messages: int = 6,
+    max_messages: int = 20,
     exclude_message_ids: set[str] | None = None,
 ) -> int:
     """Token cost of packing the floor message set (newest eligible rows)."""
@@ -1936,8 +1940,8 @@ def select_glass_tail(
     glass_rows: Sequence[Mapping[str, Any]],
     *,
     cap_tokens: int,
-    floor_messages: int = 4,
-    max_messages: int = 16,
+    floor_messages: int = 6,
+    max_messages: int = 20,
     social_wake: bool = False,
     exclude_message_ids: set[str] | None = None,
 ) -> tuple[list[MealItem], dict[str, Any]]:
@@ -2136,7 +2140,7 @@ def compose_meal(
         directed_keep_active=directed_keep_active,
         glass_tail_active=gt_active,
         glass_tail_fraction=float(
-            getattr(cfg, "glass_tail_fraction", 0.08) or 0.08
+            getattr(cfg, "glass_tail_fraction", 0.10) or 0.10
         ),
         semantic_fraction=cfg.semantic_fraction,
         directed_keep_fraction=float(
@@ -2148,9 +2152,9 @@ def compose_meal(
     )
 
     floor_messages = int(
-        getattr(cfg, "glass_tail_floor_messages", 4) or 4
+        getattr(cfg, "glass_tail_floor_messages", 6) or 6
     )
-    max_messages = int(getattr(cfg, "glass_tail_max_messages", 16) or 16)
+    max_messages = int(getattr(cfg, "glass_tail_max_messages", 20) or 20)
 
     # Message floor raise (social wakes): steal supports, never temporal.
     floor_stolen = 0
@@ -2577,6 +2581,8 @@ def expand_memory_meal_for_provider(
     *,
     glass_by_id: Mapping[str, Mapping[str, Any]] | None = None,
     wake_message_id: str | None = None,
+    viewing_att_ids: Sequence[str] | None = None,
+    viewing_entries: Mapping[str, Any] | None = None,
     media_store: Any | None = None,
     provider: str = "xai",
     expand_last_user_images: bool = False,
@@ -2592,6 +2598,8 @@ def expand_memory_meal_for_provider(
       glass wake row (never full sliding history) when present in
       ``glass_by_id``.
     * Seed glass attachments from ``_memory_media_ids`` when needed.
+    * Forward ``viewing_att_ids`` / ``viewing_entries`` so expand injects the
+      viewing carrier and shares the wake∪viewing multimodal budget (KD-V4/V10).
     * Delegate MIME / vision / inventory policy to
       :func:`elyra.media.prompt.expand_meal_for_provider`.
     """
@@ -2616,6 +2624,8 @@ def expand_memory_meal_for_provider(
         meal,
         glass_by_id=glass,
         wake_message_id=wake_message_id,
+        viewing_att_ids=viewing_att_ids,
+        viewing_entries=viewing_entries,
         media_store=media_store,
         provider=provider,
         expand_last_user_images=expand_last_user_images,

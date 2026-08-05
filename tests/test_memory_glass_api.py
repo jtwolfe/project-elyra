@@ -270,6 +270,12 @@ def test_memory_atoms_list_and_detail(paths):
         assert detail["ok"] is True
         assert detail["atom"]["atom_id"] == atom.atom_id
         assert "atom list seed" in (detail["atom"].get("content_text") or "")
+        # PR2 inspect enrichment: embed meta + media inventory zero-state keys.
+        da = detail["atom"]
+        assert "embed_channels" in da
+        assert "embed_media_skipped" in da
+        assert "media" in da
+        assert isinstance(da["media"], list)
 
         code, missing = h.get("/api/memory/atoms/a_deadbeefdeadbeefdeadbeefdeadbeef")
         assert code == 404

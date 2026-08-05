@@ -146,8 +146,12 @@ Linux isolation needs **KVM** (`/dev/kvm` readable/writable). Without it, instal
 | **sandbox** | `pip install -e '.[sandbox]'` | Warm microsandbox isolation (`microsandbox`) | Guest `run` / isolation-on `verify_tool` → `sandbox_unavailable:*` |
 | **search** | `pip install -e '.[search]'` | Host `web_search` via `ddgs` | `search_unavailable` (+ install hint) |
 | **browser** | `pip install -e '.[browser]'` **and** `playwright install chromium` | Host `browser_*` tools | Clear browser unavailable errors |
+| **memory-lance** | `pip install -e '.[memory-lance]'` | LanceDB atom store + ANN | JSONL backend continues |
+| **memory-embed** | `pip install -e '.[memory-embed]'` | Nemotron encode (torch / transformers / **qwen-omni-utils**) | Mock encoder always available; hermetic CI never installs this extra |
 
 Combine extras in one install: `pip install -e '.[sandbox,search,browser]'`.
+
+**Multimodal encode deps (`memory-embed`):** the extra pins `qwen-omni-utils` (import name `qwen_omni_utils`) for Nemotron image/audio/video packing. Soft import at runtime — **text-only encode continues without it**; media channels soft-skip with durable `embed_media_skipped` / `media_encode=false` health rather than hard-failing the install. Mock backend always accepts media inputs in CI. Upper bound of `qwen-omni-utils` is intentionally unpinned (lower-bound only).
 
 Helper for sandbox only:
 
