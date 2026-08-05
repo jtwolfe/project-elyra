@@ -35,7 +35,7 @@ def split_memory_budget(
     *,
     system_text: str = "",
     orient_text: str = "",
-    episodic_fraction: float = 0.20,
+    episodic_fraction: float = 0.24,
 ) -> tuple[int, int, int]:
     """Split meal budget into fixed + episodic + temporal caps.
 
@@ -63,8 +63,8 @@ def split_memory_budget_v2(
     orient_text: str = "",
     semantic_enabled: bool = False,
     semantic_fraction: float = 0.12,
-    episodic_fraction: float = 0.20,
-    episodic_fraction_with_semantic: float = 0.18,
+    episodic_fraction: float = 0.24,
+    episodic_fraction_with_semantic: float = 0.22,
     temporal_min_fraction: float = 0.55,
 ) -> tuple[int, int, int, int]:
     """Split meal budget into fixed + semantic + episodic + temporal caps.
@@ -134,8 +134,8 @@ def split_memory_budget_v3(
     directed_keep_active: bool = False,
     semantic_fraction: float = 0.12,
     directed_keep_fraction: float = 0.08,
-    episodic_fraction: float = 0.20,
-    episodic_fraction_with_semantic: float = 0.18,
+    episodic_fraction: float = 0.24,
+    episodic_fraction_with_semantic: float = 0.22,
     temporal_min_fraction: float = 0.55,
 ) -> tuple[int, int, int, int, int]:
     """Split meal budget: fixed + semantic + directed_keep + episodic + temporal.
@@ -223,11 +223,11 @@ def split_memory_budget_v4(
     semantic_enabled: bool = False,
     directed_keep_active: bool = False,
     glass_tail_active: bool = False,
-    glass_tail_fraction: float = 0.08,
+    glass_tail_fraction: float = 0.10,
     semantic_fraction: float = 0.12,
     directed_keep_fraction: float = 0.08,
-    episodic_fraction: float = 0.20,
-    episodic_fraction_with_semantic: float = 0.18,
+    episodic_fraction: float = 0.24,
+    episodic_fraction_with_semantic: float = 0.22,
     temporal_min_fraction: float = 0.55,
 ) -> tuple[int, int, int, int, int, int]:
     """Split meal budget: fixed + sem + dk + epi + glass_tail + temporal.

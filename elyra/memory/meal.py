@@ -64,7 +64,7 @@ _NON_SUMMARY_KINDS = (
     "ledger",
 )
 
-EPISODIC_MAX_PRIOR_MOMENTS = 12
+EPISODIC_MAX_PRIOR_MOMENTS = 18
 _RAW_RANGE_LIMIT = 500
 _COMPACT_LINE_CHARS = 80
 _COMPACT_HEADER_LABEL = "temporal/compact"
@@ -626,8 +626,8 @@ def _shrink_episodic(
     if total() <= cap:
         return items
 
-    # 3b: drop raw speak/observation beyond last 2 per prior moment
-    items = _trim_speak_obs_per_moment(items, keep_last=2, cap=cap)
+    # 3b: drop raw speak/observation beyond last 3 per prior moment (KD-V8)
+    items = _trim_speak_obs_per_moment(items, keep_last=3, cap=cap)
     if total() <= cap:
         return items
 
@@ -2140,7 +2140,7 @@ def compose_meal(
         directed_keep_active=directed_keep_active,
         glass_tail_active=gt_active,
         glass_tail_fraction=float(
-            getattr(cfg, "glass_tail_fraction", 0.08) or 0.08
+            getattr(cfg, "glass_tail_fraction", 0.10) or 0.10
         ),
         semantic_fraction=cfg.semantic_fraction,
         directed_keep_fraction=float(
@@ -2152,9 +2152,9 @@ def compose_meal(
     )
 
     floor_messages = int(
-        getattr(cfg, "glass_tail_floor_messages", 4) or 4
+        getattr(cfg, "glass_tail_floor_messages", 6) or 6
     )
-    max_messages = int(getattr(cfg, "glass_tail_max_messages", 16) or 16)
+    max_messages = int(getattr(cfg, "glass_tail_max_messages", 20) or 20)
 
     # Message floor raise (social wakes): steal supports, never temporal.
     floor_stolen = 0
