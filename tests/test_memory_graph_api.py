@@ -230,6 +230,8 @@ def test_graph_overview_flags_off_honesty(paths):
         code, body = h.get("/api/memory/graph")
         assert code == 200, body
         assert body["tabs"]["graph"]["stub"] is False
+        assert body["tabs"]["graph_free_browse"]["stub"] is False
+        assert "GET /api/memory/graph/neighbors" in body["tabs"]["graph_free_browse"]["api"]
         assert body["traversal"]["directed_traversal_enabled"] is False
         assert body["has_active"] is False
         assert body["has_last_session"] is False
@@ -240,6 +242,11 @@ def test_graph_overview_flags_off_honesty(paths):
         assert "semantic_hop" in kinds
         assert body["honesty"]["flag_off"] is True
         assert body["honesty"]["note"]
+        # Empty EdgeStore honesty for free-browse (#61 / PR8).
+        assert body["honesty"]["edge_store_empty"] is True
+        assert body["honesty"]["projected_edges_only"] is True
+        assert body["edge_count"] == 0
+        assert "EdgeStore empty" in body["honesty"]["note"]
         # No multi-hop wall-clock field.
         blob = json.dumps(body)
         assert "wall_ms" not in blob
@@ -295,8 +302,17 @@ def test_graph_neighbors_structural_chain(paths):
             assert "edge_kind" in n
             assert "weight" in n
             assert "snippet" in n
+            assert "src_atom_id" in n  # free-browse canvas needs src for links
             # No raw embedding dump.
             assert "emb_joint" not in n
+        # Free-browse honesty: empty EdgeStore still returns projected edges.
+        code, overview = h.get("/api/memory/graph")
+        assert code == 200
+        assert overview["honesty"]["projected_edges_only"] is True
+        assert overview["edge_count"] == 0
+        # Neighbor expand still works with projected sequential links only.
+        projected_kinds = {n["edge_kind"] for n in body["neighbors"]}
+        assert "sequential" in projected_kinds or "same_moment" in projected_kinds
         # Missing atom → 404
         code, missing = h.get("/api/memory/graph/neighbors?atom_id=a_does_not_exist")
         assert code == 404
@@ -695,6 +711,8 @@ def test_graph_neighbors_durable_created_with_real_dsts(paths):
         assert code == 200
         assert overview["edge_count"] >= 4
         assert overview["traversal"]["durable_edges_enabled"] is True
+        assert overview["honesty"]["edge_store_empty"] is False
+        assert overview["honesty"]["projected_edges_only"] is False
         assert "created_with" in overview["edges_by_kind"] or overview[
             "edge_count"
         ] > 0

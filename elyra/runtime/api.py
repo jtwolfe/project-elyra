@@ -1910,6 +1910,32 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 _LOG.exception("graph overview edge health peek failed")
 
         # Overview is always 200; ok tracks store health (flags may be off).
+        # EdgeStore empty → free-browse/neighbors still work via projected
+        # structural (+ optional semantic_hop); durable kinds absent (#61 / PR8).
+        durable_on = bool(trav_flags.get("durable_edges_enabled"))
+        edge_store_empty = edge_count == 0
+        honesty_notes: list[str] = []
+        if not trav_flags.get("directed_traversal_enabled"):
+            honesty_notes.append(
+                "directed_traversal_enabled is off — tools/POST fail closed; "
+                "structural neighbor probe still available when store is open"
+            )
+        elif not has_active and not has_last:
+            honesty_notes.append(
+                "no active or last walk yet — start via traverse tools "
+                "or debug POST"
+            )
+        if edge_store_empty:
+            honesty_notes.append(
+                "EdgeStore empty (edge_count=0) — free-browse/neighbors show "
+                "projected structural edges (+ optional semantic_hop) only; "
+                "durable kinds absent until edge writes land"
+            )
+        elif not durable_on:
+            honesty_notes.append(
+                "durable_edges_enabled is off — durable EdgeStore rows are not "
+                "written by promote; expand still unions any existing rows"
+            )
         self._json(
             200,
             {
@@ -1925,35 +1951,34 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "backend": edge_backend,
                     "edge_count": edge_count,
                     "edges_by_kind": edges_by_kind,
-                    "durable_edges_enabled": bool(
-                        trav_flags.get("durable_edges_enabled")
-                    ),
+                    "durable_edges_enabled": durable_on,
                 },
                 "traversal": trav_flags,
                 "memory": flags,
                 "tabs": {
                     "vectors": {"stub": False, "phase": "2"},
                     "graph": {"stub": False, "phase": "2a"},
+                    # #61 free-browse canvas reuses neighbors + legend (no graph DB).
+                    "graph_free_browse": {
+                        "stub": False,
+                        "phase": "2a",
+                        "api": [
+                            "GET /api/memory/graph",
+                            "GET /api/memory/graph/neighbors",
+                            "GET /api/memory/graph/session",
+                        ],
+                    },
                 },
-                # Honesty for empty/disabled (UI copy).
                 "honesty": {
                     "flag_off": not bool(
                         trav_flags.get("directed_traversal_enabled")
                     ),
                     "no_session": not has_active and not has_last,
-                    "durable_edges_enabled": bool(
-                        trav_flags.get("durable_edges_enabled")
-                    ),
+                    "durable_edges_enabled": durable_on,
+                    "edge_store_empty": edge_store_empty,
+                    "projected_edges_only": edge_store_empty,
                     "note": (
-                        "directed_traversal_enabled is off — tools/POST fail closed; "
-                        "structural neighbor probe still available when store is open"
-                        if not trav_flags.get("directed_traversal_enabled")
-                        else (
-                            "no active or last walk yet — start via traverse tools "
-                            "or debug POST"
-                            if not has_active and not has_last
-                            else None
-                        )
+                        " · ".join(honesty_notes) if honesty_notes else None
                     ),
                 },
             },

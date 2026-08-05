@@ -77,6 +77,17 @@ const memoryGraphNeighborSem = $("#memory-graph-neighbor-sem");
 const memoryGraphNeighborsRun = $("#memory-graph-neighbors-run");
 const memoryGraphNeighborsList = $("#memory-graph-neighbors-list");
 const memoryGraphNeighborsMeta = $("#memory-graph-neighbors-meta");
+const memoryGraphBrowseAtom = $("#memory-graph-browse-atom");
+const memoryGraphBrowseK = $("#memory-graph-browse-k");
+const memoryGraphBrowseSem = $("#memory-graph-browse-sem");
+const memoryGraphBrowseSession = $("#memory-graph-browse-session");
+const memoryGraphBrowseExpand = $("#memory-graph-browse-expand");
+const memoryGraphBrowseClear = $("#memory-graph-browse-clear");
+const memoryGraphBrowseMeta = $("#memory-graph-browse-meta");
+const memoryGraphBrowseLegend = $("#memory-graph-browse-legend");
+const memoryGraphBrowseSvg = $("#memory-graph-browse-svg");
+const memoryGraphBrowseEmpty = $("#memory-graph-browse-empty");
+const memoryGraphBrowseDetail = $("#memory-graph-browse-detail");
 /** @type {boolean} */
 let memoryVectorsRebuildInFlight = false;
 /** @type {"context" | "atoms" | "vectors" | "graph"} */
@@ -5342,6 +5353,75 @@ async function runNeighborSearch() {
 }
 
 /**
+ * Free-browse memory graph (#61): client-side node-link cache over
+ * GET /api/memory/graph/neighbors + edge_kind_legend. No graph DB.
+ * @type {{
+ *   nodes: Map<string, {id: string, label: string, kind: string, snippet: string, x: number, y: number, vx: number, vy: number, expanded: boolean}>,
+ *   edges: Map<string, {key: string, src: string, dst: string, kind: string, weight: number|null, reason: string}>,
+ *   selectedId: string|null,
+ *   legend: Array<Record<string, any>>,
+ *   legendByKind: Map<string, Record<string, any>>,
+ *   overviewHonesty: Record<string, any>|null,
+ *   edgeCount: number,
+ *   sessionConsidered: Set<string>,
+ *   sessionKept: Set<string>,
+ *   panX: number,
+ *   panY: number,
+ *   scale: number,
+ *   draggingNode: string|null,
+ *   panning: boolean,
+ *   lastPtr: {x: number, y: number}|null,
+ * }}
+ */
+const freeBrowseGraph = {
+  nodes: new Map(),
+  edges: new Map(),
+  selectedId: null,
+  legend: [],
+  legendByKind: new Map(),
+  overviewHonesty: null,
+  edgeCount: 0,
+  sessionConsidered: new Set(),
+  sessionKept: new Set(),
+  panX: 0,
+  panY: 0,
+  scale: 1,
+  draggingNode: null,
+  panning: false,
+  lastPtr: null,
+};
+
+/** Stable colors for edge kinds (legend + strokes). */
+const FREE_BROWSE_KIND_COLORS = {
+  sequential: "#6b9bd2",
+  parent_of: "#8b7ec8",
+  child_of: "#8b7ec8",
+  same_moment: "#5aae8b",
+  summary_child: "#c9a227",
+  summary_source: "#d4893a",
+  supersedes: "#b07040",
+  created_with: "#d16b8a",
+  recalls: "#e07a5f",
+  in_moment: "#3d9a8b",
+  has_channel: "#7a8a99",
+  semantic_hop: "#a78bfa",
+};
+
+/**
+ * @param {string} kind
+ * @returns {string}
+ */
+function freeBrowseKindColor(kind) {
+  const k = String(kind || "");
+  if (FREE_BROWSE_KIND_COLORS[k]) return FREE_BROWSE_KIND_COLORS[k];
+  // Deterministic fallback from kind string.
+  let h = 0;
+  for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return `hsl(${hue} 42% 55%)`;
+}
+
+/**
  * Format idle age for Graph session card (seconds → short human).
  * @param {number | null | undefined} ageS
  */
@@ -5366,6 +5446,15 @@ function renderGraphOverview(data) {
   const mem = data.memory || {};
   const flagOn = trav.directed_traversal_enabled === true;
   const keepOn = trav.directed_keep_enabled === true;
+  const durableOn = trav.durable_edges_enabled === true;
+  const edgeCount =
+    data.edge_count != null
+      ? Number(data.edge_count)
+      : data.edge_store && data.edge_store.edge_count != null
+        ? Number(data.edge_store.edge_count)
+        : 0;
+  freeBrowseGraph.edgeCount = Number.isFinite(edgeCount) ? edgeCount : 0;
+  freeBrowseGraph.overviewHonesty = data.honesty || null;
   const rows = [
     [
       "traversal",
@@ -5376,6 +5465,17 @@ function renderGraphOverview(data) {
       "directed keep",
       keepOn ? "on" : "off",
       keepOn === true ? true : null,
+    ],
+    [
+      "durable edges",
+      durableOn
+        ? freeBrowseGraph.edgeCount > 0
+          ? `on · ${freeBrowseGraph.edgeCount} rows`
+          : "on · EdgeStore empty"
+        : freeBrowseGraph.edgeCount > 0
+          ? `off · ${freeBrowseGraph.edgeCount} residual rows`
+          : "off · EdgeStore empty",
+      durableOn === true ? true : null,
     ],
     [
       "sessions",
@@ -5427,7 +5527,10 @@ function renderGraphOverview(data) {
     if (good === true) val.classList.add("status-ok");
     if (good === false) val.classList.add("status-bad");
     // Flag off is expected default — muted, not status-bad.
-    if (label === "traversal" && !flagOn) {
+    if (
+      (label === "traversal" && !flagOn) ||
+      (label === "durable edges" && !durableOn)
+    ) {
       val.classList.remove("status-bad");
       val.classList.add("memory-vector-stale");
     }
@@ -5438,6 +5541,10 @@ function renderGraphOverview(data) {
   }
   // Edge-kind legend as a compact line.
   const legend = Array.isArray(data.edge_kind_legend) ? data.edge_kind_legend : [];
+  freeBrowseGraph.legend = legend;
+  freeBrowseGraph.legendByKind = new Map(
+    legend.map((e) => [String(e.kind || ""), e])
+  );
   if (legend.length) {
     const row = document.createElement("div");
     row.className = "status-row";
@@ -5453,6 +5560,7 @@ function renderGraphOverview(data) {
     row.appendChild(val);
     memoryGraphOverview.appendChild(row);
   }
+  renderFreeBrowseLegend();
 
   if (memoryGraphHonesty) {
     const honesty = data.honesty || {};
@@ -5465,6 +5573,523 @@ function renderGraphOverview(data) {
       memoryGraphHonesty.textContent = "";
     }
   }
+}
+
+/** Color chips from edge_kind_legend for free-browse canvas. */
+function renderFreeBrowseLegend() {
+  if (!memoryGraphBrowseLegend) return;
+  memoryGraphBrowseLegend.innerHTML = "";
+  const legend = freeBrowseGraph.legend || [];
+  if (!legend.length) return;
+  for (const e of legend) {
+    const kind = String(e.kind || "");
+    if (!kind) continue;
+    const item = document.createElement("span");
+    item.className = "memory-graph-browse-legend-item";
+    const sw = document.createElement("span");
+    sw.className = "memory-graph-browse-swatch";
+    sw.style.background = freeBrowseKindColor(kind);
+    const lab = document.createElement("span");
+    const tags = [
+      e.durable ? "D" : e.structural ? "P" : "E",
+      e.base_weight != null ? String(e.base_weight) : null,
+    ]
+      .filter(Boolean)
+      .join("·");
+    lab.textContent = tags ? `${kind} (${tags})` : kind;
+    lab.title = e.label || kind;
+    item.appendChild(sw);
+    item.appendChild(lab);
+    memoryGraphBrowseLegend.appendChild(item);
+  }
+}
+
+/**
+ * @param {string} id
+ * @param {Partial<{label: string, kind: string, snippet: string, x: number, y: number}>} [fields]
+ */
+function freeBrowseEnsureNode(id, fields = {}) {
+  if (!id) return null;
+  let n = freeBrowseGraph.nodes.get(id);
+  if (!n) {
+    const angle = Math.random() * Math.PI * 2;
+    const r = 40 + freeBrowseGraph.nodes.size * 8;
+    n = {
+      id,
+      label: fields.label || id.slice(0, 10),
+      kind: fields.kind || "atom",
+      snippet: fields.snippet || "",
+      x: fields.x != null ? fields.x : Math.cos(angle) * r,
+      y: fields.y != null ? fields.y : Math.sin(angle) * r,
+      vx: 0,
+      vy: 0,
+      expanded: false,
+    };
+    freeBrowseGraph.nodes.set(id, n);
+  } else {
+    if (fields.label) n.label = fields.label;
+    if (fields.kind) n.kind = fields.kind;
+    if (fields.snippet) n.snippet = fields.snippet;
+  }
+  return n;
+}
+
+/**
+ * @param {string} src
+ * @param {string} dst
+ * @param {string} kind
+ * @param {number|null} weight
+ * @param {string} [reason]
+ */
+function freeBrowseUpsertEdge(src, dst, kind, weight, reason) {
+  if (!src || !dst) return;
+  const key = `${src}|${dst}|${kind || "?"}`;
+  freeBrowseGraph.edges.set(key, {
+    key,
+    src,
+    dst,
+    kind: kind || "?",
+    weight: weight != null && Number.isFinite(Number(weight)) ? Number(weight) : null,
+    reason: reason || "",
+  });
+}
+
+/** Place unexpanded neighbors in a ring around the focus node. */
+function freeBrowseLayoutAround(focusId) {
+  const focus = freeBrowseGraph.nodes.get(focusId);
+  if (!focus) return;
+  const nbrs = [];
+  for (const e of freeBrowseGraph.edges.values()) {
+    if (e.src === focusId) nbrs.push(e.dst);
+    else if (e.dst === focusId) nbrs.push(e.src);
+  }
+  const uniq = [...new Set(nbrs)].filter((id) => id !== focusId);
+  const n = uniq.length || 1;
+  const radius = Math.max(90, 36 + n * 14);
+  uniq.forEach((id, i) => {
+    const node = freeBrowseGraph.nodes.get(id);
+    if (!node) return;
+    // Only nudge nodes that were never expanded (keep user-dragged layout).
+    if (node.expanded && id !== focusId) return;
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    node.x = focus.x + Math.cos(a) * radius;
+    node.y = focus.y + Math.sin(a) * radius;
+  });
+}
+
+/** Lightweight repulsive / attractive pass so the canvas stays readable. */
+function freeBrowseRelax(iterations = 40) {
+  const nodes = [...freeBrowseGraph.nodes.values()];
+  if (nodes.length < 2) return;
+  for (let it = 0; it < iterations; it++) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const minD = 56;
+        if (dist < minD) {
+          const f = ((minD - dist) / dist) * 0.35;
+          dx *= f;
+          dy *= f;
+          a.x -= dx;
+          a.y -= dy;
+          b.x += dx;
+          b.y += dy;
+        }
+      }
+    }
+    for (const e of freeBrowseGraph.edges.values()) {
+      const a = freeBrowseGraph.nodes.get(e.src);
+      const b = freeBrowseGraph.nodes.get(e.dst);
+      if (!a || !b) continue;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const ideal = 110;
+      const f = ((dist - ideal) / dist) * 0.06;
+      dx *= f;
+      dy *= f;
+      a.x += dx;
+      a.y += dy;
+      b.x -= dx;
+      b.y -= dy;
+    }
+  }
+}
+
+function renderFreeBrowseCanvas() {
+  if (!memoryGraphBrowseSvg) return;
+  const svg = memoryGraphBrowseSvg;
+  const hasNodes = freeBrowseGraph.nodes.size > 0;
+  if (memoryGraphBrowseEmpty) memoryGraphBrowseEmpty.hidden = hasNodes;
+  // Clear children
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const NS = "http://www.w3.org/2000/svg";
+  const gRoot = document.createElementNS(NS, "g");
+  const rect = svg.getBoundingClientRect();
+  const w = rect.width || 640;
+  const h = rect.height || 320;
+  const tx = w / 2 + freeBrowseGraph.panX;
+  const ty = h / 2 + freeBrowseGraph.panY;
+  gRoot.setAttribute(
+    "transform",
+    `translate(${tx},${ty}) scale(${freeBrowseGraph.scale})`
+  );
+
+  const showSession =
+    !memoryGraphBrowseSession || memoryGraphBrowseSession.checked !== false;
+
+  // Edges
+  for (const e of freeBrowseGraph.edges.values()) {
+    const a = freeBrowseGraph.nodes.get(e.src);
+    const b = freeBrowseGraph.nodes.get(e.dst);
+    if (!a || !b) continue;
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("class", "memory-graph-browse-edge");
+    line.setAttribute("x1", String(a.x));
+    line.setAttribute("y1", String(a.y));
+    line.setAttribute("x2", String(b.x));
+    line.setAttribute("y2", String(b.y));
+    line.setAttribute("stroke", freeBrowseKindColor(e.kind));
+    gRoot.appendChild(line);
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const label = document.createElementNS(NS, "text");
+    label.setAttribute("class", "memory-graph-browse-edge-label");
+    label.setAttribute("x", String(mx));
+    label.setAttribute("y", String(my - 4));
+    label.setAttribute("text-anchor", "middle");
+    const wTxt =
+      e.weight != null && Number.isFinite(e.weight)
+        ? e.weight.toFixed(2)
+        : "";
+    label.textContent = wTxt ? `${e.kind} ${wTxt}` : e.kind;
+    gRoot.appendChild(label);
+  }
+
+  // Nodes
+  for (const n of freeBrowseGraph.nodes.values()) {
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "memory-graph-browse-node");
+    g.setAttribute("data-atom-id", n.id);
+    g.setAttribute("transform", `translate(${n.x},${n.y})`);
+    if (n.id === freeBrowseGraph.selectedId) g.classList.add("selected");
+    if (showSession && freeBrowseGraph.sessionKept.has(n.id)) {
+      g.classList.add("session-kept");
+    } else if (showSession && freeBrowseGraph.sessionConsidered.has(n.id)) {
+      g.classList.add("session-considered");
+    }
+    const circle = document.createElementNS(NS, "circle");
+    circle.setAttribute("r", n.id === freeBrowseGraph.selectedId ? "14" : "11");
+    // Solid fills — avoid color-mix for broader SVG engine support.
+    circle.setAttribute(
+      "fill",
+      n.id === freeBrowseGraph.selectedId
+        ? freeBrowseKindColor("sequential")
+        : "#3a4556"
+    );
+    if (n.expanded) circle.setAttribute("opacity", "1");
+    else circle.setAttribute("opacity", "0.88");
+    g.appendChild(circle);
+    const text = document.createElementNS(NS, "text");
+    text.setAttribute("y", "24");
+    text.setAttribute("text-anchor", "middle");
+    const short =
+      n.label && n.label !== n.id
+        ? n.label.slice(0, 18)
+        : n.id.length > 12
+          ? `${n.id.slice(0, 10)}…`
+          : n.id;
+    text.textContent = short;
+    g.appendChild(text);
+    g.addEventListener("pointerdown", (ev) => {
+      ev.stopPropagation();
+      freeBrowseGraph.draggingNode = n.id;
+      freeBrowseGraph.lastPtr = { x: ev.clientX, y: ev.clientY };
+      try {
+        g.setPointerCapture(ev.pointerId);
+      } catch {
+        /* ignore */
+      }
+    });
+    g.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      // Treat as select+expand when not dragged far.
+      selectFreeBrowseNode(n.id, { expand: true });
+    });
+    gRoot.appendChild(g);
+  }
+
+  svg.appendChild(gRoot);
+  renderFreeBrowseDetail();
+}
+
+function renderFreeBrowseDetail() {
+  if (!memoryGraphBrowseDetail) return;
+  const id = freeBrowseGraph.selectedId;
+  if (!id || !freeBrowseGraph.nodes.has(id)) {
+    memoryGraphBrowseDetail.hidden = true;
+    memoryGraphBrowseDetail.textContent = "";
+    return;
+  }
+  const n = freeBrowseGraph.nodes.get(id);
+  const degree = [...freeBrowseGraph.edges.values()].filter(
+    (e) => e.src === id || e.dst === id
+  ).length;
+  const honesty = freeBrowseGraph.overviewHonesty || {};
+  const bits = [
+    `selected=${id}`,
+    n.kind ? `kind=${n.kind}` : null,
+    `degree=${degree}`,
+    n.expanded ? "expanded" : "not-yet-expanded",
+    freeBrowseGraph.edgeCount === 0 || honesty.projected_edges_only
+      ? "edges=projected(+semantic)"
+      : `edge_store_rows=${freeBrowseGraph.edgeCount}`,
+  ].filter(Boolean);
+  memoryGraphBrowseDetail.hidden = false;
+  memoryGraphBrowseDetail.textContent = [
+    bits.join(" · "),
+    n.snippet ? n.snippet.slice(0, 160) : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * @param {string} atomId
+ * @param {{ expand?: boolean }} [opts]
+ */
+function selectFreeBrowseNode(atomId, opts = {}) {
+  if (!atomId) return;
+  freeBrowseGraph.selectedId = atomId;
+  freeBrowseEnsureNode(atomId);
+  if (memoryGraphBrowseAtom) memoryGraphBrowseAtom.value = atomId;
+  // Keep list probe in sync.
+  if (memoryGraphNeighborAtom) memoryGraphNeighborAtom.value = atomId;
+  renderFreeBrowseCanvas();
+  if (opts.expand) {
+    runFreeBrowseExpand({ atomId }).catch((e) =>
+      panelLoadError("Memory free-browse expand", e)
+    );
+  }
+}
+
+function clearFreeBrowseCache() {
+  freeBrowseGraph.nodes.clear();
+  freeBrowseGraph.edges.clear();
+  freeBrowseGraph.selectedId = null;
+  freeBrowseGraph.panX = 0;
+  freeBrowseGraph.panY = 0;
+  freeBrowseGraph.scale = 1;
+  if (memoryGraphBrowseMeta) {
+    memoryGraphBrowseMeta.hidden = true;
+    memoryGraphBrowseMeta.textContent = "";
+  }
+  renderFreeBrowseCanvas();
+}
+
+/**
+ * Merge a neighbors API payload into the free-browse cache and re-render.
+ * @param {Record<string, any>} data
+ * @param {string} focusId
+ */
+function mergeNeighborsIntoFreeBrowse(data, focusId) {
+  const focus = freeBrowseEnsureNode(focusId);
+  if (focus) focus.expanded = true;
+  const neighbors = Array.isArray(data.neighbors) ? data.neighbors : [];
+  const nCount = neighbors.length;
+  neighbors.forEach((row, i) => {
+    const dst = String(row.atom_id || "");
+    if (!dst) return;
+    const angle = (i / Math.max(nCount, 1)) * Math.PI * 2 - Math.PI / 2;
+    const base = freeBrowseGraph.nodes.get(focusId);
+    const bx = base ? base.x : 0;
+    const by = base ? base.y : 0;
+    freeBrowseEnsureNode(dst, {
+      label: row.snippet || row.label || dst,
+      kind: row.kind || "atom",
+      snippet: row.snippet || row.label || "",
+      x: bx + Math.cos(angle) * 100,
+      y: by + Math.sin(angle) * 100,
+    });
+    freeBrowseUpsertEdge(
+      String(row.src_atom_id || focusId),
+      dst,
+      String(row.edge_kind || "?"),
+      row.weight != null ? Number(row.weight) : null,
+      row.reason || ""
+    );
+  });
+  freeBrowseLayoutAround(focusId);
+  freeBrowseRelax(48);
+  freeBrowseGraph.selectedId = focusId;
+
+  if (memoryGraphBrowseMeta) {
+    const q = data.query || {};
+    const em = data.expand_meta || {};
+    const kinds = new Set(
+      neighbors.map((n) => String(n.edge_kind || "")).filter(Boolean)
+    );
+    const durableKinds = [...kinds].filter((k) => {
+      const leg = freeBrowseGraph.legendByKind.get(k);
+      return leg && leg.durable;
+    });
+    const honesty = freeBrowseGraph.overviewHonesty || {};
+    const parts = [
+      `focus=${focusId}`,
+      `nodes=${freeBrowseGraph.nodes.size}`,
+      `edges=${freeBrowseGraph.edges.size}`,
+      `+${neighbors.length} hop`,
+      q.k != null ? `k=${q.k}` : null,
+      q.allow_semantic === false ? "semantic=off" : "semantic=on",
+      em.elapsed_ms != null ? `ms=${em.elapsed_ms}` : null,
+      em.semantic_reason ? `sem=${em.semantic_reason}` : null,
+      data.omitted_reason ? `omit=${data.omitted_reason}` : null,
+      kinds.size ? `kinds=${[...kinds].join(",")}` : null,
+      freeBrowseGraph.edgeCount === 0 || honesty.projected_edges_only
+        ? "EdgeStore empty → projected edges only"
+        : durableKinds.length
+          ? `durable_in_hop=${durableKinds.join(",")}`
+          : "no durable kinds in this hop",
+    ].filter(Boolean);
+    memoryGraphBrowseMeta.hidden = false;
+    memoryGraphBrowseMeta.textContent = parts.join(" · ");
+  }
+  renderFreeBrowseCanvas();
+}
+
+/**
+ * Expand focus atom via GET /api/memory/graph/neighbors and cache results.
+ * @param {{ atomId?: string }} [opts]
+ */
+async function runFreeBrowseExpand(opts = {}) {
+  const atomId = (
+    opts.atomId ||
+    (memoryGraphBrowseAtom && memoryGraphBrowseAtom.value.trim()) ||
+    ""
+  ).trim();
+  let k = 12;
+  if (memoryGraphBrowseK) {
+    const raw = parseInt(memoryGraphBrowseK.value, 10);
+    if (Number.isFinite(raw)) k = raw;
+  }
+  const allowSem =
+    !memoryGraphBrowseSem || memoryGraphBrowseSem.checked !== false;
+  if (!atomId) {
+    if (memoryGraphBrowseMeta) {
+      memoryGraphBrowseMeta.hidden = false;
+      memoryGraphBrowseMeta.textContent =
+        "Pick an atom id to free-browse (or click a walk / neighbor card).";
+    }
+    return;
+  }
+  freeBrowseEnsureNode(atomId);
+  freeBrowseGraph.selectedId = atomId;
+  if (memoryGraphBrowseAtom) memoryGraphBrowseAtom.value = atomId;
+  if (memoryGraphNeighborAtom) memoryGraphNeighborAtom.value = atomId;
+  if (memoryGraphBrowseMeta) {
+    memoryGraphBrowseMeta.hidden = false;
+    memoryGraphBrowseMeta.textContent = `expanding ${atomId}…`;
+  }
+  const params = new URLSearchParams();
+  params.set("atom_id", atomId);
+  params.set("k", String(k));
+  params.set("allow_semantic", allowSem ? "1" : "0");
+  try {
+    const data = await fetchJson(
+      `/api/memory/graph/neighbors?${params.toString()}`
+    );
+    mergeNeighborsIntoFreeBrowse(data, atomId);
+    // Keep list probe in sync with canvas expand.
+    renderGraphNeighbors(data);
+  } catch (err) {
+    if (memoryGraphBrowseMeta) {
+      memoryGraphBrowseMeta.hidden = false;
+      memoryGraphBrowseMeta.textContent = String(err.message || err);
+    }
+  }
+}
+
+/**
+ * Sticky session overlay: mark considered/kept ids on the canvas.
+ * @param {Record<string, any>} sessionPayload
+ */
+function updateFreeBrowseSessionOverlay(sessionPayload) {
+  freeBrowseGraph.sessionConsidered = new Set();
+  freeBrowseGraph.sessionKept = new Set();
+  const sess = sessionPayload && sessionPayload.session;
+  if (!sess) {
+    renderFreeBrowseCanvas();
+    return;
+  }
+  if (Array.isArray(sess.considered)) {
+    for (const n of sess.considered) {
+      if (n && n.atom_id) freeBrowseGraph.sessionConsidered.add(String(n.atom_id));
+    }
+  }
+  if (Array.isArray(sess.keep_ids)) {
+    for (const id of sess.keep_ids) freeBrowseGraph.sessionKept.add(String(id));
+  }
+  renderFreeBrowseCanvas();
+}
+
+function bindFreeBrowsePointerHandlers() {
+  if (!memoryGraphBrowseSvg || memoryGraphBrowseSvg.dataset.bound === "1") return;
+  memoryGraphBrowseSvg.dataset.bound = "1";
+  memoryGraphBrowseSvg.addEventListener("pointerdown", (ev) => {
+    if (freeBrowseGraph.draggingNode) return;
+    freeBrowseGraph.panning = true;
+    freeBrowseGraph.lastPtr = { x: ev.clientX, y: ev.clientY };
+    try {
+      memoryGraphBrowseSvg.setPointerCapture(ev.pointerId);
+    } catch {
+      /* ignore */
+    }
+  });
+  memoryGraphBrowseSvg.addEventListener("pointermove", (ev) => {
+    if (!freeBrowseGraph.lastPtr) return;
+    const dx = ev.clientX - freeBrowseGraph.lastPtr.x;
+    const dy = ev.clientY - freeBrowseGraph.lastPtr.y;
+    freeBrowseGraph.lastPtr = { x: ev.clientX, y: ev.clientY };
+    if (freeBrowseGraph.draggingNode) {
+      const n = freeBrowseGraph.nodes.get(freeBrowseGraph.draggingNode);
+      if (n) {
+        n.x += dx / freeBrowseGraph.scale;
+        n.y += dy / freeBrowseGraph.scale;
+        renderFreeBrowseCanvas();
+      }
+      return;
+    }
+    if (freeBrowseGraph.panning) {
+      freeBrowseGraph.panX += dx;
+      freeBrowseGraph.panY += dy;
+      renderFreeBrowseCanvas();
+    }
+  });
+  const endPtr = () => {
+    freeBrowseGraph.draggingNode = null;
+    freeBrowseGraph.panning = false;
+    freeBrowseGraph.lastPtr = null;
+  };
+  memoryGraphBrowseSvg.addEventListener("pointerup", endPtr);
+  memoryGraphBrowseSvg.addEventListener("pointercancel", endPtr);
+  memoryGraphBrowseSvg.addEventListener(
+    "wheel",
+    (ev) => {
+      ev.preventDefault();
+      const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+      freeBrowseGraph.scale = Math.min(
+        3,
+        Math.max(0.35, freeBrowseGraph.scale * delta)
+      );
+      renderFreeBrowseCanvas();
+    },
+    { passive: false }
+  );
 }
 
 /**
@@ -5651,9 +6276,16 @@ function renderGraphNodeList(el, nodes, mode) {
       if (memoryGraphNeighborAtom && aid) {
         memoryGraphNeighborAtom.value = aid;
       }
-      runGraphNeighborSearch().catch((e) =>
-        panelLoadError("Memory graph neighbors", e)
-      );
+      if (memoryGraphBrowseAtom && aid) {
+        memoryGraphBrowseAtom.value = aid;
+      }
+      if (aid) {
+        selectFreeBrowseNode(aid, { expand: true });
+      } else {
+        runGraphNeighborSearch().catch((e) =>
+          panelLoadError("Memory graph neighbors", e)
+        );
+      }
     });
     el.appendChild(card);
   }
@@ -5760,8 +6392,8 @@ function renderGraphNeighbors(data) {
     card.appendChild(pre);
     card.style.cursor = "pointer";
     card.addEventListener("click", () => {
-      if (memoryGraphNeighborAtom && n.atom_id) {
-        memoryGraphNeighborAtom.value = n.atom_id;
+      if (n.atom_id) {
+        selectFreeBrowseNode(String(n.atom_id), { expand: true });
       }
     });
     memoryGraphNeighborsList.appendChild(card);
@@ -5778,6 +6410,11 @@ async function runGraphNeighborSearch() {
     const raw = parseInt(memoryGraphNeighborK.value, 10);
     if (Number.isFinite(raw)) k = raw;
   }
+  // Prefer free-browse k when list k empty/default and browse set.
+  if (memoryGraphBrowseK && (!memoryGraphNeighborK || !memoryGraphNeighborK.value)) {
+    const rawB = parseInt(memoryGraphBrowseK.value, 10);
+    if (Number.isFinite(rawB)) k = rawB;
+  }
   params.set("k", String(k));
   const allowSem =
     !memoryGraphNeighborSem || memoryGraphNeighborSem.checked !== false;
@@ -5793,6 +6430,7 @@ async function runGraphNeighborSearch() {
     return;
   }
   params.set("atom_id", atomId);
+  if (memoryGraphBrowseAtom) memoryGraphBrowseAtom.value = atomId;
   if (memoryGraphNeighborsList) {
     memoryGraphNeighborsList.innerHTML = `<p class="muted">expanding…</p>`;
   }
@@ -5801,6 +6439,7 @@ async function runGraphNeighborSearch() {
       `/api/memory/graph/neighbors?${params.toString()}`
     );
     renderGraphNeighbors(data);
+    mergeNeighborsIntoFreeBrowse(data, atomId);
   } catch (err) {
     if (memoryGraphNeighborsMeta) memoryGraphNeighborsMeta.hidden = true;
     if (memoryGraphNeighborsList) {
@@ -5829,9 +6468,13 @@ async function refreshMemoryGraph(opts = {}) {
     return;
   }
   lastGraphFp = fp;
+  bindFreeBrowsePointerHandlers();
   renderGraphOverview(overview);
   renderGraphSession(session);
   renderGraphLists(session);
+  updateFreeBrowseSessionOverlay(session);
+  // Re-paint canvas so honesty/legend changes show without wiping cache.
+  renderFreeBrowseCanvas();
 }
 
 async function refreshMemory(opts = {}) {
@@ -5953,6 +6596,33 @@ if (memoryGraphNeighborsRun) {
     runGraphNeighborSearch().catch((e) =>
       panelLoadError("Memory graph neighbors", e)
     );
+  });
+}
+if (memoryGraphBrowseExpand) {
+  memoryGraphBrowseExpand.addEventListener("click", () => {
+    runFreeBrowseExpand().catch((e) =>
+      panelLoadError("Memory free-browse expand", e)
+    );
+  });
+}
+if (memoryGraphBrowseClear) {
+  memoryGraphBrowseClear.addEventListener("click", () => {
+    clearFreeBrowseCache();
+  });
+}
+if (memoryGraphBrowseSession) {
+  memoryGraphBrowseSession.addEventListener("change", () => {
+    renderFreeBrowseCanvas();
+  });
+}
+if (memoryGraphBrowseAtom) {
+  memoryGraphBrowseAtom.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      runFreeBrowseExpand().catch((e) =>
+        panelLoadError("Memory free-browse expand", e)
+      );
+    }
   });
 }
 
