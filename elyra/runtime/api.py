@@ -533,6 +533,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_memory_ladder_rebuild(body)
             return
 
+        if path == "/api/memory/graph/edges/backfill":
+            self._post_memory_graph_edges_backfill(body)
+            return
+
         if path == "/api/memory/graph/traverse":
             self._post_memory_graph_traverse(body)
             return
@@ -1191,6 +1195,124 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             result = {"ok": True, "result": result}
         result.setdefault("ok", True)
         result["memory"] = self._memory_flags_block()
+        self._json(200, result)
+
+    def _post_memory_graph_edges_backfill(self, body: dict[str, Any]) -> None:
+        """POST /api/memory/graph/edges/backfill — force structural in_moment.
+
+        Operator path for Glass Graph **Force edge backfill** (polish1 PR4).
+        Optional body: ``max_atoms``, ``max_ms`` (ints); ``kinds`` list (v1
+        only honors ``in_moment``). Synchronous; mirrors ladder rebuild.
+        """
+        from elyra.memory.config import (
+            is_durable_edges_enabled,
+            is_edge_backfill_dev_enabled,
+        )
+
+        flags = self._memory_flags_block()
+        mem_cfg = self._memory_settings()
+        payload = body if isinstance(body, dict) else {}
+
+        # Surface flag state on every response for glass honesty.
+        flags_out = dict(flags) if isinstance(flags, dict) else {}
+        flags_out["edge_backfill_dev_enabled"] = is_edge_backfill_dev_enabled(
+            mem_cfg
+        )
+        flags_out["durable_edges_enabled"] = is_durable_edges_enabled(mem_cfg)
+
+        if not is_edge_backfill_dev_enabled(mem_cfg):
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": "edge_backfill_dev_disabled",
+                    "memory": flags_out,
+                },
+            )
+            return
+        if not is_durable_edges_enabled(mem_cfg):
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": "durable_edges_disabled",
+                    "memory": flags_out,
+                    "hint": (
+                        "enable memory.durable_edges_enabled to write edges; "
+                        "dev backfill surface alone does not flip Gate B"
+                    ),
+                },
+            )
+            return
+
+        def _opt_int(key: str) -> int | None:
+            if key not in payload or payload.get(key) is None:
+                return None
+            try:
+                v = int(payload[key])
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be an int") from None
+            if v < 0:
+                raise ValueError(f"{key} must be >= 0")
+            return v
+
+        try:
+            max_atoms = _opt_int("max_atoms")
+            max_ms = _opt_int("max_ms")
+        except ValueError as exc:
+            self._json(
+                400,
+                {"ok": False, "error": str(exc), "memory": flags_out},
+            )
+            return
+
+        kinds = payload.get("kinds")
+        kinds_list: list[str] | None = None
+        if kinds is not None:
+            if not isinstance(kinds, (list, tuple)):
+                self._json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "kinds must be a list of strings",
+                        "memory": flags_out,
+                    },
+                )
+                return
+            kinds_list = [str(k) for k in kinds]
+
+        backfill = getattr(self.worker, "backfill_durable_edges", None)
+        if not callable(backfill):
+            self._json(
+                501,
+                {
+                    "ok": False,
+                    "error": "backfill_durable_edges not available",
+                    "memory": flags_out,
+                },
+            )
+            return
+        try:
+            result = backfill(
+                max_atoms=max_atoms,
+                max_ms=max_ms,
+                kinds=kinds_list,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("POST /api/memory/graph/edges/backfill failed")
+            self._json(
+                200,
+                {
+                    "ok": False,
+                    "error": str(exc) or type(exc).__name__,
+                    "memory": flags_out,
+                },
+            )
+            return
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        result.setdefault("ok", True)
+        result["memory"] = flags_out
         self._json(200, result)
 
     def _post_memory_vectors_rebuild(self, body: dict[str, Any]) -> None:
@@ -1923,6 +2045,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         # EdgeStore empty → free-browse/neighbors still work via projected
         # structural (+ optional semantic_hop); durable kinds absent (#61 / PR8).
         durable_on = bool(trav_flags.get("durable_edges_enabled"))
+        backfill_dev_on = bool(trav_flags.get("edge_backfill_dev_enabled"))
         edge_store_empty = edge_count == 0
         honesty_notes: list[str] = []
         if not trav_flags.get("directed_traversal_enabled"):
@@ -1946,6 +2069,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "durable_edges_enabled is off — durable EdgeStore rows are not "
                 "written by promote; expand still unions any existing rows"
             )
+        # Process-RAM last force-backfill result for glass progress line.
+        backfill_last = None
+        last_bf = getattr(self.worker, "last_edge_backfill_result", None)
+        if callable(last_bf):
+            try:
+                backfill_last = last_bf()
+            except Exception:  # noqa: BLE001
+                backfill_last = None
         self._json(
             200,
             {
@@ -1963,6 +2094,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "edges_by_kind": edges_by_kind,
                     "durable_edges_enabled": durable_on,
                 },
+                "edge_backfill": {
+                    "dev_enabled": backfill_dev_on,
+                    "last": backfill_last,
+                },
                 "traversal": trav_flags,
                 "memory": flags,
                 "tabs": {
@@ -1976,6 +2111,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                             "GET /api/memory/graph",
                             "GET /api/memory/graph/neighbors",
                             "GET /api/memory/graph/session",
+                            "POST /api/memory/graph/edges/backfill",
                         ],
                     },
                 },
@@ -1985,6 +2121,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     ),
                     "no_session": not has_active and not has_last,
                     "durable_edges_enabled": durable_on,
+                    "edge_backfill_dev_enabled": backfill_dev_on,
                     "edge_store_empty": edge_store_empty,
                     "projected_edges_only": edge_store_empty,
                     "note": (

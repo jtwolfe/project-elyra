@@ -102,10 +102,13 @@ class MemoryStore(Protocol):
         kinds: Sequence[AtomKind] | None = None,
         limit: int = 50,
         newest_first: bool = True,
+        glass_cap: bool = True,
     ) -> list[Atom]:
         """Glass/admin listing; filter by embedding_status / kinds.
 
-        Hard-capped at LIST_ATOMS_MAX. Full-table scan is fine at dogfood scale.
+        Hard-capped at LIST_ATOMS_MAX when ``glass_cap=True`` (default).
+        Operator bulk paths (e.g. edge backfill) may pass ``glass_cap=False``
+        to honor ``limit`` without the glass ceiling.
         """
         ...
 

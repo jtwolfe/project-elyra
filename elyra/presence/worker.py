@@ -518,6 +518,8 @@ class PresenceWorker:
         self._edge_store: Any | None = None
         self._edge_store_open_attempted = False
         self._edge_store_open_failed = False
+        # Dev force edge backfill last result (process-RAM; glass progress line).
+        self._edge_backfill_last: dict[str, Any] | None = None
         # Phase 2 encode queue + embedder + EmbeddingIndex (lazy; store open).
         self._encode_queue: Any | None = None
         self._embedder: Any | None = None
@@ -2080,6 +2082,51 @@ class PresenceWorker:
         except Exception as exc:  # noqa: BLE001
             _LOG.exception("rebuild_episodic_summaries failed")
             return {"ok": False, "error": str(exc) or type(exc).__name__}
+
+    def backfill_durable_edges(
+        self,
+        *,
+        max_atoms: int | None = None,
+        max_ms: int | None = None,
+        kinds: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Operator force structural edge backfill (Graph glass; polish1 PR4).
+
+        Synchronous like ladder rebuild. Process-RAM last result for glass.
+        """
+        from elyra.memory.edges import backfill_durable_edges as _backfill
+
+        store = self._ensure_memory_store()
+        edge_store = self._ensure_edge_store()
+        mem_cfg = self.settings.memory
+        try:
+            result = _backfill(
+                store,
+                edge_store,
+                settings=mem_cfg,
+                max_atoms=max_atoms,
+                max_ms=max_ms,
+                kinds=kinds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("backfill_durable_edges failed")
+            result = {
+                "ok": False,
+                "error": str(exc) or type(exc).__name__,
+                "scanned": 0,
+                "written": 0,
+                "skipped": 0,
+            }
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        # Process-life last result for Graph progress line.
+        self._edge_backfill_last = dict(result)
+        return result
+
+    def last_edge_backfill_result(self) -> dict[str, Any] | None:
+        """Return a copy of the last force-backfill result, if any."""
+        snap = self._edge_backfill_last
+        return dict(snap) if isinstance(snap, dict) else None
 
     def _desired_encode_owner(self) -> str:
         """Compute desired encode_owner from flags (none | idle | worker)."""

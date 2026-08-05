@@ -22,6 +22,8 @@ from elyra.llm.constants import (
 )
 from elyra.llm.models import DEFAULT_XAI_MODEL, DEFAULT_XAI_MODEL_LABEL
 from elyra.memory.config import (
+    EDGE_BACKFILL_MAX_ATOMS_MAX,
+    EDGE_BACKFILL_MAX_MS_MAX,
     EDGE_CREATED_WITH_MAX_MAX,
     EDGE_CREATED_WITH_WRITE_CAP_MAX,
     EDGE_MAX_PER_ATOM_MAX,
@@ -615,6 +617,8 @@ def _replace_section(section: Any, values: Mapping[str, Any], prefix: str) -> An
             "memory.edge_recalls_skip_queue_depth": (
                 EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX
             ),
+            "memory.edge_backfill_max_atoms": EDGE_BACKFILL_MAX_ATOMS_MAX,
+            "memory.edge_backfill_max_ms": EDGE_BACKFILL_MAX_MS_MAX,
         }
         if path in _edge_int_caps:
             hi = _edge_int_caps[path]

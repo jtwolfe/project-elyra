@@ -507,3 +507,301 @@ def test_enforce_outgoing_budgets_helper(jsonl_store):
     dropped = enforce_outgoing_budgets(jsonl_store, "S", cfg)
     assert len(dropped) == 2
     assert jsonl_store.count_edges_for_atom("S", kind=EDGE_RECALLS) == 2
+
+
+# ── Dev force edge backfill (polish1 PR4 / KD-P-backfill) ───────────────────
+
+
+def test_backfill_in_moment_writes_and_idempotent(paths):
+    """Missing in_moment hub edges written; re-run written≈0."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    estore = open_edge_store(paths, cfg)
+    try:
+        mid = "m_bf_1"
+        a = store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-08-05T10:00:00Z",
+                kind="observation",
+                content_text="hist atom a",
+                content_ref="inline",
+                moment_id=mid,
+            )
+        )
+        b = store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-08-05T10:01:00Z",
+                kind="speak",
+                content_text="hist atom b",
+                content_ref="inline",
+                moment_id=mid,
+            )
+        )
+        # No moment_id → skipped
+        store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-08-05T10:02:00Z",
+                kind="observation",
+                content_text="orphan",
+                content_ref="inline",
+                moment_id="",
+            )
+        )
+
+        r1 = backfill_durable_edges(store, estore, settings=cfg)
+        assert r1["ok"] is True
+        assert r1["scanned"] >= 3
+        assert r1["written"] == 2
+        assert r1["written_by_kind"].get(EDGE_IN_MOMENT) == 2
+        assert r1["skipped"] >= 1
+        hub = moment_hub_id(mid)
+        for atom in (a, b):
+            outs = estore.list_edges_from(atom.atom_id, kinds=[EDGE_IN_MOMENT])
+            assert any(e.dst_atom_id == hub for e in outs)
+
+        r2 = backfill_durable_edges(store, estore, settings=cfg)
+        assert r2["ok"] is True
+        assert r2["written"] == 0
+        assert r2["skipped"] >= 3
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_backfill_empty_store(paths):
+    """Empty collection: ok, scanned=0, written=0."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.store import open_memory_store
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    estore = open_edge_store(paths, cfg)
+    try:
+        r = backfill_durable_edges(store, estore, settings=cfg)
+        assert r["ok"] is True
+        assert r["scanned"] == 0
+        assert r["written"] == 0
+        assert r["skipped"] == 0
+        assert r["truncated"] is False
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_backfill_requires_flags(paths):
+    """Honest failure when durable_edges or dev flag off; no writes."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    store = open_memory_store(
+        paths, MemorySettings(write_atoms=True, backend="jsonl")
+    )
+    estore = open_edge_store(
+        paths, MemorySettings(write_atoms=True, backend="jsonl")
+    )
+    try:
+        store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-08-05T10:00:00Z",
+                kind="observation",
+                content_text="x",
+                content_ref="inline",
+                moment_id="m_x",
+            )
+        )
+        # durable off (default) even if dev on
+        r = backfill_durable_edges(
+            store,
+            estore,
+            settings=MemorySettings(
+                durable_edges_enabled=False,
+                edge_backfill_dev_enabled=True,
+            ),
+        )
+        assert r["ok"] is False
+        assert r["error"] == "durable_edges_disabled"
+        assert estore.list_edges_from(
+            store.list_atoms(limit=1)[0].atom_id
+        ) == []
+
+        # dev off even if durable on
+        r2 = backfill_durable_edges(
+            store,
+            estore,
+            settings=MemorySettings(
+                durable_edges_enabled=True,
+                edge_backfill_dev_enabled=False,
+            ),
+        )
+        assert r2["ok"] is False
+        assert r2["error"] == "edge_backfill_dev_disabled"
+
+        # edge_store None
+        r3 = backfill_durable_edges(
+            store,
+            None,
+            settings=MemorySettings(
+                durable_edges_enabled=True,
+                edge_backfill_dev_enabled=True,
+            ),
+        )
+        assert r3["ok"] is False
+        assert r3["error"] == "edge_store_unavailable"
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_backfill_max_ms_truncates(paths):
+    """max_ms=0 forces truncated without writes (budget path)."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    estore = open_edge_store(paths, cfg)
+    try:
+        store.put_atom(
+            Atom(
+                atom_id=new_atom_id(),
+                t_start="2026-08-05T10:00:00Z",
+                kind="observation",
+                content_text="x",
+                content_ref="inline",
+                moment_id="m_t",
+            )
+        )
+        r = backfill_durable_edges(
+            store, estore, settings=cfg, max_ms=0, max_atoms=10
+        )
+        assert r["ok"] is True
+        assert r["truncated"] is True
+        assert r["written"] == 0
+        assert r["scanned"] == 0
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_edge_backfill_dev_enabled_factory_default():
+    """Dogfood ON; Gate B durable_edges stays factory off."""
+    from elyra.memory.config import (
+        is_durable_edges_enabled,
+        is_edge_backfill_dev_enabled,
+    )
+
+    d = MemorySettings()
+    assert d.edge_backfill_dev_enabled is True
+    assert d.durable_edges_enabled is False
+    assert is_edge_backfill_dev_enabled(d) is True
+    assert is_durable_edges_enabled(d) is False
+
+
+def test_backfill_scans_beyond_glass_list_atoms_max(paths):
+    """Operator bulk path honors max_atoms > LIST_ATOMS_MAX (glass cap)."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.store import LIST_ATOMS_MAX, open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    estore = open_edge_store(paths, cfg)
+    try:
+        n = LIST_ATOMS_MAX + 25  # 225
+        mid = "m_bulk"
+        for i in range(n):
+            store.put_atom(
+                Atom(
+                    atom_id=new_atom_id(),
+                    t_start=f"2026-08-05T10:{i // 60:02d}:{i % 60:02d}Z",
+                    kind="observation",
+                    content_text=f"bulk {i}",
+                    content_ref="inline",
+                    moment_id=mid,
+                )
+            )
+        # Glass list still capped.
+        assert len(store.list_atoms(limit=1000)) == LIST_ATOMS_MAX
+        # Bulk backfill scans beyond glass cap.
+        r = backfill_durable_edges(
+            store, estore, settings=cfg, max_atoms=n, max_ms=60_000
+        )
+        assert r["ok"] is True
+        assert r["scanned"] == n
+        assert r["written"] == n
+        hub = moment_hub_id(mid)
+        # Spot-check oldest atom still got a hub edge.
+        oldest = store.list_atoms(newest_first=False, limit=1, glass_cap=False)[0]
+        outs = estore.list_edges_from(oldest.atom_id, kinds=[EDGE_IN_MOMENT])
+        assert any(e.dst_atom_id == hub for e in outs)
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_backfill_unavailable_edge_store_early_out(paths):
+    """UnavailableEdgeStore fails closed once — no per-atom error spam."""
+    from elyra.memory.edges import UnavailableEdgeStore, backfill_durable_edges
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    try:
+        for i in range(3):
+            store.put_atom(
+                Atom(
+                    atom_id=new_atom_id(),
+                    t_start=f"2026-08-05T11:0{i}:00Z",
+                    kind="observation",
+                    content_text=f"x{i}",
+                    content_ref="inline",
+                    moment_id="m_u",
+                )
+            )
+        bad = UnavailableEdgeStore("edge_backend_unavailable")
+        r = backfill_durable_edges(store, bad, settings=cfg)
+        assert r["ok"] is False
+        assert r["error"] == "edge_backend_unavailable"
+        assert r["scanned"] == 0
+        assert r["written"] == 0
+        assert r["errors"] == 0
+    finally:
+        store.close()

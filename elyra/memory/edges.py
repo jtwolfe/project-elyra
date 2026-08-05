@@ -29,11 +29,14 @@ from typing import (
 
 from elyra.config import ElyraPaths
 from elyra.memory.config import (
+    EDGE_BACKFILL_MAX_ATOMS_DEFAULT,
+    EDGE_BACKFILL_MAX_MS_DEFAULT,
     EDGE_SCHEMA_VERSION,
     MemorySettings,
     edges_jsonl_path,
     ensure_memory_dirs,
     is_durable_edges_enabled,
+    is_edge_backfill_dev_enabled,
     lance_root,
     memory_meta_path,
 )
@@ -2056,6 +2059,213 @@ def open_edge_store(
         raise MemoryUnavailable("edge_backend_unavailable") from exc
 
 
+def _list_atoms_for_backfill(atom_store: Any, max_atoms: int) -> list[Any]:
+    """Newest-first bulk list for operator backfill (bypasses glass LIST_ATOMS_MAX).
+
+    Prefers ``list_atoms(..., glass_cap=False)`` when the store supports it;
+    falls back to default glass-capped listing for older/mock stores.
+    """
+    list_fn = getattr(atom_store, "list_atoms", None)
+    if not callable(list_fn):
+        raise RuntimeError("list_atoms_unavailable")
+    lim = max(0, int(max_atoms))
+    if lim == 0:
+        return []
+    try:
+        return list(
+            list_fn(newest_first=True, limit=lim, glass_cap=False) or []
+        )
+    except TypeError:
+        # Older mocks / Protocol stubs without glass_cap kwarg.
+        return list(list_fn(newest_first=True, limit=lim) or [])
+
+
+def backfill_durable_edges(
+    atom_store: Any,
+    edge_store: EdgeStore | None,
+    *,
+    settings: MemorySettings | None = None,
+    max_atoms: int | None = None,
+    max_ms: float | int | None = None,
+    kinds: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Structural-first durable edge backfill (polish1 KD-P-backfill §4.2).
+
+    V1: ``in_moment`` only — for each atom with ``moment_id``, write hub edge
+    when missing. Idempotent: re-run yields ``written≈0``. Synchronous;
+    soft-fails per atom. Never reconstructs ``created_with`` / ``recalls``.
+
+    Requires ``durable_edges_enabled`` and ``edge_backfill_dev_enabled``.
+    Scans up to ``max_atoms`` (default 2000) newest-first without the glass
+    ``LIST_ATOMS_MAX`` ceiling when the store supports ``glass_cap=False``.
+    """
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.promote import write_in_moment_edge
+
+    cfg = settings or MemorySettings()
+    t0 = time.monotonic()
+    kind_set = tuple(kinds) if kinds is not None else (EDGE_IN_MOMENT,)
+    # Only structural kinds supported in v1.
+    do_in_moment = EDGE_IN_MOMENT in kind_set
+
+    max_atoms_eff = (
+        int(max_atoms)
+        if max_atoms is not None
+        else int(
+            getattr(cfg, "edge_backfill_max_atoms", EDGE_BACKFILL_MAX_ATOMS_DEFAULT)
+            or EDGE_BACKFILL_MAX_ATOMS_DEFAULT
+        )
+    )
+    max_atoms_eff = max(0, max_atoms_eff)
+    max_ms_eff = (
+        float(max_ms)
+        if max_ms is not None
+        else float(
+            getattr(cfg, "edge_backfill_max_ms", EDGE_BACKFILL_MAX_MS_DEFAULT)
+            or EDGE_BACKFILL_MAX_MS_DEFAULT
+        )
+    )
+    max_ms_eff = max(0.0, max_ms_eff)
+
+    result: dict[str, Any] = {
+        "ok": False,
+        "scanned": 0,
+        "written": 0,
+        "written_by_kind": {},
+        "skipped": 0,
+        "errors": 0,
+        "elapsed_ms": 0,
+        "truncated": False,
+        "kinds": list(kind_set),
+        "max_atoms": max_atoms_eff,
+        "max_ms": int(max_ms_eff),
+    }
+
+    if not is_edge_backfill_dev_enabled(cfg):
+        result["error"] = "edge_backfill_dev_disabled"
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+    if not is_durable_edges_enabled(cfg):
+        result["error"] = "durable_edges_disabled"
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+    if edge_store is None or isinstance(edge_store, UnavailableEdgeStore):
+        reason = "edge_store_unavailable"
+        if isinstance(edge_store, UnavailableEdgeStore):
+            reason = str(getattr(edge_store, "reason", None) or reason)
+        result["error"] = reason
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+    if atom_store is None:
+        result["error"] = "store_unavailable"
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+    if not do_in_moment:
+        result["error"] = "no_supported_kinds"
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+
+    written_by_kind: dict[str, int] = {EDGE_IN_MOMENT: 0}
+    scanned = 0
+    written = 0
+    skipped = 0
+    errors = 0
+    truncated = False
+
+    try:
+        atoms = _list_atoms_for_backfill(atom_store, max_atoms_eff)
+    except RuntimeError as exc:
+        result["error"] = str(exc) or "list_atoms_unavailable"
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        _LOG.exception("backfill list_atoms failed")
+        result["error"] = str(exc) or type(exc).__name__
+        result["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
+        return result
+
+    for atom in atoms:
+        if scanned >= max_atoms_eff:
+            truncated = True
+            break
+        elapsed_ms = (time.monotonic() - t0) * 1000.0
+        if elapsed_ms >= max_ms_eff:
+            truncated = True
+            break
+        scanned += 1
+        moment_id = getattr(atom, "moment_id", None) or ""
+        moment_id = str(moment_id).strip()
+        if not moment_id:
+            skipped += 1
+            continue
+        src_id = str(getattr(atom, "atom_id", "") or "")
+        if not src_id:
+            skipped += 1
+            continue
+        try:
+            hub = moment_hub_id(moment_id)
+            existing = edge_store.list_edges_from(
+                src_id, kinds=[EDGE_IN_MOMENT], limit=4
+            )
+            if any(getattr(e, "dst_atom_id", None) == hub for e in existing):
+                skipped += 1
+                continue
+            write_in_moment_edge(
+                edge_store,
+                src_atom_id=src_id,
+                moment_id=moment_id,
+                settings=cfg,
+                atom_store=atom_store,
+            )
+            # Confirm write landed (put is idempotent by identity key).
+            after = edge_store.list_edges_from(
+                src_id, kinds=[EDGE_IN_MOMENT], limit=4
+            )
+            if any(getattr(e, "dst_atom_id", None) == hub for e in after):
+                written += 1
+                written_by_kind[EDGE_IN_MOMENT] = (
+                    written_by_kind.get(EDGE_IN_MOMENT, 0) + 1
+                )
+            else:
+                # Budget drop / soft fail — count as skip, not error.
+                skipped += 1
+        except Exception:  # noqa: BLE001 — soft-fail per atom
+            _LOG.exception(
+                "backfill in_moment failed atom_id=%s", src_id
+            )
+            errors += 1
+
+    # Truncated when wall or max_atoms stop mid-scan, or store returned a
+    # full page while more may exist (caller can raise max_atoms).
+    if not truncated and len(atoms) >= max_atoms_eff > 0:
+        # May or may not have more atoms; honest when we hit the request cap.
+        try:
+            health = getattr(atom_store, "health", None)
+            total = None
+            if callable(health):
+                h = health() or {}
+                if isinstance(h, dict) and h.get("atom_count") is not None:
+                    total = int(h["atom_count"])
+            if total is not None and total > scanned:
+                truncated = True
+        except Exception:  # noqa: BLE001
+            pass
+
+    result.update(
+        {
+            "ok": True,
+            "scanned": scanned,
+            "written": written,
+            "written_by_kind": written_by_kind,
+            "skipped": skipped,
+            "errors": errors,
+            "elapsed_ms": int((time.monotonic() - t0) * 1000),
+            "truncated": truncated,
+        }
+    )
+    return result
+
+
 __all__ = [
     "DurableEdge",
     "EdgeRecord",
@@ -2065,6 +2275,7 @@ __all__ = [
     "LanceEdgeStore",
     "RECALLS_DST_KINDS",
     "UnavailableEdgeStore",
+    "backfill_durable_edges",
     "channel_virtual_id",
     "durable_edge_from_dict",
     "durable_edge_to_dict",

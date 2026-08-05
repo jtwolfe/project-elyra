@@ -826,3 +826,189 @@ def test_graph_neighbors_durable_created_with_real_dsts(paths):
         ] > 0
     finally:
         h.close()
+
+
+# ── PR4: force edge backfill API ─────────────────────────────────────────────
+
+
+def test_graph_edges_backfill_writes_in_moment(paths):
+    """POST backfill creates missing in_moment; re-run written≈0; last on overview."""
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.weights import EDGE_IN_MOMENT
+
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            directed_traversal_enabled=True,
+            durable_edges_enabled=True,
+            edge_backfill_dev_enabled=True,
+        ),
+    )
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        assert store is not None
+        mid = "m_api_bf"
+        atoms = _link_chain(
+            store,
+            ["bf alpha", "bf beta", "bf gamma"],
+            moment_id=mid,
+        )
+        # Precondition: no durable edges yet.
+        estore = h.worker._ensure_edge_store()  # noqa: SLF001
+        assert estore is not None
+        for a in atoms:
+            assert estore.list_edges_from(a.atom_id, kinds=[EDGE_IN_MOMENT]) == []
+
+        code, body = h.post("/api/memory/graph/edges/backfill", {})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["written"] == 3
+        assert body["scanned"] >= 3
+        assert body["written_by_kind"].get("in_moment") == 3
+        assert body["memory"]["durable_edges_enabled"] is True
+        assert body["memory"]["edge_backfill_dev_enabled"] is True
+
+        hub = moment_hub_id(mid)
+        for a in atoms:
+            outs = estore.list_edges_from(a.atom_id, kinds=[EDGE_IN_MOMENT])
+            assert any(e.dst_atom_id == hub for e in outs)
+
+        # Idempotent re-run.
+        code, body2 = h.post("/api/memory/graph/edges/backfill", {})
+        assert code == 200, body2
+        assert body2["ok"] is True
+        assert body2["written"] == 0
+        assert body2["skipped"] >= 3
+
+        # Overview carries last result + backfill flag.
+        code, overview = h.get("/api/memory/graph")
+        assert code == 200, overview
+        assert overview["traversal"]["edge_backfill_dev_enabled"] is True
+        assert overview["edge_backfill"]["dev_enabled"] is True
+        assert overview["edge_backfill"]["last"] is not None
+        assert overview["edge_backfill"]["last"]["written"] == 0
+        assert overview["edge_count"] >= 3
+        assert "in_moment" in (overview.get("edges_by_kind") or {})
+    finally:
+        h.close()
+
+
+def test_graph_edges_backfill_durable_off(paths):
+    """durable_edges_enabled off → honest failure; no edges written."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            durable_edges_enabled=False,
+            edge_backfill_dev_enabled=True,
+        ),
+    )
+    try:
+        store = h.worker._ensure_memory_store()  # noqa: SLF001
+        _link_chain(store, ["x only"], moment_id="m_off")
+        code, body = h.post("/api/memory/graph/edges/backfill", {})
+        assert code == 200, body
+        assert body["ok"] is False
+        assert body["error"] == "durable_edges_disabled"
+        estore = h.worker._ensure_edge_store()  # noqa: SLF001
+        if estore is not None:
+            health = estore.health() or {}
+            assert int(health.get("edge_count") or 0) == 0
+    finally:
+        h.close()
+
+
+def test_graph_edges_backfill_dev_off(paths):
+    """edge_backfill_dev_enabled off → honest failure."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            edge_backfill_dev_enabled=False,
+        ),
+    )
+    try:
+        code, body = h.post("/api/memory/graph/edges/backfill", {})
+        assert code == 200, body
+        assert body["ok"] is False
+        assert body["error"] == "edge_backfill_dev_disabled"
+
+        code, overview = h.get("/api/memory/graph")
+        assert code == 200
+        assert overview["traversal"]["edge_backfill_dev_enabled"] is False
+        assert overview["edge_backfill"]["dev_enabled"] is False
+    finally:
+        h.close()
+
+
+def test_graph_edges_backfill_empty_store(paths):
+    """Empty atom store: ok with scanned=0."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            edge_backfill_dev_enabled=True,
+        ),
+    )
+    try:
+        # Open store so API does not report store_unavailable.
+        assert h.worker._ensure_memory_store() is not None  # noqa: SLF001
+        code, body = h.post("/api/memory/graph/edges/backfill", {})
+        assert code == 200, body
+        assert body["ok"] is True
+        assert body["scanned"] == 0
+        assert body["written"] == 0
+    finally:
+        h.close()
+
+
+def test_graph_edges_backfill_bad_body(paths):
+    """Invalid max_atoms → 400."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            edge_backfill_dev_enabled=True,
+        ),
+    )
+    try:
+        code, body = h.post(
+            "/api/memory/graph/edges/backfill", {"max_atoms": "nope"}
+        )
+        assert code == 400
+        assert body["ok"] is False
+        assert "max_atoms" in body["error"]
+    finally:
+        h.close()
+
+
+def test_graph_overview_backfill_dev_default_on(paths):
+    """Factory: edge_backfill_dev_enabled on; durable_edges still off (no Gate B)."""
+    h = _ApiHarness(paths, memory=_enabled_memory())
+    try:
+        code, body = h.get("/api/memory/graph")
+        assert code == 200, body
+        assert body["traversal"]["edge_backfill_dev_enabled"] is True
+        assert body["traversal"]["durable_edges_enabled"] is False
+        assert body["edge_backfill"]["dev_enabled"] is True
+        assert body["edge_backfill"]["last"] is None
+        assert (
+            "POST /api/memory/graph/edges/backfill"
+            in body["tabs"]["graph_free_browse"]["api"]
+        )
+    finally:
+        h.close()

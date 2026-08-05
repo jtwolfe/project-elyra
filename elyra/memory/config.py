@@ -59,6 +59,12 @@ EDGE_RECALLS_SKIP_QUEUE_DEPTH_MAX = 4096
 EDGE_RECALLS_INLINE_DEFAULT = False
 # Presence-worker deferred recalls queue (OQ-P7: 32 drop-new).
 EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT = 32
+# Dev force edge backfill (polish1 KD-P-backfill). Factory ON for dogfood era;
+# writes still require durable_edges_enabled (Gate B stays off).
+EDGE_BACKFILL_MAX_ATOMS_DEFAULT = 2000
+EDGE_BACKFILL_MAX_ATOMS_MAX = 10_000
+EDGE_BACKFILL_MAX_MS_DEFAULT = 30_000
+EDGE_BACKFILL_MAX_MS_MAX = 120_000
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
 # Kept below atom_max_chars (8000) so spill is reachable under default settings
@@ -253,6 +259,17 @@ def is_durable_edges_enabled(settings: MemorySettings | None) -> bool:
     if settings is None:
         return False
     return bool(getattr(settings, "durable_edges_enabled", False))
+
+
+def is_edge_backfill_dev_enabled(settings: MemorySettings | None) -> bool:
+    """True when Graph dev force-edge-backfill button/API may run.
+
+    Factory default **on** for dogfood era (KD-P-backfill). Write path still
+    requires ``durable_edges_enabled``; this flag only gates the dev surface.
+    """
+    if settings is None:
+        return False
+    return bool(getattr(settings, "edge_backfill_dev_enabled", True))
 
 
 @dataclass(frozen=True)
@@ -456,6 +473,11 @@ class MemorySettings:
     # When True, default GraphView expand includes has_channel kind filter
     # (virtual channel destinations are still never walkable — Option A).
     traverse_expand_channels: bool = False
+    # Dev Graph force edge backfill (polish1 KD-P-backfill). ON for dogfood;
+    # UI hides when false. Writes still require durable_edges_enabled.
+    edge_backfill_dev_enabled: bool = True
+    edge_backfill_max_atoms: int = EDGE_BACKFILL_MAX_ATOMS_DEFAULT
+    edge_backfill_max_ms: int = EDGE_BACKFILL_MAX_MS_DEFAULT
 
 
 def memory_root(paths: ElyraPaths) -> Path:
@@ -508,6 +530,10 @@ def blob_relpath_for_atom(atom_id: str) -> str:
 __all__ = [
     "ATOMS_BLOB_DIRNAME",
     "ATOMS_JSONL",
+    "EDGE_BACKFILL_MAX_ATOMS_DEFAULT",
+    "EDGE_BACKFILL_MAX_ATOMS_MAX",
+    "EDGE_BACKFILL_MAX_MS_DEFAULT",
+    "EDGE_BACKFILL_MAX_MS_MAX",
     "EDGE_CREATED_WITH_MAX_DEFAULT",
     "EDGE_CREATED_WITH_MAX_MAX",
     "EDGE_CREATED_WITH_WRITE_CAP_DEFAULT",
@@ -579,6 +605,7 @@ __all__ = [
     "is_directed_keep_enabled",
     "is_directed_traversal_enabled",
     "is_durable_edges_enabled",
+    "is_edge_backfill_dev_enabled",
     "ladder_dir",
     "lance_root",
     "memory_meta_path",
