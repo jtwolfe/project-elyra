@@ -2302,6 +2302,7 @@ class PresenceWorker:
                 _LOG.debug("MediaStore open for encode failed", exc_info=True)
             index = self._ensure_embedding_index()
             gate = self._get_embedder_gate()
+            edge_store = self._ensure_edge_store()
             drain_t0 = time.monotonic()
             stats = queue.drain(
                 store,
@@ -2313,6 +2314,7 @@ class PresenceWorker:
                 media_store=media_store,
                 settings=mem_cfg,
                 gate=gate,
+                edge_store=edge_store,
             )
             drain_ms = int((time.monotonic() - drain_t0) * 1000.0)
             # Wall-clock ISO for Vectors/inspect health (not monotonic).
@@ -2578,6 +2580,7 @@ class PresenceWorker:
         try:
             from elyra.memory.promote import promote_wake_observation
 
+            # Consumer-only embedder (no cold load) + edge/index for recalls.
             promote_wake_observation(
                 store,
                 moment_id,
@@ -2587,6 +2590,10 @@ class PresenceWorker:
                 why_now=why,
                 settings=mem_cfg,
                 promote_context=self._promote_context_snapshot(),
+                edge_store=self._ensure_edge_store(),
+                embedder=self._ensure_embedder(role="consumer"),
+                index=self._ensure_embedding_index(),
+                encode_queue=self._encode_queue,
             )
         except Exception:  # noqa: BLE001 — never abort claim/open
             _LOG.exception(
@@ -2920,6 +2927,10 @@ class PresenceWorker:
             memory_store=mem,
             memory_settings=self.settings.memory,
             promote_context_fn=self._promote_context_snapshot,
+            edge_store=self._ensure_edge_store(),
+            embedder=self._ensure_embedder(role="consumer"),
+            index=self._ensure_embedding_index(),
+            encode_queue=self._encode_queue,
             viewing_dirty_fn=self._is_viewing_dirty,
             clear_viewing_dirty_fn=self._clear_viewing_dirty,
         )
