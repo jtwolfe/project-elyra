@@ -238,7 +238,7 @@ snappy_ann_max_ms(settings, site: Literal["meal","traverse","recalls","http"]) -
 |------|-------------------|-----------------------------|
 | **meal** | `semantic_select_max_ms` (encode sub: `encode_query_max_ms`) | Existing select_semantic snappy omit/timeout |
 | **traverse** (start seed / step hop) | `min(traverse_expand_max_ms, semantic_select_max_ms)` | Soft-skip ANN; structural walk continues; honest `timeout` / `encoder_cold` |
-| **recalls** (deferred job) | `min(semantic_select_max_ms, 100)` or **0 = skip ANN** | Soft-skip; no edges; never blocks promote |
+| **recalls** (deferred job) | **0 = skip ANN** (product default when wait off) | Soft-skip; no edges; never blocks promote. Implementer note: a brief `min(semantic_select_max_ms, 100)` snappy attempt is allowed only if tests need non-zero ANN under wait-off; do not ship that as product default. |
 | **http / free-browse** | `min(traverse_expand_max_ms, semantic_select_max_ms)` when `allow_semantic` | Fail-fast partial; no long hang |
 
 ##### Wait **enabled**
@@ -821,7 +821,6 @@ flowchart LR
   P1a --> P2[PR2 local map + filters]
   P1a --> P5[PR5 glass sticky + honesty]
   P1b -.->|optional| P5
-  P2 --> P5
   P1a --> P3[PR3 skill maneuvers]
   P2 --> P3
   P3 --> P6[PR6 dogfood docs]
