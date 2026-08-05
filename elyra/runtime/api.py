@@ -1855,6 +1855,16 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def _memory_settings(self) -> Any | None:
         return getattr(getattr(self.worker, "settings", None), "memory", None)
 
+    def _memory_settings_with_wait(self) -> Any | None:
+        """MemorySettings with runtime semantic_wait overlay when worker has it."""
+        fn = getattr(self.worker, "_memory_settings_with_wait", None)
+        if callable(fn):
+            try:
+                return fn()
+            except Exception:  # noqa: BLE001
+                _LOG.debug("worker _memory_settings_with_wait failed", exc_info=True)
+        return self._memory_settings()
+
     def _get_memory_graph(self) -> None:
         """GET /api/memory/graph — overview: flags, session presence, legend."""
         from elyra.memory.inspect import (
@@ -1863,7 +1873,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         )
 
         flags = self._memory_flags_block()
-        mem_cfg = self._memory_settings()
+        mem_cfg = self._memory_settings_with_wait()
         trav_flags = directed_traversal_flags(mem_cfg)
         reg = self._traversal_registry()
         has_active = False
@@ -1871,7 +1881,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         meal_keep_count = 0
         if reg is not None:
             try:
-                # Bind live settings so flag honesty matches registry.
+                # Bind wait-overlaid settings so flag/ceiling honesty matches live.
                 bind = getattr(reg, "bind_settings", None)
                 if callable(bind) and mem_cfg is not None:
                     bind(mem_cfg)
@@ -1996,7 +2006,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         )
 
         flags = self._memory_flags_block()
-        mem_cfg = self._memory_settings()
+        mem_cfg = self._memory_settings_with_wait()
         trav_flags = directed_traversal_flags(mem_cfg)
         which_raw = (qs.get("which") or [None])[0]
         which = (
@@ -2116,14 +2126,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         flags = self._memory_flags_block()
         # Prefer worker overlay so wait max tracks glass set_semantic_wait.
-        mem_with_wait = getattr(self.worker, "_memory_settings_with_wait", None)
-        if callable(mem_with_wait):
-            try:
-                mem_cfg = mem_with_wait()
-            except Exception:  # noqa: BLE001
-                mem_cfg = self._memory_settings()
-        else:
-            mem_cfg = self._memory_settings()
+        mem_cfg = self._memory_settings_with_wait()
         trav_flags = directed_traversal_flags(mem_cfg)
         atom_id_raw = (qs.get("atom_id") or [None])[0]
         atom_id = (
@@ -2316,7 +2319,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         )
 
         flags = self._memory_flags_block()
-        mem_cfg = self._memory_settings()
+        # Wait overlay so POST traverse start/step ANN ceilings track glass.
+        mem_cfg = self._memory_settings_with_wait()
         trav_flags = directed_traversal_flags(mem_cfg)
         if not isinstance(body, dict):
             body = {}
@@ -2349,7 +2353,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Always bind live settings before enable check / mutate.
+        # Always bind wait-overlaid settings before enable check / mutate.
         try:
             bind = getattr(reg, "bind_settings", None)
             if callable(bind) and mem_cfg is not None:

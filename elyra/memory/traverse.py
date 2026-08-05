@@ -1183,21 +1183,55 @@ class TraversalRegistry:
         newly: list[str] = []
         # KD-P0-step-ann: one shared semantic ANN budget per step; at most one
         # semantic_hop call (first expand_id that still has ANN budget).
+        # Structural multi-id expand is charged ONLY against expand_ms_budget;
+        # ANN wait time must NOT empty packing or starve further expand_ids.
         step_semantic_budget = int(semantic_ann_deadline_ms(cfg, "traverse"))
         session.budgets.semantic_ms_budget_step = step_semantic_budget
         ann_calls_this_step = 0
         semantic_ms_spent = 0
+        struct_spent_total = 0  # dual-deadline structural accounting only
+
+        def _pack_edges(src_id: str, next_depth: int, edges: list[Any]) -> None:
+            """Accept returned edges (nodes/depth caps only — no expand_ms wall)."""
+            nonlocal newly
+            for e in edges:
+                if session.budgets.nodes_remaining <= 0:
+                    break
+                if e.dst_atom_id in session.considered:
+                    continue
+                atom = store.get_atom(e.dst_atom_id)
+                if atom is None:
+                    continue
+                self._add_considered(
+                    session,
+                    store,
+                    atom,
+                    via_edge_kind=e.edge_kind,
+                    via_reason=e.reason,
+                    depth=next_depth,
+                    weight=e.weight,
+                    parent_id=src_id,
+                    label_n=label_n,
+                    preview_n=preview_n,
+                )
+                newly.append(e.dst_atom_id)
+                session.edge_kind_counts[e.edge_kind] = (
+                    session.edge_kind_counts.get(e.edge_kind, 0) + 1
+                )
+                if next_depth > session.budgets.depth_spent:
+                    session.budgets.depth_spent = next_depth
 
         if can_expand and expand_ids:
             picks = [str(x) for x in expand_ids][: max(0, expand_per)]
-            t0 = _now_ms()
-            deadline = float(expand_ms) if expand_ms > 0 else None
+            struct_budget = float(expand_ms) if expand_ms > 0 else None
             session.budgets.steps_spent += 1
 
             for src_id in picks:
                 if session.budgets.nodes_remaining <= 0:
                     break
-                if deadline is not None and (_now_ms() - t0) > deadline:
+                # Continue multi-id structural expand using structural spend only
+                # (never wall-clock including ANN wait).
+                if struct_budget is not None and struct_spent_total >= struct_budget:
                     expand_truncated = True
                     break
                 src_node = session.considered.get(src_id)
@@ -1207,66 +1241,65 @@ class TraversalRegistry:
                 next_depth = src_node.depth + 1
                 if next_depth > session.budgets.max_depth:
                     continue
-                remaining_ms = None
-                if deadline is not None:
-                    remaining_ms = max(0, int(deadline - (_now_ms() - t0)))
-                    if remaining_ms <= 0:
+                remaining_struct: int | None
+                if struct_budget is not None:
+                    remaining_struct = max(
+                        0, int(struct_budget - struct_spent_total)
+                    )
+                    if remaining_struct <= 0:
                         expand_truncated = True
                         break
-                # Structural first always; ANN only on first expand_id with budget.
-                allow_sem = ann_calls_this_step == 0 and step_semantic_budget > 0
-                edges = graph.neighbors(
+                else:
+                    remaining_struct = None  # no structural soft wall
+
+                # Phase A: structural-only under remaining expand_ms.
+                edges_struct = graph.neighbors(
                     src_id,
                     k=neighbor_k,
                     exclude_ids=set(session.considered.keys()),
-                    allow_semantic=allow_sem,
-                    expand_deadline_ms=remaining_ms,
-                    semantic_deadline_ms=(
-                        step_semantic_budget if allow_sem else 0
-                    ),
+                    allow_semantic=False,
+                    expand_deadline_ms=remaining_struct,
+                    semantic_deadline_ms=0,
                 )
-                if allow_sem:
+                self._sync_moment_cache(session, graph)
+                meta_struct = graph.last_expand_meta
+                struct_spent_total += int(
+                    meta_struct.get("structural_ms_spent") or 0
+                )
+                if meta_struct.get("structural_truncated") or meta_struct.get(
+                    "expand_truncated"
+                ):
+                    expand_truncated = True
+                _pack_edges(src_id, next_depth, edges_struct)
+
+                # Phase B: at most one semantic_hop under independent ANN budget.
+                if (
+                    ann_calls_this_step == 0
+                    and step_semantic_budget > 0
+                    and session.budgets.nodes_remaining > 0
+                ):
+                    edges_sem = graph.neighbors(
+                        src_id,
+                        kinds=["semantic_hop"],
+                        k=neighbor_k,
+                        exclude_ids=set(session.considered.keys()),
+                        allow_semantic=True,
+                        expand_deadline_ms=0,  # no structural work this pass
+                        semantic_deadline_ms=step_semantic_budget,
+                    )
                     ann_calls_this_step += 1
                     meta_sem = graph.last_expand_meta
-                    semantic_ms_spent += int(meta_sem.get("semantic_ms_spent") or 0)
+                    semantic_ms_spent += int(
+                        meta_sem.get("semantic_ms_spent") or 0
+                    )
                     # Shared budget consumed (not reused for further ids).
                     step_semantic_budget = 0
-                # Sync GraphView moment_member_cache → session frontier cache.
-                self._sync_moment_cache(session, graph)
-                meta = graph.last_expand_meta
-                if meta.get("expand_truncated") or meta.get("structural_truncated"):
-                    expand_truncated = True
-                for e in edges:
-                    if session.budgets.nodes_remaining <= 0:
-                        break
-                    if deadline is not None and (_now_ms() - t0) > deadline:
-                        expand_truncated = True
-                        break
-                    if e.dst_atom_id in session.considered:
-                        continue
-                    atom = store.get_atom(e.dst_atom_id)
-                    if atom is None:
-                        continue
-                    self._add_considered(
-                        session,
-                        store,
-                        atom,
-                        via_edge_kind=e.edge_kind,
-                        via_reason=e.reason,
-                        depth=next_depth,
-                        weight=e.weight,
-                        parent_id=src_id,
-                        label_n=label_n,
-                        preview_n=preview_n,
-                    )
-                    newly.append(e.dst_atom_id)
-                    session.edge_kind_counts[e.edge_kind] = (
-                        session.edge_kind_counts.get(e.edge_kind, 0) + 1
-                    )
-                    # Update depth_spent to max path hops from seeds.
-                    if next_depth > session.budgets.depth_spent:
-                        session.budgets.depth_spent = next_depth
-            expand_ms_spent = int(_now_ms() - t0)
+                    # Pack ANN results always — do not apply expand_ms wall.
+                    # semantic_timeout is honesty only, not discard.
+                    _pack_edges(src_id, next_depth, edges_sem)
+
+            # expand_ms honesty: structural spend only (ANN is separate budget).
+            expand_ms_spent = int(struct_spent_total)
         elif not can_expand and expand_ids:
             # Still count a step attempt? Design: exceed caps → stop further
             # expand; finish with partial keep still allowed. Do not increment

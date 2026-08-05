@@ -1342,14 +1342,18 @@ class GraphView:
                         )
                     )
                     expand_meta["semantic_ms_spent"] = int(_now_ms() - t_sem0)
-                    if expand_meta.get("semantic_reason") == REASON_TIMEOUT:
-                        expand_meta["semantic_truncated"] = True
-                        expand_meta["expand_truncated"] = True
-                    elif expand_meta.get("expand_truncated") and not expand_meta.get(
+                    # Dual mode: ANN wall is not structural expand_truncated.
+                    # _project_semantic_hop may set expand_truncated on ANN miss —
+                    # convert pure-ANN timeouts to semantic_truncated only.
+                    if expand_meta.get("expand_truncated") and not expand_meta.get(
                         "structural_truncated"
                     ):
-                        # semantic hop set expand_truncated for its own timeout
                         expand_meta["semantic_truncated"] = True
+                        expand_meta["expand_truncated"] = False
+                    if expand_meta.get("semantic_reason") == REASON_TIMEOUT:
+                        expand_meta["semantic_truncated"] = True
+                        if not expand_meta.get("structural_truncated"):
+                            expand_meta["expand_truncated"] = False
             elif not over():
                 # Legacy: shared wall from t0
                 edges.extend(

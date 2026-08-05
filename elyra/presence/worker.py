@@ -1774,7 +1774,9 @@ class PresenceWorker:
     def _idle_traversal_ttl(self) -> None:
         """Abandon active traversal session when idle past traverse_session_ttl_s."""
         try:
-            self._traversal.bind_settings(self.settings.memory)
+            # Prefer wait overlay so glass max_ms is not clobbered by bare
+            # settings if any future ANN path reuses the bound snapshot.
+            self._traversal.bind_settings(self._memory_settings_with_wait())
             dropped = self._traversal.sweep_idle()
             if dropped is not None:
                 _LOG.info(
@@ -3502,6 +3504,9 @@ class PresenceWorker:
                 # graph_view is a factory (fresh view per call; warm embedder only).
                 "graph_view": self.graph_view,
                 "traversal": self._traversal,
+                # Wait overlay so tools rebind registry with runtime semantic_wait
+                # (not bare settings.memory product defaults).
+                "memory_settings_with_wait": self._memory_settings_with_wait,
                 # Moment viewing set + promote ports (view_media tool).
                 "moment_viewing": self._moment_viewing,
                 "viewing_dirty_ref": lambda: self._viewing_dirty,

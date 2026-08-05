@@ -172,8 +172,11 @@ def snappy_ann_max_ms(
     |----------|--------|
     | meal     | ``semantic_select_max_ms`` |
     | traverse | ``min(traverse_expand_max_ms, semantic_select_max_ms)`` |
-    | recalls  | ``min(semantic_select_max_ms, 100)`` |
+    | recalls  | **0 = skip ANN** (product default; never inline snappy under promote) |
     | http     | ``min(traverse_expand_max_ms, semantic_select_max_ms)`` |
+
+    Wait-off recalls soft-skip ANN entirely (design §1.1 / KD-P0-defer). PR1b
+    deferred jobs use the wait helper when wait is on; wait-off stays skip.
     """
     select_ms = 50
     expand_ms = 120
@@ -190,7 +193,8 @@ def snappy_ann_max_ms(
     if site_key == "meal":
         return select_ms
     if site_key == "recalls":
-        return min(select_ms, 100)
+        # Product default: skip ANN when wait is off (not min(select, 100)).
+        return 0
     # traverse + http (and unknown → traverse/http snappy)
     return min(expand_ms, select_ms)
 

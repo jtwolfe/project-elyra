@@ -137,13 +137,21 @@ def test_effective_semantic_wait_helper_runtime_overlay() -> None:
     assert snappy_ann_max_ms(settings, "meal") == 40
     assert snappy_ann_max_ms(settings, "traverse") == min(120, 40)
     assert snappy_ann_max_ms(settings, "http") == min(120, 40)
-    assert snappy_ann_max_ms(settings, "recalls") == min(40, 100)
+    # Product wait-off recalls: skip ANN (0), not min(select, 100).
+    assert snappy_ann_max_ms(settings, "recalls") == 0
     assert semantic_ann_deadline_ms(settings, "traverse") == 8_000
     assert (
         semantic_ann_deadline_ms(
             settings, "traverse", runtime_state=runtime_off
         )
         == min(120, 40)
+    )
+    # Wait-off recalls deadline is 0 (skip).
+    assert (
+        semantic_ann_deadline_ms(
+            settings, "recalls", runtime_state=runtime_off
+        )
+        == 0
     )
 
 
@@ -152,7 +160,7 @@ def test_snappy_ann_empty_settings_defaults() -> None:
     assert snappy_ann_max_ms(None, "meal") == 50
     assert snappy_ann_max_ms(None, "traverse") == min(120, 50)
     assert snappy_ann_max_ms(None, "http") == min(120, 50)
-    assert snappy_ann_max_ms(None, "recalls") == min(50, 100)
+    assert snappy_ann_max_ms(None, "recalls") == 0
     assert semantic_wait_enabled(None) is True
     assert effective_semantic_wait_max_ms(None) == SEMANTIC_WAIT_MAX_MS_DEFAULT
 

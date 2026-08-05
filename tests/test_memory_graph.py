@@ -881,9 +881,10 @@ def test_dual_deadline_structural_complete_semantic_timeout(store, monkeypatch):
     assert meta.get("structural_truncated") is False
     assert meta.get("structural_ms_budget") == 50
     assert meta.get("semantic_ms_budget") == 1
-    # Semantic timed out independently.
+    # Semantic timed out independently — dual mode does not OR into expand_timeout.
     assert meta.get("semantic_reason") == REASON_TIMEOUT
     assert meta.get("semantic_truncated") is True
+    assert meta.get("expand_truncated") is False
     assert EDGE_SEMANTIC_HOP not in {e.edge_kind for e in edges}
 
 

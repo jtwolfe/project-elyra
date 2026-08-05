@@ -55,14 +55,32 @@ def _memory_settings(ctx: ToolContext) -> Any | None:
     return getattr(settings, "memory", None)
 
 
+def _memory_settings_for_bind(ctx: ToolContext) -> Any | None:
+    """Prefer worker wait overlay so glass semantic_wait drives ANN ceilings.
+
+    Falls back to bare ``ctx.settings.memory`` when the host did not inject
+    ``extras['memory_settings_with_wait']`` (hermetic unit tests).
+    """
+    extras = ctx.extras if isinstance(ctx.extras, dict) else {}
+    overlay = extras.get("memory_settings_with_wait")
+    if callable(overlay):
+        try:
+            mem = overlay()
+            if mem is not None:
+                return mem
+        except Exception:  # noqa: BLE001 — soft fallthrough
+            _LOG.debug("memory_settings_with_wait failed", exc_info=True)
+    return _memory_settings(ctx)
+
+
 def _resolve_traversal(ctx: ToolContext) -> tuple[Any | None, ToolResult | None]:
     """Return TraversalRegistry from extras, or an error ToolResult."""
     extras = ctx.extras if isinstance(ctx.extras, dict) else {}
     reg = extras.get("traversal")
     if reg is None:
         return None, _err(ERROR_TRAVERSE_UNAVAILABLE, hint=_HINT_UNAVAILABLE)
-    # Bind latest memory settings when available (flag / budget changes).
-    mem = _memory_settings(ctx)
+    # Bind wait-overlaid settings when host provides them (polish1 wiring).
+    mem = _memory_settings_for_bind(ctx)
     bind = getattr(reg, "bind_settings", None)
     if callable(bind) and mem is not None:
         try:

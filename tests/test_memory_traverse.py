@@ -585,6 +585,117 @@ def test_step_at_most_one_semantic_ann_call(store):
     assert len(step.get("newly_expanded") or []) >= 1
 
 
+def test_step_wait_on_slow_ann_still_packs_edges(store, monkeypatch):
+    """Wait-on slow ANN must not discard structural+semantic results via expand_ms.
+
+    Regression for review Issue 1: dual-deadline neighbors returns edges after
+    a "slow" ANN, but packing must not apply expand_ms wall-clock (which would
+    drop all edges when ANN exceeds ~120ms structural budget).
+    """
+    from elyra.memory.graph import EDGE_SEMANTIC_HOP, EDGE_SEQUENTIAL, GraphEdge
+
+    atoms = _chain_store(store, 5)
+    settings = _enabled_settings(
+        semantic_wait_for_select=True,
+        semantic_wait_max_ms=5_000,
+        traverse_expand_max_ms=20,  # tiny structural wall
+        traverse_max_expand_per_step=5,
+        traverse_keep_adjacent=False,
+    )
+    reg = _reg(settings)
+    gv = GraphView(store, settings=settings, now="2026-07-28T10:05:00Z")
+    start = reg.start(
+        gv,
+        goal="pack after slow ann",
+        seed_atom_ids=[atoms[1].atom_id, atoms[2].atom_id],
+        seed_mode="explicit_only",
+        moment_id="m1",
+    )
+    assert start["ok"] is True
+    sid = start["session_id"]
+
+    # Fake neighbors: structural returns sequential edges quickly; ANN pass
+    # returns a semantic_hop edge but reports large semantic_ms_spent.
+    real_neighbors = gv.neighbors
+    call_n = {"n": 0}
+
+    def fake_neighbors(atom_id, **kwargs):
+        call_n["n"] += 1
+        allow_sem = bool(kwargs.get("allow_semantic", True))
+        kinds = kwargs.get("kinds")
+        # Phase B pure semantic hop call
+        if allow_sem and kinds is not None and list(kinds) == [EDGE_SEMANTIC_HOP]:
+            # Simulate slow ANN under wait ceiling — wall clock would exceed expand_ms.
+            dst = atoms[3].atom_id
+            edges = [
+                GraphEdge(
+                    src_atom_id=str(atom_id),
+                    dst_atom_id=dst,
+                    edge_kind=EDGE_SEMANTIC_HOP,
+                    weight=0.9,
+                    reason="semantic:joint",
+                )
+            ]
+            gv._last_expand_meta = {  # noqa: SLF001
+                "dual_deadline": True,
+                "structural_ms_spent": 0,
+                "semantic_ms_spent": 4500,  # >> expand_ms 20
+                "structural_truncated": False,
+                "semantic_truncated": False,
+                "expand_truncated": False,
+                "semantic_ms_budget": 5_000,
+            }
+            return edges
+        # Phase A structural-only
+        assert allow_sem is False
+        # Return one sequential neighbor from real store projection when possible
+        edges = real_neighbors(
+            atom_id,
+            k=kwargs.get("k"),
+            exclude_ids=kwargs.get("exclude_ids"),
+            allow_semantic=False,
+            expand_deadline_ms=kwargs.get("expand_deadline_ms"),
+            semantic_deadline_ms=0,
+        )
+        # Ensure meta reports small structural spend
+        meta = dict(gv.last_expand_meta)
+        meta["structural_ms_spent"] = min(5, int(meta.get("structural_ms_spent") or 5))
+        meta["semantic_ms_spent"] = 0
+        meta["dual_deadline"] = True
+        gv._last_expand_meta = meta  # noqa: SLF001
+        return edges
+
+    monkeypatch.setattr(gv, "neighbors", fake_neighbors)
+
+    step = reg.step(
+        gv,
+        session_id=sid,
+        expand_ids=[atoms[1].atom_id, atoms[2].atom_id],
+    )
+    assert step["ok"] is True
+    budget = step["budget"]
+    assert budget["semantic_ann_calls_last"] == 1
+    assert budget["semantic_ms_budget_step"] == 5_000
+    # ANN spend reported; expand_ms spend is structural-only (not 4500).
+    assert budget["semantic_ms_spent_last"] >= 4500
+    assert budget["expand_ms_spent_last"] < 100  # not charged ANN wait
+    newly = step.get("newly_expanded") or []
+    # Must pack edges despite "slow" ANN (not empty after wait).
+    assert len(newly) >= 1, newly
+    # Semantic hop destination packed.
+    assert atoms[3].atom_id in newly or atoms[3].atom_id in (
+        step.get("keep_set") or []
+    ) or any(
+        n.get("atom_id") == atoms[3].atom_id
+        for n in (step.get("frontier") or [])
+        if isinstance(n, dict)
+    ) or atoms[3].atom_id in set(
+        getattr(reg.active_session, "considered", {}) or {}
+    )
+    # Multi-id structural phase ran (2 structural calls + 1 ANN = at least 3).
+    assert call_n["n"] >= 3
+
+
 def test_seed_mode_semantic_only_encoder_cold_empty_frontier(store):
     """Cold encoder + semantic_only → empty seeds; encoder_cold honesty; no temporal."""
     from elyra.memory.index import MemoryEmbeddingIndex
