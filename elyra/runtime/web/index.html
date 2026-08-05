@@ -458,6 +458,61 @@
           <div id="memory-tab-graph" class="memory-tab-panel" role="tabpanel" hidden>
             <div id="memory-graph-overview" class="memory-flags status-fields">loading…</div>
             <p id="memory-graph-honesty" class="muted status-helper memory-graph-honesty" hidden></p>
+            <div class="memory-graph-browse card" id="memory-graph-browse">
+              <div class="card-head">
+                <strong>Free-browse graph</strong>
+                <span class="badge" title="Client-side node-link cache over GET neighbors; no graph DB">#61</span>
+              </div>
+              <p class="muted status-helper memory-graph-browse-hint">
+                Select a node to expand 1-hop via
+                <code>GET /api/memory/graph/neighbors</code>. Edges accumulate in a
+                browser cache (projected structural + optional semantic; durable when
+                EdgeStore has rows). Not a full hypergraph DB.
+              </p>
+              <div class="memory-neighbors-toolbar memory-graph-browse-toolbar">
+                <label class="status-label" for="memory-graph-browse-atom">Atom id</label>
+                <input
+                  id="memory-graph-browse-atom"
+                  type="text"
+                  class="status-input memory-filter"
+                  placeholder="a_…"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label class="status-label" for="memory-graph-browse-k">k</label>
+                <input
+                  id="memory-graph-browse-k"
+                  type="number"
+                  class="status-input memory-filter memory-neighbor-k"
+                  value="12"
+                  min="1"
+                  max="50"
+                />
+                <label class="status-label memory-graph-sem-label" for="memory-graph-browse-sem">
+                  <input id="memory-graph-browse-sem" type="checkbox" checked />
+                  semantic
+                </label>
+                <label class="status-label memory-graph-sem-label" for="memory-graph-browse-session" title="Highlight considered/kept from last walk session">
+                  <input id="memory-graph-browse-session" type="checkbox" checked />
+                  session overlay
+                </label>
+                <button type="button" id="memory-graph-browse-expand" class="btn-secondary btn-sm">
+                  Expand
+                </button>
+                <button type="button" id="memory-graph-browse-clear" class="link-btn btn-sm">
+                  Clear cache
+                </button>
+              </div>
+              <div id="memory-graph-browse-meta" class="muted status-helper memory-neighbors-meta" hidden></div>
+              <div id="memory-graph-browse-legend" class="memory-graph-browse-legend" aria-label="Edge kind colors"></div>
+              <div class="memory-graph-browse-canvas-wrap">
+                <svg id="memory-graph-browse-svg" class="memory-graph-browse-svg" role="img" aria-label="Memory free-browse graph"></svg>
+                <p id="memory-graph-browse-empty" class="muted empty memory-empty memory-graph-browse-empty">
+                  Enter an atom id and Expand, or click a walk node below to seed the canvas.
+                </p>
+              </div>
+              <div id="memory-graph-browse-detail" class="memory-graph-browse-detail muted" hidden></div>
+            </div>
             <div id="memory-graph-session" class="memory-graph-session card">
               <div class="card-head">
                 <strong>Walk session</strong>
