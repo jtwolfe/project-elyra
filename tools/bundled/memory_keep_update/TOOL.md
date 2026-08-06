@@ -21,15 +21,20 @@ without starting or finishing a traversal walk.
 | `merge` (default) | non-empty | optional | Union pin/reinforce; then drop `remove_ids` |
 | `merge` | empty | non-empty | Remove only |
 | `merge` | empty | empty | `invalid_args` (no-op refused) |
-| `replace` | non-empty | optional | Tray becomes `atom_ids` only (then remove) |
+| `replace` | non-empty | optional | Tray becomes `atom_ids` only (then remove). **Resets** `walk_summary_nl` unless `note` is passed (full tray replace, not pin-only) |
 | `replace` | empty | * | **Clear tray**: empty entries; `walk_summary_nl=null` unless `note` provided |
 
 **Abandon ≠ clear.** Finishing a walk still merges into the tray; abandoning a walk
 **retains** keep. Use empty `mode=replace` to intentionally clear pins.
 
-**Meal timing (KD-A16):** tray is sticky on disk immediately. Outer meal packs
-`directed_keep` on the **next** `compose_meal` / re-outer — not necessarily same hop.
-Success payload includes `meal_timing: "next_compose"`.
+**Meal timing (KD-A16):** tray is sticky on disk immediately (best-effort persist).
+Outer meal packs `directed_keep` on the **next** `compose_meal` / re-outer —
+not necessarily same hop. Success payload includes `meal_timing: "next_compose"`.
+
+**`ok` contract:** success means the **in-process** registry tray + thin snap
+were updated. Disk write is best-effort (same as `memory_traverse_finish` /
+operator clear): rare I/O failures are logged and do not flip `ok`. Process
+restart after a failed persist may reload the previous sticky tray.
 
 ## Errors
 

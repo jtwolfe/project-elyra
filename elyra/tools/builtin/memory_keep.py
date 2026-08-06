@@ -37,12 +37,6 @@ def _err(reason: str, *, hint: str | None = None, **extra: Any) -> ToolResult:
     return ToolResult(ok=False, payload=payload, error_reason=reason)
 
 
-def _ok(payload: dict[str, Any]) -> ToolResult:
-    body = dict(payload)
-    body.setdefault("ok", True)
-    return ToolResult(ok=True, payload=body)
-
-
 def _memory_settings(ctx: ToolContext) -> Any | None:
     settings = ctx.settings
     if settings is None:
@@ -63,14 +57,10 @@ def _resolve_traversal(ctx: ToolContext) -> tuple[Any | None, ToolResult | None]
             bind(mem)
         except Exception:  # noqa: BLE001 — soft; registry keeps prior
             _LOG.debug("traversal.bind_settings failed", exc_info=True)
-    # Prefer bound paths from tool context when registry has none.
+    # Always rebind paths from tool context for next tray save/load.
     bind_paths = getattr(reg, "bind_paths", None)
     if callable(bind_paths) and ctx.paths is not None:
         try:
-            if getattr(reg, "directed_keep_tray", None) is None:
-                # Only bind when tray not yet loaded so tests/host can inject paths.
-                # Always rebinding is also safe (paths used on next save/load).
-                pass
             bind_paths(ctx.paths)
         except Exception:  # noqa: BLE001
             _LOG.debug("traversal.bind_paths failed", exc_info=True)

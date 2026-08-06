@@ -2219,8 +2219,12 @@ class TraversalRegistry:
     ) -> dict[str, Any]:
         """Model/operator keep tray update (KD-K1–K7). Fail closed if keep off.
 
-        No active traverse session required. Mutates sticky tray on disk
-        immediately; meal packs on next compose (KD-A16).
+        No active traverse session required. Mutates in-process tray + thin snap
+        and best-effort-persists to disk (same contract as ``finish`` /
+        ``clear_confirmed_keep``: ``ok`` reflects in-process SoT; disk write
+        failures are logged and do not flip ``ok``). Meal packs on next compose
+        (KD-A16). Non-empty ``replace`` resets ``walk_summary_nl`` unless
+        ``note`` is provided (full tray replace, not pin-only).
         """
         if not is_directed_keep_enabled(self._settings):
             return {
@@ -2318,6 +2322,7 @@ class TraversalRegistry:
                 removed = sorted(before - set(tray.atom_ids()))
 
         self._sync_thin_snap_from_tray(tray, now=now, moment_id=moment_id)
+        # Disk is best-effort: match finish/clear — log + continue; ok=in-process SoT.
         try:
             save_directed_keep_tray(tray, paths=self._tray_paths)
         except Exception:  # noqa: BLE001
@@ -2423,6 +2428,7 @@ class TraversalRegistry:
         )
         self._directed_keep_tray = empty
         self._last_confirmed_keep = None
+        # Disk best-effort (same as finish / update_keep non-clear path).
         try:
             save_directed_keep_tray(empty, paths=self._tray_paths)
         except Exception:  # noqa: BLE001

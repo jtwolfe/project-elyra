@@ -1379,6 +1379,91 @@ def test_update_keep_disk_after_clear(paths):
     assert reg2.get_meal_keep_ids() == ([], None)
 
 
+def test_update_keep_replace_without_note_nulls_summary(paths):
+    """Non-empty replace is full tray replace: prior summary dropped unless note."""
+    settings = MemorySettings(directed_keep_enabled=True)
+    reg = TraversalRegistry(
+        settings=settings,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T14:30:00Z",
+    )
+    reg.update_keep(mode="merge", atom_ids=["a1", "a2"], note="prior summary")
+    assert reg.ensure_tray().walk_summary_nl == "prior summary"
+    out = reg.update_keep(mode="replace", atom_ids=["b1"])  # no note
+    assert out["ok"] is True
+    assert out["atom_ids"] == ["b1"]
+    assert out["walk_summary_nl"] is None
+    assert reg.ensure_tray().walk_summary_nl is None
+    assert reg.last_confirmed_keep is not None
+    assert reg.last_confirmed_keep.walk_summary_nl == ""
+
+
+def test_update_keep_replace_with_remove_ids(paths):
+    """replace base then remove_ids drops from the new set."""
+    settings = MemorySettings(directed_keep_enabled=True)
+    reg = TraversalRegistry(
+        settings=settings,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T14:31:00Z",
+    )
+    out = reg.update_keep(
+        mode="replace",
+        atom_ids=["r1", "r2", "r3"],
+        remove_ids=["r2", "missing"],
+        note="after remove",
+    )
+    assert out["ok"] is True
+    assert set(out["atom_ids"]) == {"r1", "r3"}
+    assert out["removed"] == ["r2"]
+    assert out["walk_summary_nl"] == "after remove"
+    assert set(reg.last_confirmed_keep.keep_ids) == {"r1", "r3"}
+
+
+def test_update_keep_merge_remove_all_clears_snap_retains_summary(paths):
+    """Merge that drops every pin: empty tray, summary retained, thin snap None."""
+    settings = MemorySettings(directed_keep_enabled=True)
+    reg = TraversalRegistry(
+        settings=settings,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T14:32:00Z",
+    )
+    reg.update_keep(mode="merge", atom_ids=["x1", "x2"], note="still relevant")
+    out = reg.update_keep(mode="merge", remove_ids=["x1", "x2"])
+    assert out["ok"] is True
+    assert out["atom_ids"] == []
+    assert set(out["removed"]) == {"x1", "x2"}
+    assert out["walk_summary_nl"] == "still relevant"
+    assert reg.last_confirmed_keep is None
+    ids, summary = reg.get_meal_keep_ids()
+    assert ids == []
+    assert summary == "still relevant"
+
+
+def test_update_keep_disabled_does_not_touch_disk(paths):
+    """Fail-closed when keep off: existing disk tray file left unchanged."""
+    now = "2026-07-28T14:33:00Z"
+    # Seed disk with sticky pins while keep is on.
+    on = MemorySettings(directed_keep_enabled=True)
+    seed = TraversalRegistry(settings=on, paths=paths, now_fn=lambda: now)
+    seed.update_keep(mode="merge", atom_ids=["disk_seed"], note="on disk")
+    path = tray_runtime_path(paths.data_dir)
+    assert path.is_file()
+    before_text = path.read_text(encoding="utf-8")
+    assert load_directed_keep_tray(paths).atom_ids() == ["disk_seed"]
+
+    off = MemorySettings(
+        directed_traversal_enabled=False, directed_keep_enabled=False
+    )
+    reg = TraversalRegistry(settings=off, paths=paths, now_fn=lambda: now)
+    # Load prior disk into RAM so we can assert it is not rewritten empty/new.
+    reg.ensure_tray()
+    out = reg.update_keep(mode="replace", atom_ids=["should_not_persist"])
+    assert out["ok"] is False
+    assert out["error_reason"] == ERROR_KEEP_DISABLED
+    assert path.read_text(encoding="utf-8") == before_text
+    assert load_directed_keep_tray(paths).atom_ids() == ["disk_seed"]
+
+
 def test_moment_close_abandons_active_retains_prior_last(store):
     """Active mid-walk abandoned on moment close; prior finished last sticky."""
     atoms = _chain_store(store, 3)
