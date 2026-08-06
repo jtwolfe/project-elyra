@@ -27,25 +27,38 @@
   }
 
   /**
-   * Protect HTML tags with placeholders, run fn, restore tags.
-   * Prevents underscore/star emphasis from mangling attributes (target="_blank")
-   * and path underscores inside href.
+   * Placeholder tokens for protected regions. Uses BMP private-use sentinels so
+   * they cannot collide with HTML-escaped user text (which only has &<>" entities).
+   */
+  function phToken(i) {
+    return `\uE000MDPH${i}\uE001`;
+  }
+
+  /**
+   * Protect HTML regions, run fn, restore.
+   * 1) Full <code>…</code> spans (text inside must not get * / _ emphasis)
+   * 2) Remaining tags so attributes (target="_blank") and href path underscores survive
    */
   function withProtectedTags(html, fn) {
-    const tags = [];
-    let t = String(html == null ? "" : html).replace(/<[^>]+>/g, (m) => {
-      const i = tags.length;
-      tags.push(m);
-      return `%%TAG${i}%%`;
-    });
+    const slots = [];
+    const stash = (m) => {
+      const i = slots.length;
+      slots.push(m);
+      return phToken(i);
+    };
+    let t = String(html == null ? "" : html);
+    // Whole code spans first so snake_case inside backticks is never italicized.
+    t = t.replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, stash);
+    // Remaining open/close/void tags (attrs + shells).
+    t = t.replace(/<[^>]+>/g, stash);
     t = fn(t);
-    return t.replace(/%%TAG(\d+)%%/g, (_, i) => {
+    return t.replace(/\uE000MDPH(\d+)\uE001/g, (_, i) => {
       const idx = Number(i);
-      return Number.isFinite(idx) && tags[idx] != null ? tags[idx] : "";
+      return Number.isFinite(idx) && slots[idx] != null ? slots[idx] : "";
     });
   }
 
-  /** Bold/italic after links/code — tags must already be present as HTML. */
+  /** Bold/italic after links/code — tags and code spans must already be HTML. */
   function applyEmphasis(html) {
     return withProtectedTags(html, (t) => {
       t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");

@@ -126,11 +126,74 @@ process.stdout.write('ok');
     assert out.strip() == "ok"
 
 
+def test_inline_code_snake_case_not_italicized():
+    """Full <code> spans are protected — snake_case in backticks stays intact."""
+    html = _render("`snake_case` and _y_")
+    assert "<code>snake_case</code>" in html
+    assert "<em>case</em>" not in html
+    assert "<em>y</em>" in html
+
+
 def test_identifier_underscores_match_current_paired_behavior():
-    """a_b_c still pair-matches as today (not a regression claim of no-em)."""
+    """Bare a_b_c pair-matches as a<em>b</em>c under current underscore rules."""
     html = _render("a_b_c")
-    # Document current paired `_…_` behavior rather than inventing new rules.
-    assert "a" in html and "c" in html
+    assert html == "<p>a<em>b</em>c</p>"
+
+
+def test_placeholder_sentinel_does_not_collide_with_user_text():
+    """User text resembling old %%TAGn%% placeholders must survive emphasis."""
+    html = _render("%%TAG0%% and _x_")
+    assert "%%TAG0%%" in html
+    assert "<em>x</em>" in html
+
+
+# ── fail-closed when markdown.js missing ─────────────────────────────────
+
+
+def test_app_js_fail_closed_path_present():
+    """Adapter must fail closed if ElyraMarkdown is missing (static wiring)."""
+    js = APP_JS.read_text(encoding="utf-8")
+    assert 'typeof md.renderMarkdown !== "function"' in js
+    assert "Fail closed" in js
+    assert "return `<p>${esc(src || " in js or "return `<p>${esc(src ||" in js
+
+
+def test_fail_closed_renders_escaped_plain_no_markdown():
+    """Behavioral contract of app.js fail-closed branch (no ElyraMarkdown)."""
+    if not _node_available():
+        pytest.skip("node not available for hermetic markdown fixtures")
+    # Mirrors app.js renderMarkdown fail-closed arm exactly.
+    script = r"""
+function failClosedRenderMarkdown(src) {
+  const esc = (s) =>
+    String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  return `<p>${esc(src || "")}</p>`;
+}
+const html = failClosedRenderMarkdown("[x](https://example.com) and _y_");
+if (html.includes("<em>") || html.includes("<a ") || html.includes("<strong>")) {
+  throw new Error("fail-closed must not produce markdown HTML: " + html);
+}
+if (!html.includes("_y_") || !html.includes("[x](https://example.com)")) {
+  throw new Error("fail-closed must keep raw text escaped: " + html);
+}
+if (!html.startsWith("<p>") || !html.endsWith("</p>")) {
+  throw new Error("expected single escaped paragraph: " + html);
+}
+process.stdout.write("ok");
+"""
+    proc = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "ok"
 
 
 # ── #88B: plain system/orient channels ───────────────────────────────────
@@ -155,9 +218,9 @@ process.stdout.write('ok');
 def test_app_js_plain_system_orient_not_in_prose_set():
     """Memory Context: system/orient use textContent path, not renderMarkdown."""
     js = APP_JS.read_text(encoding="utf-8")
-    assert 'plainCh = new Set(["system", "orient"])' in js or (
-        "plainCh" in js and '"system"' in js and '"orient"' in js
-    )
+    # Single source: Set built from ElyraMarkdown.PLAIN_MEMORY_CHANNELS
+    assert "PLAIN_MEMORY_CHANNELS" in js
+    assert "plainCh" in js
     # prose set must not list system/orient
     prose_match = re.search(
         r"const proseCh\s*=\s*new Set\(\[([\s\S]*?)\]\)",
@@ -170,25 +233,33 @@ def test_app_js_plain_system_orient_not_in_prose_set():
     # plain path uses textContent
     assert "plainCh.has(ch)" in js
     assert "body.textContent = snippet" in js or "body.textContent = snippet ||" in js
-    # system/orient must not call renderMarkdown on the plain branch
-    # (prose branch still may call renderMarkdown)
-    card_fn = re.search(
-        r"function renderMemoryChannelCard\([\s\S]*?\n\}",
+    # Tighter region: plain branch around memory-snippet-plain → proseCh branch
+    plain_branch = re.search(
+        r"memory-snippet-plain[\s\S]*?body\.textContent\s*=\s*snippet"
+        r"[\s\S]*?\}\s*else if\s*\(\s*proseCh\.has\(ch\)\s*\)",
         js,
     )
-    assert card_fn is not None
-    body = card_fn.group(0)
-    assert "plainCh" in body
-    assert "textContent" in body
-    # ensure plain branch does not set innerHTML
-    plain_branch = re.search(
-        r"if\s*\(\s*plainCh\.has\(ch\)\s*\)\s*\{([\s\S]*?)\}\s*else if\s*\(\s*proseCh",
-        body,
+    assert plain_branch is not None, "plainCh → proseCh branch region not found"
+    region = plain_branch.group(0)
+    assert "innerHTML" not in region
+    assert "renderMarkdown" not in region
+    assert "textContent" in region
+
+
+def test_app_js_plain_channels_match_markdown_export():
+    """plainCh membership must stay aligned with markdown.js export."""
+    out = _run_markdown_node(
+        """
+const ch = md.PLAIN_MEMORY_CHANNELS.slice().sort();
+process.stdout.write(JSON.stringify(ch));
+"""
     )
-    assert plain_branch is not None, "plainCh branch not found"
-    assert "innerHTML" not in plain_branch.group(1)
-    assert "textContent" in plain_branch.group(1)
-    assert "renderMarkdown" not in plain_branch.group(1)
+    exported = json.loads(out.strip())
+    assert exported == ["orient", "system"]
+    js = APP_JS.read_text(encoding="utf-8")
+    # Fallback list in app.js must match export when module missing
+    assert '["system", "orient"]' in js or "['system', 'orient']" in js
+    assert "PLAIN_MEMORY_CHANNELS" in js
 
 
 def test_index_loads_markdown_js_before_app():
@@ -205,8 +276,10 @@ def test_app_js_delegates_render_markdown_to_elyra_markdown():
     assert "ElyraMarkdown" in js
     assert "md.renderMarkdown" in js or "ElyraMarkdown.renderMarkdown" in js
     # Tag-protect lives in the pure helper, not a second emphasis path in app.js
-    assert "withProtectedTags" in MARKDOWN_JS.read_text(encoding="utf-8")
-    assert "applyEmphasis" in MARKDOWN_JS.read_text(encoding="utf-8")
+    md_src = MARKDOWN_JS.read_text(encoding="utf-8")
+    assert "withProtectedTags" in md_src
+    assert "applyEmphasis" in md_src
+    assert "MDPH" in md_src  # collision-resistant sentinel
 
 
 def test_markdown_js_file_exists_and_exports():

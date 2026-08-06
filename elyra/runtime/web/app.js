@@ -3960,7 +3960,14 @@ function renderMemoryChannelCard(item) {
 
   // Prose-friendly body for summaries / speak-like channels.
   // system/orient: plain textContent only (KD-MD2 / #88B) — long structured text.
-  const plainCh = new Set(["system", "orient"]);
+  // Prefer ElyraMarkdown.PLAIN_MEMORY_CHANNELS so the list is not duplicated.
+  const mdPlain =
+    typeof globalThis !== "undefined" ? globalThis.ElyraMarkdown : null;
+  const plainCh = new Set(
+    mdPlain && Array.isArray(mdPlain.PLAIN_MEMORY_CHANNELS)
+      ? mdPlain.PLAIN_MEMORY_CHANNELS
+      : ["system", "orient"] // fail-closed fallback if markdown.js missing
+  );
   const proseCh = new Set([
     "temporal",
     "episodic",
