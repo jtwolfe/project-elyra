@@ -9,6 +9,7 @@
 | **Date** | 2026-08-06 |
 | **Design (normative)** | [design-warm-on-start.md](../../design/design-warm-on-start.md) (**Draft R2**) |
 | **Related dogfood** | [edges-traversal-dogfood.md](edges-traversal-dogfood.md) |
+| **P0.5 spike results** | [warm-on-start-spike-edges-open.md](warm-on-start-spike-edges-open.md) — **C4_ok** on py3.12 copy (2904/2904 parity ~1.4 s) + **C3** fragments; **C_segfault** on py3.14 only |
 | **Program** | [README.md](README.md) |
 | **Implementation branch** | `fix/warm-on-start` (from `fix/general-touchup1`; restack onto `working` if touchup1 merges first) |
 
@@ -52,6 +53,8 @@ Observed product failure mode that motivates the design (not a signed checklist)
 | **Open fragility** | Live table has hung/segfaulted on open in local repros; Graph health peek can timeout |
 
 Full edges/polish1 dogfood boxes remain under [edges-traversal-dogfood.md](edges-traversal-dogfood.md). Warm-on-start does **not** claim Gate B from this inventory alone.
+
+**P0.5 open-class pin (2026-08-06):** copy-on-read of operator `edges.lance` under **Python 3.12.8** → **`C4_ok`** (`open_edge_store` ~1.4 s, RAM=disk=**2904**, parity true, kinds: created_with 1920 / has_channel 468 / in_moment 331 / recalls 185) with co-class **`C3_fragment_explosion`** (2904 data files / 2905 versions). Default **py3.14** lance is universal **`C_segfault`** (not table-specific). Restart→Graph-zero therefore leans **C1 sticky/lazy + C7 honesty**, not empty disk — details: [warm-on-start-spike-edges-open.md](warm-on-start-spike-edges-open.md).
 
 ---
 
@@ -104,7 +107,7 @@ P5    chore(memory): tray optional warm + recalls notes
 | Slice | One-line scope | Claim bar |
 |-------|----------------|-----------|
 | **P0** | Design + this inventory | Docs only |
-| **P0.5** | Open copy of operator table; time/counts/parity/failure class | Written class pin in STATE/notes |
+| **P0.5** | Open copy of operator table; time/counts/parity/failure class | **Done** — [spike note](warm-on-start-spike-edges-open.md): **C4_ok**+**C3** on py3.12; P2 still required |
 | **P2** | Reopen tests; hard-fail RAM=0/disk>0; Graph empty vs unavailable vs parity; open SM clears Unavailable; single-flight; optional timeout | **First behavior**; no durable-on usefulness claim until green + restart checklist |
 | **P1** | `_warm_memory_core`; side-thread sole embedder loader; claim after core; `embed_preload=true` | Hermetic warm/claim tests; dogfood pin only after P2 (and P3 if needed) |
 | **P3** | Batch upsert (merge-blocking); compact best-effort + quarantine fallbacks | Batch tests; compact smoke or documented unsupported |
