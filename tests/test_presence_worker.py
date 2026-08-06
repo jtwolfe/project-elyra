@@ -1856,3 +1856,218 @@ def test_edge_store_single_flight_open(paths, monkeypatch):
     assert results[0] is results[1]
     assert calls["n"] == 1
     assert worker._edge_store_state == "ready"  # noqa: SLF001
+
+
+# ── P1 warm-on-start: eager core + side-thread embedder loader ──────────────
+
+
+def test_warm_core_allows_claim_before_embedder(paths, monkeypatch):
+    """After core warm, claim/start runs while embedder loader still loading.
+
+    KD-WARM-UX: presence must not join Nemotron before ``_started`` / claim loop.
+    Mock open_encoder blocks until release; presence loop must set ``_started``
+    and poll while embedder_state is still ``loading``.
+    """
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.embed.mock import MockEmbedder
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+            embed_preload=True,
+            encode_worker_enabled=True,
+            encode_worker_poll_s=0.05,
+        ),
+    )
+    worker, stop = _make_worker(
+        paths, run_do_loop_fn=_stub_loop(), settings=settings, poll_seconds=0.02
+    )
+
+    opened = threading.Event()
+    release = threading.Event()
+    load_calls = {"n": 0}
+
+    def slow_open(_cfg):
+        load_calls["n"] += 1
+        opened.set()
+        # Hold cold load until test releases — presence must not wait.
+        if not release.wait(timeout=10.0):
+            raise RuntimeError("loader release timeout")
+        return MockEmbedder()
+
+    monkeypatch.setattr(
+        "elyra.memory.embed.runtime.open_encoder",
+        slow_open,
+    )
+
+    t = threading.Thread(target=worker.run, name="presence-warm-test", daemon=True)
+    t.start()
+    try:
+        # Wait until start-path loader has entered open_encoder.
+        assert opened.wait(timeout=5.0), "loader never entered open_encoder"
+        # Presence must already have finished core + set _started without joining.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not worker._started:  # noqa: SLF001
+            time.sleep(0.01)
+        assert worker._started is True  # noqa: SLF001
+        assert worker._embedder_state == "loading"  # noqa: SLF001
+        # Core fabric open (store + edges) while embedder still loading.
+        assert worker._memory is not None  # noqa: SLF001
+        assert worker._edge_store_state in ("ready", "unavailable")  # noqa: SLF001
+        # Consumer gate: non-blocking None while loading (KD-GATE / KD-E18).
+        t0 = time.monotonic()
+        emb = worker._ensure_embedder(role="consumer")  # noqa: SLF001
+        assert emb is None
+        assert (time.monotonic() - t0) < 0.5
+        # Encode worker deferred until loader terminal.
+        assert (
+            worker._encode_worker is None
+            or not worker._encode_worker.is_alive()  # noqa: SLF001
+        )
+        # Status surfaces honest warming + loading.
+        mem = worker.status_snapshot()["memory"]
+        assert mem["embedder_state"] == "loading"
+        assert mem["memory_warming"] is True
+        assert "edges_open" in mem
+        assert mem["edges_open"]["state"] in (
+            "ready",
+            "unavailable",
+            "opening",
+            "absent",
+        )
+    finally:
+        release.set()
+        stop.set()
+        t.join(timeout=15.0)
+
+
+def test_warm_loader_terminal_starts_encode_worker(paths, monkeypatch):
+    """On loader terminal warm, presence applies encode worker start once."""
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.embed.mock import MockEmbedder
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+            semantic_enabled=True,
+            embed_enabled=True,
+            embed_backend="mock",
+            embed_preload=True,
+            encode_worker_enabled=True,
+            encode_worker_poll_s=0.05,
+        ),
+    )
+    worker, stop = _make_worker(
+        paths, run_do_loop_fn=_stub_loop(), settings=settings, poll_seconds=0.02
+    )
+    monkeypatch.setattr(
+        "elyra.memory.embed.runtime.open_encoder",
+        lambda _cfg: MockEmbedder(),
+    )
+    t = threading.Thread(target=worker.run, name="presence-warm-term", daemon=True)
+    t.start()
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if (
+                worker._embedder_loader_applied  # noqa: SLF001
+                and worker._embedder_state == "warm"  # noqa: SLF001
+            ):
+                break
+            time.sleep(0.02)
+        assert worker._embedder_state == "warm"  # noqa: SLF001
+        assert worker._embedder_loader_applied is True  # noqa: SLF001
+        assert worker._memory_warming is False  # noqa: SLF001
+        # Encode worker should be live after terminal apply.
+        deadline2 = time.monotonic() + 3.0
+        while time.monotonic() < deadline2:
+            w = worker._encode_worker  # noqa: SLF001
+            if w is not None and w.is_alive():
+                break
+            time.sleep(0.02)
+        assert worker._encode_worker is not None  # noqa: SLF001
+        assert worker._encode_worker.is_alive()  # noqa: SLF001
+        emb = worker._ensure_embedder(role="consumer")  # noqa: SLF001
+        assert emb is not None
+        mem = worker.status_snapshot()["memory"]
+        assert mem["embedder_state"] == "warm"
+        assert mem["memory_warming"] is False
+    finally:
+        stop.set()
+        t.join(timeout=10.0)
+
+
+def test_memory_status_component_fields_present(paths):
+    """Status memory block exposes embedder_state / edges_open / memory_warming."""
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+        ),
+    )
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+    mem = worker.status_snapshot()["memory"]
+    assert mem["embedder_state"] in ("absent", "loading", "warm", "failed")
+    assert isinstance(mem["edges_open"], dict)
+    assert "state" in mem["edges_open"]
+    assert "memory_warming" in mem
+    assert mem["memory_warming"] is False  # not yet on warm path
+
+    # After eager core (no run loop), edges open + fields still honest.
+    worker._warm_memory_core()  # noqa: SLF001
+    mem2 = worker.status_snapshot()["memory"]
+    assert mem2["store_open"] is True
+    assert mem2["edges_open"]["state"] in ("ready", "unavailable")
+    assert mem2["embedder_state"] == "absent"  # core does not load embedder
+
+
+def test_consumer_embedder_nonblocking_while_loading_status(paths):
+    """Document KD-GATE: consumers stay non-blocking while loader in flight."""
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            embed_enabled=True,
+            embed_backend="mock",
+            embed_preload=True,
+        ),
+    )
+    worker, _stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+    worker._embedder_state = "loading"  # noqa: SLF001
+    worker._memory_warming = True  # noqa: SLF001
+    t0 = time.monotonic()
+    emb = worker._ensure_embedder(role="consumer")  # noqa: SLF001
+    elapsed = time.monotonic() - t0
+    assert emb is None
+    assert elapsed < 0.5
+    mem = worker.status_snapshot()["memory"]
+    assert mem["embedder_state"] == "loading"
+    assert mem["memory_warming"] is True

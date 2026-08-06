@@ -797,9 +797,15 @@ def test_worker_run_finally_closes_all(monkeypatch: pytest.MonkeyPatch) -> None:
     worker._encode_owner = "none"
     worker._embedder = None
     worker._embedder_open_lock = __import__("threading").Lock()
+    worker._embedder_loader_thread = None
+    worker._memory_warming = False
     # Short-circuit body of run() before heavy memory ensure when stop already set:
-    # still need _ensure_memory_store not to blow if called — mock it.
-    worker._ensure_memory_store = MagicMock()  # type: ignore[method-assign]
+    # warm-on-start path: mock core warm + loader gates (no real store open).
+    worker._warm_memory_core = MagicMock()  # type: ignore[method-assign]
+    worker._should_preload_embedder = MagicMock(return_value=False)  # type: ignore[method-assign]
+    worker._start_embedder_loader_thread = MagicMock()  # type: ignore[method-assign]
+    worker._join_embedder_loader_thread = MagicMock()  # type: ignore[method-assign]
+    worker._maybe_apply_embedder_loader_terminal = MagicMock()  # type: ignore[method-assign]
     worker._start_encode_worker_if_needed = MagicMock()  # type: ignore[method-assign]
     worker._maybe_restart_encode_worker = MagicMock()  # type: ignore[method-assign]
     worker._claim_and_open = MagicMock(return_value=None)  # type: ignore[method-assign]

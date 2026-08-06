@@ -23,4 +23,6 @@ embed_enabled = true
 embed_backend = "nemotron"
 embed_model_id = "nvidia/omni-embed-nemotron-3b"
 embed_device = "rocm"
+# Warm-on-start (KD-EP): pin true even if factory default flips
+embed_preload = true
 parcels_enabled = true

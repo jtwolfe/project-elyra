@@ -332,7 +332,10 @@ class MemorySettings:
     embed_model_id: str = "nvidia/omni-embed-nemotron-3b"
     embed_model_path: str = ""  # optional local path under ELYRA_HOME
     embed_device: str = "auto"  # auto | cuda | rocm | cpu
-    embed_preload: bool = False
+    # Warm-on-start product default (KD-EP): sole start-path loader cold-opens
+    # embedder on a side thread after core fabric. Set false to defer load to
+    # first encode-worker tick (legacy lean).
+    embed_preload: bool = True
     embed_media_max_bytes: int = 8_000_000
     embed_media_max_seconds: int = 30
     encode_max_ms_per_tick: int = 100

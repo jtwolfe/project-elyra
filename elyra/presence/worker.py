@@ -544,6 +544,12 @@ class PresenceWorker:
         self._embedder_gate: Any = EmbedderGate()
         self._embedding_index: Any | None = None
         self._embed_catchup_marked: int = 0  # process-life OQ4 none→pending count
+        # Warm-on-start (KD-WARM-UX / KD-EP): core fabric blocks claim; embedder
+        # loads on a sole side-thread; encode worker starts only on terminal.
+        self._memory_warming: bool = False
+        self._embedder_loader_thread: threading.Thread | None = None
+        self._embedder_loader_terminal: str | None = None  # warm|failed|absent
+        self._embedder_loader_applied: bool = False
         # Continuous encode worker ownership (KD-E1 / KD-E7).
         # encode_owner ∈ {none, idle, worker}
         self._encode_owner: str = "none"
@@ -1276,18 +1282,35 @@ class PresenceWorker:
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        """Blocking poll loop (run on the presence thread)."""
+        """Blocking poll loop (run on the presence thread).
+
+        Warm-on-start (KD-WARM-UX R2): after recover, eagerly open store + index
+        + EdgeStore on this thread (may block first claim). Embedder cold load
+        runs on a **sole side-thread** when ``embed_preload``; presence sets
+        ``_started`` and enters the claim loop **without** joining Nemotron.
+        Encode worker starts only after loader terminal (warm|failed), or
+        immediately when preload is off (encode tick remains sole loader).
+        """
         _LOG.info("presence worker started")
         try:
             self._startup_recover()
-            self._ensure_memory_store()
-            # Continuous encode: start worker + set owner before first drain tick.
-            self._start_encode_worker_if_needed()
+            self._memory_warming = True
+            self._warm_memory_core()
+            # Sole start loader: NOT on presence thread; do NOT join here.
+            if self._should_preload_embedder():
+                self._start_embedder_loader_thread()
+            else:
+                # Preload off / embed disabled: encode worker may cold-load on
+                # first tick (existing path). No start-path loader to await.
+                self._start_encode_worker_if_needed()
+                self._memory_warming = False
             self._started = True
             while not self._stop.is_set():
                 wake: WakeItem | None = None
                 moment_id: str | None = None
                 try:
+                    # Apply loader terminal once (start encode worker, clear warming).
+                    self._maybe_apply_embedder_loader_terminal()
                     # Busy-safe death recovery: monitor every loop iteration
                     # (not idle-only) — KD-E16.
                     self._maybe_restart_encode_worker()
@@ -1324,6 +1347,11 @@ class PresenceWorker:
                     self._fail_in_flight(wake, moment_id, exc)
                     self._stop.wait(timeout=self._poll)
         finally:
+            # Join start loader before encode/embedder teardown (KD-WARM-UX).
+            try:
+                self._join_embedder_loader_thread(timeout_s=30.0)
+            except Exception:  # noqa: BLE001
+                _LOG.exception("join embedder loader thread failed")
             # Encode teardown before browser close (join worker → close embedder).
             self._shutdown_encode()
             # Close Playwright on the owner thread (sync API is not cross-thread).
@@ -1393,18 +1421,142 @@ class PresenceWorker:
             self._memory = open_memory_store(self.paths, mem_cfg)
             self._install_encode_hooks(self._memory, mem_cfg)
             self._ensure_embedding_index()
-            # Optional preload as loader (outside encode gate).
-            if (
-                bool(getattr(mem_cfg, "embed_preload", False))
-                and bool(getattr(mem_cfg, "embed_enabled", False))
-            ):
-                self._ensure_embedder(role="loader")
+            # Embedder preload is owned by run() sole start loader thread
+            # (KD-WARM-UX / KD-EP) — never sync open_encoder on store open.
             return self._memory
         except Exception:  # noqa: BLE001 — store down must not kill presence
             self._memory_open_failed = True
             self._memory = None
             _LOG.exception("memory store open failed; atoms disabled this run")
             return None
+
+    def _warm_memory_core(self) -> None:
+        """Eager open atom store + embedding index + EdgeStore (KD-WARM-UX).
+
+        Runs on the presence thread after recover and **before** ``_started``.
+        May block first claim until store + edges are decided. Does **not**
+        load the embedder (side-thread sole loader owns that).
+        """
+        _LOG.info("memory.fabric_warming start")
+        try:
+            self._ensure_memory_store()
+            # Index opens with store; re-ensure is cheap if already set.
+            if self._memory is not None:
+                self._ensure_embedding_index()
+            # EdgeStore single-flight SM (P2); eager open for durable fabric.
+            self._ensure_edge_store()
+            _LOG.info(
+                "memory.fabric_core_ready store_open=%s index_open=%s "
+                "edges_state=%s",
+                self._memory is not None,
+                self._embedding_index is not None,
+                getattr(self, "_edge_store_state", "absent"),
+            )
+        except Exception:  # noqa: BLE001 — never kill presence on warm
+            _LOG.exception("memory.fabric_core warm failed")
+
+    def _should_preload_embedder(self) -> bool:
+        """True when start-path sole loader should cold-open the embedder."""
+        mem_cfg = self.settings.memory
+        if not (mem_cfg.write_atoms or mem_cfg.enabled):
+            return False
+        if not bool(getattr(mem_cfg, "embed_enabled", False)):
+            return False
+        return bool(getattr(mem_cfg, "embed_preload", False))
+
+    def _start_embedder_loader_thread(self) -> None:
+        """Kick sole start-path embedder loader. Do **not** join before claim.
+
+        Uses existing ``_ensure_embedder(role=loader)`` open lock / state machine.
+        Encode worker is **not** started until terminal warm|failed is applied
+        on the presence thread (``_maybe_apply_embedder_loader_terminal``).
+        """
+        if self._embedder_loader_thread is not None:
+            return
+
+        def _target() -> None:
+            terminal = "failed"
+            try:
+                emb = self._ensure_embedder(role="loader")
+                if emb is not None and self._embedder_state == "warm":
+                    terminal = "warm"
+                elif self._embedder_state == "failed":
+                    terminal = "failed"
+                else:
+                    # Aborted mid-load (shutdown) or no handle — treat as failed
+                    # for encode-worker start gating (soft-skip drain).
+                    terminal = "failed"
+            except Exception:  # noqa: BLE001
+                terminal = "failed"
+                _LOG.exception("memory.embed.loader_thread failed")
+            self._embedder_loader_terminal = terminal
+            _LOG.info(
+                "memory.embed.loader_thread_terminal state=%s", terminal
+            )
+
+        t = threading.Thread(
+            target=_target,
+            name="elyra-embedder-loader",
+            daemon=True,
+        )
+        self._embedder_loader_thread = t
+        _LOG.info("memory.embed.loader_thread_start")
+        t.start()
+
+    def _maybe_apply_embedder_loader_terminal(self) -> None:
+        """Presence-thread join point: start encode worker once after loader.
+
+        Idempotent. Called each claim-loop iteration. When the start-path
+        loader is not used (preload off), this is a no-op.
+        """
+        if self._embedder_loader_applied:
+            return
+        # Only applies when start-path loader was kicked.
+        if self._embedder_loader_thread is None:
+            return
+        term = self._embedder_loader_terminal
+        if term not in ("warm", "failed", "absent"):
+            return
+        self._embedder_loader_applied = True
+        if term in ("warm", "failed"):
+            self._start_encode_worker_if_needed()
+        # Clear warming when embedder is no longer mid-load.
+        if self._embedder_state != "loading":
+            self._memory_warming = False
+        _LOG.info(
+            "memory.fabric_ready embedder_terminal=%s embedder_state=%s",
+            term,
+            self._embedder_state,
+        )
+
+    def _join_embedder_loader_thread(self, *, timeout_s: float = 30.0) -> None:
+        """Best-effort join of start-path loader on shutdown."""
+        t = getattr(self, "_embedder_loader_thread", None)
+        if t is None:
+            return
+        if not t.is_alive():
+            return
+        t.join(timeout=float(timeout_s))
+        if t.is_alive():
+            _LOG.warning(
+                "memory.embed.loader_thread join timed out after %.1fs",
+                float(timeout_s),
+            )
+
+    def _encode_worker_start_allowed(self) -> bool:
+        """When start-path loader owns cold open, defer encode worker until terminal.
+
+        Tests / non-run paths that call ``_start_encode_worker_if_needed``
+        without kicking the loader thread are unrestricted (loader thread is
+        None → allowed). Soft-safe when warm-path fields are missing.
+        """
+        t = getattr(self, "_embedder_loader_thread", None)
+        if t is None:
+            return True
+        if bool(getattr(self, "_embedder_loader_applied", False)):
+            return True
+        term = getattr(self, "_embedder_loader_terminal", None)
+        return term in ("warm", "failed", "absent")
 
     def _install_encode_hooks(self, store: Any, mem_cfg: Any) -> None:
         """Install store write hook + EncodeQueue (KD16). Best-effort."""
@@ -1650,6 +1802,10 @@ class PresenceWorker:
 
         Includes a compact ``ladder`` sub-block (knobs + last_hourly_process /
         llm_calls) for dogfood observability (#92 design §10).
+
+        Warm-on-start component fields (KD-GATE / KD-WARM-UX minimal honesty):
+        ``embedder_state``, ``edges_open`` (open SM snapshot), ``memory_warming``.
+        Full aggregate ``memory_ready`` formula polish is P4 — not here.
         """
         mem_cfg = self.settings.memory
         with self._lock:
@@ -1662,6 +1818,21 @@ class PresenceWorker:
                 "skipped": dict(self._recalls_skipped),
                 "queue_depth_max": int(self._deferred_recalls_depth),
             }
+        emb_state = str(getattr(self, "_embedder_state", None) or "absent")
+        if emb_state not in ("absent", "loading", "warm", "failed"):
+            emb_state = "absent"
+        try:
+            edges_open = self.edge_store_open_status()
+        except Exception:  # noqa: BLE001 — status must never raise
+            edges_open = {
+                "state": str(getattr(self, "_edge_store_state", "absent") or "absent"),
+                "attempts": int(getattr(self, "_edge_store_open_attempts", 0) or 0),
+                "error": getattr(self, "_edge_store_error", None),
+                "permanent_failed": bool(
+                    getattr(self, "_edge_store_open_failed", False)
+                ),
+                "next_retry_at_monotonic": None,
+            }
         block: dict[str, Any] = {
             "enabled": bool(mem_cfg.enabled),
             "write_atoms": bool(mem_cfg.write_atoms),
@@ -1670,6 +1841,10 @@ class PresenceWorker:
             "ok": False,
             "has_last_meal": self._last_meal_snapshot is not None,
             "recalls_deferred": deferred_metrics,
+            # Component honesty (P1 minimal — not full memory_ready formula).
+            "embedder_state": emb_state,
+            "edges_open": edges_open,
+            "memory_warming": bool(getattr(self, "_memory_warming", False)),
         }
         # Ladder knobs always visible (even when store not yet open).
         try:
@@ -2328,9 +2503,16 @@ class PresenceWorker:
         return "idle"
 
     def _start_encode_worker_if_needed(self) -> None:
-        """Start continuous EncodeWorker when flags allow. Soft-fail."""
+        """Start continuous EncodeWorker when flags allow. Soft-fail.
+
+        When the start-path sole embedder loader is in flight (KD-EP), defers
+        until ``_maybe_apply_embedder_loader_terminal`` so open_encoder is not
+        dual-owned with the encode-worker first tick.
+        """
         try:
             if self._encode_shutting_down:
+                return
+            if not self._encode_worker_start_allowed():
                 return
             desired = self._desired_encode_owner()
             self._encode_owner = desired
@@ -2431,6 +2613,10 @@ class PresenceWorker:
         """
         try:
             if self._encode_shutting_down:
+                return
+            # Start-path sole loader still owns cold open — do not thrash-count
+            # "restarts" every poll while embedder is loading (KD-EP).
+            if not self._encode_worker_start_allowed():
                 return
             desired = self._desired_encode_owner()
             if desired != "worker":

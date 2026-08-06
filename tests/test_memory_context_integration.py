@@ -463,6 +463,11 @@ def test_memory_status_block_default_flags(paths):
     # Store opens lazily on worker run / first write path, not on snapshot alone.
     assert snap["memory"]["store_open"] is False
     assert snap["memory"]["ok"] is False
+    # P1 warm-on-start component fields (honest even before warm).
+    assert snap["memory"]["embedder_state"] == "absent"
+    assert isinstance(snap["memory"]["edges_open"], dict)
+    assert snap["memory"]["edges_open"]["state"] == "absent"
+    assert snap["memory"]["memory_warming"] is False
     # PR-E: ladder knobs always present for dogfood observability.
     ladder = snap["memory"]["ladder"]
     assert ladder["enabled"] is True

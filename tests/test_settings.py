@@ -93,7 +93,7 @@ def test_default_settings_match_design():
     assert s.memory.embed_backend == "mock"
     assert s.memory.embed_device == "auto"
     assert s.memory.embed_model_id == "nvidia/omni-embed-nemotron-3b"
-    assert s.memory.embed_preload is False
+    assert s.memory.embed_preload is True
     assert s.memory.semantic_fraction == 0.12
     assert s.memory.episodic_fraction_with_semantic == 0.22
     assert s.memory.temporal_min_fraction == 0.55
@@ -382,11 +382,16 @@ def test_invalid_memory_summary_mode_and_ladder_knobs_raise(tmp_path):
 
 
 def test_memory_phase2_semantic_toml_and_defaults(tmp_path):
-    """Phase 2 knobs load from toml; defaults stay off when omitted."""
+    """Phase 2 knobs load from toml; defaults stay off when omitted.
+
+    ``embed_preload`` product default is True (KD-EP warm-on-start); still
+    overridable via toml.
+    """
     s = load_settings(tmp_path)
     assert s.memory.semantic_enabled is False
     assert s.memory.embed_enabled is False
     assert s.memory.parcels_enabled is False
+    assert s.memory.embed_preload is True  # factory default on (warm-on-start)
 
     (tmp_path / "elyra.toml").write_text(
         """
@@ -395,6 +400,7 @@ semantic_enabled = true
 embed_enabled = true
 embed_backend = "mock"
 embed_device = "cpu"
+embed_preload = false
 semantic_fraction = 0.10
 episodic_fraction_with_semantic = 0.15
 temporal_min_fraction = 0.60
@@ -416,6 +422,7 @@ ann_recent_buffer_max = 128
     assert s2.memory.embed_enabled is True
     assert s2.memory.embed_backend == "mock"
     assert s2.memory.embed_device == "cpu"
+    assert s2.memory.embed_preload is False  # toml override
     assert s2.memory.semantic_fraction == 0.10
     assert s2.memory.episodic_fraction_with_semantic == 0.15
     assert s2.memory.temporal_min_fraction == 0.60
