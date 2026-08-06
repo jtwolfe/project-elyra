@@ -7,7 +7,7 @@ essays. When an item is fixed, mark **Status** and leave a one-line resolution
 
 | Field | Value |
 |-------|--------|
-| **Branch** | `main` (product tip after known-bugs Glass batch) |
+| **Branch** | `working` / touchup1 (known-bugs close notes after general-touchup1 C1–C6) |
 | **Project** | [Autopoiesis Commons #2](https://github.com/users/jtwolfe/projects/2) |
 | **Epic** | [#59](https://github.com/jtwolfe/project-elyra/issues/59) — break-out into issues |
 | **Audience** | Operators + implementers |
@@ -27,13 +27,13 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-glass-01` | [#70](https://github.com/jtwolfe/project-elyra/issues/70) (closed) | **Fixed** on main (Moments pretty-print) |
 | `BUG-glass-02` | [#71](https://github.com/jtwolfe/project-elyra/issues/71) (closed) | **Fixed** on main — Moments tab under Memory |
 | `BUG-mem-ui-01` | [#72](https://github.com/jtwolfe/project-elyra/issues/72) (closed) | **Fixed** on main (Context chrome + inspect); residual: ladder narrative |
-| `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | Open (defer) |
+| `BUG-mem-ui-02` | [#73](https://github.com/jtwolfe/project-elyra/issues/73) (open) | **Open (defer)** — atoms list beautify; touchup1 did **not** close this |
 | `BUG-mem-ui-03` | [#74](https://github.com/jtwolfe/project-elyra/issues/74) (closed) | **Fixed** on main (Atoms soft-skip under glass-03) |
 | `BUG-glass-03` | [#86](https://github.com/jtwolfe/project-elyra/issues/86) (open) | **Partial** on main — knip soft-skip shipped; residual poll architecture later |
 | `BUG-chat-01` | [#75](https://github.com/jtwolfe/project-elyra/issues/75) (closed) | **Done** — KaTeX on fix/known-bugs (dogfood OK) |
 | `BUG-chat-02` | [#84](https://github.com/jtwolfe/project-elyra/issues/84) (closed) | **Done** — soft newlines on fix/known-bugs (dogfood OK) |
-| `BUG-chat-03` | [#88](https://github.com/jtwolfe/project-elyra/issues/88) (open) | Open — Sources / reference links must open correctly |
-| `BUG-wait-01` | [#89](https://github.com/jtwolfe/project-elyra/issues/89) (open) | Open — multi-choice wait after speak; strong instruction nudge |
+| `BUG-chat-03` | [#88](https://github.com/jtwolfe/project-elyra/issues/88) (closed) | **Fixed** (A+B) on touchup1 — link italic protect + system/orient plain |
+| `BUG-wait-01` | [#89](https://github.com/jtwolfe/project-elyra/issues/89) (closed) | **Fixed** under **gentle-with-examples** standard (touchup1); wait bar hide on reply |
 | `BUG-tts-01` | [#85](https://github.com/jtwolfe/project-elyra/issues/85) (open) | Open — TTS needs text sanitation before service call |
 | `BUG-status-01` | [#76](https://github.com/jtwolfe/project-elyra/issues/76) (closed) | **Fixed** on main |
 | `BUG-status-02` | [#77](https://github.com/jtwolfe/project-elyra/issues/77) (closed) | **Fixed** on main |
@@ -45,6 +45,21 @@ Each BUG-* entry has a GitHub issue (sub-issue of [#59](https://github.com/jtwol
 | `BUG-meal-01` | [#91](https://github.com/jtwolfe/project-elyra/issues/91) (closed) | **Fixed** on main — runtime fraction default 0.5 → ~250k; slider max 0.75 + `--max-meal-override` |
 | `BUG-meal-02` | [#92](https://github.com/jtwolfe/project-elyra/issues/92) (closed) | **Fixed** on main — LLM period ladder + meal tip policy; dogfood OK on feature/92 |
 | `BUG-meal-03` | [#93](https://github.com/jtwolfe/project-elyra/issues/93) (closed) | **In progress** — instance continuity: glass-tail + sticky directed keep (implement plan ready; S1–S6 product PRs) |
+
+### Touchup1 board notes (not all are BUG-* rows)
+
+| Issue | Board posture after general-touchup1 |
+|-------|--------------------------------------|
+| [#88](https://github.com/jtwolfe/project-elyra/issues/88) / `BUG-chat-03` | **Fixed (A+B)** — chat link italic protect + Memory Context `system`/`orient` plain text |
+| [#89](https://github.com/jtwolfe/project-elyra/issues/89) / `BUG-wait-01` | **Fixed** under **gentle-with-examples** product acceptance (not ALL-CAPS MUST thrash) + wait bar optimistic hide |
+| [#104](https://github.com/jtwolfe/project-elyra/issues/104) | **Fixed (update-first)** — model-facing `memory_keep_update` (merge/replace/remove; empty replace clears); abandon ≠ clear; meal packs next compose. Super-set of clear-only issue body |
+| [#73](https://github.com/jtwolfe/project-elyra/issues/73) / `BUG-mem-ui-02` | **STAYS OPEN (defer)** — atoms list beautify. Goals newest-first + light Context polish in touchup1 are **operator bulk**, not #73 Done |
+| [#109](https://github.com/jtwolfe/project-elyra/issues/109) | **STAYS OPEN** — **C4 grok_build residual dogfood** (`docs/goal/v0.1.md` C4). **Not** skill-bundle fail-closed |
+| Unfiled skill-bundle / online server skills fail-closed | **Deferred non-goal** — separate from #109; **no issue number claimed** here |
+| [#120](https://github.com/jtwolfe/project-elyra/issues/120) / C14 | Option B honesty in C6: code + partial dogfood; residual [#125](https://github.com/jtwolfe/project-elyra/issues/125); **not** Gate B (no edge code in this bulk) |
+| [#103](https://github.com/jtwolfe/project-elyra/issues/103) | Verify residual language in C6: close only with live `auto` evidence; pure cold `semantic_only` → #125 |
+
+Design: [design-general-touchup1.md](../design/design-general-touchup1.md).
 
 ---
 
@@ -364,7 +379,7 @@ Context cards are hard to read: snipped text, channel labels without hierarchy, 
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open (defer) |
+| **Status** | **Open (defer)** — atoms list beautify. Touchup1 **did not** close this |
 | **Issue** | [#73](https://github.com/jtwolfe/project-elyra/issues/73) |
 | **Severity now** | Low–Med |
 | **Severity later** | Med as atom volume grows |
@@ -380,6 +395,10 @@ Atoms timeline/detail reads as dump-ish (truncated text rows, weak kind/time vis
 1. Beautify list rows: kind color/chip, relative time, moment badge, clearer empty-vs-blob affordance.
 2. Detail pane: structured meta, full text when under cap, blob hydrate indicator.
 3. Avoid fighting **BUG-mem-ui-03** (do not full re-render while selecting text).
+
+### Touchup1 honesty (not a close)
+
+General-touchup1 shipped **goals list newest-first** and **light Memory Context chrome** as operator bulk work under that design (C3). That work is **not** atoms timeline beautify and **must not** be read as #73 / BUG-mem-ui-02 Done. Expand this issue body only if an operator later wants goals order folded into the same card.
 
 ---
 
@@ -543,45 +562,57 @@ Multi-line chat input showed as a single run-on paragraph in Glass history; atom
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open |
+| **Status** | **Fixed** (A+B) on general-touchup1 (`ed84afc` + follow-ups; 2026-08-06) |
 | **Issue** | [#88](https://github.com/jtwolfe/project-elyra/issues/88) |
-| **Severity now** | Med (research speaks dump Sources operators cannot reliably open) |
-| **Severity later** | Med as citation-heavy dogfood grows |
-| **Area** | Glass `renderMarkdown` link path; speak/chat **Sources** sections |
+| **Severity now** | Low residual (optional bare-URL autolink still out of band) |
+| **Severity later** | Med if emphasis/link path regresses |
+| **Area** | Glass `renderMarkdown` link path; speak/chat **Sources** sections; Memory Context cards |
 | **Dogfood** | 2026-07-30 — moment `cb41e603-1a7a-497c-932c-91983f4e1893` Schrödinger speak; Sources with Wikipedia/Grokipedia markdown links (non-ASCII path chars e.g. `Schrödinger`) |
 
 ### Symptom
 
-Long research **`speak`** payloads end with a **Sources** list. Operators need every link to be clickable and land on the intended page (new tab). Risk classes: Unicode wiki paths, bare URLs (no markdown), trailing punctuation, broken `href` encoding.
+Long research **`speak`** payloads end with a **Sources** list. Operators need every link to be clickable and land on the intended page (new tab). Risk classes: Unicode wiki paths, bare URLs (no markdown), trailing punctuation, broken `href` encoding. Separately, underscore italic post-processing mangled `target="_blank"` and path underscores inside already-built anchors.
 
-### Likely cause
+### Likely cause (confirmed for A)
 
-- Only `[label](url)` becomes anchors; bare `https://` may not autolink.
-- Non-ASCII path segments may need percent-encoding in `href` for some browsers.
-- Edge cases: parentheses, mixed encoding, `target`/`rel` hygiene.
+In `renderMarkdown` → `inline()`, link substitution built `<a href="…" target="_blank" …>` then underscore italic `/(^|[^_])_([^_]+)_/g` ran on the **whole** HTML string, pairing through attributes and path segments.
 
-### Fix directions
+### Fix (landed) — A+B
 
-1. Safely encode `http(s)` hrefs (IRI → valid URL) without double-encoding.
-2. Optionally autolink bare `https://` lines in Sources-like blocks.
-3. Regression: Schrödinger Sources (Wikipedia + Grokipedia) all open; reject `javascript:`.
-4. Display-only — do not change atom/message store text.
+**#88A (core — Sources / link open correctness):**
+
+1. Tag-protect HTML tags before `**` / `*` / `__` / `_` emphasis; restore after (KD-MD1).
+2. Display-only — no atom/message store rewrite.
+3. `rel="noopener noreferrer"` retained; non-http(s) schemes rejected for external anchors.
+4. Hermetic pure-markdown fixtures cover the confirmed italic/link bug class.
+
+**#88B (operator-additive — Memory Context plain fixed channels):**
+
+1. Memory Context `system` / `orient` render as **plain text** (`textContent`), not `renderMarkdown`.
+2. Other meal channels keep current prose/markdown path.
+3. Close comment for #88 must cover **A+B** (B is additive to the original issue body).
+
+### Residual / non-goals
+
+- Full bare-URL autolinker remains optional follow-up (not blocking close).
+- No stored-message rewrites for markdown.
 
 ### Related
 
 - **BUG-chat-01** / **BUG-chat-02** — same `renderMarkdown` surface.
 - Parent epic [#59](https://github.com/jtwolfe/project-elyra/issues/59).
+- Design: [design-general-touchup1.md](../design/design-general-touchup1.md) §1.
 
 ---
 
-## BUG-wait-01 — Multi-choice wait after substantive speak (strong instruction nudge)
+## BUG-wait-01 — Multi-choice wait after substantive speak (gentle-with-examples)
 
 | Field | Value |
 |-------|--------|
-| **Status** | Open |
+| **Status** | **Fixed** under **gentle-with-examples** product acceptance on general-touchup1 (`1394ad3`; 2026-08-06) |
 | **Issue** | [#89](https://github.com/jtwolfe/project-elyra/issues/89) |
-| **Severity now** | Med (fork questions die without wait bar; human free-types into a new moment) |
-| **Severity later** | High for collaborative multi-step dogfood |
+| **Severity now** | Low residual if live model still skips forks post-ship (follow-up card — does **not** reopen #89 under KD-W1) |
+| **Severity later** | Med if skill/TOOL soft language regresses or wait hide races return |
 | **Area** | `wait_user` + `talk` / social skills + loop `ends_moment` ordering; Glass `#wait-choices` |
 | **Dogfood** | 2026-07-30 — same Schrödinger moment: after long answer **speak**, model listed forks (1)–(4) and asked “Which fork?” **without** arming `wait_user` multi-choice — no Glass choice buttons |
 
@@ -594,31 +625,87 @@ After a substantive **speak** that offers multiple follow-up forks, the model of
 
 so Glass never shows the wait bar / multi-choice buttons. Operator must re-open the conversation free-text instead of tapping a choice.
 
-Product intent already exists (`talk` skill: speak then wait; multi-choice for collab forks) but the **nudge is too soft** — model treats the fork list as a rhetorical close.
+Product intent already exists (`talk` skill: speak then wait; multi-choice for collab forks). Historical issue text asked for a **strong / must** nudge; **product acceptance to close is the gentler standard** (KD-W1).
 
 ### Likely cause
 
-- Soft skill language (“if you need a decision”) rather than a hard close-path rule.
+- Soft skill language without a concrete dogfood-shaped example of research close + numbered forks.
 - `ends_moment` batch abort after `wait_user` — model must order **speak → wait_user** in one turn; may skip wait to “finish cleanly”.
-- Glass wait UI is correct when armed (`renderWaitBar`); defect is **failure to arm**.
+- Glass wait UI is correct when armed (`renderWaitBar`); defect is **failure to arm** plus free-text reply path that did not optimistically hide / `refreshStatus`.
 
-### Fix directions
+### Fix (landed) — gentle-with-examples + wait bar UX
 
-1. **Strong skill + TOOL.md nudge:** when speak offers numbered / lettered forks, **must** follow with `wait_user` using those strings as `choices` (or long free-text wait if offering “I’ll type”).
-2. Concrete dogfood example in `talk` + `wait_user` (research close + 4 forks).
-3. Optional host one-shot reminder if speak looks multi-choice and batch has no wait (avoid thrash).
-4. Verify: armed multi-choice → buttons; free-text → composer hint; reply routes `wait_reply`.
+**Product acceptance (KD-W1):** shipping **gentle-with-examples** (not ALL-CAPS MUST thrash) is **sufficient to close #89 / BUG-wait-01**. Historical “strong / must” known-bugs language is **superseded**.
+
+1. **`talk` SKILL.md + `wait_user` TOOL.md:** prefer-language when speak lists real numbered/lettered collaborative forks → end with `wait_user` whose `choices` match those fork strings; free-text path = empty `choices` + long timeout. Concrete dogfood-shaped example (research close + forks). Soft prefer — not a hard fail for purely illustrative lists. **Do not invent choices.**
+2. **Glass:** `hideWaitBarOptimistic()` **after successful** multi-choice **or** free-text wait reply; both paths `refreshMessages` + `refreshStatus`; `renderWaitBar` re-shows if `pending_wait` still pending.
+3. No host force-wait soft-check in this bulk (optional later; not required for close under KD-W1).
+
+### Residual
+
+If post-ship live dogfood still shows **systematic** skip of multi-choice arming, file a separate follow-up — that residual does **not** block #89 close under the gentle standard.
 
 ### Explicit non-goals
 
 - Do not invent choices the model did not offer.
 - Do not retune default timeouts without separate dogfood.
+- Do not reinstate harsh MUST thrash as the acceptance bar.
 - Separate from **BUG-wake-*** storm class.
 
 ### Related
 
 - `tools/bundled/wait_user/TOOL.md`, `skills/bundled/talk/SKILL.md`, `elyra/tools/builtin/social.py`
 - Parent epic [#59](https://github.com/jtwolfe/project-elyra/issues/59).
+- Design: [design-general-touchup1.md](../design/design-general-touchup1.md) §2 / KD-W1 / KD-W2.
+
+---
+
+## Related: #104 — Update-first directed keep (`memory_keep_update`)
+
+Not a BUG-* row historically (board issue under meal/context management). Touchup1 **closes the product gap**:
+
+| Field | Value |
+|-------|--------|
+| **Status** | **Fixed (update-first)** on general-touchup1 (`c8bb09c` tool + `fb83374` prompts; 2026-08-06) |
+| **Issue** | [#104](https://github.com/jtwolfe/project-elyra/issues/104) |
+| **Area** | `memory_keep_update` tool; `DirectedKeepTray` / `TraversalRegistry.update_keep`; memory-traverse + system/orient prompts |
+
+### Shipped (KD-104-CLOSE honesty)
+
+Issue body was clear-focused (“no complete manual clear path”). Product lock shipped the **super-set**:
+
+1. Model-facing **`memory_keep_update`** — `mode=merge|replace`, `atom_ids`, `remove_ids`, optional `note`.
+2. **Empty `replace` + empty `atom_ids`** = intentional clear (entries + `walk_summary_nl` unless `note`).
+3. **Abandon ≠ clear** — `memory_traverse_abandon` retains keep; clear is empty replace only.
+4. Tray sticky immediately on disk; outer meal packs `directed_keep` on **next compose** (KD-A16).
+5. Fail closed when directed keep disabled.
+6. Skills/prompts treat keep as **context management** tied to goals/tasks (walk vs keep split).
+
+### Related
+
+- **BUG-meal-03** — sticky directed keep substrate (S3+).
+- Design: [design-general-touchup1.md](../design/design-general-touchup1.md) §4 / KD-K* / KD-104-CLOSE.
+
+---
+
+## Related: #109 — C4 grok_build residual dogfood (stays open)
+
+| Field | Value |
+|-------|--------|
+| **Status** | **Open** — residual packaging/dogfood sign-off for shipped `grok_build` |
+| **Issue** | [#109](https://github.com/jtwolfe/project-elyra/issues/109) |
+| **Identity** | v0.1 **C4** (`docs/goal/v0.1.md`) — **not** skill-bundle fail-closed |
+| **Touchup1** | **Excluded** from general-touchup1; remains open after this bulk |
+
+### Honesty
+
+- **#109 = C4 grok_build residual dogfood.** Address after touchup1.
+- **Unfiled:** skill-bundle / online server skills fail-closed is a **separate** deferred operator interest. **Do not invent that work as #109** and do not claim an issue number for it here.
+
+### Related
+
+- [docs/goal/v0.1.md](../goal/v0.1.md) packaging rails C4 → #109.
+- Design non-goal: [design-general-touchup1.md](../design/design-general-touchup1.md) KD-109.
 
 ---
 
