@@ -42,12 +42,72 @@ def test_list_goals_and_status_filter(store):
 
     all_g = store.list_goals()
     assert len(all_g) == 3
+    # All statuses still returned when unfiltered (KD-G1).
+    assert {g["status"] for g in all_g} == {"open", "review", "cancelled"}
     open_only = store.list_goals(status="open")
     assert len(open_only) == 1
     assert open_only[0]["id"] == a["id"]
     review_only = store.list_goals(status="review")
     assert len(review_only) == 1
     assert review_only[0]["id"] == b["id"]
+
+
+def test_list_goals_newest_first_by_updated_at(store):
+    """KD-G1: list order is newest-updated first (not create/append order)."""
+    a = store.create_goal("A")
+    b = store.create_goal("B")
+    # Touch A so its updated_at is strictly after B's create stamp.
+    store.update_goal(a["id"], title="A touched")
+
+    ordered = store.list_goals()
+    assert [g["id"] for g in ordered] == [a["id"], b["id"]]
+    assert ordered[0]["updated_at"] >= ordered[1]["updated_at"]
+
+
+def test_list_goals_id_tie_break_when_stamps_equal(store, tmp_path):
+    """KD-G1: equal (updated_at|created_at) → stable id desc tie-break."""
+    paths = resolve_paths(tmp_path)
+    paths.ensure_data_dirs()
+    s = GoalsStore(paths)
+    stamp = "2026-01-01T00:00:00+00:00"
+    doc = {
+        "goals": [
+            {
+                "id": "g_aaa",
+                "title": "older id",
+                "status": "open",
+                "acceptance": None,
+                "created_at": stamp,
+                "updated_at": stamp,
+                "tasks": [],
+            },
+            {
+                "id": "g_zzz",
+                "title": "newer id",
+                "status": "closed",
+                "acceptance": None,
+                "created_at": stamp,
+                "updated_at": stamp,
+                "tasks": [],
+            },
+            {
+                "id": "g_mmm",
+                "title": "mid id",
+                "status": "review",
+                "acceptance": None,
+                "created_at": stamp,
+                "updated_at": stamp,
+                "tasks": [],
+            },
+        ]
+    }
+    s.store_path.parent.mkdir(parents=True, exist_ok=True)
+    s.store_path.write_text(json.dumps(doc), encoding="utf-8")
+
+    ordered = s.list_goals()
+    assert [g["id"] for g in ordered] == ["g_zzz", "g_mmm", "g_aaa"]
+    # Unfiltered still includes all statuses (closed/review/open).
+    assert {g["status"] for g in ordered} == {"open", "review", "closed"}
 
 
 def test_soft_close_warning_open_to_closed(store):

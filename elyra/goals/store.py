@@ -213,7 +213,12 @@ class GoalsStore:
         *,
         status: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List goals; optional filter by status."""
+        """List goals; optional filter by status.
+
+        Order is newest-first by ``updated_at`` (fallback ``created_at``),
+        with stable ``id`` tie-break. No status filter returns all statuses
+        in that order (KD-G1).
+        """
         if status is not None and status not in GOAL_STATUSES:
             raise ValueError(f"invalid goal status: {status!r}")
         with self._lock:
@@ -225,6 +230,14 @@ class GoalsStore:
                 if status is not None and g.get("status") != status:
                     continue
                 out.append(dict(g))
+            # Newest-updated first; id desc as hermetic tie-break when stamps equal.
+            out.sort(
+                key=lambda g: (
+                    str(g.get("updated_at") or g.get("created_at") or ""),
+                    str(g.get("id") or ""),
+                ),
+                reverse=True,
+            )
             return out
 
     def update_goal(
