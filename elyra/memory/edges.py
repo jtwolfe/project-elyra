@@ -5,7 +5,16 @@ atom MemoryStore; put/list/delete/count parity on both backends; kind unique
 keys; outgoing budget FIFO for created_with (<=100) and total (~150);
 created_with retarget to youngest 1h tip + vertical fabric ensure (OQ-E7);
 speak-time recalls + encode-ready has_channel write helpers (soft-fail).
-Out of scope: GraphView expand (PR2), pure semantic traverse start (PR5).
+
+Warm-on-start P3 (batch + compact):
+- ``put_edges_batch`` is **merge-blocking** for multi-edge paths (backfill);
+  Lance uses one ``merge_insert`` for the batch to avoid per-row fragments.
+- ``compact()`` is **best-effort**. JSONL rewrites one line per live edge.
+  Lance tries ``table.compact_files()`` (then ``optimize``) when present;
+  when no compact API exists, returns ``ok=False`` / ``reason=unsupported``
+  (offline rebuild / quarantine remain operator fallbacks — design §4.5).
+- Fragment heuristic: warn when Lance fragment/data-file count ≥
+  ``edge_fragment_warn_threshold`` (default 500).
 """
 
 from __future__ import annotations
@@ -31,6 +40,8 @@ from elyra.config import ElyraPaths
 from elyra.memory.config import (
     EDGE_BACKFILL_MAX_ATOMS_DEFAULT,
     EDGE_BACKFILL_MAX_MS_DEFAULT,
+    EDGE_COMPACT_ON_OPEN_DEFAULT,
+    EDGE_FRAGMENT_WARN_THRESHOLD_DEFAULT,
     EDGE_SCHEMA_VERSION,
     MemorySettings,
     edges_jsonl_path,
@@ -85,6 +96,8 @@ _DEFAULT_KIND_CAPS: Mapping[str, int] = {
 }
 
 _EDGES_TABLE = "edges"
+# Operator backfill flush size (merge-blocking batch path).
+_BACKFILL_EDGE_BATCH = 64
 
 
 # ── Record model ───────────────────────────────────────────────────────────
@@ -313,6 +326,14 @@ class EdgeStore(Protocol):
         """Insert or replace by (src, dst, kind). Returns stored edge."""
         ...
 
+    def put_edges_batch(self, edges: Sequence[DurableEdge]) -> list[DurableEdge]:
+        """Batch insert/replace by (src, dst, kind). Returns stored edges.
+
+        Merge-blocking multi-edge write: disk durable before RAM indexes update.
+        Empty input → []. Within-batch duplicate identity keys: last wins.
+        """
+        ...
+
     def get_edge(self, edge_id: str) -> DurableEdge | None:
         ...
 
@@ -367,6 +388,10 @@ class EdgeStore(Protocol):
         edges: Sequence[DurableEdge],
     ) -> list[DurableEdge]:
         """Delete all outgoing of kind from src, then put ``edges``."""
+        ...
+
+    def compact(self) -> dict[str, Any]:
+        """Best-effort coalesce. Returns status dict (ok / reason / backend)."""
         ...
 
     def health(self) -> dict[str, Any]:
@@ -486,6 +511,73 @@ def put_edge_with_budget(
         retarget=retarget,
     )
     return stored, dropped
+
+
+def put_edges_batch(
+    store: EdgeStore,
+    edges: Sequence[DurableEdge],
+) -> list[DurableEdge]:
+    """Batch upsert via ``store.put_edges_batch`` when available, else sequential.
+
+    Prefer this helper from multi-edge paths (backfill) so backends without a
+    native batch method still work. Disk durability contract is owned by the
+    store implementation: Lance/JSONL batch methods update indexes only after
+    durable writes for the rows that landed.
+    """
+    if not edges:
+        return []
+    batch_fn = getattr(store, "put_edges_batch", None)
+    if callable(batch_fn):
+        return list(batch_fn(edges))
+    out: list[DurableEdge] = []
+    for edge in edges:
+        out.append(store.put_edge(edge))
+    return out
+
+
+def _prepare_edges_for_batch(
+    edges: Sequence[DurableEdge],
+    *,
+    by_key: Mapping[tuple[str, str, str], str],
+    by_id: Mapping[str, DurableEdge],
+) -> tuple[list[DurableEdge], list[str]]:
+    """Prepare edges for batch put.
+
+    Within-batch identity-key duplicates: last wins (stable order of first
+    appearance replaced). Returns ``(prepared, stale_edge_ids_to_drop)`` where
+    stale ids are prior unique-key holders whose ``edge_id`` differs from the
+    prepared row (must leave disk before/with the upsert).
+    """
+    ordered_keys: list[tuple[str, str, str]] = []
+    by_batch_key: dict[tuple[str, str, str], DurableEdge] = {}
+    for edge in edges:
+        if edge is None:
+            continue
+        key = edge_identity_key(
+            edge.src_atom_id, edge.dst_atom_id, edge.edge_kind
+        )
+        if key not in by_batch_key:
+            ordered_keys.append(key)
+        by_batch_key[key] = edge
+
+    prepared: list[DurableEdge] = []
+    stale_ids: list[str] = []
+    seen_stale: set[str] = set()
+    for key in ordered_keys:
+        edge = by_batch_key[key]
+        existing_id = by_key.get(key)
+        existing = by_id.get(existing_id) if existing_id else None
+        prep = prepare_edge_for_put(edge, existing=existing)
+        if (
+            existing is not None
+            and existing.edge_id
+            and existing.edge_id != prep.edge_id
+            and existing.edge_id not in seen_stale
+        ):
+            stale_ids.append(existing.edge_id)
+            seen_stale.add(existing.edge_id)
+        prepared.append(prep)
+    return prepared, stale_ids
 
 
 # ── created_with retarget (OQ-E7) ──────────────────────────────────────────
@@ -1326,6 +1418,34 @@ class JsonlEdgeStore:
             self._index_put(prepared)
             return prepared
 
+    def put_edges_batch(
+        self, edges: Sequence[DurableEdge]
+    ) -> list[DurableEdge]:
+        """Append many rows under one lock; index only after each durable append.
+
+        Exception mid-batch: edges already appended are indexed before re-raise
+        so RAM matches durable suffix (no success-with-only-RAM).
+        """
+        with self._lock:
+            self._check_open()
+            if not edges:
+                return []
+            prepared, _stale = _prepare_edges_for_batch(
+                edges, by_key=self._by_key, by_id=self._by_id
+            )
+            if not prepared:
+                return []
+            written: list[DurableEdge] = []
+            try:
+                for prep in prepared:
+                    self._append_row(durable_edge_to_dict(prep))
+                    self._index_put(prep)
+                    written.append(prep)
+            except Exception:
+                # written already indexed; re-raise for caller honesty.
+                raise
+            return written
+
     def get_edge(self, edge_id: str) -> DurableEdge | None:
         with self._lock:
             self._check_open()
@@ -1476,7 +1596,7 @@ class JsonlEdgeStore:
         with self._lock:
             self._closed = True
 
-    def compact(self) -> None:
+    def compact(self) -> dict[str, Any]:
         """Rewrite edges.jsonl with one latest line per live edge_id."""
         with self._lock:
             self._check_open()
@@ -1507,6 +1627,12 @@ class JsonlEdgeStore:
                 except OSError:
                     pass
                 raise
+            return {
+                "ok": True,
+                "backend": "jsonl",
+                "edge_count": len(edges),
+                "line_count": self._line_count,
+            }
 
 
 # ── Lance backend ──────────────────────────────────────────────────────────
@@ -1691,6 +1817,74 @@ class LanceEdgeStore:
             disk_n if disk_n is not None else "?",
             (ram_n == disk_n) if disk_n is not None else "?",
         )
+        self._maybe_fragment_warn_and_compact()
+
+    def _fragment_count(self) -> int | None:
+        """Best-effort Lance fragment / data-file count for scale heuristic."""
+        try:
+            if self._table is not None and hasattr(self._table, "to_lance"):
+                ds = self._table.to_lance()
+                if hasattr(ds, "get_fragments"):
+                    return int(len(ds.get_fragments()))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            data_dir = self.lance_dir / f"{_EDGES_TABLE}.lance" / "data"
+            if data_dir.is_dir():
+                return sum(1 for p in data_dir.iterdir() if p.is_file())
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _fragment_warn_threshold(self) -> int:
+        raw = getattr(
+            self._settings,
+            "edge_fragment_warn_threshold",
+            EDGE_FRAGMENT_WARN_THRESHOLD_DEFAULT,
+        )
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            n = EDGE_FRAGMENT_WARN_THRESHOLD_DEFAULT
+        return max(1, n)
+
+    def _maybe_fragment_warn_and_compact(self) -> None:
+        """Warn at ≥threshold fragments; optional best-effort compact_on_open."""
+        frag_n = self._fragment_count()
+        thr = self._fragment_warn_threshold()
+        if frag_n is not None and frag_n >= thr:
+            _LOG.warning(
+                "memory.edges.fragment_scale fragments=%d threshold=%d "
+                "backend=lance (batch put + compact recommended)",
+                frag_n,
+                thr,
+            )
+        mode = str(
+            getattr(
+                self._settings,
+                "edge_compact_on_open",
+                EDGE_COMPACT_ON_OPEN_DEFAULT,
+            )
+            or EDGE_COMPACT_ON_OPEN_DEFAULT
+        ).strip().lower()
+        should = mode in ("true", "1", "yes") or (
+            mode == "auto" and frag_n is not None and frag_n >= thr
+        )
+        if not should:
+            return
+        try:
+            result = self.compact()
+            _LOG.info(
+                "memory.edges.compact_on_open ok=%s reason=%s fragments_before=%s",
+                result.get("ok"),
+                result.get("reason") or result.get("method"),
+                frag_n,
+            )
+        except Exception:  # noqa: BLE001
+            _LOG.warning(
+                "memory.edges.compact_on_open failed",
+                exc_info=True,
+            )
 
     def _index_remove(self, edge_id: str) -> DurableEdge | None:
         old = self._by_id.pop(edge_id, None)
@@ -1749,6 +1943,18 @@ class LanceEdgeStore:
             .execute([row])
         )
 
+    def _upsert_rows(self, edges: Sequence[DurableEdge]) -> None:
+        """Single merge_insert for many rows (fragment-friendly)."""
+        if not edges:
+            return
+        rows = [_edge_to_lance_row(e) for e in edges]
+        (
+            self._table.merge_insert("edge_id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute(rows)
+        )
+
     def _delete_row(self, edge_id: str) -> None:
         self._table.delete(f"edge_id = {_sql_quote(edge_id)}")
 
@@ -1775,6 +1981,37 @@ class LanceEdgeStore:
                 self._index_remove(existing.edge_id)
             self._upsert_row(prepared)
             self._index_put(prepared)
+            return prepared
+
+    def put_edges_batch(
+        self, edges: Sequence[DurableEdge]
+    ) -> list[DurableEdge]:
+        """One merge_insert for the batch; indexes update only after disk OK.
+
+        Stale unique-key holders (different edge_id) are deleted on disk
+        before merge. On any disk failure, RAM is left unchanged and the
+        exception propagates (no success-with-only-RAM).
+        """
+        with self._lock:
+            self._check_open()
+            if not edges:
+                return []
+            prepared, stale_ids = _prepare_edges_for_batch(
+                edges, by_key=self._by_key, by_id=self._by_id
+            )
+            if not prepared:
+                return []
+            # Disk first — never index until durable write succeeds.
+            try:
+                for sid in stale_ids:
+                    self._delete_row(sid)
+                self._upsert_rows(prepared)
+            except Exception:
+                raise
+            for sid in stale_ids:
+                self._index_remove(sid)
+            for prep in prepared:
+                self._index_put(prep)
             return prepared
 
     def get_edge(self, edge_id: str) -> DurableEdge | None:
@@ -1899,6 +2136,88 @@ class LanceEdgeStore:
                 stored.append(prepared)
             return stored
 
+    def compact(self) -> dict[str, Any]:
+        """Best-effort fragment coalesce (warm-on-start P3 / design §4.5).
+
+        Tries in order:
+        1. ``table.compact_files()`` when present (preferred)
+        2. ``table.optimize()`` when present
+        3. else ``ok=False``, ``reason=unsupported`` — operator offline rebuild
+           / quarantine remain fallbacks (see module docstring).
+
+        Does not raise for missing APIs; may raise on I/O errors from a
+        present compact API.
+        """
+        with self._lock:
+            self._check_open()
+            if self._table is None:
+                return {
+                    "ok": False,
+                    "backend": "lance",
+                    "reason": "no_table",
+                }
+            before = self._fragment_count()
+            # Prefer compact_files (lancedb 0.20+ table API).
+            if hasattr(self._table, "compact_files") and callable(
+                self._table.compact_files
+            ):
+                try:
+                    stats = self._table.compact_files()
+                    after = self._fragment_count()
+                    return {
+                        "ok": True,
+                        "backend": "lance",
+                        "method": "compact_files",
+                        "fragments_before": before,
+                        "fragments_after": after,
+                        "stats": str(stats) if stats is not None else None,
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning(
+                        "memory.edges.compact compact_files failed: %s",
+                        exc,
+                    )
+                    return {
+                        "ok": False,
+                        "backend": "lance",
+                        "reason": f"compact_files_error:{type(exc).__name__}",
+                        "fragments_before": before,
+                    }
+            if hasattr(self._table, "optimize") and callable(
+                self._table.optimize
+            ):
+                try:
+                    self._table.optimize()
+                    after = self._fragment_count()
+                    return {
+                        "ok": True,
+                        "backend": "lance",
+                        "method": "optimize",
+                        "fragments_before": before,
+                        "fragments_after": after,
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning(
+                        "memory.edges.compact optimize failed: %s",
+                        exc,
+                    )
+                    return {
+                        "ok": False,
+                        "backend": "lance",
+                        "reason": f"optimize_error:{type(exc).__name__}",
+                        "fragments_before": before,
+                    }
+            return {
+                "ok": False,
+                "backend": "lance",
+                "reason": "unsupported",
+                "note": (
+                    "No compact_files/optimize on this lancedb build; "
+                    "use offline rebuild or quarantine (design §4.5)."
+                ),
+                "fragments_before": before,
+            }
+
     def health(self) -> dict[str, Any]:
         """Health with KD-ES-PARITY honesty.
 
@@ -1929,6 +2248,12 @@ class LanceEdgeStore:
                     self._settings
                 ),
             }
+            frag_n = self._fragment_count()
+            if frag_n is not None:
+                thr = self._fragment_warn_threshold()
+                out["fragment_count"] = frag_n
+                out["fragment_warn_threshold"] = thr
+                out["fragment_warn"] = frag_n >= thr
             try:
                 if self._table is not None and hasattr(
                     self._table, "count_rows"
@@ -1967,6 +2292,11 @@ class UnavailableEdgeStore:
         self._closed = False
 
     def put_edge(self, edge: DurableEdge) -> DurableEdge:
+        raise MemoryUnavailable(self.reason)
+
+    def put_edges_batch(
+        self, edges: Sequence[DurableEdge]
+    ) -> list[DurableEdge]:
         raise MemoryUnavailable(self.reason)
 
     def get_edge(self, edge_id: str) -> DurableEdge | None:
@@ -2018,6 +2348,13 @@ class UnavailableEdgeStore:
         edges: Sequence[DurableEdge],
     ) -> list[DurableEdge]:
         raise MemoryUnavailable(self.reason)
+
+    def compact(self) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "backend": "unavailable",
+            "reason": self.reason,
+        }
 
     def health(self) -> dict[str, Any]:
         return {
@@ -2150,14 +2487,17 @@ def backfill_durable_edges(
 
     V1: ``in_moment`` only — for each atom with ``moment_id``, write hub edge
     when missing. Idempotent: re-run yields ``written≈0``. Synchronous;
-    soft-fails per atom. Never reconstructs ``created_with`` / ``recalls``.
+    soft-fails per atom / batch. Never reconstructs ``created_with`` /
+    ``recalls``.
+
+    Uses ``put_edges_batch`` (merge-blocking) when the store supports it so
+    multi-edge history repair does not explode Lance fragments.
 
     Requires ``durable_edges_enabled`` and ``edge_backfill_dev_enabled``.
     Scans up to ``max_atoms`` (default 2000) newest-first without the glass
     ``LIST_ATOMS_MAX`` ceiling when the store supports ``glass_cap=False``.
     """
     from elyra.memory.graph import moment_hub_id
-    from elyra.memory.promote import write_in_moment_edge
 
     cfg = settings or MemorySettings()
     t0 = time.monotonic()
@@ -2196,6 +2536,7 @@ def backfill_durable_edges(
         "kinds": list(kind_set),
         "max_atoms": max_atoms_eff,
         "max_ms": int(max_ms_eff),
+        "batch": False,
     }
 
     if not is_edge_backfill_dev_enabled(cfg):
@@ -2228,6 +2569,26 @@ def backfill_durable_edges(
     skipped = 0
     errors = 0
     truncated = False
+    used_batch = callable(getattr(edge_store, "put_edges_batch", None))
+    pending: list[DurableEdge] = []
+
+    def _flush_pending() -> None:
+        nonlocal written, errors, skipped
+        if not pending:
+            return
+        batch = list(pending)
+        pending.clear()
+        try:
+            stored = put_edges_batch(edge_store, batch)
+            written += len(stored)
+            written_by_kind[EDGE_IN_MOMENT] = (
+                written_by_kind.get(EDGE_IN_MOMENT, 0) + len(stored)
+            )
+        except Exception:  # noqa: BLE001 — soft-fail whole batch
+            _LOG.exception(
+                "backfill put_edges_batch failed n=%d", len(batch)
+            )
+            errors += len(batch)
 
     try:
         atoms = _list_atoms_for_backfill(atom_store, max_atoms_eff)
@@ -2267,30 +2628,32 @@ def backfill_durable_edges(
             if any(getattr(e, "dst_atom_id", None) == hub for e in existing):
                 skipped += 1
                 continue
-            write_in_moment_edge(
-                edge_store,
-                src_atom_id=src_id,
-                moment_id=moment_id,
-                settings=cfg,
-                atom_store=atom_store,
-            )
-            # Confirm write landed (put is idempotent by identity key).
-            after = edge_store.list_edges_from(
-                src_id, kinds=[EDGE_IN_MOMENT], limit=4
-            )
-            if any(getattr(e, "dst_atom_id", None) == hub for e in after):
-                written += 1
-                written_by_kind[EDGE_IN_MOMENT] = (
-                    written_by_kind.get(EDGE_IN_MOMENT, 0) + 1
+            now = utc_now_iso()
+            pending.append(
+                DurableEdge(
+                    edge_id=new_edge_id(),
+                    src_atom_id=src_id,
+                    dst_atom_id=hub,
+                    edge_kind=EDGE_IN_MOMENT,
+                    created_at=now,
+                    updated_at=now,
+                    weight=base_weight(EDGE_IN_MOMENT),
+                    reason="promote_membership",
+                    meta={"moment_id": moment_id},
                 )
-            else:
-                # Budget drop / soft fail — count as skip, not error.
-                skipped += 1
-        except Exception:  # noqa: BLE001 — soft-fail per atom
+            )
+            if len(pending) >= _BACKFILL_EDGE_BATCH:
+                _flush_pending()
+        except Exception:  # noqa: BLE001 — soft-fail per atom (scan/list)
             _LOG.exception(
                 "backfill in_moment failed atom_id=%s", src_id
             )
             errors += 1
+
+    # Flush remaining pending before exit (including when truncated mid-scan
+    # after some edges were collected — durable partial progress is OK).
+    # When max_ms=0, scanned never increments and pending stays empty.
+    _flush_pending()
 
     # Truncated when wall or max_atoms stop mid-scan, or store returned a
     # full page while more may exist (caller can raise max_atoms).
@@ -2318,6 +2681,7 @@ def backfill_durable_edges(
             "errors": errors,
             "elapsed_ms": int((time.monotonic() - t0) * 1000),
             "truncated": truncated,
+            "batch": used_batch,
         }
     )
     return result
@@ -2347,6 +2711,7 @@ __all__ = [
     "plan_budget_drops",
     "prepare_edge_for_put",
     "put_edge_with_budget",
+    "put_edges_batch",
     "retarget_created_with_edge",
     "rank_recalls_candidates",
     "select_fifo_overflow",

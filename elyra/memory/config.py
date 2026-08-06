@@ -65,6 +65,11 @@ EDGE_BACKFILL_MAX_ATOMS_DEFAULT = 2000
 EDGE_BACKFILL_MAX_ATOMS_MAX = 10_000
 EDGE_BACKFILL_MAX_MS_DEFAULT = 30_000
 EDGE_BACKFILL_MAX_MS_MAX = 120_000
+# Warm-on-start P3: fragment scale heuristic (data files / fragments ≥ threshold → warn).
+EDGE_FRAGMENT_WARN_THRESHOLD_DEFAULT = 500
+EDGE_FRAGMENT_WARN_THRESHOLD_MAX = 100_000
+# Best-effort compact on open: "false" | "true" | "auto" (auto = only when over threshold).
+EDGE_COMPACT_ON_OPEN_DEFAULT = "false"
 
 # Inline body threshold for JSONL rows (spill to blob when longer).
 # Kept below atom_max_chars (8000) so spill is reachable under default settings
@@ -482,6 +487,10 @@ class MemorySettings:
     edge_backfill_dev_enabled: bool = True
     edge_backfill_max_atoms: int = EDGE_BACKFILL_MAX_ATOMS_DEFAULT
     edge_backfill_max_ms: int = EDGE_BACKFILL_MAX_MS_DEFAULT
+    # Warm-on-start P3: warn when Lance fragment/data-file count ≥ threshold.
+    edge_fragment_warn_threshold: int = EDGE_FRAGMENT_WARN_THRESHOLD_DEFAULT
+    # Best-effort compact on Lance open: false | true | auto.
+    edge_compact_on_open: str = EDGE_COMPACT_ON_OPEN_DEFAULT
 
 
 def memory_root(paths: ElyraPaths) -> Path:
@@ -538,6 +547,9 @@ __all__ = [
     "EDGE_BACKFILL_MAX_ATOMS_MAX",
     "EDGE_BACKFILL_MAX_MS_DEFAULT",
     "EDGE_BACKFILL_MAX_MS_MAX",
+    "EDGE_COMPACT_ON_OPEN_DEFAULT",
+    "EDGE_FRAGMENT_WARN_THRESHOLD_DEFAULT",
+    "EDGE_FRAGMENT_WARN_THRESHOLD_MAX",
     "EDGE_CREATED_WITH_MAX_DEFAULT",
     "EDGE_CREATED_WITH_MAX_MAX",
     "EDGE_CREATED_WITH_WRITE_CAP_DEFAULT",

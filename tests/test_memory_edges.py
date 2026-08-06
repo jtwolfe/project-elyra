@@ -29,6 +29,7 @@ from elyra.memory.edges import (
     open_edge_store,
     plan_budget_drops,
     put_edge_with_budget,
+    put_edges_batch,
     select_fifo_overflow,
     total_outgoing_cap,
 )
@@ -938,3 +939,339 @@ def test_backfill_unavailable_edge_store_early_out(paths):
         assert r["errors"] == 0
     finally:
         store.close()
+
+
+# ── P3 warm-on-start: batch upsert + compact fallbacks ───────────────────────
+
+
+def test_jsonl_put_edges_batch_and_reopen(paths):
+    """W2b: batch put ≥ many edges → durable after reopen (jsonl)."""
+    cfg = MemorySettings(backend="jsonl", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    n = 50
+    batch = [
+        _edge(
+            src="S_batch",
+            dst=f"D{i}",
+            kind=EDGE_CREATED_WITH,
+            edge_id=f"e_jb_{i}",
+        )
+        for i in range(n)
+    ]
+    stored = store.put_edges_batch(batch)
+    assert len(stored) == n
+    assert store.count_edges_for_atom("S_batch") == n
+    # Helper path matches method.
+    more = put_edges_batch(
+        store,
+        [
+            _edge(
+                src="S_batch",
+                dst="D_extra",
+                kind=EDGE_CREATED_WITH,
+                edge_id="e_jb_extra",
+            )
+        ],
+    )
+    assert len(more) == 1
+    assert store.count_edges_for_atom("S_batch") == n + 1
+    # Empty batch is no-op.
+    assert store.put_edges_batch([]) == []
+    store.close()
+
+    reopened = open_edge_store(paths, cfg, fail_soft=False)
+    try:
+        assert reopened.count_edges_for_atom("S_batch") == n + 1
+        assert reopened.health()["edge_count"] == n + 1
+        # compact returns status dict
+        c = reopened.compact()
+        assert c["ok"] is True
+        assert c["backend"] == "jsonl"
+        assert c["edge_count"] == n + 1
+    finally:
+        reopened.close()
+
+
+def test_jsonl_put_edges_batch_identity_last_wins(paths):
+    """Within-batch duplicate (src,dst,kind): last wins; unique key upsert."""
+    cfg = MemorySettings(backend="jsonl", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    try:
+        batch = [
+            _edge(
+                src="S",
+                dst="D",
+                kind=EDGE_IN_MOMENT,
+                edge_id="e_a",
+                reason="first",
+            ),
+            _edge(
+                src="S",
+                dst="D",
+                kind=EDGE_IN_MOMENT,
+                edge_id="e_b",
+                reason="second",
+            ),
+        ]
+        stored = store.put_edges_batch(batch)
+        # No prior state: within-batch last raw edge wins (e_b).
+        assert len(stored) == 1
+        assert stored[0].edge_id == "e_b"
+        assert store.count_edges_for_atom("S") == 1
+        got = store.list_edges_from("S")[0]
+        assert got.reason == "second"
+        # Second batch upsert updates reason, keeps identity (prepare_edge_for_put).
+        store.put_edges_batch(
+            [
+                _edge(
+                    src="S",
+                    dst="D",
+                    kind=EDGE_IN_MOMENT,
+                    edge_id="e_c",
+                    reason="third",
+                )
+            ]
+        )
+        assert store.count_edges_for_atom("S") == 1
+        got2 = store.list_edges_from("S")[0]
+        assert got2.reason == "third"
+        assert got2.edge_id == got.edge_id
+    finally:
+        store.close()
+
+
+def test_backfill_uses_batch_path(paths):
+    """Backfill still writes in_moment and reports batch=True on JsonlEdgeStore."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.graph import moment_hub_id
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    estore = open_edge_store(paths, cfg)
+    try:
+        mid = "m_batch_bf"
+        ids = []
+        for i in range(5):
+            a = store.put_atom(
+                Atom(
+                    atom_id=new_atom_id(),
+                    t_start=f"2026-08-05T12:0{i}:00Z",
+                    kind="observation",
+                    content_text=f"bf {i}",
+                    content_ref="inline",
+                    moment_id=mid,
+                )
+            )
+            ids.append(a.atom_id)
+        r = backfill_durable_edges(store, estore, settings=cfg)
+        assert r["ok"] is True
+        assert r["written"] == 5
+        assert r.get("batch") is True
+        hub = moment_hub_id(mid)
+        for aid in ids:
+            outs = estore.list_edges_from(aid, kinds=[EDGE_IN_MOMENT])
+            assert any(e.dst_atom_id == hub for e in outs)
+        # Idempotent re-run
+        r2 = backfill_durable_edges(store, estore, settings=cfg)
+        assert r2["written"] == 0
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_backfill_batch_exception_counts_errors(paths, monkeypatch):
+    """If batch put fails, errors count the batch size; no silent RAM-only success."""
+    from elyra.memory import edges as edges_mod
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="jsonl",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, cfg)
+    estore = open_edge_store(paths, cfg)
+    try:
+        for i in range(3):
+            store.put_atom(
+                Atom(
+                    atom_id=new_atom_id(),
+                    t_start=f"2026-08-05T13:0{i}:00Z",
+                    kind="observation",
+                    content_text=f"x{i}",
+                    content_ref="inline",
+                    moment_id="m_err",
+                )
+            )
+
+        def _boom(_store, _edges):
+            raise OSError("simulated batch disk failure")
+
+        monkeypatch.setattr(edges_mod, "put_edges_batch", _boom)
+        r = backfill_durable_edges(store, estore, settings=cfg)
+        assert r["ok"] is True
+        assert r["errors"] == 3
+        assert r["written"] == 0
+        # No edges should have been written (batch failed before index).
+        assert estore.health()["edge_count"] == 0
+    finally:
+        estore.close()
+        store.close()
+
+
+@lance_only
+def test_lance_put_edges_batch_write_reopen(paths):
+    """W2b lance: batch ≥200 → reopen count + parity (merge-blocking)."""
+    cfg = MemorySettings(backend="lance", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    n = 200
+    batch = [
+        _edge(
+            src="S_lb",
+            dst=f"D{i}",
+            kind=EDGE_CREATED_WITH,
+            edge_id=f"e_lb_{i}",
+            created_at=f"2026-08-05T10:{(i // 60) % 60:02d}:{i % 60:02d}Z",
+        )
+        for i in range(n)
+    ]
+    stored = store.put_edges_batch(batch)
+    assert len(stored) == n
+    h1 = store.health()
+    assert h1["ok"] is True
+    assert h1["edge_count"] == n
+    assert h1.get("disk_edge_count") == n
+    assert h1.get("edge_count_parity") is True
+    # Batch should not create one fragment per edge.
+    frag = h1.get("fragment_count")
+    if frag is not None:
+        assert frag < n // 2  # well under per-row explosion
+    store.close()
+
+    reopened = open_edge_store(paths, cfg, fail_soft=False)
+    try:
+        assert reopened.count_edges_for_atom("S_lb") == n
+        h2 = reopened.health()
+        assert h2["ok"] is True
+        assert h2["edge_count"] == n
+        assert h2.get("disk_edge_count") == n
+        assert h2.get("edge_count_parity") is True
+    finally:
+        reopened.close()
+
+
+@lance_only
+def test_lance_compact_best_effort(paths):
+    """compact_files path when API exists; status dict always returned."""
+    cfg = MemorySettings(backend="lance", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    # Create several fragments via single puts, then compact.
+    for i in range(8):
+        store.put_edge(
+            _edge(
+                src="S_c",
+                dst=f"D{i}",
+                kind=EDGE_CREATED_WITH,
+                edge_id=f"e_c_{i}",
+            )
+        )
+    before = store.health().get("fragment_count")
+    result = store.compact()
+    assert isinstance(result, dict)
+    assert result["backend"] == "lance"
+    if result.get("ok"):
+        assert result.get("method") in ("compact_files", "optimize")
+        after = result.get("fragments_after")
+        if before is not None and after is not None and before > 1:
+            assert after <= before
+    else:
+        # Documented unsupported / error path still honest.
+        assert result.get("reason")
+    # Compact must not destroy edges.
+    assert store.count_edges_for_atom("S_c") == 8
+    store.close()
+
+
+@lance_only
+def test_lance_fragment_warn_in_health(paths):
+    """Fragment heuristic surfaces count + warn flag at threshold."""
+    cfg = MemorySettings(
+        backend="lance",
+        durable_edges_enabled=True,
+        edge_fragment_warn_threshold=3,
+    )
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    for i in range(5):
+        store.put_edge(
+            _edge(
+                src="S_fw",
+                dst=f"D{i}",
+                kind=EDGE_CREATED_WITH,
+                edge_id=f"e_fw_{i}",
+            )
+        )
+    h = store.health()
+    assert h.get("fragment_count") is not None
+    assert h.get("fragment_warn_threshold") == 3
+    if h["fragment_count"] >= 3:
+        assert h.get("fragment_warn") is True
+    store.close()
+
+
+@lance_only
+def test_lance_backfill_batch_path(paths):
+    """Backfill via Lance batch put still idempotent and durable."""
+    from elyra.memory.edges import backfill_durable_edges
+    from elyra.memory.store import open_memory_store
+    from elyra.memory.types import Atom, new_atom_id
+
+    cfg = MemorySettings(
+        write_atoms=True,
+        backend="lance",
+        durable_edges_enabled=True,
+        edge_backfill_dev_enabled=True,
+    )
+    store = open_memory_store(paths, MemorySettings(write_atoms=True, backend="jsonl"))
+    estore = open_edge_store(paths, cfg, fail_soft=False)
+    try:
+        mid = "m_lance_bf"
+        for i in range(10):
+            store.put_atom(
+                Atom(
+                    atom_id=new_atom_id(),
+                    t_start=f"2026-08-05T14:00:{i:02d}Z",
+                    kind="observation",
+                    content_text=f"lbf {i}",
+                    content_ref="inline",
+                    moment_id=mid,
+                )
+            )
+        r = backfill_durable_edges(store, estore, settings=cfg)
+        assert r["ok"] is True
+        assert r["written"] == 10
+        assert r.get("batch") is True
+        assert estore.health()["edge_count"] == 10
+        r2 = backfill_durable_edges(store, estore, settings=cfg)
+        assert r2["written"] == 0
+    finally:
+        estore.close()
+        store.close()
+
+
+def test_unavailable_put_edges_batch_and_compact():
+    u = UnavailableEdgeStore("edge_backend_unavailable")
+    with pytest.raises(MemoryUnavailable):
+        u.put_edges_batch([_edge()])
+    c = u.compact()
+    assert c["ok"] is False
+    assert c["reason"] == "edge_backend_unavailable"
