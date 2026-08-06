@@ -217,6 +217,13 @@ const devSpeedDelay = $("#dev-speed-delay");
 const semanticWaitToggle = $("#semantic-wait-toggle");
 const semanticWaitMeta = $("#semantic-wait-meta");
 const semanticWaitBadge = $("#semantic-wait-badge");
+const memoryFabricBadge = $("#memory-fabric-badge");
+const memoryFabricAggregate = $("#memory-fabric-aggregate");
+const memoryFabricStore = $("#memory-fabric-store");
+const memoryFabricEdges = $("#memory-fabric-edges");
+const memoryFabricEmbedder = $("#memory-fabric-embedder");
+const memoryFabricIndex = $("#memory-fabric-index");
+const memoryFabricNote = $("#memory-fabric-note");
 const semanticWaitMaxMs = $("#semantic-wait-max-ms");
 const mealBudgetFraction = $("#meal-budget-fraction");
 const mealBudgetReadout = $("#meal-budget-readout");
@@ -2474,10 +2481,127 @@ async function refreshStatus() {
   renderContinuous(s);
   renderDevSpeed(s);
   renderSemanticWait(s);
+  renderMemoryFabric(s);
   // Server-confirmed pending wait (KD-W2) — source of truth for armed checks.
   lastStatusPendingWait = s.pending_wait || null;
   renderWaitBar(lastStatusPendingWait);
   return s;
+}
+
+/**
+ * Status card: memory fabric aggregate + component gates (P4 / KD-MR).
+ * Independent of chat_ready — never green just because chat is ready.
+ * @param {Record<string, any>} s
+ */
+function renderMemoryFabric(s) {
+  const mem = (s && s.memory) || {};
+  const enabled = mem.enabled === true || mem.write_atoms === true;
+  const ready = mem.memory_ready === true;
+  const warming =
+    mem.warming === true || mem.memory_warming === true;
+  const storeReady = mem.atom_store_ready === true || (mem.store_open === true && mem.ok === true);
+  const edgesReady = mem.edges_ready === true;
+  const embReady = mem.embedder_ready === true;
+  const indexReady = mem.index_ready === true;
+  const embState =
+    (mem.embedder && mem.embedder.state) || mem.embedder_state || "absent";
+  const edgesState =
+    (mem.edges && mem.edges.state) ||
+    (mem.edges_open && mem.edges_open.state) ||
+    "absent";
+
+  let phase = "off";
+  if (!enabled && !mem.need_store) {
+    phase = "off";
+  } else if (warming && !ready) {
+    phase = "warming";
+  } else if (ready) {
+    phase = "ready";
+  } else {
+    phase = "degraded";
+  }
+
+  if (memoryFabricBadge) {
+    memoryFabricBadge.textContent = phase;
+    memoryFabricBadge.classList.remove("badge-open", "badge-bad");
+    if (phase === "ready") {
+      memoryFabricBadge.classList.add("badge-open");
+    } else if (phase === "degraded") {
+      memoryFabricBadge.classList.add("badge-bad");
+    } else if (phase === "warming") {
+      memoryFabricBadge.classList.add("badge-open");
+    }
+  }
+
+  const setVal = (el, text, good) => {
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove("status-ok", "status-bad");
+    if (good === true) el.classList.add("status-ok");
+    if (good === false) el.classList.add("status-bad");
+  };
+
+  setVal(
+    memoryFabricAggregate,
+    phase === "ready"
+      ? "ready"
+      : phase === "warming"
+        ? "warming"
+        : phase === "off"
+          ? "off (not required)"
+          : "degraded",
+    phase === "ready" ? true : phase === "degraded" ? false : null
+  );
+  setVal(
+    memoryFabricStore,
+    storeReady ? "ready" : mem.store_open ? "open · not ok" : "closed",
+    storeReady ? true : enabled ? false : null
+  );
+  setVal(
+    memoryFabricEdges,
+    edgesReady
+      ? `ready${mem.edges && mem.edges.edge_count != null ? ` · ${mem.edges.edge_count} rows` : ""}`
+      : `${edgesState}${mem.need_edges === false ? " (not required)" : ""}`,
+    edgesReady ? true : mem.need_edges ? false : null
+  );
+  setVal(
+    memoryFabricEmbedder,
+    embReady
+      ? "warm"
+      : `${embState}${mem.need_embed === false ? " (not required)" : ""}`,
+    embReady ? true : mem.need_embed ? false : null
+  );
+  setVal(
+    memoryFabricIndex,
+    indexReady
+      ? "ready"
+      : mem.need_index === false
+        ? "— (not required)"
+        : "absent",
+    indexReady ? true : mem.need_index ? false : null
+  );
+
+  if (memoryFabricNote) {
+    if (phase === "warming" && s && s.chat_ready) {
+      memoryFabricNote.textContent =
+        "memory warming — replies may wait or run without full fabric (chat_ready independent)";
+    } else if (edgesReady && !embReady && mem.need_embed) {
+      memoryFabricNote.textContent =
+        "edges ready · embedder loading/failed — semantic hops deferred";
+    } else if (!edgesReady && mem.need_edges) {
+      memoryFabricNote.textContent =
+        "edges not ready — durable Graph expand limited; not empty fabric alone";
+    } else if (phase === "ready") {
+      memoryFabricNote.textContent =
+        "Fabric OK. Consumers still gate on component flags, not only aggregate.";
+    } else if (phase === "off") {
+      memoryFabricNote.textContent =
+        "Memory disabled (enabled/write_atoms off). chat_ready is independent.";
+    } else {
+      memoryFabricNote.textContent =
+        "Fabric degraded. chat_ready is independent of memory_ready.";
+    }
+  }
 }
 
 function renderGoals(goals) {
@@ -3056,11 +3180,25 @@ function renderMemoryFlags(mem, opts = {}) {
   if (!memoryContextFlags) return;
   const force = Boolean(opts.force);
   const m = mem || {};
+  const fabricPhase = (() => {
+    if (m.memory_ready === true) return "ready";
+    if (m.warming === true || m.memory_warming === true) return "warming";
+    if (!(m.enabled || m.write_atoms)) return "off";
+    return "degraded";
+  })();
   const rows = [
     ["enabled", m.enabled === true ? "true" : "false", m.enabled === true],
     ["write_atoms", m.write_atoms === true ? "true" : "false", m.write_atoms === true],
     ["backend", m.backend || "—", null],
     ["store", m.ok ? "ok" : m.error || "down", m.ok === true],
+    [
+      "fabric",
+      fabricPhase +
+        (m.edges_ready != null
+          ? ` · edges=${m.edges_ready ? "ok" : "no"} · emb=${m.embedder_ready ? "ok" : "no"}`
+          : ""),
+      fabricPhase === "ready" ? true : fabricPhase === "degraded" ? false : null,
+    ],
     ["atoms", m.atom_count != null ? String(m.atom_count) : "—", null],
     ["open moment", m.active_moment_id || "—", null],
     ...ladderFlagRows(m.ladder),
@@ -5463,6 +5601,26 @@ function renderGraphOverview(data) {
       "store",
       mem.ok ? mem.backend || "ok" : mem.error || "down",
       mem.ok === true,
+    ],
+    [
+      "fabric",
+      (() => {
+        if (mem.memory_ready === true) return "ready";
+        if (mem.warming === true || mem.memory_warming === true) return "warming";
+        if (!(mem.enabled || mem.write_atoms)) return "off";
+        const bits = [];
+        if (mem.edges_ready === false) bits.push("edges");
+        if (mem.embedder_ready === false && mem.need_embed) bits.push("embedder");
+        if (mem.atom_store_ready === false) bits.push("store");
+        return bits.length ? `degraded (${bits.join(", ")})` : "degraded";
+      })(),
+      mem.memory_ready === true
+        ? true
+        : mem.warming || mem.memory_warming
+          ? null
+          : mem.enabled || mem.write_atoms
+            ? false
+            : null,
     ],
   ];
   for (const [label, value, good] of rows) {

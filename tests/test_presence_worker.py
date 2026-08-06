@@ -1933,10 +1933,13 @@ def test_warm_core_allows_claim_before_embedder(paths, monkeypatch):
             worker._encode_worker is None
             or not worker._encode_worker.is_alive()  # noqa: SLF001
         )
-        # Status surfaces honest warming + loading.
+        # Status surfaces honest warming + loading; aggregate not ready yet.
         mem = worker.status_snapshot()["memory"]
         assert mem["embedder_state"] == "loading"
         assert mem["memory_warming"] is True
+        assert mem["warming"] is True
+        assert mem["embedder_ready"] is False
+        assert mem["memory_ready"] is False  # need_embed while loading
         assert "edges_open" in mem
         assert mem["edges_open"]["state"] in (
             "ready",
@@ -2007,13 +2010,17 @@ def test_warm_loader_terminal_starts_encode_worker(paths, monkeypatch):
         mem = worker.status_snapshot()["memory"]
         assert mem["embedder_state"] == "warm"
         assert mem["memory_warming"] is False
+        assert mem["embedder_ready"] is True
+        # Full fabric ready once embedder terminal warm + edges ok.
+        if mem["edges_ready"] and mem["atom_store_ready"] and mem["index_ready"]:
+            assert mem["memory_ready"] is True
     finally:
         stop.set()
         t.join(timeout=10.0)
 
 
 def test_memory_status_component_fields_present(paths):
-    """Status memory block exposes embedder_state / edges_open / memory_warming."""
+    """Status memory block exposes embedder_state / edges_open / memory_warming / ready."""
     from dataclasses import replace
 
     from elyra.memory.config import MemorySettings
@@ -2034,6 +2041,16 @@ def test_memory_status_component_fields_present(paths):
     assert "state" in mem["edges_open"]
     assert "memory_warming" in mem
     assert mem["memory_warming"] is False  # not yet on warm path
+    # P4 aggregate + component flags always present.
+    assert "memory_ready" in mem
+    assert mem["memory_ready"] is False  # store not open yet
+    assert "edges_ready" in mem
+    assert "embedder_ready" in mem
+    assert "index_ready" in mem
+    assert "atom_store_ready" in mem
+    assert isinstance(mem.get("edges"), dict)
+    assert isinstance(mem.get("embedder"), dict)
+    assert isinstance(mem.get("index"), dict)
 
     # After eager core (no run loop), edges open + fields still honest.
     worker._warm_memory_core()  # noqa: SLF001
@@ -2041,6 +2058,13 @@ def test_memory_status_component_fields_present(paths):
     assert mem2["store_open"] is True
     assert mem2["edges_open"]["state"] in ("ready", "unavailable")
     assert mem2["embedder_state"] == "absent"  # core does not load embedder
+    assert mem2["atom_store_ready"] is True
+    assert mem2["index_ready"] is True
+    if mem2["edges_open"]["state"] == "ready":
+        assert mem2["edges_ready"] is True
+        # embed not enabled by default in this settings → memory_ready true
+        assert mem2["need_embed"] is False
+        assert mem2["memory_ready"] is True
 
 
 def test_consumer_embedder_nonblocking_while_loading_status(paths):

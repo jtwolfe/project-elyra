@@ -216,6 +216,20 @@ def _print_startup_posture(sup: ElyraSupervisor) -> None:
     else:
         chat = "off"
     print(f"chat:        {chat}")
+    # Memory fabric posture (KD-MR / P4) — independent of chat_ready.
+    try:
+        from elyra.memory.readiness import format_memory_fabric_cli_line
+
+        worker = getattr(sup, "_worker", None)
+        mem_block: dict = {}
+        if worker is not None and hasattr(worker, "status_snapshot"):
+            snap = worker.status_snapshot()
+            raw = snap.get("memory") if isinstance(snap, dict) else None
+            if isinstance(raw, dict):
+                mem_block = raw
+        print(format_memory_fabric_cli_line(mem_block))
+    except Exception:  # noqa: BLE001 — posture is best-effort
+        print("memory:      unknown")
 
 
 def _cmd_start(args: argparse.Namespace) -> int:

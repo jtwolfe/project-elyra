@@ -1803,10 +1803,18 @@ class PresenceWorker:
         Includes a compact ``ladder`` sub-block (knobs + last_hourly_process /
         llm_calls) for dogfood observability (#92 design §10).
 
-        Warm-on-start component fields (KD-GATE / KD-WARM-UX minimal honesty):
-        ``embedder_state``, ``edges_open`` (open SM snapshot), ``memory_warming``.
-        Full aggregate ``memory_ready`` formula polish is P4 — not here.
+        Warm-on-start component fields + aggregate (KD-GATE / KD-MR / P4):
+        ``edges_ready``, ``embedder_ready``, ``atom_store_ready``, ``index_ready``,
+        aggregate ``memory_ready``, ``warming`` / ``memory_warming``. Nested
+        ``edges`` / ``embedder`` / ``index`` objects for Glass honesty.
+        ``chat_ready`` is never folded into ``memory_ready``.
         """
+        from elyra.memory.edges import UnavailableEdgeStore
+        from elyra.memory.readiness import (
+            compute_memory_ready,
+            edges_component_ready,
+        )
+
         mem_cfg = self.settings.memory
         with self._lock:
             deferred_pending = len(self._deferred_recalls_jobs)
@@ -1821,6 +1829,9 @@ class PresenceWorker:
         emb_state = str(getattr(self, "_embedder_state", None) or "absent")
         if emb_state not in ("absent", "loading", "warm", "failed"):
             emb_state = "absent"
+        emb_error: str | None = None
+        if emb_state == "failed":
+            emb_error = "embedder_failed"
         try:
             edges_open = self.edge_store_open_status()
         except Exception:  # noqa: BLE001 — status must never raise
@@ -1833,19 +1844,176 @@ class PresenceWorker:
                 ),
                 "next_retry_at_monotonic": None,
             }
+
+        # Edge health peek (no open side-effects beyond existing handle).
+        edge_handle = getattr(self, "_edge_store", None)
+        edge_state = str(edges_open.get("state") or "absent")
+        edge_health: dict[str, Any] = {}
+        edge_backend: str | None = None
+        edge_count = 0
+        disk_edge_count: int | None = None
+        edge_count_parity: bool | None = None
+        edge_error: str | None = edges_open.get("error")
+        if (
+            edge_handle is not None
+            and not isinstance(edge_handle, UnavailableEdgeStore)
+            and hasattr(edge_handle, "health")
+        ):
+            try:
+                eh = edge_handle.health()
+                if isinstance(eh, Mapping):
+                    edge_health = dict(eh)
+                    if eh.get("backend") is not None:
+                        edge_backend = str(eh.get("backend"))
+                    try:
+                        edge_count = int(eh.get("edge_count") or 0)
+                    except (TypeError, ValueError):
+                        edge_count = 0
+                    if eh.get("disk_edge_count") is not None:
+                        try:
+                            disk_edge_count = int(eh["disk_edge_count"])
+                        except (TypeError, ValueError):
+                            disk_edge_count = None
+                    if "edge_count_parity" in eh:
+                        edge_count_parity = bool(eh.get("edge_count_parity"))
+                    if eh.get("error") is not None and edge_error is None:
+                        edge_error = str(eh.get("error"))
+            except Exception:  # noqa: BLE001
+                edge_health = {}
+        elif isinstance(edge_handle, UnavailableEdgeStore):
+            if edge_error is None:
+                edge_error = str(
+                    getattr(edge_handle, "reason", "") or "edge_store_unavailable"
+                )
+
+        edges_ready = edges_component_ready(
+            state=edge_state,
+            handle=edge_handle,
+            health=edge_health if edge_health else None,
+            unavailable_type=UnavailableEdgeStore,
+        )
+        # health.ok when handle real; unavailable → ok false
+        edges_ok = bool(edge_health.get("ok")) if edge_health else False
+        if isinstance(edge_handle, UnavailableEdgeStore):
+            edges_ok = False
+        edges_open_flag = edge_state == "ready" and edge_handle is not None and (
+            not isinstance(edge_handle, UnavailableEdgeStore)
+        )
+        edges_warming = edge_state in ("opening", "absent") and bool(
+            getattr(self, "_memory_warming", False)
+        )
+
+        store_open = self._memory is not None
+        store_ok = False
+        store_error: str | None = None
+        atom_count: Any = None
+        line_count: Any = None
+        health_backend: Any = None
+        if self._memory is None:
+            if self._memory_open_failed:
+                store_error = "open_failed"
+            elif not (mem_cfg.write_atoms or mem_cfg.enabled):
+                store_error = "disabled"
+        else:
+            try:
+                health = self._memory.health()
+                if isinstance(health, Mapping):
+                    store_ok = bool(health.get("ok"))
+                    atom_count = health.get("atom_count")
+                    line_count = health.get("line_count")
+                    health_backend = health.get("backend")
+                    if health.get("error") is not None:
+                        store_error = str(health.get("error"))
+                else:
+                    store_ok = True
+            except Exception as exc:  # noqa: BLE001
+                store_ok = False
+                store_error = str(exc) or type(exc).__name__
+
+        index_handle = getattr(self, "_embedding_index", None)
+        index_ready = index_handle is not None
+        # Honesty: never claim index ready without a store handle (backing data).
+        if not store_open:
+            index_ready = False
+
+        embedder_ready = emb_state == "warm"
+        warming = bool(getattr(self, "_memory_warming", False))
+        # Also surface warming while required edges are mid-open.
+        if edge_state == "opening":
+            warming = True
+        if emb_state == "loading" and bool(getattr(mem_cfg, "embed_enabled", False)):
+            warming = True
+
+        agg = compute_memory_ready(
+            enabled=bool(mem_cfg.enabled),
+            write_atoms=bool(mem_cfg.write_atoms),
+            backend=str(mem_cfg.backend),
+            durable_edges_enabled=bool(
+                getattr(mem_cfg, "durable_edges_enabled", False)
+            ),
+            embed_enabled=bool(getattr(mem_cfg, "embed_enabled", False)),
+            store_open=store_open,
+            store_ok=store_ok,
+            index_ready=index_ready,
+            edges_ready=edges_ready,
+            embedder_ready=embedder_ready,
+        )
+
         block: dict[str, Any] = {
             "enabled": bool(mem_cfg.enabled),
             "write_atoms": bool(mem_cfg.write_atoms),
             "backend": str(mem_cfg.backend),
-            "store_open": self._memory is not None,
-            "ok": False,
+            "store_open": store_open,
+            "ok": store_ok,
             "has_last_meal": self._last_meal_snapshot is not None,
             "recalls_deferred": deferred_metrics,
-            # Component honesty (P1 minimal — not full memory_ready formula).
+            # Aggregate + component gates (P4 / KD-MR / KD-GATE).
+            "memory_ready": bool(agg["memory_ready"]),
+            "warming": warming,
+            "memory_warming": warming,  # alias (P1 field name)
+            "atom_store_ready": bool(agg["atom_store_ready"]),
+            "index_ready": bool(agg["index_ready"]),
+            "edges_ready": bool(agg["edges_ready"]),
+            "embedder_ready": bool(agg["embedder_ready"]),
+            "need_store": bool(agg["need_store"]),
+            "need_index": bool(agg["need_index"]),
+            "need_edges": bool(agg["need_edges"]),
+            "need_embed": bool(agg["need_embed"]),
+            # Backward-compat flat fields (P1).
             "embedder_state": emb_state,
             "edges_open": edges_open,
-            "memory_warming": bool(getattr(self, "_memory_warming", False)),
+            # Nested component objects (design §2.4).
+            "edges": {
+                "ready": bool(edges_ready),
+                "open": bool(edges_open_flag),
+                "ok": bool(edges_ok),
+                "warming": bool(edges_warming),
+                "backend": edge_backend,
+                "edge_count": edge_count,
+                "disk_edge_count": disk_edge_count,
+                "edge_count_parity": edge_count_parity,
+                "error": edge_error,
+                "state": edge_state,
+                "attempts": int(edges_open.get("attempts") or 0),
+                "next_retry_at": edges_open.get("next_retry_at_monotonic"),
+            },
+            "embedder": {
+                "ready": bool(embedder_ready),
+                "state": emb_state,
+                "preload": bool(getattr(mem_cfg, "embed_preload", False)),
+                "error": emb_error,
+            },
+            "index": {"ready": bool(index_ready)},
         }
+        if atom_count is not None:
+            block["atom_count"] = atom_count
+        if line_count is not None:
+            block["line_count"] = line_count
+        if health_backend is not None:
+            block["backend"] = str(health_backend) if health_backend else block["backend"]
+        if store_error is not None:
+            block["error"] = store_error
+
         # Ladder knobs always visible (even when store not yet open).
         try:
             from elyra.memory.ladder import ladder_status_snapshot
@@ -1858,25 +2026,8 @@ class PresenceWorker:
                     getattr(mem_cfg, "summary_mode", "template") or "template"
                 ),
             }
-        if self._memory is None:
-            if self._memory_open_failed:
-                block["error"] = "open_failed"
-            elif not (mem_cfg.write_atoms or mem_cfg.enabled):
-                block["error"] = "disabled"
-            return block
-        try:
-            health = self._memory.health()
-            if isinstance(health, Mapping):
-                block["ok"] = bool(health.get("ok"))
-                for key in ("atom_count", "line_count", "backend", "error"):
-                    if key in health:
-                        block[key] = health[key]
-            else:
-                block["ok"] = True
-        except Exception as exc:  # noqa: BLE001
-            block["ok"] = False
-            block["error"] = str(exc) or type(exc).__name__
         return block
+
 
     def last_meal_snapshot(self) -> dict[str, Any] | None:
         """Return a copy of the last composed meal inspect payload, if any."""
