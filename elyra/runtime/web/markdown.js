@@ -353,11 +353,25 @@
     return html;
   }
 
-  /** Fixed Memory Context channels that must render as plain text (KD-MD2 / #88B). */
-  const PLAIN_MEMORY_CHANNELS = Object.freeze(["system", "orient"]);
+  /**
+   * Memory → Context channel snippets are all plain text (not markdown).
+   * Chat remains the only pretty-markdown surface. Kept as an export for
+   * hermetic tests / documentation of the Context channel set.
+   */
+  const PLAIN_MEMORY_CHANNELS = Object.freeze([
+    "system",
+    "orient",
+    "temporal",
+    "episodic",
+    "semantic",
+    "summary",
+    "directed_keep",
+    "glass_tail",
+  ]);
 
-  function isPlainMemoryChannel(ch) {
-    return PLAIN_MEMORY_CHANNELS.indexOf(String(ch || "")) !== -1;
+  function isPlainMemoryChannel(_ch) {
+    // All Memory → Context channel snippets are plain (chat keeps markdown).
+    return true;
   }
 
   return {

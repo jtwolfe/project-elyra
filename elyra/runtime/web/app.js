@@ -3860,7 +3860,8 @@ function fillAtomInspectInto(container, a, opts = {}) {
     container.appendChild(pre);
   } else {
     const pre = document.createElement("pre");
-    pre.className = "memory-snippet memory-snippet-prose";
+    // Shared Atoms + Context inspect: plain text (Context must never markdown).
+    pre.className = "memory-snippet memory-snippet-plain";
     pre.style.whiteSpace = "pre-wrap";
     pre.textContent = text || "(empty)";
     container.appendChild(pre);
@@ -3994,41 +3995,11 @@ function renderMemoryChannelCard(item) {
     }
   }
 
-  // Prose-friendly body for summaries / speak-like channels.
-  // system/orient: plain textContent only (KD-MD2 / #88B) — long structured text.
-  // Prefer ElyraMarkdown.PLAIN_MEMORY_CHANNELS so the list is not duplicated.
-  const mdPlain =
-    typeof globalThis !== "undefined" ? globalThis.ElyraMarkdown : null;
-  const plainCh = new Set(
-    mdPlain && Array.isArray(mdPlain.PLAIN_MEMORY_CHANNELS)
-      ? mdPlain.PLAIN_MEMORY_CHANNELS
-      : ["system", "orient"] // fail-closed fallback if markdown.js missing
-  );
-  const proseCh = new Set([
-    "temporal",
-    "episodic",
-    "semantic",
-    "summary",
-    "directed_keep",
-  ]);
-  let body;
-  if (plainCh.has(ch)) {
-    body = document.createElement("pre");
-    body.className = "memory-snippet memory-snippet-plain";
-    body.textContent = snippet || "(empty)";
-  } else if (proseCh.has(ch)) {
-    body = document.createElement("div");
-    body.className = "memory-snippet memory-snippet-prose";
-    if (snippet) {
-      body.innerHTML = renderMarkdown(snippet);
-    } else {
-      body.textContent = "(empty)";
-    }
-  } else {
-    body = document.createElement("pre");
-    body.className = "memory-snippet";
-    body.textContent = snippet || "(empty)";
-  }
+  // Memory → Context: all channel snippets are plain text (chat keeps pretty MD).
+  // JSON pretty in atom inspect folds is still textContent (not HTML markdown).
+  const body = document.createElement("pre");
+  body.className = "memory-snippet memory-snippet-plain";
+  body.textContent = snippet || "(empty)";
   card.appendChild(body);
 
   if (truncated) {
@@ -4085,7 +4056,7 @@ function renderMemoryChannelCard(item) {
     const panel = document.createElement("div");
     panel.className = "memory-atom-inspect-panel";
     const pre = document.createElement("pre");
-    pre.className = "memory-snippet memory-snippet-prose";
+    pre.className = "memory-snippet memory-snippet-plain";
     pre.style.whiteSpace = "pre-wrap";
     pre.textContent = snippet || "(empty)";
     panel.appendChild(pre);

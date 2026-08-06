@@ -220,66 +220,53 @@ process.stdout.write("ok");
 
 
 def test_plain_memory_channels_helper():
+    """All Memory Context channels are plain (isPlainMemoryChannel always true)."""
     out = _run_markdown_node(
         """
 const ch = md.PLAIN_MEMORY_CHANNELS;
 if (!Array.isArray(ch) || ch.indexOf('system') < 0 || ch.indexOf('orient') < 0)
   throw new Error('missing plain channels: ' + JSON.stringify(ch));
+if (ch.indexOf('episodic') < 0 || ch.indexOf('temporal') < 0)
+  throw new Error('expected episodic/temporal in PLAIN_MEMORY_CHANNELS');
 if (md.isPlainMemoryChannel('system') !== true) throw new Error('system');
 if (md.isPlainMemoryChannel('orient') !== true) throw new Error('orient');
-if (md.isPlainMemoryChannel('temporal') !== false) throw new Error('temporal');
-if (md.isPlainMemoryChannel('directed_keep') !== false) throw new Error('keep');
+if (md.isPlainMemoryChannel('temporal') !== true) throw new Error('temporal');
+if (md.isPlainMemoryChannel('episodic') !== true) throw new Error('episodic');
+if (md.isPlainMemoryChannel('directed_keep') !== true) throw new Error('keep');
+if (md.isPlainMemoryChannel('anything_else') !== true) throw new Error('unknown');
 process.stdout.write('ok');
 """
     )
     assert out.strip() == "ok"
 
 
-def test_app_js_plain_system_orient_not_in_prose_set():
-    """Memory Context: system/orient use textContent path, not renderMarkdown."""
+def test_app_js_memory_context_all_plain_no_markdown():
+    """Memory Context channel cards: plain textContent only — no MD HTML."""
     js = APP_JS.read_text(encoding="utf-8")
-    # Single source: Set built from ElyraMarkdown.PLAIN_MEMORY_CHANNELS
-    assert "PLAIN_MEMORY_CHANNELS" in js
-    assert "plainCh" in js
-    # prose set must not list system/orient
-    prose_match = re.search(
-        r"const proseCh\s*=\s*new Set\(\[([\s\S]*?)\]\)",
-        js,
-    )
-    assert prose_match is not None, "proseCh set not found in app.js"
-    prose_body = prose_match.group(1)
-    assert '"system"' not in prose_body and "'system'" not in prose_body
-    assert '"orient"' not in prose_body and "'orient'" not in prose_body
-    # plain path uses textContent
-    assert "plainCh.has(ch)" in js
+    # renderMemoryChannelCard must use plain snippet path only
+    assert "memory-snippet-plain" in js
     assert "body.textContent = snippet" in js or "body.textContent = snippet ||" in js
-    # Tighter region: plain branch around memory-snippet-plain → proseCh branch
-    plain_branch = re.search(
-        r"memory-snippet-plain[\s\S]*?body\.textContent\s*=\s*snippet"
-        r"[\s\S]*?\}\s*else if\s*\(\s*proseCh\.has\(ch\)\s*\)",
-        js,
-    )
-    assert plain_branch is not None, "plainCh → proseCh branch region not found"
-    region = plain_branch.group(0)
-    assert "innerHTML" not in region
-    assert "renderMarkdown" not in region
-    assert "textContent" in region
+    # No dual prose/markdown branch for Context channel cards
+    assert "const proseCh" not in js
+    assert "plainCh.has(ch)" not in js
+    # Card body path must not *call* renderMarkdown on snippets (chat still may).
+    i = js.find("function renderMemoryChannelCard")
+    assert i >= 0, "renderMemoryChannelCard not found"
+    # Function is large; take a fixed window covering the body-snippet branch.
+    region = js[i : i + 4500]
+    assert "memory-snippet-plain" in region
+    assert "body.textContent = snippet" in region or "body.textContent = snippet ||" in region
+    assert "renderMarkdown(" not in region
+    assert "innerHTML = " not in region
 
 
-def test_app_js_plain_channels_match_markdown_export():
-    """plainCh membership must stay aligned with markdown.js export."""
-    out = _run_markdown_node(
-        """
-const ch = md.PLAIN_MEMORY_CHANNELS.slice().sort();
-process.stdout.write(JSON.stringify(ch));
-"""
-    )
-    exported = json.loads(out.strip())
-    assert exported == ["orient", "system"]
+def test_app_js_context_plain_not_prose_markdown_path():
+    """Context inspect folds also use plain class (not prose markdown)."""
     js = APP_JS.read_text(encoding="utf-8")
-    # Fallback list in app.js must match export when module missing
-    assert '["system", "orient"]' in js or "['system', 'orient']" in js
-    assert "PLAIN_MEMORY_CHANNELS" in js
+    # Fixed-channel inspect + shared atom fill use plain class
+    assert "memory-snippet-plain" in js
+    # Channel card path comment documents Context-wide plain policy
+    assert "Memory → Context" in js or "Memory Context" in js or "all channel snippets are plain" in js
 
 
 def test_index_loads_markdown_js_before_app():
