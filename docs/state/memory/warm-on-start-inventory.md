@@ -37,6 +37,16 @@ Pinned from design § “Code-backed lazy inventory” and implementation anchor
 
 **Non-required warm (out of scope for `memory_ready`):** Playwright, full MSB image pull, Grok Build seed — stay async / non-blocking (KD23 pattern).
 
+### W5 / P5 — tray + deferred recalls (landed notes)
+
+| Item | v1 warm-on-start posture | Notes |
+|------|--------------------------|--------|
+| **Directed-keep tray** | **Optional** warm: `_warm_memory_core` calls `TraversalRegistry.ensure_tray()` once, **soft-fail** (log + continue). **Never** a `memory_ready` / component gate (KD-TRAY). | Lazy first-meal `ensure_tray` remains the fallback if warm fails or is skipped. |
+| **Deferred speak `recalls`** | **Idle-drain default retained** (`_idle_deferred_recalls` on idle tick under semantic wait). | **Optional drain-at-start is not required for v1** warm-on-start. Product default remains deferred (`edge_recalls_inline=false`); do not flip to inline speak ANN. |
+| **Inline recalls** | Out of scope | Always-inline speak recalls is a non-goal (design Non-Goals). |
+
+Code anchors: `PresenceWorker._warm_memory_core` / `_warm_directed_keep_tray`; idle recalls drain in `run()` idle branch. Design KDs: **KD-TRAY**, **KD-RECALLS**, §8.
+
 ---
 
 ## Dogfood symptoms (operator host)
@@ -112,7 +122,7 @@ P5    chore(memory): tray optional warm + recalls notes
 | **P1** | `_warm_memory_core`; side-thread sole embedder loader; claim after core; `embed_preload=true` | Hermetic warm/claim tests; dogfood pin only after P2 (and P3 if needed) |
 | **P3** | Batch upsert (merge-blocking); compact best-effort + quarantine fallbacks | Batch tests; compact smoke or documented unsupported |
 | **P4** | Aggregate `memory_ready` + CLI/Glass badge polish | Status contract; `chat_ready` independent |
-| **P5** | Optional tray warm; recalls notes | Soft fail tray |
+| **P5** | Optional tray warm; recalls notes | **Done** (this stack): soft-fail `ensure_tray` on warm core; inventory notes — deferred recalls stay idle-drain; no drain-at-start; tray never gates `memory_ready` |
 
 ### Out-of-order rules (do not violate)
 
@@ -127,10 +137,12 @@ P5    chore(memory): tray optional warm + recalls notes
 
 | Area | Path |
 |------|------|
-| Worker ensure / sticky | `elyra/presence/worker.py` — `_ensure_edge_store`, `_ensure_memory_store`, `_ensure_embedder`, `run` |
+| Worker ensure / sticky | `elyra/presence/worker.py` — `_ensure_edge_store`, `_ensure_memory_store`, `_ensure_embedder`, `_warm_memory_core`, `_warm_directed_keep_tray`, `run` |
 | Edge store | `elyra/memory/edges.py` — `LanceEdgeStore`, materialize/parity, `health`, `open_edge_store(fail_soft=True)`, `UnavailableEdgeStore` |
+| Keep tray | `elyra/memory/keep_tray.py` + `TraversalRegistry.ensure_tray` — optional warm on start (P5); soft fail |
+| Deferred recalls | `PresenceWorker._idle_deferred_recalls` — idle-tick drain only (v1; no start drain) |
 | Graph mislabel | `elyra/runtime/api.py` `_get_memory_graph` |
-| Config | `elyra/memory/config.py` `embed_preload=False` today |
+| Config | `elyra/memory/config.py` — `embed_preload=True` (P1); `edge_recalls_inline=false` (deferred default) |
 | Supervisor race | `elyra/runtime/supervisor.py` (API concurrent with presence) |
 | Dogfood paths | `data/memory/lance/edges.lance`; leftover `data/memory/edges.jsonl` |
 
@@ -141,4 +153,4 @@ P5    chore(memory): tray optional warm + recalls notes
 - This inventory is **not** architecture manual “shipped” status.
 - Execute-plan P0 complete ≠ fabric warm ≠ Gate B.
 - Prefer [design-warm-on-start.md](../../design/design-warm-on-start.md) for normative KDs and acceptance; update this note when P0.5 pins a class or when behavior slices land.
-- **P2 code landed** on `execute-plan/613b1a50-pr-3-edge-reopen-parity`: `_ensure_edge_store` SM + lock; `LanceEdgeStore` parity; Graph empty vs unavailable; tests in `test_memory_edges` / `test_presence_worker` / `test_memory_graph_api`. Eager open (P1) and batch/compact (P3) still open.
+- **P2–P5 code landed** on this stack: open SM + eager core + batch + `memory_ready` + optional tray warm. Still **no durable-on usefulness / Gate B claim** until operator restart checklist green. Deferred recalls remain idle-drain (no start drain in v1).

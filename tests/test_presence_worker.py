@@ -2067,6 +2067,72 @@ def test_memory_status_component_fields_present(paths):
         assert mem2["memory_ready"] is True
 
 
+def test_warm_core_optional_tray_soft_fail(paths):
+    """W5: warm core best-effort ensure_tray; soft fail; never gates memory_ready.
+
+    - Happy path: tray loaded after ``_warm_memory_core`` (was lazy before).
+    - Failure path: ensure_tray raises → core still completes; memory_ready
+      still driven only by store/index/edges/embedder components.
+    """
+    from dataclasses import replace
+    from unittest.mock import patch
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.keep_tray import (
+        DirectedKeepTray,
+        merge_confirm,
+        save_directed_keep_tray,
+        tray_runtime_path,
+    )
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+        ),
+    )
+    # Seed a sticky tray on disk so warm path has something to load.
+    tray = DirectedKeepTray()
+    merge_confirm(tray, ["warm-pin-a"], now="2026-08-06T00:00:00Z")
+    save_directed_keep_tray(tray, paths=paths)
+    assert tray_runtime_path(paths.data_dir).is_file()
+
+    worker, _stop = _make_worker(
+        paths, run_do_loop_fn=_stub_loop(), settings=settings
+    )
+    assert worker.traversal.directed_keep_tray is None  # lazy until warm
+
+    worker._warm_memory_core()  # noqa: SLF001
+
+    loaded = worker.traversal.directed_keep_tray
+    assert loaded is not None
+    assert "warm-pin-a" in loaded.atom_ids()
+    mem = worker.status_snapshot()["memory"]
+    # Tray is not a readiness component (KD-TRAY / KD-GATE).
+    assert "tray_ready" not in mem
+    if mem["edges_ready"] and mem["atom_store_ready"]:
+        assert mem["memory_ready"] is True
+
+    # Soft fail: ensure_tray boom must not kill warm core or flip ready falsely.
+    worker2, _ = _make_worker(
+        paths, run_do_loop_fn=_stub_loop(), settings=settings
+    )
+    with patch.object(
+        worker2.traversal,
+        "ensure_tray",
+        side_effect=RuntimeError("tray boom"),
+    ):
+        worker2._warm_memory_core()  # noqa: SLF001 — must not raise
+    assert worker2.traversal.directed_keep_tray is None
+    mem2 = worker2.status_snapshot()["memory"]
+    # Store/edges still decide readiness — tray failure is invisible to aggregate.
+    if mem2["edges_ready"] and mem2["atom_store_ready"]:
+        assert mem2["memory_ready"] is True
+
+
 def test_consumer_embedder_nonblocking_while_loading_status(paths):
     """Document KD-GATE: consumers stay non-blocking while loader in flight."""
     from dataclasses import replace

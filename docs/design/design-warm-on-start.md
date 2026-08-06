@@ -69,7 +69,7 @@ Elyra’s product value after Phase 2 / 2a is **atoms + vectors + durable edges 
 | **Graph honesty bug** | `edge_store_empty = edge_count == 0` **regardless of `edge_ok`** → Unavailable labeled “EdgeStore empty” | `api.py` `_get_memory_graph` ~L2049–2065; Glass “on · EdgeStore empty” |
 | **Open fragility** | Live `edges.lance` has segfaulted/hung on open in local repros; Graph API can timeout on health peek | operator dogfood |
 | **Backfill** | v1 `in_moment` only; restart → Graph edge_count 0 with durable on | `backfill_durable_edges` |
-| **Deferred recalls / tray / sandbox** | Idle deferred recalls; lazy tray; sandbox async warm | polish1 / KD23 |
+| **Deferred recalls / tray / sandbox** | Idle deferred recalls (v1); tray optional warm soft-fail (W5); sandbox async warm | polish1 / KD23 / KD-TRAY |
 
 ### Operator Graph after restart (paste — product failure)
 
@@ -641,7 +641,14 @@ Hermetic fragment-heavy fixture optional if copy is too large for CI — then sp
 
 ### 8. Deferred recalls + tray (W5)
 
-Unchanged: deferred default; tray optional; never gate `memory_ready`.
+Unchanged product defaults:
+
+| Surface | v1 warm-on-start | Gate? |
+|---------|------------------|-------|
+| **Speak `recalls`** | Deferred (idle-tick drain under semantic wait). **No drain-at-start** required for v1. | N/A — not a fabric component |
+| **Directed-keep tray** | **Optional** one-shot `ensure_tray` during `_warm_memory_core`; **soft fail** (log + continue). Lazy first-meal load remains. | **Never** — not in `memory_ready` / component flags (KD-TRAY) |
+
+Do **not** flip product default to inline speak ANN; do **not** treat tray load failure as fabric degraded.
 
 ---
 

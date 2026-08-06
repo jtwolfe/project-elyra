@@ -1436,6 +1436,10 @@ class PresenceWorker:
         Runs on the presence thread after recover and **before** ``_started``.
         May block first claim until store + edges are decided. Does **not**
         load the embedder (side-thread sole loader owns that).
+
+        Optional (W5 / KD-TRAY): best-effort ``ensure_tray`` once so the sticky
+        directed-keep tray is loaded before first meal. Soft-fail only — tray
+        is never a ``memory_ready`` gate.
         """
         _LOG.info("memory.fabric_warming start")
         try:
@@ -1445,15 +1449,36 @@ class PresenceWorker:
                 self._ensure_embedding_index()
             # EdgeStore single-flight SM (P2); eager open for durable fabric.
             self._ensure_edge_store()
+            # W5 / KD-TRAY: optional tray warm — soft fail, non-gating.
+            self._warm_directed_keep_tray()
             _LOG.info(
                 "memory.fabric_core_ready store_open=%s index_open=%s "
-                "edges_state=%s",
+                "edges_state=%s tray_loaded=%s",
                 self._memory is not None,
                 self._embedding_index is not None,
                 getattr(self, "_edge_store_state", "absent"),
+                getattr(self._traversal, "directed_keep_tray", None) is not None,
             )
         except Exception:  # noqa: BLE001 — never kill presence on warm
             _LOG.exception("memory.fabric_core warm failed")
+
+    def _warm_directed_keep_tray(self) -> None:
+        """Best-effort load of sticky directed-keep tray (W5 / KD-TRAY).
+
+        Soft-fail only: missing file, IO error, or registry issues must not
+        block warm core or affect ``memory_ready``. Lazy first-meal path still
+        calls ``ensure_tray`` when this warm is skipped or fails.
+        """
+        try:
+            trav = getattr(self, "_traversal", None)
+            if trav is None:
+                return
+            trav.ensure_tray()
+        except Exception:  # noqa: BLE001 — tray never gates fabric
+            _LOG.warning(
+                "directed_keep_tray warm failed (soft); lazy load on first use",
+                exc_info=True,
+            )
 
     def _should_preload_embedder(self) -> bool:
         """True when start-path sole loader should cold-open the embedder."""
