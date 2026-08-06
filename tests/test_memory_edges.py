@@ -85,9 +85,13 @@ def _edge(
 # ── Pure helpers ───────────────────────────────────────────────────────────
 
 
-def test_durable_edges_flag_default_off():
+def test_durable_edges_flag_default_on():
+    """None settings fail closed; factory MemorySettings defaults edges on."""
     assert is_durable_edges_enabled(None) is False
-    assert is_durable_edges_enabled(MemorySettings()) is False
+    assert is_durable_edges_enabled(MemorySettings()) is True
+    assert is_durable_edges_enabled(
+        MemorySettings(durable_edges_enabled=False)
+    ) is False
     assert is_durable_edges_enabled(
         MemorySettings(durable_edges_enabled=True)
     ) is True
@@ -193,7 +197,8 @@ def test_open_jsonl_writes_edge_schema_version(paths, jsonl_store):
     assert h["ok"] is True
     assert h["backend"] == "jsonl"
     assert h["edge_count"] == 0
-    assert h["durable_edges_enabled"] is False
+    # Health mirrors settings; factory default is on.
+    assert h["durable_edges_enabled"] is True
 
 
 def test_jsonl_put_get_list_delete_count(jsonl_store):
@@ -710,7 +715,7 @@ def test_backfill_max_ms_truncates(paths):
 
 
 def test_edge_backfill_dev_enabled_factory_default():
-    """Dogfood ON; Gate B durable_edges stays factory off."""
+    """Dogfood: edge_backfill_dev + durable_edges both factory on."""
     from elyra.memory.config import (
         is_durable_edges_enabled,
         is_edge_backfill_dev_enabled,
@@ -718,9 +723,9 @@ def test_edge_backfill_dev_enabled_factory_default():
 
     d = MemorySettings()
     assert d.edge_backfill_dev_enabled is True
-    assert d.durable_edges_enabled is False
+    assert d.durable_edges_enabled is True
     assert is_edge_backfill_dev_enabled(d) is True
-    assert is_durable_edges_enabled(d) is False
+    assert is_durable_edges_enabled(d) is True
 
 
 def test_backfill_scans_beyond_glass_list_atoms_max(paths):

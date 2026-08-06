@@ -778,12 +778,12 @@ def test_graph_overview_legend_covers_all_edge_kinds(paths):
             "semantic_hop",
         ):
             assert required in kinds
-        # Durable flag honesty on overview.
+        # Durable flag honesty on overview (factory default on).
         assert "edge_count" in body
         assert "edges_by_kind" in body
         assert "edge_store" in body
-        assert body["edge_store"]["durable_edges_enabled"] is False
-        assert body["traversal"].get("durable_edges_enabled") is False
+        assert body["edge_store"]["durable_edges_enabled"] is True
+        assert body["traversal"].get("durable_edges_enabled") is True
     finally:
         h.close()
 
@@ -1063,13 +1063,13 @@ def test_graph_edges_backfill_bad_body(paths):
 
 
 def test_graph_overview_backfill_dev_default_on(paths):
-    """Factory: edge_backfill_dev_enabled on; durable_edges still off (no Gate B)."""
+    """Factory: edge_backfill_dev_enabled on; durable_edges product default on."""
     h = _ApiHarness(paths, memory=_enabled_memory())
     try:
         code, body = h.get("/api/memory/graph")
         assert code == 200, body
         assert body["traversal"]["edge_backfill_dev_enabled"] is True
-        assert body["traversal"]["durable_edges_enabled"] is False
+        assert body["traversal"]["durable_edges_enabled"] is True
         assert body["edge_backfill"]["dev_enabled"] is True
         assert body["edge_backfill"]["last"] is None
         assert (

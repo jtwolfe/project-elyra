@@ -15,9 +15,9 @@ Arm a durable wait and stop the moment (`ends_moment`, `stop_reason=wait`).
 
 ## Guidance
 
-- Multi-choice is good for collaborative forks (adopt / revise / hold).
+- Multi-choice is good for collaborative pick-one options (A/B/C, adopt / revise / hold).
 - Free-text / "I'll type" style: leave `choices` empty and use a long timeout — do not pass short 30–120s values for thoughtful replies.
-- When a speak presents **numbered or lettered collaborative forks** the human should pick among, prefer `wait_user` with those fork strings as `choices` (same wording as glass buttons). Do not invent choices that were not offered.
+- When a speak presents **A/B/C, (1)/(2)/(3), or short labeled options** the human should pick among, prefer `wait_user` with those option strings as `choices` (same wording as Glass buttons). Do not invent choices that were not offered.
 - On success the tool result includes `arm_wait` for the host; later tool calls in the same assistant batch are not run (skills should order speak then wait).
 - Does not count as speak — call `speak` first if the user needs a visible message.
 

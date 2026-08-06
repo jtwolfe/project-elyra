@@ -60,7 +60,7 @@ EDGE_RECALLS_INLINE_DEFAULT = False
 # Presence-worker deferred recalls queue (OQ-P7: 32 drop-new).
 EDGE_RECALLS_DEFERRED_QUEUE_DEPTH_DEFAULT = 32
 # Dev force edge backfill (polish1 KD-P-backfill). Factory ON for dogfood era;
-# writes still require durable_edges_enabled (Gate B stays off).
+# writes still require durable_edges_enabled (product default on).
 EDGE_BACKFILL_MAX_ATOMS_DEFAULT = 2000
 EDGE_BACKFILL_MAX_ATOMS_MAX = 10_000
 EDGE_BACKFILL_MAX_MS_DEFAULT = 30_000
@@ -453,9 +453,10 @@ class MemorySettings:
     # Off → frontier-only thin surface (rollback).
     traverse_local_map_enabled: bool = True
 
-    # --- Durable EdgeStore (default OFF writes — KD-E / edges design) ---
+    # --- Durable EdgeStore (product default ON — operator dogfood Gate B) ---
     # Store open is independent of this flag; promote write path gates on it.
-    durable_edges_enabled: bool = False
+    # Set false in tests / rollback when fabric must stay silent.
+    durable_edges_enabled: bool = True
     edge_max_per_atom: int = EDGE_MAX_PER_ATOM_DEFAULT
     edge_created_with_max: int = EDGE_CREATED_WITH_MAX_DEFAULT
     edge_created_with_write_cap: int = EDGE_CREATED_WITH_WRITE_CAP_DEFAULT
