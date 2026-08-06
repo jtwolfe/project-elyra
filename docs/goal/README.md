@@ -13,6 +13,7 @@ Short north stars: *what* / *why*. Full designs stay under [DESIGN](../design/RE
 | [grok-improvement-phases.md](grok-improvement-phases.md) | Grok migration phase map | Short |
 | [philosophical-soft-guidance.md](philosophical-soft-guidance.md) | Soft influences (explicit non-deliverable) | Medium |
 | [memory-atoms.pdf](../memory-atoms.pdf) | Philosophy reference (GOAL + STATE link) | PDF |
+| [rl-application-goals/](rl-application-goals/) | Future application goals (embodied, personal, institutional, research, creative, care) — aspirational; not v0.1 scope | Package |
 
 **Also indexed (still living outside this folder until later PRs):**
 
@@ -26,3 +27,4 @@ Short north stars: *what* / *why*. Full designs stay under [DESIGN](../design/RE
 - GOAL pages stay **short** (north star + success bars + links).  
 - **No dual full designs** here — implementer bodies live under DESIGN.  
 - Long discussion has **one home** (`v0.1-discussion.md`); short claim is the entry (`v0.1.md`).
+- Application goal packages (e.g. `rl-application-goals/`) stay aspirational product direction with explicit non-claims; detailed implementation plans belong under DESIGN when scheduled.
