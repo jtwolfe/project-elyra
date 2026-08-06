@@ -1,0 +1,4 @@
+{
+  "kind": "builtin",
+  "entry": "elyra.tools.builtin.memory_keep:memory_keep_update"
+}

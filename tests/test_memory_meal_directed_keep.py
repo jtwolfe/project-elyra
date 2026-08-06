@@ -25,6 +25,7 @@ from elyra.memory.tokens import (
     split_memory_budget_v3,
     split_memory_budget_v4,
 )
+from elyra.memory.traverse import TraversalRegistry
 from elyra.memory.types import Atom, new_atom_id
 
 
@@ -717,6 +718,69 @@ def test_compose_meal_traversal_flag_enables_keep_oq_a1(store):
         directed_keep_summary="walk",
     )
     assert "directed_keep" in pkg.channels_present
+
+
+def test_compose_meal_after_update_keep_includes_then_clears(paths, store):
+    """#104: update_keep pins pack on next compose; empty replace omits channel."""
+    open_id = "m_open"
+    store.put_atom(
+        _atom(t="2026-07-28T14:50:00Z", text="open", moment_id=open_id)
+    )
+    store.put_atom(
+        _atom(
+            t="2026-07-20T10:00:00Z",
+            text="pinned by keep update",
+            moment_id="m_k",
+            atom_id="a_ku",
+        )
+    )
+    cfg = MemorySettings(
+        directed_keep_enabled=True,
+        semantic_enabled=False,
+        episodic_horizon_hours=1.0,
+    )
+    reg = TraversalRegistry(
+        settings=cfg,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T15:00:00Z",
+    )
+    out = reg.update_keep(
+        mode="merge", atom_ids=["a_ku"], note="from update_keep"
+    )
+    assert out["ok"] is True
+    meal_ids, meal_summary = reg.get_meal_keep_ids()
+    assert "a_ku" in meal_ids
+    assert meal_summary == "from update_keep"
+
+    pkg = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=datetime(2026, 7, 28, 15, 0, tzinfo=UTC),
+        settings=cfg,
+        directed_keep_ids=meal_ids,
+        directed_keep_summary=meal_summary,
+    )
+    assert "directed_keep" in pkg.channels_present
+    dk_ids = [i.atom_id for i in pkg.items if i.channel == "directed_keep" and i.atom_id]
+    assert "a_ku" in dk_ids
+
+    cleared = reg.update_keep(mode="replace", atom_ids=[])
+    assert cleared["ok"] is True
+    empty_ids, empty_summary = reg.get_meal_keep_ids()
+    assert empty_ids == []
+    assert empty_summary is None
+    pkg2 = compose_meal(
+        store,
+        open_moment_id=open_id,
+        budget_tokens=50_000,
+        now=datetime(2026, 7, 28, 15, 0, tzinfo=UTC),
+        settings=cfg,
+        directed_keep_ids=empty_ids,
+        directed_keep_summary=empty_summary,
+    )
+    assert "directed_keep" not in pkg2.channels_present
+
 
 
 def test_directed_keep_packs_across_moment_ids(store):

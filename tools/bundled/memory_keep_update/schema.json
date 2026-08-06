@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["merge", "replace"],
+      "description": "merge (default): union/reinforce + optional remove_ids. replace: tray becomes atom_ids only (empty = clear)."
+    },
+    "atom_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Atoms to pin/keep. Required non-empty for merge pin/add; empty allowed with mode=replace (clear) or with only remove_ids under merge."
+    },
+    "remove_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ids to drop from tray (merge or applied after replace base). Ignored if absent."
+    },
+    "note": {
+      "type": "string",
+      "description": "Optional short walk_summary_nl / meal note (≤240 recommended)."
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}

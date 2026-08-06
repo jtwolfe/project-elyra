@@ -216,3 +216,29 @@ def test_defaults():
     assert DEFAULT_HARD_TTL_HOURS == 24.0
     assert DEFAULT_SOFT_TTL_HOURS == 3.0
     assert DEFAULT_ENTRY_CAP == 32
+
+
+def test_remove_ids_drops_listed_preserves_order_and_summary():
+    tray = DirectedKeepTray()
+    merge_confirm(tray, ["a1", "a2", "a3"], now=_now(0), walk_summary_nl="keep me")
+    n = tray.remove_ids(["a2", "missing", "", "a2"])
+    assert n == 1
+    assert tray.atom_ids() == ["a1", "a3"]
+    assert tray.walk_summary_nl == "keep me"
+    assert tray.remove_ids([]) == 0
+    assert tray.remove_ids(None) == 0  # type: ignore[arg-type]
+
+
+def test_remove_ids_empty_tray_is_zero():
+    tray = DirectedKeepTray()
+    assert tray.remove_ids(["x"]) == 0
+    assert tray.atom_ids() == []
+
+
+def test_merge_confirm_reinforces_last_reinforced_at():
+    tray = DirectedKeepTray()
+    merge_confirm(tray, ["a1"], now=_now(2))
+    merge_confirm(tray, ["a1"], now=_now(0))
+    ent = tray.entry_map()["a1"]
+    assert ent.last_reinforced_at == _now(0)
+    assert ent.confirmed_at == _now(2)  # original confirm time retained

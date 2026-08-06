@@ -7,7 +7,8 @@ expand_ms + steps — no multi-hop session wall-clock), dual sticky snapshots
 sticky directed-keep tray ownership (S3 / KD-TRAY-SOT).
 
 Out of scope: meal directed_keep packing (PR-A3), tools/skill (PR-A4),
-glass Graph tab (PR-A5), replace mode (S4).
+glass Graph tab (PR-A5). Model keep update (merge/replace/clear) via
+``TraversalRegistry.update_keep`` (#104 / KD-K1–K7).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from elyra.memory.config import (
     TRAVERSE_MAX_NODES_MAX,
     TRAVERSE_MAX_STEPS_MAX,
     TRAVERSE_NEIGHBOR_K_MAX,
+    is_directed_keep_enabled,
     is_directed_traversal_enabled,
     semantic_ann_deadline_ms,
 )
@@ -51,11 +53,13 @@ _LOG = logging.getLogger(__name__)
 SessionStatus = Literal["active", "confirmed", "abandoned", "timed_out"]
 
 ERROR_TRAVERSE_DISABLED = "traverse_disabled"
+ERROR_KEEP_DISABLED = "keep_disabled"
 ERROR_NO_ACTIVE = "no_active_session"
 ERROR_SESSION_NOT_ACTIVE = "session_not_active"
 ERROR_UNKNOWN_SESSION = "unknown_session"
 ERROR_BUDGET = "budget_exhausted"
 ERROR_NOT_CONSIDERED = "not_in_considered"
+ERROR_INVALID_ARGS = "invalid_args"
 
 # Defaults mirrored from MemorySettings / design §5.1 budgets table (PR6).
 _DEFAULT_MAX_DEPTH = 5
@@ -141,6 +145,23 @@ def clamp_budget(
 
 def _new_session_id() -> str:
     return "tr_" + uuid.uuid4().hex
+
+
+def _normalize_id_list(raw: Sequence[str] | None) -> list[str]:
+    """Strip/blank-filter id lists; preserve first-seen order (dedupe)."""
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if item is None:
+            continue
+        s = str(item).strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
 
 
 def _int_cfg(cfg: Any | None, name: str, default: int) -> int:
@@ -2187,6 +2208,129 @@ class TraversalRegistry:
         view["last_confirmed_retained"] = self._last_confirmed_keep is not None
         return view
 
+    def update_keep(
+        self,
+        *,
+        mode: str = "merge",
+        atom_ids: Sequence[str] | None = None,
+        remove_ids: Sequence[str] | None = None,
+        note: str | None = None,
+        moment_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Model/operator keep tray update (KD-K1–K7). Fail closed if keep off.
+
+        No active traverse session required. Mutates sticky tray on disk
+        immediately; meal packs on next compose (KD-A16).
+        """
+        if not is_directed_keep_enabled(self._settings):
+            return {
+                "ok": False,
+                "error_reason": ERROR_KEEP_DISABLED,
+                "status": "disabled",
+            }
+
+        mode_n = (mode or "merge").strip().lower() if isinstance(mode, str) else ""
+        if mode_n not in ("merge", "replace"):
+            return {
+                "ok": False,
+                "error_reason": ERROR_INVALID_ARGS,
+                "detail": "mode must be merge|replace",
+            }
+
+        ids = _normalize_id_list(atom_ids)
+        rems = _normalize_id_list(remove_ids)
+        note_s: str | None
+        if note is None:
+            note_s = None
+        elif isinstance(note, str):
+            note_s = note  # strip applied when writing summary
+        else:
+            return {
+                "ok": False,
+                "error_reason": ERROR_INVALID_ARGS,
+                "detail": "note must be a string",
+            }
+
+        # Validate before any durable mutate (fail paths need no restore).
+        if mode_n == "merge" and not ids and not rems:
+            return {
+                "ok": False,
+                "error_reason": ERROR_INVALID_ARGS,
+                "detail": "merge requires atom_ids and/or remove_ids",
+            }
+
+        now = self._now_fn()
+        hard, soft, cap = self._tray_policy()
+        removed: list[str] = []
+
+        if mode_n == "replace" and not ids:
+            # Empty replace = clear tray (+ summary null unless note).
+            summary = str(note_s).strip() if note_s is not None else None
+            if summary == "":
+                summary = None
+            tray = self._wipe_tray(walk_summary_nl=summary)
+            return self._keep_update_ok(
+                mode=mode_n,
+                tray=tray,
+                removed=removed,
+                now=now,
+                moment_id=moment_id,
+            )
+
+        if mode_n == "replace":
+            tray = DirectedKeepTray(
+                max_age_hard_hours=hard,
+                soft_evict_after_hours=soft,
+                entry_cap=cap,
+            )
+            tray.merge_confirm(
+                ids,
+                now=now,
+                session_id="keep_update",
+                moment_id=moment_id,
+                walk_summary_nl=note_s if note_s is not None else None,
+                hard_hours=hard,
+                soft_hours=soft,
+                entry_cap=cap,
+            )
+            if rems:
+                before = set(tray.atom_ids())
+                tray.remove_ids(rems)
+                removed = sorted(before - set(tray.atom_ids()))
+            self._directed_keep_tray = tray
+        else:
+            # merge: union/reinforce then drop remove_ids
+            tray = self.ensure_tray()
+            if ids or note_s is not None:
+                tray.merge_confirm(
+                    ids,
+                    now=now,
+                    session_id="keep_update",
+                    moment_id=moment_id,
+                    walk_summary_nl=note_s if note_s is not None else None,
+                    hard_hours=hard,
+                    soft_hours=soft,
+                    entry_cap=cap,
+                )
+            if rems:
+                before = set(tray.atom_ids())
+                tray.remove_ids(rems)
+                removed = sorted(before - set(tray.atom_ids()))
+
+        self._sync_thin_snap_from_tray(tray, now=now, moment_id=moment_id)
+        try:
+            save_directed_keep_tray(tray, paths=self._tray_paths)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("save directed_keep_tray after update_keep failed")
+
+        return self._keep_update_ok(
+            mode=mode_n,
+            tray=tray,
+            removed=removed,
+            now=now,
+            moment_id=moment_id,
+        )
+
     def clear_confirmed_keep(
         self,
         *,
@@ -2198,18 +2342,8 @@ class TraversalRegistry:
         if moment_id is not None and snap is not None:
             if snap.moment_id not in (None, moment_id):
                 return {"ok": True, "cleared_keep": False, "cleared_glass": False}
-        self._last_confirmed_keep = None
-        # Operator clear: wipe live tray and persist empty (meal path uses tray).
-        empty = DirectedKeepTray()
-        hard, soft, cap = self._tray_policy()
-        empty.max_age_hard_hours = hard
-        empty.soft_evict_after_hours = soft
-        empty.entry_cap = cap
-        self._directed_keep_tray = empty
-        try:
-            save_directed_keep_tray(empty, paths=self._tray_paths)
-        except Exception:  # noqa: BLE001
-            _LOG.exception("save empty directed_keep_tray after clear failed")
+        # Share empty-tray + snap-clear path with update_keep empty replace.
+        self._wipe_tray(walk_summary_nl=None)
         cleared_glass = False
         if clear_glass:
             if moment_id is None or (
@@ -2275,6 +2409,66 @@ class TraversalRegistry:
         self._directed_keep_tray = None
 
     # -- internals -----------------------------------------------------------
+
+    def _wipe_tray(
+        self, *, walk_summary_nl: str | None = None
+    ) -> DirectedKeepTray:
+        """Empty tray + clear thin snap + persist (shared clear path KD-K7)."""
+        hard, soft, cap = self._tray_policy()
+        empty = DirectedKeepTray(
+            max_age_hard_hours=hard,
+            soft_evict_after_hours=soft,
+            entry_cap=cap,
+            walk_summary_nl=walk_summary_nl,
+        )
+        self._directed_keep_tray = empty
+        self._last_confirmed_keep = None
+        try:
+            save_directed_keep_tray(empty, paths=self._tray_paths)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("save empty directed_keep_tray failed")
+        return empty
+
+    def _sync_thin_snap_from_tray(
+        self,
+        tray: DirectedKeepTray,
+        *,
+        now: str,
+        moment_id: str | None = None,
+    ) -> None:
+        """Rewrite or clear ``_last_confirmed_keep`` from live tray (KD-K7)."""
+        if not tray.entries:
+            self._last_confirmed_keep = None
+            return
+        self._last_confirmed_keep = ConfirmedKeepSnapshot(
+            session_id="keep_update",
+            goal="",
+            keep_ids=tuple(tray.atom_ids()),
+            walk_summary_nl=tray.walk_summary_nl or "",
+            finished_at=now,
+            moment_id=moment_id,
+        )
+
+    def _keep_update_ok(
+        self,
+        *,
+        mode: str,
+        tray: DirectedKeepTray,
+        removed: Sequence[str],
+        now: str,
+        moment_id: str | None = None,
+    ) -> dict[str, Any]:
+        del now, moment_id  # reserved for future audit fields
+        ids = tray.atom_ids()
+        return {
+            "ok": True,
+            "mode": mode,
+            "entry_count": len(ids),
+            "atom_ids": ids,
+            "removed": list(removed),
+            "walk_summary_nl": tray.walk_summary_nl,
+            "meal_timing": "next_compose",
+        }
 
     def _require_active(
         self, session_id: str | None
@@ -2470,6 +2664,8 @@ class TraversalRegistry:
 
 __all__ = [
     "ERROR_BUDGET",
+    "ERROR_INVALID_ARGS",
+    "ERROR_KEEP_DISABLED",
     "ERROR_NO_ACTIVE",
     "ERROR_NOT_CONSIDERED",
     "ERROR_SESSION_NOT_ACTIVE",

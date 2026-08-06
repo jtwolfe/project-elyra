@@ -4,7 +4,8 @@ Module owns types + load/save + pure helpers only (KD-TRAY-SOT).
 In-process source of truth is ``TraversalRegistry`` (not this module).
 Persist path: ``data/runtime/directed_keep_tray.json``.
 
-Out of scope: meal packing, replace mode (S4), soft-recall (S5), graph UX (S6).
+Out of scope: meal packing, soft-recall (S5), graph UX (S6).
+Replace/remove for model keep updates live on DirectedKeepTray (merge_confirm + remove_ids).
 """
 
 from __future__ import annotations
@@ -219,6 +220,23 @@ class DirectedKeepTray:
         # Preserve relative order of survivors as currently listed.
         before = len(self.entries)
         self.entries = [e for e in self.entries if e.atom_id in keep_set]
+        return before - len(self.entries)
+
+    def remove_ids(self, ids: Sequence[str]) -> int:
+        """Drop listed atom ids from tray. Returns count removed.
+
+        Unknown / blank ids are ignored (no error). Order of survivors is
+        preserved. Does not touch ``walk_summary_nl`` or policy fields.
+        """
+        drop = {
+            str(raw).strip()
+            for raw in (ids or ())
+            if raw is not None and str(raw).strip()
+        }
+        if not drop:
+            return 0
+        before = len(self.entries)
+        self.entries = [e for e in self.entries if e.atom_id not in drop]
         return before - len(self.entries)
 
     def merge_confirm(
@@ -490,3 +508,4 @@ __all__ = [
     "seed_tray_from_keep_ids",
     "tray_runtime_path",
 ]
+

@@ -15,5 +15,6 @@
 - gh_tools.py — frozen gh_* PR/issue/project builtins (GH_TOKEN soft-fail)
 - sandbox_packages.py — sandbox_pip_update (allowlist-add guest curated env)
 - memory_traverse.py — memory_traverse_start/step/inspect/finish/abandon (Phase 2a)
+- memory_keep.py — memory_keep_update (directed keep merge/replace/clear; #104)
 - grok_build.py — host Grok Build instrument (modes; never OAuth in secret_env)
 """

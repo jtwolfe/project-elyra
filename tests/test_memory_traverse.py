@@ -14,7 +14,10 @@ from elyra.memory.config import (
 )
 from elyra.memory.graph import GraphView
 from elyra.memory.store import open_memory_store
+from elyra.memory.keep_tray import load_directed_keep_tray, tray_runtime_path
 from elyra.memory.traverse import (
+    ERROR_INVALID_ARGS,
+    ERROR_KEEP_DISABLED,
     ERROR_NO_ACTIVE,
     ERROR_TRAVERSE_DISABLED,
     LOCAL_MAP_ASSOCIATIVE_CAP,
@@ -1229,6 +1232,151 @@ def test_clear_confirmed_keep_optional_glass(store):
     assert reg.last_session is not None  # glass retained
     reg.clear_confirmed_keep(clear_glass=True)
     assert reg.last_session is None
+
+
+# ── update_keep (#104 / KD-K1–K7) ───────────────────────────────────────────
+
+
+def test_update_keep_merge_replace_clear_remove(paths, store):
+    """merge / replace / remove_ids / empty-replace clear + thin snap sync."""
+    settings = _enabled_settings(traverse_keep_adjacent=False)
+    reg = TraversalRegistry(
+        settings=settings,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T12:00:00Z",
+    )
+
+    # merge pin
+    out = reg.update_keep(mode="merge", atom_ids=["a1", "a2"], note="first pins")
+    assert out["ok"] is True
+    assert out["mode"] == "merge"
+    assert set(out["atom_ids"]) == {"a1", "a2"}
+    assert out["entry_count"] == 2
+    assert out["walk_summary_nl"] == "first pins"
+    assert out["meal_timing"] == "next_compose"
+    snap = reg.last_confirmed_keep
+    assert snap is not None
+    assert set(snap.keep_ids) == {"a1", "a2"}
+    assert snap.session_id == "keep_update"
+    assert snap.walk_summary_nl == "first pins"
+
+    # merge reinforce + add
+    out2 = reg.update_keep(mode="merge", atom_ids=["a2", "a3"])
+    assert out2["ok"] is True
+    assert set(out2["atom_ids"]) == {"a1", "a2", "a3"}
+    tray = reg.ensure_tray()
+    assert tray.entry_map()["a2"].last_reinforced_at == "2026-07-28T12:00:00Z"
+    assert tray.walk_summary_nl == "first pins"  # note omitted → summary retained
+
+    # remove_ids under merge
+    out3 = reg.update_keep(mode="merge", remove_ids=["a1", "missing"])
+    assert out3["ok"] is True
+    assert set(out3["atom_ids"]) == {"a2", "a3"}
+    assert out3["removed"] == ["a1"]
+    assert set(reg.last_confirmed_keep.keep_ids) == {"a2", "a3"}
+
+    # replace with new set
+    out4 = reg.update_keep(
+        mode="replace", atom_ids=["b1"], note="replaced", moment_id="m9"
+    )
+    assert out4["ok"] is True
+    assert out4["atom_ids"] == ["b1"]
+    assert out4["walk_summary_nl"] == "replaced"
+    assert reg.last_confirmed_keep is not None
+    assert reg.last_confirmed_keep.keep_ids == ("b1",)
+    assert reg.last_confirmed_keep.moment_id == "m9"
+
+    # empty replace = clear (summary null)
+    out5 = reg.update_keep(mode="replace", atom_ids=[])
+    assert out5["ok"] is True
+    assert out5["atom_ids"] == []
+    assert out5["entry_count"] == 0
+    assert out5["walk_summary_nl"] is None
+    assert reg.last_confirmed_keep is None
+    assert reg.get_meal_keep_ids() == ([], None)
+    # disk empty
+    loaded = load_directed_keep_tray(paths)
+    assert loaded.entries == []
+    assert loaded.walk_summary_nl is None
+    assert tray_runtime_path(paths.data_dir).is_file()
+
+    # empty replace with note keeps annotate-only summary, still no entries/snap
+    reg.update_keep(mode="merge", atom_ids=["z1"])
+    out6 = reg.update_keep(mode="replace", atom_ids=[], note="cleared with note")
+    assert out6["ok"] is True
+    assert out6["atom_ids"] == []
+    assert out6["walk_summary_nl"] == "cleared with note"
+    assert reg.last_confirmed_keep is None
+    ids, summary = reg.get_meal_keep_ids()
+    assert ids == []
+    assert summary == "cleared with note"
+
+
+def test_update_keep_disabled_fail_closed_no_mutate(paths):
+    """Fail closed when keep off — no tray/snap mutation."""
+    settings = MemorySettings(
+        directed_traversal_enabled=False,
+        directed_keep_enabled=False,
+    )
+    now = "2026-07-28T12:00:00Z"
+    reg = TraversalRegistry(
+        settings=settings, paths=paths, now_fn=lambda: now
+    )
+    # Seed RAM tray as if prior state existed (should not change on fail).
+    tray = reg.ensure_tray()
+    tray.merge_confirm(["seed"], now=now, walk_summary_nl="seed")
+    reg._last_confirmed_keep = None  # noqa: SLF001 — intentional hermetic seed
+    before_ids = list(tray.atom_ids())
+    out = reg.update_keep(mode="merge", atom_ids=["new_id"])
+    assert out["ok"] is False
+    assert out["error_reason"] == ERROR_KEEP_DISABLED
+    assert reg.ensure_tray().atom_ids() == before_ids
+    assert reg.last_confirmed_keep is None
+
+
+def test_update_keep_merge_noop_invalid_args(paths):
+    settings = MemorySettings(directed_keep_enabled=True)
+    reg = TraversalRegistry(settings=settings, paths=paths)
+    out = reg.update_keep(mode="merge", atom_ids=[], remove_ids=[])
+    assert out["ok"] is False
+    assert out["error_reason"] == ERROR_INVALID_ARGS
+    assert reg.directed_keep_tray is None or reg.ensure_tray().atom_ids() == []
+
+
+def test_update_keep_no_active_session_required(paths):
+    """Keep update works with no walk; keep-only flag (not traversal) is enough."""
+    settings = MemorySettings(
+        directed_traversal_enabled=False,
+        directed_keep_enabled=True,
+    )
+    reg = TraversalRegistry(
+        settings=settings,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T13:00:00Z",
+    )
+    assert reg.active_session is None
+    out = reg.update_keep(mode="replace", atom_ids=["solo"])
+    assert out["ok"] is True
+    assert out["atom_ids"] == ["solo"]
+    assert reg.get_meal_keep_ids()[0] == ["solo"]
+
+
+def test_update_keep_disk_after_clear(paths):
+    settings = MemorySettings(directed_keep_enabled=True)
+    reg = TraversalRegistry(
+        settings=settings,
+        paths=paths,
+        now_fn=lambda: "2026-07-28T14:00:00Z",
+    )
+    reg.update_keep(mode="merge", atom_ids=["d1", "d2"], note="disk")
+    assert tray_runtime_path(paths.data_dir).is_file()
+    reg.update_keep(mode="replace", atom_ids=[])
+    reloaded = load_directed_keep_tray(paths)
+    assert reloaded.atom_ids() == []
+    assert reloaded.walk_summary_nl is None
+    # New registry reloads empty
+    reg2 = TraversalRegistry(settings=settings, paths=paths)
+    assert reg2.get_meal_keep_ids() == ([], None)
 
 
 def test_moment_close_abandons_active_retains_prior_last(store):
