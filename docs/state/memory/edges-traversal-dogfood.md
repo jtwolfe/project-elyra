@@ -6,13 +6,27 @@
 | **Audience** | Operators |
 | **Status** | Active (living checklist) |
 | **Normative?** | No — prefer code on `working`; boxes are ops evidence, not product default-on |
-| **Last verified** | 2026-08-05 (code on `working`/`main` @ `161a820`; live dogfood **partial**) |
+| **Last verified** | 2026-08-06 (board honesty C6 / KD-C14 + KD-S103; **code complete** on `working` @ `ba78887`; live dogfood **partial** 2026-08-05 — tip drifts past historical `161a820`) |
 | **Design (edges stack)** | [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) (**Shipped (code; dogfood partial)**) |
 | **Design (polish1)** | [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) (**Shipped (code; dogfood partial)** — PR0–PR6) |
 | **Architecture priors** | [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md), [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) |
 | **Program** | [README.md](README.md) — edges/traversal + polish1 close-out |
-| **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98), [#120](https://github.com/jtwolfe/project-elyra/issues/120), [#103](https://github.com/jtwolfe/project-elyra/issues/103), [#105](https://github.com/jtwolfe/project-elyra/issues/105); polish2 residuals **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** |
-| **Claim today (2026-08-05)** | **Edges + polish1 code on `working`/`main` @ `161a820`** (hermetic green). **Live dogfood partial** — fabric/wait/sticky/backfill/multi-hop `created_with` proven; full boxes not signed. **Polish2** residuals on #125 (cold `semantic_only`, start `local_map` budget, recalls on expand). **Not** Gate B / product default-on of `durable_edges_enabled`. |
+| **Related issues** | [#98](https://github.com/jtwolfe/project-elyra/issues/98), [#120](https://github.com/jtwolfe/project-elyra/issues/120) C14, [#103](https://github.com/jtwolfe/project-elyra/issues/103) semantic directed, [#105](https://github.com/jtwolfe/project-elyra/issues/105); polish2 residuals **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** |
+| **Claim today (2026-08-06)** | **C14 / #120 Option B:** *code complete on `working`@`ba78887`; dogfood partial; residual #125; not Gate B.* Edges + polish1 hermetic green; **live dogfood partial** (fabric/wait/sticky/backfill/multi-hop `created_with`; product-default `auto` dual-seed warm in polish1 dogfood). **Full checklist boxes not signed.** **#103:** verify-only — close board issue **only with live evidence** for product-default `auto`; pure `semantic_only` cold → **#125**; **hermetic-only is not sufficient** to close. **Not** Gate B / product default-on of `durable_edges_enabled`. |
+
+---
+
+## Board honesty — C14 (#120) + #103 (touchup1 C6)
+
+Docs slice only — **no edge engine code** under Option B / verify-only.
+
+| Issue | Board posture | Evidence bar |
+|-------|---------------|--------------|
+| **#120 C14** | **Option B:** treat edges as **code + partial dogfood**; residual quality under **#125**. Template: *code complete on working@ba78887; dogfood partial; residual #125; not Gate B.* | Hermetic green + partial live (2026-08-05) is enough for Option B board close / residual-waiver — **not** full dogfood green, **not** Gate B. |
+| **#103** semantic directed | **Verify-only.** Product-default `seed_mode=auto` (dual temporal reserve + semantic fill; start structural 250ms; ANN under semantic wait) is **code-complete** on tip. | **Close only with live evidence** for the **auto** path (moment/session notes + tip SHA). Pure `semantic_only` under cold encoder → residual **#125** (does not block auto-path close if auto was live-verified). **Hermetic green alone is not sufficient** to close #103. No cold-seed greenfield in this bulk. |
+| **#125** polish2 | Residual home | Cold pure `semantic_only` reliability, start `local_map` budget, `recalls` on expand `via_edge_kind`, structural budget accounting noise. |
+
+**Partial live pointers (2026-08-05 polish1 dogfood; not full sign-off):** multi-hop durable `created_with` / `in_moment`; deferred `recalls` store growth; sticky last session; force backfill; unified wait 120s dogfood; **auto** start warm dual-seed (semantic + temporal anchors). **Not** claimed green: pure `semantic_only` cold/warm reliability, rich start `local_map`, recalls-as-expand surface — see #125.
 
 ---
 
@@ -26,12 +40,14 @@
 | GraphView durable ∪ projected expand; `expand_moment`; full legend | **Code** (PR2) |
 | `created_with` + `in_moment` write + retarget-to-1h tip | **Code** (PR3) |
 | `recalls` (speak-time) + `has_channel` (encode-ready) | **Code** (PR4) |
-| Pure semantic start + dual temporal reserve (#103 / #105 seed) | **Code** (PR5) |
+| Pure semantic start + dual temporal reserve (#103 / #105 seed) | **Code** (PR5) — product-default `auto` **partial live** (warm dual-seed); pure `semantic_only` cold residual **#125** |
 | Raised product budgets + HARD_MAX clamp + frontier/moment cache (#105) | **Code** (PR6) |
 | Graph API `edge_count` / `edges_by_kind` / `durable_edges_enabled` | **Code** (PR2+) |
 | Glass overview edge counts polish | **Code** (PR7) |
 | Visual free-browse graph (#61) | **Code** (PR8 on edges tip) |
 | Live promote → edges → multi-hop walk on operator machine | **Partial live** 2026-08-05 — multi-hop + durable kinds proven; boxes below still open for full sign-off |
+| C14 / #120 board (Option B) | **Code + partial dogfood**; residual **#125**; **not** full checklist green; **not** Gate B |
+| #103 board close | **Live evidence required** for product-default `auto`; hermetic-only **not** enough; pure cold `semantic_only` → **#125** |
 | Gate B / `durable_edges_enabled` factory default-on | **Not** this checklist’s done bar |
 
 ### Polish1 (PR0–PR6)
@@ -126,11 +142,13 @@
 
 ## Pure semantic start + dual slots (#103 / #105 seed)
 
+**Board (#103):** code path on `working` @ `ba78887` (PR5 + polish1 wait). Product-default **`auto`** has **partial live** support (warm dual-seed in polish1 dogfood). **Do not close #103 on hermetic green alone.** Pure `semantic_only` cold residual lives on **[#125](https://github.com/jtwolfe/project-elyra/issues/125)** and does not require greenfield here.
+
 - [ ] `memory_traverse_start` with goal text (and optional `seed_media_ids`) under warm mock/Nemotron:
   - `seed_mode=auto` (default): semantic seeds fill after dual temporal reserve; `seed_sources` honest
   - dual_n default **2** → at least 1–2 temporal anchors when semantic hits present
 - [ ] Cold encoder / no index: `semantic_reason` ∈ {`encoder_cold`, `no_index`, …}; **no torch cold-load** on start
-- [ ] `seed_mode=semantic_only` + cold → **empty frontier OK** (does not fall through to temporal strip — pure semantic honesty for #103)
+- [ ] `seed_mode=semantic_only` + cold → **empty frontier OK** (does not fall through to temporal strip — pure semantic honesty for #103); warm reliability residual → **#125**
 - [ ] `seed_mode=temporal_only` → strip fill; no semantic ANN
 - [ ] Skill nudge: focused goals may use `semantic_only` (playbook); default remains `auto` (OQ-E6)
 - [ ] Start structural budget: `traverse_start_expand_max_ms` product **250** for non-ANN start work / reporting; **ANN seed uses semantic wait ceiling** (polish1 — not 250 as ANN cap)
@@ -292,7 +310,7 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 | Result | pass / fail / partial |
 | Notes | |
 
-**Done for “edges + traverse green” product claim:** fabric + start + budgets boxes checked with notes, or residual filed on #98 / #120 / #103 / #105 with explicit defer. **Still not** Gate B or factory default-on of `durable_edges_enabled`.
+**Done for “edges + traverse green” product claim:** fabric + start + budgets boxes checked with notes, or residual filed with explicit defer. **C14 / #120 Option B (board):** code complete on `working`@`ba78887`; dogfood partial; residual **#125**; **not** Gate B — does **not** require every box green. **#103:** close only with live `auto`-path evidence; hermetic-only insufficient; pure cold `semantic_only` → **#125**. **Still not** Gate B or factory default-on of `durable_edges_enabled`.
 
 ---
 
@@ -302,7 +320,7 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 |-------|--------|
 | Operator | |
 | Date | |
-| Tip SHA | (`working`/`main` @ land, e.g. `161a820`, or operating pin) |
+| Tip SHA | (`working` @ land, e.g. `ba78887`, or operating pin; historical polish1 banner used `161a820`) |
 | Encoder backend | mock / nemotron |
 | `semantic_wait.max_ms` (dogfood) | e.g. 120000 |
 | Deferred recalls | observed / not observed |
@@ -314,7 +332,7 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 | Result | pass / fail / partial |
 | Notes | |
 
-**Done for “polish1 green” product claim:** unified wait (120s dogfood OK) + deferred recalls + local_map + backfill + glass sticky + skill boxes checked with notes, **or** residual filed with explicit defer. **Polish2 residuals filed:** [#125](https://github.com/jtwolfe/project-elyra/issues/125). **Still not** Gate B or factory default-on of `durable_edges_enabled`.
+**Done for “polish1 green” product claim:** unified wait (120s dogfood OK) + deferred recalls + local_map + backfill + glass sticky + skill boxes checked with notes, **or** residual filed with explicit defer. **Polish2 residuals filed:** [#125](https://github.com/jtwolfe/project-elyra/issues/125). **Still not** Gate B or factory default-on of `durable_edges_enabled`. Partial live ≠ full polish1 product claim.
 
 ---
 
@@ -322,6 +340,9 @@ Optional live: warm Nemotron path for recalls + semantic start quality (mock pro
 
 - [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) — KD-E* + PR0–PR8 edges stack
 - [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) — KD-P* + PR0–PR6 polish1
+- [design-general-touchup1.md](../../design/design-general-touchup1.md) — KD-C14 (#120 Option B) + KD-S103 (verify-only / residual #125)
+- [#120](https://github.com/jtwolfe/project-elyra/issues/120) — C14 edges dogfood (Option B: code + partial dogfood)
+- [#103](https://github.com/jtwolfe/project-elyra/issues/103) — semantic directed seed (close only with live `auto` evidence)
 - [#125](https://github.com/jtwolfe/project-elyra/issues/125) — edges **polish2** residuals (cold semantic_only, start local_map budget, recalls on expand)
 - [architecture/phase-2a-directed-traversal.md](architecture/phase-2a-directed-traversal.md) — base 2a walk / Graph glass
 - [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) — semantic seeds / MM loop
