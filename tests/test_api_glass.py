@@ -966,6 +966,9 @@ def test_static_index_served(paths):
         assert "continuous-toggle" in html
         assert "Continuous work" in html
         assert "pill-autopilot" in html
+        # #88: pure markdown helpers load before app.js
+        assert 'src="/markdown.js"' in html
+        assert html.index('src="/markdown.js"') < html.index('src="/app.js"')
         # Continuous control lives in the rail (single source of truth).
         assert "continuous-toggle-rail" in html
         assert "rail-continuous" in html

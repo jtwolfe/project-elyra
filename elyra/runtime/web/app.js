@@ -604,258 +604,27 @@ function renderKatexHtml(tex, display, escape) {
 
 /**
  * Safe markdown → HTML for chat glass (GFM-ish subset).
- * Escapes first; allows headings, emphasis, lists, quotes, code, tables, links.
- * Soft newlines → <br> (BUG-chat-02 / #84). Math via KaTeX placeholders (BUG-chat-01 / #75).
+ * Delegates to ElyraMarkdown (markdown.js) with glass resolveMediaUrl + KaTeX.
+ * Soft newlines → <br> (BUG-chat-02 / #84). Math via KaTeX (BUG-chat-01 / #75).
+ * Tag-protected emphasis so link attrs/paths survive underscore italic (#88A / KD-MD1).
  */
 function renderMarkdown(src) {
-  const raw = String(src || "");
-  if (!raw.trim()) return "<p></p>";
-
-  const fences = [];
-  const math = [];
-  let text = raw.replace(/\r\n/g, "\n");
-
-  // Code fences first so LaTeX inside ``` is not treated as math.
-  text = text.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    const i = fences.length;
-    fences.push({ lang: String(lang || "").trim(), code: code.replace(/\n$/, "") });
-    return `\n\n%%FENCE${i}%%\n\n`;
-  });
-
-  // Math placeholders before escape/italic so \frac{a}{b} and e^{-i} survive.
-  // Order matches Grok dogfood: \[ \] primary; \( \), $$, $ as fallbacks.
-  const pushMath = (tex, display) => {
-    const i = math.length;
-    math.push({ tex: String(tex || "").trim(), display: Boolean(display) });
-    return `%%MATH${i}%%`;
-  };
-  // Display blocks: own paragraph so we do not wrap <div> in <p>.
-  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => `\n\n${pushMath(tex, true)}\n\n`);
-  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => `\n\n${pushMath(tex, true)}\n\n`);
-  text = text.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => pushMath(tex, false));
-  // Single $…$: no spaces inside (avoids "$5 and real $x^2$" eating the closer).
-  // Grok dogfood primary is \[ \]; $ is OpenAI-style fallback for compact TeX.
-  text = text.replace(
-    /(?<!\\)\$(?!\$)((?:\\.|[^$\n\\\s])+)(?<!\\)\$(?!\$)/g,
-    (full, tex) => {
-      const body = String(tex || "").trim();
-      if (!body) return full;
-      // Skip pure currency-like $12.50$
-      if (/^\d+([.,]\d+)?$/.test(body)) return full;
-      return pushMath(body, false);
-    }
-  );
-
-  const escape = (s) =>
-    String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
-  const inline = (s) => {
-    let t = escape(s);
-    // images ![alt](url) — http(s), data:image, attachment:<id>, /api/media/<id>
-    t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => {
-      const resolved = resolveMediaUrl(url);
-      if (!resolved) return escape(`![${alt}](${url})`);
-      // Only render as <img> for image-like targets (not raw non-image data:)
-      if (/^data:/i.test(resolved) && !/^data:image\//i.test(resolved)) {
-        return escape(`![${alt}](${url})`);
-      }
-      return `<img class="md-img" src="${escape(resolved)}" alt="${escape(
-        alt
-      )}" loading="lazy" />`;
-    });
-    // links [text](url) — https?, attachment:<id>, /api/media/<id>
-    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
-      const resolved = resolveMediaUrl(url);
-      if (!resolved || /^data:/i.test(resolved)) {
-        // data: links not allowed as anchors; bare https only without resolve miss
-        const u = String(url || "").trim();
-        if (/^https?:\/\//i.test(u)) {
-          return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(
-            label
-          )}</a>`;
-        }
-        return escape(`[${label}](${url})`);
-      }
-      const external = /^https?:\/\//i.test(resolved);
-      if (external) {
-        return `<a href="${escape(resolved)}" target="_blank" rel="noopener noreferrer">${escape(
-          label
-        )}</a>`;
-      }
-      // same-origin media: open in new tab / download
-      return `<a class="md-att-link" href="${escape(
-        resolved
-      )}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
-    });
-    // inline code
-    t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escape(code)}</code>`);
-    // bold / italic (skip if only a math placeholder left in the segment)
-    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    t = t.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
-    t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-    t = t.replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
-    return t;
-  };
-
-  const lines = text.split("\n");
-  const out = [];
-  let i = 0;
-  let para = [];
-
-  const flushPara = () => {
-    if (!para.length) return;
-    // Display-math-only paragraph → block (no wrapping <p>).
-    if (para.length === 1 && /^%%MATH\d+%%$/.test(para[0])) {
-      out.push(para[0]);
-      para = [];
-      return;
-    }
-    // Soft newlines (BUG-chat-02): keep line breaks inside a paragraph as <br>.
-    out.push(`<p>${para.map((line) => inline(line)).join("<br>")}</p>`);
-    para = [];
-  };
-
-  const isTableSep = (line) =>
-    /^\s*\|?[\s:-]+\|[\s|:-]+\|?\s*$/.test(line) && line.includes("-");
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (!trimmed) {
-      flushPara();
-      i += 1;
-      continue;
-    }
-
-    const fenceMatch = trimmed.match(/^%%FENCE(\d+)%%$/);
-    if (fenceMatch) {
-      flushPara();
-      const f = fences[Number(fenceMatch[1])];
-      if (f) {
-        const lang = f.lang ? escape(f.lang) : "";
-        out.push(
-          `<div class="md-code-wrap"><button type="button" class="md-copy">Copy</button><pre><code class="language-${lang}">${escape(
-            f.code
-          )}</code></pre></div>`
-        );
-      }
-      i += 1;
-      continue;
-    }
-
-    // Standalone display math placeholder (from \[ \] / $$ extraction).
-    if (/^%%MATH\d+%%$/.test(trimmed)) {
-      flushPara();
-      out.push(trimmed);
-      i += 1;
-      continue;
-    }
-
-    if (/^---+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
-      flushPara();
-      out.push("<hr />");
-      i += 1;
-      continue;
-    }
-
-    const hm = trimmed.match(/^(#{1,4})\s+(.+)$/);
-    if (hm) {
-      flushPara();
-      const level = hm[1].length;
-      out.push(`<h${level}>${inline(hm[2])}</h${level}>`);
-      i += 1;
-      continue;
-    }
-
-    if (trimmed.startsWith(">")) {
-      flushPara();
-      const quote = [];
-      while (i < lines.length && lines[i].trim().startsWith(">")) {
-        quote.push(lines[i].trim().replace(/^>\s?/, ""));
-        i += 1;
-      }
-      out.push(
-        `<blockquote>${quote.map((q) => inline(q)).join("<br>")}</blockquote>`
-      );
-      continue;
-    }
-
-    // GFM table
-    if (
-      trimmed.includes("|") &&
-      i + 1 < lines.length &&
-      isTableSep(lines[i + 1])
-    ) {
-      flushPara();
-      const splitRow = (row) =>
-        row
-          .trim()
-          .replace(/^\|/, "")
-          .replace(/\|$/, "")
-          .split("|")
-          .map((c) => c.trim());
-      const header = splitRow(lines[i]);
-      i += 2; // skip header + separator
-      const bodyRows = [];
-      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
-        bodyRows.push(splitRow(lines[i]));
-        i += 1;
-      }
-      let table = "<table><thead><tr>";
-      header.forEach((h) => {
-        table += `<th>${inline(h)}</th>`;
-      });
-      table += "</tr></thead><tbody>";
-      bodyRows.forEach((row) => {
-        table += "<tr>";
-        header.forEach((_, idx) => {
-          table += `<td>${inline(row[idx] || "")}</td>`;
-        });
-        table += "</tr>";
-      });
-      table += "</tbody></table>";
-      out.push(table);
-      continue;
-    }
-
-    // lists
-    const ul = trimmed.match(/^[-*+]\s+(.+)$/);
-    const ol = trimmed.match(/^\d+\.\s+(.+)$/);
-    if (ul || ol) {
-      flushPara();
-      const ordered = Boolean(ol);
-      const items = [];
-      while (i < lines.length) {
-        const t = lines[i].trim();
-        const m = ordered ? t.match(/^\d+\.\s+(.+)$/) : t.match(/^[-*+]\s+(.+)$/);
-        if (!m) break;
-        items.push(`<li>${inline(m[1])}</li>`);
-        i += 1;
-      }
-      out.push(
-        ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`
-      );
-      continue;
-    }
-
-    para.push(trimmed);
-    i += 1;
+  const md =
+    typeof globalThis !== "undefined" ? globalThis.ElyraMarkdown : null;
+  if (!md || typeof md.renderMarkdown !== "function") {
+    // Fail closed to escaped plain if helper script missing.
+    const esc = (s) =>
+      String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    return `<p>${esc(src || "")}</p>`;
   }
-  flushPara();
-
-  let html = out.join("\n") || "<p></p>";
-  // Expand math placeholders (after markdown so TeX was never italic-mangled).
-  html = html.replace(/%%MATH(\d+)%%/g, (_, idx) => {
-    const m = math[Number(idx)];
-    if (!m) return "";
-    return renderKatexHtml(m.tex, m.display, escape);
+  return md.renderMarkdown(src, {
+    resolveMediaUrl,
+    renderKatexHtml,
   });
-  return html;
 }
 
 function wireMessageBodyInteractions(root) {
@@ -4190,22 +3959,31 @@ function renderMemoryChannelCard(item) {
   }
 
   // Prose-friendly body for summaries / speak-like channels.
+  // system/orient: plain textContent only (KD-MD2 / #88B) — long structured text.
+  const plainCh = new Set(["system", "orient"]);
   const proseCh = new Set([
     "temporal",
     "episodic",
     "semantic",
     "summary",
-    "system",
-    "orient",
     "directed_keep",
   ]);
-  const body = document.createElement(proseCh.has(ch) ? "div" : "pre");
-  body.className = proseCh.has(ch)
-    ? "memory-snippet memory-snippet-prose"
-    : "memory-snippet";
-  if (proseCh.has(ch) && snippet) {
-    body.innerHTML = renderMarkdown(snippet);
+  let body;
+  if (plainCh.has(ch)) {
+    body = document.createElement("pre");
+    body.className = "memory-snippet memory-snippet-plain";
+    body.textContent = snippet || "(empty)";
+  } else if (proseCh.has(ch)) {
+    body = document.createElement("div");
+    body.className = "memory-snippet memory-snippet-prose";
+    if (snippet) {
+      body.innerHTML = renderMarkdown(snippet);
+    } else {
+      body.textContent = "(empty)";
+    }
   } else {
+    body = document.createElement("pre");
+    body.className = "memory-snippet";
     body.textContent = snippet || "(empty)";
   }
   card.appendChild(body);
