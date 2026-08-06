@@ -266,6 +266,12 @@ function actorLabel(message) {
 }
 
 let lastPendingWaitId = null;
+/**
+ * Last server-confirmed pending_wait from refreshStatus (KD-W2).
+ * Not cleared by optimistic hide — used for free-text "wait was armed" checks
+ * and re-show after refresh if still pending.
+ */
+let lastStatusPendingWait = null;
 let noticeTimer = null;
 /** True while a wait-choice POST is in flight (blocks double-submit). */
 let waitReplyInFlight = false;
@@ -890,6 +896,31 @@ function setWaitChoicesDisabled(disabled) {
   });
 }
 
+/**
+ * Pure: true when a pending wait is armed for the session user (KD-W2).
+ * Uses last server-confirmed pending_wait shape; does not invent waits.
+ */
+function waitArmedForSessionUser(pending, userId) {
+  return Boolean(
+    pending &&
+      pending.status === "pending" &&
+      String(pending.user_id || "") === String(userId || "")
+  );
+}
+
+/**
+ * Optimistic hide after successful wait reply (multi-choice or free-text).
+ * Only mutates UI + in-flight flags — does NOT clear lastStatusPendingWait
+ * (server-confirmed bookkeeping; refreshStatus remains source of truth).
+ */
+function hideWaitBarOptimistic() {
+  waitBar.hidden = true;
+  waitChoices.innerHTML = "";
+  waitPrompt.textContent = "";
+  lastPendingWaitId = null;
+  waitReplyInFlight = false;
+}
+
 function renderWaitBar(pending) {
   if (!pending || pending.status !== "pending") {
     waitBar.hidden = true;
@@ -945,8 +976,11 @@ async function sendWaitChoice(choice) {
     if (data && data.routed && data.routed !== "wait_reply") {
       showNotice(`Wait reply routed as ${data.routed} (wait may have already cleared).`);
     }
+    // Hide only after successful HTTP (not before POST / not on throw).
+    hideWaitBarOptimistic();
     await Promise.all([refreshMessages(), refreshStatus()]);
   } catch (err) {
+    // Do not hide on error; restore choice buttons from last server state.
     waitReplyInFlight = false;
     setWaitChoicesDisabled(false);
     showNotice(String(err.message || err));
@@ -2440,7 +2474,9 @@ async function refreshStatus() {
   renderContinuous(s);
   renderDevSpeed(s);
   renderSemanticWait(s);
-  renderWaitBar(s.pending_wait || null);
+  // Server-confirmed pending wait (KD-W2) — source of truth for armed checks.
+  lastStatusPendingWait = s.pending_wait || null;
+  renderWaitBar(lastStatusPendingWait);
   return s;
 }
 
@@ -8259,6 +8295,12 @@ form.addEventListener("submit", async (e) => {
   // Media-only send allowed: empty text + attachments (R1b / glass empty-content).
   if (!text && !hasPending) return;
   sendBtn.disabled = true;
+  // Capture armed state from last server-confirmed status (before POST).
+  // Also treat visible wait bar (lastPendingWaitId) as armed for free-text hide.
+  const sessionUid = getSessionUserId();
+  const waitWasArmed =
+    waitArmedForSessionUser(lastStatusPendingWait, sessionUid) ||
+    lastPendingWaitId != null;
   try {
     let attachmentIds = [];
     if (hasPending) {
@@ -8266,7 +8308,7 @@ form.addEventListener("submit", async (e) => {
     }
     const payload = {
       content: text, // user text only — no inventory prose (PR4)
-      user_id: getSessionUserId(),
+      user_id: sessionUid,
     };
     if (attachmentIds.length) {
       payload.attachment_ids = attachmentIds;
@@ -8285,8 +8327,17 @@ form.addEventListener("submit", async (e) => {
         "Interjection buffer full — message queued as a wake for after this moment."
       );
     }
-    await refreshMessages({ force: true });
+    // Hide only after successful HTTP when a wait was armed for this user.
+    if (waitWasArmed) {
+      hideWaitBarOptimistic();
+    }
+    // Always refresh status after chat send (phase pill + wait re-arm).
+    await Promise.all([
+      refreshMessages({ force: true }),
+      refreshStatus(),
+    ]);
   } catch (err) {
+    // Do not hide wait bar on error — lastStatusPendingWait stays intact.
     showNotice(String(err.message || err));
   } finally {
     sendBtn.disabled = false;
