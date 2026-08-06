@@ -2084,29 +2084,47 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         # Unavailable / parity-fail must NEVER be labeled "EdgeStore empty".
         durable_on = bool(trav_flags.get("durable_edges_enabled"))
         backfill_dev_on = bool(trav_flags.get("edge_backfill_dev_enabled"))
+        # KD-ES-PARITY Graph honesty (design R1 table):
+        # - RAM=0, disk>0 (or edge_load_parity_failure) → hard-fail / unavailable class
+        # - RAM≠disk, both >0 (edge_count_parity_mismatch) → degraded warn, serve RAM
+        #   — NOT unavailable, NOT "do not trust zero"
         parity_hard_fail = (
             disk_edge_count is not None
             and disk_edge_count > 0
             and edge_count == 0
         ) or (
             edge_error is not None
-            and (
-                edge_error.startswith("edge_load_parity_failure")
-                or edge_error == "edge_count_parity_mismatch"
-            )
+            and edge_error.startswith("edge_load_parity_failure")
         )
         parity_mismatch = (
-            edge_count_parity is False
-            and edge_count > 0
-            and disk_edge_count is not None
-            and disk_edge_count > 0
-            and disk_edge_count != edge_count
+            edge_count > 0
+            and (
+                (
+                    edge_count_parity is False
+                    and disk_edge_count is not None
+                    and disk_edge_count > 0
+                    and disk_edge_count != edge_count
+                )
+                or (
+                    edge_error is not None
+                    and (
+                        edge_error == "edge_count_parity_mismatch"
+                        or edge_error.startswith("edge_count_parity_mismatch")
+                    )
+                )
+            )
         )
         edge_store_unavailable = bool(
             is_unavailable_handle
             or edge_open_state == "unavailable"
             or (estore is None and edge_error)
-            or (not edge_ok and edge_error and not parity_mismatch and edge_count == 0)
+            or (
+                not edge_ok
+                and edge_error
+                and not parity_mismatch
+                and not parity_hard_fail
+                and edge_count == 0
+            )
         )
         # Honest empty only when store is ok (or open-ready with zero rows).
         edge_store_empty = (
@@ -2116,7 +2134,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             and edge_count == 0
             and edge_ok
         )
-        # Free-browse uses projected edges when durable fabric is absent OR empty.
+        # Free-browse: projected-only when durable fabric absent/empty/hard-fail.
+        # Partial mismatch keeps serving RAM durable hops (degraded, not projected-only).
         projected_edges_only = (
             edge_store_empty
             or edge_store_unavailable
@@ -2133,19 +2152,19 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "no active or last walk yet — start via traverse tools "
                 "or debug POST"
             )
-        if edge_store_unavailable or parity_hard_fail:
+        if parity_hard_fail:
+            reason = edge_error or "edge_load_parity_failure"
+            honesty_notes.append(
+                "load parity failure — do not trust zero; do not backfill "
+                f"as empty (RAM={edge_count} disk={disk_edge_count}; "
+                f"reason={reason})"
+            )
+        elif edge_store_unavailable:
             reason = edge_error or "edge_store_unavailable"
-            if parity_hard_fail:
-                honesty_notes.append(
-                    "load parity failure — do not trust zero; do not backfill "
-                    f"as empty (RAM={edge_count} disk={disk_edge_count}; "
-                    f"reason={reason})"
-                )
-            else:
-                honesty_notes.append(
-                    "edge store unavailable — not empty fabric; "
-                    f"reason={reason}"
-                )
+            honesty_notes.append(
+                "edge store unavailable — not empty fabric; "
+                f"reason={reason}"
+            )
         elif parity_mismatch:
             honesty_notes.append(
                 f"edge count parity mismatch RAM={edge_count} "

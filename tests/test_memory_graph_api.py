@@ -1198,3 +1198,78 @@ def test_graph_overview_surfaces_disk_and_parity_fields(paths):
         assert body["honesty"].get("edge_count_parity") is True
     finally:
         h.close()
+
+
+def test_graph_overview_partial_parity_mismatch_degraded_not_unavailable(paths):
+    """RAM>0, disk≠RAM → parity mismatch honesty; not hard-fail / unavailable.
+
+    Design R1: both >0 mismatch is ready-degraded (serve RAM), not
+    "do not trust zero" / edge_store_unavailable.
+    """
+    from elyra.memory.config import EDGE_SCHEMA_VERSION
+    from elyra.memory.edges import DurableEdge, new_edge_id
+    from elyra.memory.weights import EDGE_CREATED_WITH
+
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            directed_traversal_enabled=True,
+            durable_edges_enabled=True,
+        ),
+    )
+    try:
+        estore = h.worker._ensure_edge_store()  # noqa: SLF001
+        assert estore is not None
+        now = "2026-08-06T12:00:00Z"
+        for i in range(2):
+            estore.put_edge(
+                DurableEdge(
+                    edge_id=new_edge_id(),
+                    src_atom_id="a_src",
+                    dst_atom_id=f"a_dst_{i}",
+                    edge_kind=EDGE_CREATED_WITH,
+                    created_at=now,
+                    updated_at=now,
+                    reason="partial-parity-test",
+                    schema_version=EDGE_SCHEMA_VERSION,
+                )
+            )
+
+        def health_partial_mismatch():
+            return {
+                "ok": False,
+                "backend": "lance",
+                "edge_count": 2,
+                "disk_edge_count": 99,
+                "edge_count_parity": False,
+                "error": "edge_count_parity_mismatch",
+                "edges_by_kind": {EDGE_CREATED_WITH: 2},
+                "durable_edges_enabled": True,
+            }
+
+        estore.health = health_partial_mismatch  # type: ignore[method-assign]
+        # Worker kept real handle (ready degraded); open SM not unavailable.
+        h.worker._edge_store_state = "ready"  # noqa: SLF001
+        h.worker._edge_store_error = "edge_count_parity_mismatch"  # noqa: SLF001
+
+        code, body = h.get("/api/memory/graph")
+        assert code == 200, body
+        note = body["honesty"].get("note") or ""
+        assert body["edge_count"] == 2
+        assert body["edge_store"].get("disk_edge_count") == 99
+        assert body["edge_store"].get("edge_count_parity") is False
+        assert body["honesty"]["edge_store_empty"] is False
+        assert body["honesty"]["edge_store_unavailable"] is False
+        assert body["honesty"]["projected_edges_only"] is False
+        assert "parity mismatch" in note.lower()
+        assert "do not trust zero" not in note.lower()
+        assert "EdgeStore empty" not in note
+        assert "unavailable" not in note.lower()
+        # Degraded: health ok=false still reflected on edge_store.ok
+        assert body["edge_store"]["ok"] is False
+        assert body["edge_store"].get("error") == "edge_count_parity_mismatch"
+    finally:
+        h.close()
