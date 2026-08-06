@@ -49,6 +49,7 @@ This request’s tool list is complete for callables. Families (names are snake_
 - **Growth (tools):** `install_tool_draft` → `verify_tool` → `promote_tool` (drafts are **not** callable until promote)
 - **Package recovery:** re-promote archives local; `get_tool`/`get_skill` + `list_versions` → `revert_tool`/`revert_skill` (reason required); bundled never overwritten
 - **Identity:** `get_identity`, `draft_identity`, `promote_identity` (draft never live; self promote needs operator grant)
+- **Memory (when listed):** `memory_traverse_*` multi-hop walks (skill `memory-traverse`); **`memory_keep_update`** manages sticky directed keep — merge/replace/remove pins; empty `mode=replace` clears. Keep is **context management** (align with open goals; no walk required). Abandon walk ≠ clear keep. Meal packs keep on next compose.
 
 Sandbox FS tools jail under that host tree. They cannot read host `tools/drafts/` or other host paths. Sandbox `tools/` may show **staged runtime copies** (not drafts). Write drafts only via `install_tool_draft` with a non-empty `files` map. Prefer `search_replace` for edits to existing files; for new sandbox files under the guest `run` cap (16 KiB), one `run` + `Path.write_text` is ok — use `run` primarily to execute, not as a multi-KB file bus. `run` / model runners use guest exec when isolation is on (fail closed if unusable); do not host-path fish.
 

@@ -9,6 +9,10 @@ kind: read
 Update the **instance sticky directed-keep tray** (meal channel `directed_keep`)
 without starting or finishing a traversal walk.
 
+**Product model:** traversal walks; **keep manages context**. Pin, reinforce, drop,
+or clear known atom ids directly — no active walk required. Prefer this when goals
+or tasks shift and the sticky pins should follow focus.
+
 - Optional: `mode` — `merge` (default) or `replace`
 - Optional: `atom_ids` — atoms to pin/keep (reinforce if already pinned under merge)
 - Optional: `remove_ids` — atom ids to drop from the tray
@@ -24,8 +28,9 @@ without starting or finishing a traversal walk.
 | `replace` | non-empty | optional | Tray becomes `atom_ids` only (then remove). **Resets** `walk_summary_nl` unless `note` is passed (full tray replace, not pin-only) |
 | `replace` | empty | * | **Clear tray**: empty entries; `walk_summary_nl=null` unless `note` provided |
 
-**Abandon ≠ clear.** Finishing a walk still merges into the tray; abandoning a walk
-**retains** keep. Use empty `mode=replace` to intentionally clear pins.
+**Abandon ≠ clear.** `memory_traverse_finish` still merges into the tray;
+`memory_traverse_abandon` **retains** keep (active walk only). Use empty
+`mode=replace` to intentionally clear pins — do not abandon a walk expecting clear.
 
 **Meal timing (KD-A16):** tray is sticky on disk immediately (best-effort persist).
 Outer meal packs `directed_keep` on the **next** `compose_meal` / re-outer —

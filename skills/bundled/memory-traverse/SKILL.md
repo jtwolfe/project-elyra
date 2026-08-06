@@ -9,6 +9,13 @@ Disciplined multi-hop walk over thin `memory_traverse_*` tools. Prefer this skil
 when associative recall needs **steering** beyond the meal's one-shot semantic
 channel. Temporary until `finish` — never invent atom bodies or keep blind ids.
 
+**Walk vs keep (product model):** Traversal **walks**; **keep manages context**.
+`memory_traverse_finish` merges a keep-set into the sticky directed-keep tray.
+After that — or **without any walk** — pin, drop, replace, or clear pins with
+`memory_keep_update` (no active session required). **Abandon ≠ clear:** abandon
+drops the active walk only and **retains** meal keep. Intentional clear =
+`memory_keep_update` with `mode=replace` and empty `atom_ids`.
+
 ## When to use
 
 - Multi-hop / ambiguous recall ("what led to X?", related past work across moments)
@@ -23,6 +30,8 @@ channel. Temporary until `finish` — never invent atom bodies or keep blind ids
 - Flag off (`traverse_disabled`) → stop; do not thrash start
 - You only need bodies of known ids this hop → `memory_traverse_inspect` after start,
   or note ids for next outer meal after finish — do not rewrite the full meal mid-walk
+- You only need to pin / update / clear sticky directed keep (no multi-hop dig) →
+  `memory_keep_update` directly — context management, not a walk
 
 ## First tool call (mandatory)
 
@@ -279,13 +288,32 @@ Stop (finish or abandon) when any of:
 Use `memory_traverse_inspect` for same-turn body access. Do not assume the keep-set
 is already packed into this hop's outer package.
 
+### Keep as context management (post-walk or no walk)
+
+Finish is how a **walk** confirms pins. Further context management does **not**
+require another walk:
+
+| Need | Tool |
+|------|------|
+| Confirm keep from this walk | `memory_traverse_finish` |
+| Pin / merge / remove / replace pins (no walk) | `memory_keep_update` |
+| Clear all sticky pins | `memory_keep_update` `mode=replace` with empty `atom_ids` |
+| Drop active walk only | `memory_traverse_abandon` — **retains** meal keep |
+
+- Align keep with open goals/tasks: when focus **shifts**, prefer
+  `memory_keep_update` over abandoning a walk as if that cleared context.
+- Meal packs `directed_keep` on **next** `compose_meal` after keep update too
+  (same KD-A16 honesty as finish).
+- Do **not** treat abandon as clear; empty replace is the intentional clear path.
+
 ### Glass stickiness honesty
 
 - Last finished walk is **process-life** sticky (survives moment close; abandon of
   **active** only).
 - It is **not** disk-durable across process restart — do not promise a surviving
   last walk after restart.
-- `clear_confirmed_keep(clear_glass=True)` remains the operator escape.
+- Model-facing clear of sticky keep: `memory_keep_update` empty `mode=replace`.
+- `clear_confirmed_keep(clear_glass=True)` remains the operator escape (glass).
 
 ## Tool map
 
@@ -294,8 +322,9 @@ is already packed into this hop's outer package.
 | `memory_traverse_start` | Create session; seed explicit / semantic / dual-temporal; optional `local_map` |
 | `memory_traverse_step` | Expand frontier nodes; provisional keep; scratchpad; `local_map` / `local_maps` |
 | `memory_traverse_inspect` | Capped body slices before keep |
-| `memory_traverse_finish` | Confirm keep-set + walk summary; process-life glass sticky |
-| `memory_traverse_abandon` | Drop active only; last finished + meal keep retained |
+| `memory_traverse_finish` | Confirm keep-set + walk summary; merges sticky tray; process-life glass sticky |
+| `memory_traverse_abandon` | Drop active only; last finished + meal keep **retained** (abandon ≠ clear) |
+| `memory_keep_update` | Context management: merge/replace/remove/clear sticky directed keep; no walk required; meal next compose |
 
 ## Failure modes
 
@@ -325,3 +354,4 @@ Done when:
 - Rewriting meal composition mid-walk
 - Blind multi-start thrash without finish/abandon
 - Claiming last walk survives process restart
+- Treating abandon as keep-clear (use `memory_keep_update` empty replace)

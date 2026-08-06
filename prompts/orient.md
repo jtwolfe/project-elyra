@@ -34,3 +34,4 @@
 - On user questions: after tools produce a user-visible result, **prefer a final answer speak** on glass — early status/ack alone usually leaves them waiting. Free-text never reaches glass.
 - If a full answer is already on glass, honest stop is fine — do not speak again only for ceremony.
 - Prefer honest idle (existing bullet above) over inventing busywork when bias leans rest and nothing useful remains.
+- When goals/tasks **shift**, prefer updating sticky directed keep via `memory_keep_update` rather than abandoning a walk as if that cleared context. Abandon drops the active walk only; empty replace clears pins intentionally. Meal packs keep on next compose.
