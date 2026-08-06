@@ -278,6 +278,8 @@ Preliminary choice: **LanceDB** for atoms, embeddings, and ANN; **lance-graph** 
 | [design-memory-edges-and-traversal.md](../../design/memory/design-memory-edges-and-traversal.md) | **Durable edges + pure semantic start + raised budgets** — **Shipped (code; dogfood partial)** #98/#120/#103/#105; code complete on `working` @ `ba78887`; C14 Option B |
 | [design-memory-edges-polish1.md](../../design/memory/design-memory-edges-polish1.md) | **Edges polish1** (unified wait, deferred recalls, local_map, backfill, glass sticky, skill) — **Shipped (code; dogfood partial)**; residuals [#125](https://github.com/jtwolfe/project-elyra/issues/125) |
 | [edges-traversal-dogfood.md](edges-traversal-dogfood.md) | **Operator edges + traversal + polish1 dogfood checklist** (partial live; C14 Option B + #103 verify residual; full box sign-off open) |
+| [design-warm-on-start.md](../../design/design-warm-on-start.md) | **Warm-on-start** eager fabric + durable edges across restarts — Draft R2; impl on `fix/warm-on-start` |
+| [warm-on-start-inventory.md](warm-on-start-inventory.md) | **STATE inventory** for warm-on-start (lazy fabric, dogfood symptoms, root-cause lean, P0→P5 order) |
 | [design-view-media-meal-rebalance.md](../../design/memory/design-view-media-meal-rebalance.md) | **view_media + Completions expand + outer meal rebalance** design (PR0–PR6) |
 | [architecture/phase-2-semantic.md](architecture/phase-2-semantic.md) | **Phase 2 architecture manual** (shipped + rectified + MM loop: structure ↔ essay, activities, invariants) |
 | [design-phase-2a-directed-traversal.md](../../design/memory/design-phase-2a-directed-traversal.md) | Phase 2a intent sketch (points at implementation + architecture) |
