@@ -29,9 +29,9 @@ Pinned from design § “Code-backed lazy inventory” and implementation anchor
 | **EmbeddingIndex** | Opened inside store ensure | Already on start path with atoms |
 | **Embedder** | **Lazy.** Product default **`embed_preload=false`**. Cold load only via `role=loader` (encode worker / preload path). Consumers never cold-load | ~70 s Nemotron warm often **after** store open; first semantic hop late |
 | **EdgeStore** | **Lazy** on first Graph / backfill / promote / encode drain | Restart → first Graph peek may open under timeout or soft-fail |
-| **Sticky soft-fail** | `open_edge_store(fail_soft=True)` → **`UnavailableEdgeStore`** retained in `self._edge_store` (`is not None` ⇒ no retry) | Process-life dead fabric; random `edge_store_unavailable` |
-| **Health / Graph counts** | `edge_count` = **RAM** `len(_by_id)`; optional `disk_edge_count` / `edge_count_parity` exist but Graph does not surface them well | Disk-full + RAM-zero looks like “empty” |
-| **Graph empty label** | `edge_store_empty = edge_count == 0` **regardless of `edge_ok`** | Unavailable mislabeled “EdgeStore empty” → steers to force backfill |
+| **Sticky soft-fail** | **P2:** open SM `absent\|opening\|ready\|unavailable`; transient retry **nulls** Unavailable handle; permanent (ImportError) / integrity (RAM=0/disk>0) no auto-loop | Was process-life dead fabric; random `edge_store_unavailable` |
+| **Health / Graph counts** | **P2:** Lance `health.ok=false` on parity mismatch; RAM=0/disk>0 fails open; Graph surfaces `disk_edge_count` / `edge_count_parity` | Disk-full + RAM-zero must not look like honest empty |
+| **Graph empty label** | **P2:** true empty only when `ok` and count=0; unavailable / parity-fail get distinct honesty notes | Was: Unavailable mislabeled “EdgeStore empty” |
 | **Lance put shape** | Per-edge `merge_insert` | Dogfood fragment explosion (~thousands of data files / versions) — open hang risk (P3 batch/compact) |
 | **Dual SoT** | `backend=lance` **ignores** `edges.jsonl`; live SoT is `data/memory/lance/edges.lance` only | Operator confusion; do not auto-delete leftover jsonl |
 
@@ -108,7 +108,7 @@ P5    chore(memory): tray optional warm + recalls notes
 |-------|----------------|-----------|
 | **P0** | Design + this inventory | Docs only |
 | **P0.5** | Open copy of operator table; time/counts/parity/failure class | **Done** — [spike note](warm-on-start-spike-edges-open.md): **C4_ok**+**C3** on py3.12; P2 still required |
-| **P2** | Reopen tests; hard-fail RAM=0/disk>0; Graph empty vs unavailable vs parity; open SM clears Unavailable; single-flight; optional timeout | **First behavior**; no durable-on usefulness claim until green + restart checklist |
+| **P2** | Reopen tests; hard-fail RAM=0/disk>0; Graph empty vs unavailable vs parity; open SM clears Unavailable; single-flight; optional timeout | **Behavior landed** (this stack): worker open SM + single-flight; Lance parity health; Graph honesty; hermetic reopen/retry tests. Still **no durable-on usefulness claim** until operator restart checklist green |
 | **P1** | `_warm_memory_core`; side-thread sole embedder loader; claim after core; `embed_preload=true` | Hermetic warm/claim tests; dogfood pin only after P2 (and P3 if needed) |
 | **P3** | Batch upsert (merge-blocking); compact best-effort + quarantine fallbacks | Batch tests; compact smoke or documented unsupported |
 | **P4** | Aggregate `memory_ready` + CLI/Glass badge polish | Status contract; `chat_ready` independent |
@@ -141,3 +141,4 @@ P5    chore(memory): tray optional warm + recalls notes
 - This inventory is **not** architecture manual “shipped” status.
 - Execute-plan P0 complete ≠ fabric warm ≠ Gate B.
 - Prefer [design-warm-on-start.md](../../design/design-warm-on-start.md) for normative KDs and acceptance; update this note when P0.5 pins a class or when behavior slices land.
+- **P2 code landed** on `execute-plan/613b1a50-pr-3-edge-reopen-parity`: `_ensure_edge_store` SM + lock; `LanceEdgeStore` parity; Graph empty vs unavailable; tests in `test_memory_edges` / `test_presence_worker` / `test_memory_graph_api`. Eager open (P1) and batch/compact (P3) still open.

@@ -514,10 +514,21 @@ class PresenceWorker:
         self._memory: Any | None = None
         self._memory_open_attempted = False
         self._memory_open_failed = False
-        # Durable EdgeStore (sibling to atoms; lazy; PR1+).
+        # Durable EdgeStore (sibling to atoms; lazy until P1 eager warm).
+        # Open state machine (KD-ES-LOCK / KD-ES-RETRY):
+        #   absent | opening | ready | unavailable
+        # Sticky soft-fail path (real bug): fail_soft returns UnavailableEdgeStore
+        # which is not None → old ensure never retried. We null that handle on
+        # transient retry and only permanent-fail ImportError / integrity.
         self._edge_store: Any | None = None
+        self._edge_store_state: str = "absent"
+        self._edge_store_open_lock = threading.Lock()
+        self._edge_store_open_attempts: int = 0
+        self._edge_store_open_failed = False  # permanent fail (no more retries)
+        self._edge_store_error: str | None = None
+        self._edge_store_next_retry_at: float = 0.0  # time.monotonic()
+        # Legacy alias used by older tests / status; mirrors open_attempts > 0.
         self._edge_store_open_attempted = False
-        self._edge_store_open_failed = False
         # Dev force edge backfill last result (process-RAM; glass progress line).
         self._edge_backfill_last: dict[str, Any] | None = None
         # Phase 2 encode queue + embedder + EmbeddingIndex (lazy; store open).
@@ -1707,39 +1718,216 @@ class PresenceWorker:
         """Process-local TraversalRegistry (tools inject via extras later)."""
         return self._traversal
 
+    # Edge open SM: max transient retries + backoff (KD-ES-RETRY).
+    _EDGE_OPEN_MAX_RETRIES = 3
+    _EDGE_OPEN_BACKOFF_S = (5.0, 30.0, 120.0)
+
+    @staticmethod
+    def _edge_open_reason_class(reason: str | None) -> str:
+        """Classify Unavailable / error reason: permanent | transient | integrity."""
+        r = (reason or "").strip()
+        if not r:
+            return "transient"
+        if r == "edge_backend_unavailable" or r.startswith(
+            "edge_backend_unavailable"
+        ):
+            # ImportError / missing lancedb — will not heal without install.
+            return "permanent"
+        if r.startswith("edge_load_parity_failure") or r.startswith(
+            "edge_count_parity_mismatch"
+        ):
+            # Integrity: need compact/quarantine/repair, not blind re-open loop.
+            return "integrity"
+        return "transient"
+
+    def edge_store_open_status(self) -> dict[str, Any]:
+        """Snapshot of EdgeStore open SM for Graph/status honesty (KD-ES-*)."""
+        with self._edge_store_open_lock:
+            return {
+                "state": str(self._edge_store_state),
+                "attempts": int(self._edge_store_open_attempts),
+                "error": self._edge_store_error,
+                "permanent_failed": bool(self._edge_store_open_failed),
+                "next_retry_at_monotonic": (
+                    float(self._edge_store_next_retry_at)
+                    if self._edge_store_next_retry_at
+                    else None
+                ),
+            }
+
     def _ensure_edge_store(self) -> Any | None:
-        """Open EdgeStore once alongside the atom store (fail-soft).
+        """Open EdgeStore under single-flight lock with retry state machine.
 
         Open is independent of ``durable_edges_enabled`` so glass/tests can
-        read edges written when the flag was on. Returns UnavailableEdgeStore
-        or None on hard failure — GraphView treats both as no durable fabric.
+        read edges written when the flag was on.
+
+        State machine (KD-ES-LOCK / KD-ES-RETRY)::
+
+            absent → opening → ready | unavailable
+
+        **Sticky soft-fail was the real path:** ``open_edge_store(fail_soft=True)``
+        returns ``UnavailableEdgeStore`` without raising; the old ensure stored
+        that handle and returned it forever because ``_edge_store is not None``.
+        On **transient** retry we **null the Unavailable handle** and re-open.
+        Permanent (ImportError class) and integrity (RAM=0/disk>0) do not
+        auto-retry in a tight loop.
+
+        Returns real store, ``UnavailableEdgeStore``, or ``None`` (disabled /
+        atom store missing). GraphView treats Unavailable/None as no durable
+        fabric — never as honest empty.
         """
         mem_cfg = self.settings.memory
         if not (mem_cfg.write_atoms or mem_cfg.enabled):
             return None
-        if self._edge_store is not None:
-            return self._edge_store
-        if self._edge_store_open_failed:
-            return None
-        if self._edge_store_open_attempted and self._edge_store is None:
-            return None
-        self._edge_store_open_attempted = True
-        # Ensure atom store root exists first (shared data/memory layout).
-        if self._ensure_memory_store() is None:
-            self._edge_store_open_failed = True
-            return None
-        try:
-            from elyra.memory.edges import open_edge_store
 
-            self._edge_store = open_edge_store(
-                self.paths, mem_cfg, fail_soft=True
+        from elyra.memory.edges import UnavailableEdgeStore, open_edge_store
+
+        with self._edge_store_open_lock:
+            # Ready: real backend handle only.
+            if self._edge_store_state == "ready" and self._edge_store is not None:
+                if not isinstance(self._edge_store, UnavailableEdgeStore):
+                    return self._edge_store
+                # Defensive: ready must never hold Unavailable.
+                self._edge_store = None
+                self._edge_store_state = "absent"
+
+            if self._edge_store_open_failed:
+                # Permanent fail — return sticky Unavailable if we have one.
+                return self._edge_store
+
+            now = time.monotonic()
+            if self._edge_store_state == "unavailable":
+                reason = self._edge_store_error
+                rclass = self._edge_open_reason_class(reason)
+                if rclass in ("permanent", "integrity"):
+                    return self._edge_store
+                if self._edge_store_open_attempts >= self._EDGE_OPEN_MAX_RETRIES:
+                    self._edge_store_open_failed = True
+                    return self._edge_store
+                if now < float(self._edge_store_next_retry_at or 0.0):
+                    return self._edge_store
+                # Transient retry: **null the Unavailable handle** (critical).
+                # Soft-fail handle retention was the sticky process-life death.
+                if isinstance(self._edge_store, UnavailableEdgeStore):
+                    self._edge_store = None
+                self._edge_store_state = "absent"
+                self._edge_store_error = None
+
+            if self._edge_store is not None and not isinstance(
+                self._edge_store, UnavailableEdgeStore
+            ):
+                self._edge_store_state = "ready"
+                return self._edge_store
+
+            # Single-flight open: lock held through construct/materialize.
+            self._edge_store_state = "opening"
+            self._edge_store_open_attempts += 1
+            self._edge_store_open_attempted = True
+            attempt = self._edge_store_open_attempts
+
+            # Atom store root first (shared data/memory layout).
+            if self._ensure_memory_store() is None:
+                self._edge_store_state = "unavailable"
+                self._edge_store_error = "atom_store_unavailable"
+                self._edge_store_open_failed = True
+                self._edge_store = UnavailableEdgeStore("atom_store_unavailable")
+                return self._edge_store
+
+            try:
+                store = open_edge_store(self.paths, mem_cfg, fail_soft=True)
+            except Exception as exc:  # noqa: BLE001 — edges optional
+                reason = f"edge_backend_open_failed:{type(exc).__name__}"
+                self._edge_store = UnavailableEdgeStore(reason)
+                self._edge_store_state = "unavailable"
+                self._edge_store_error = reason
+                self._schedule_edge_open_retry(attempt, reason)
+                _LOG.exception(
+                    "edge store open raised; durable expand disabled "
+                    "attempts=%d reason=%s",
+                    attempt,
+                    reason,
+                )
+                return self._edge_store
+
+            if isinstance(store, UnavailableEdgeStore):
+                reason = str(getattr(store, "reason", "") or "edge_backend_unavailable")
+                self._edge_store = store
+                self._edge_store_state = "unavailable"
+                self._edge_store_error = reason
+                self._schedule_edge_open_retry(attempt, reason)
+                _LOG.warning(
+                    "edge store open soft-fail attempts=%d reason=%s class=%s",
+                    attempt,
+                    reason,
+                    self._edge_open_reason_class(reason),
+                )
+                return self._edge_store
+
+            # Real store opened. RAM=0/disk>0 already fails inside Lance open
+            # (Unavailable). Partial parity mismatch (0 < RAM < disk) keeps the
+            # handle so Graph can surface counts, but health.ok=false (KD-ES-PARITY).
+            try:
+                eh = store.health() if hasattr(store, "health") else {}
+            except Exception:  # noqa: BLE001
+                eh = {}
+            if isinstance(eh, Mapping) and eh.get("ok") is False:
+                err = str(eh.get("error") or "edge_health_not_ok")
+                if err.startswith("edge_load_parity_failure") or (
+                    int(eh.get("disk_edge_count") or 0) > 0
+                    and int(eh.get("edge_count") or 0) == 0
+                ):
+                    try:
+                        close = getattr(store, "close", None)
+                        if callable(close):
+                            close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._edge_store = UnavailableEdgeStore(err)
+                    self._edge_store_state = "unavailable"
+                    self._edge_store_error = err
+                    self._edge_store_open_failed = True
+                    _LOG.warning(
+                        "edge store load parity failure; unavailable reason=%s",
+                        err,
+                    )
+                    return self._edge_store
+                # Partial mismatch: retain handle; Graph honesty uses ok=false.
+                _LOG.warning(
+                    "edge store open with health.ok=false reason=%s "
+                    "ram=%s disk=%s (retained for inspect)",
+                    err,
+                    eh.get("edge_count"),
+                    eh.get("disk_edge_count"),
+                )
+                self._edge_store_error = err
+
+            self._edge_store = store
+            self._edge_store_state = "ready"
+            self._edge_store_open_failed = False
+            _LOG.info(
+                "memory.edges.open_ready backend=%s attempts=%d health_ok=%s",
+                getattr(mem_cfg, "backend", "?"),
+                attempt,
+                (eh.get("ok") if isinstance(eh, Mapping) else None),
             )
             return self._edge_store
-        except Exception:  # noqa: BLE001 — edges optional for graph expand
+
+    def _schedule_edge_open_retry(self, attempt: int, reason: str) -> None:
+        """Set next_retry_at or permanent-fail based on reason class."""
+        rclass = self._edge_open_reason_class(reason)
+        if rclass in ("permanent", "integrity"):
+            # Integrity: no auto-retry loop without compact/quarantine.
+            # Permanent: ImportError will not heal.
             self._edge_store_open_failed = True
-            self._edge_store = None
-            _LOG.exception("edge store open failed; durable expand disabled")
-            return None
+            self._edge_store_next_retry_at = 0.0
+            return
+        if attempt >= self._EDGE_OPEN_MAX_RETRIES:
+            self._edge_store_open_failed = True
+            self._edge_store_next_retry_at = 0.0
+            return
+        idx = min(attempt - 1, len(self._EDGE_OPEN_BACKOFF_S) - 1)
+        delay = float(self._EDGE_OPEN_BACKOFF_S[max(0, idx)])
+        self._edge_store_next_retry_at = time.monotonic() + delay
 
     def _memory_settings_with_wait(self) -> Any:
         """MemorySettings snapshot with runtime semantic_wait overlaid.

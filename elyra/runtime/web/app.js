@@ -5380,13 +5380,32 @@ function renderGraphOverview(data) {
     ],
     [
       "durable edges",
-      durableOn
-        ? freeBrowseGraph.edgeCount > 0
-          ? `on · ${freeBrowseGraph.edgeCount} rows`
-          : "on · EdgeStore empty"
-        : freeBrowseGraph.edgeCount > 0
-          ? `off · ${freeBrowseGraph.edgeCount} residual rows`
-          : "off · EdgeStore empty",
+      (() => {
+        // KD-ES-PARITY / Graph honesty: never label unavailable as empty.
+        const unavailable =
+          edgeStore.ok === false ||
+          honesty.edge_store_unavailable === true ||
+          (edgeStore.error && String(edgeStore.error).length > 0 && edgeStore.ok !== true);
+        const empty =
+          honesty.edge_store_empty === true ||
+          (edgeStore.ok === true && freeBrowseGraph.edgeCount === 0);
+        if (durableOn) {
+          if (freeBrowseGraph.edgeCount > 0) {
+            return `on · ${freeBrowseGraph.edgeCount} rows`;
+          }
+          if (unavailable && !empty) {
+            return "on · EdgeStore unavailable";
+          }
+          return "on · EdgeStore empty";
+        }
+        if (freeBrowseGraph.edgeCount > 0) {
+          return `off · ${freeBrowseGraph.edgeCount} residual rows`;
+        }
+        if (unavailable && !empty) {
+          return "off · EdgeStore unavailable";
+        }
+        return "off · EdgeStore empty";
+      })(),
       durableOn === true ? true : null,
     ],
     [
@@ -5893,11 +5912,13 @@ function mergeNeighborsIntoFreeBrowse(data, focusId) {
       em.semantic_reason ? `sem=${em.semantic_reason}` : null,
       data.omitted_reason ? `omit=${data.omitted_reason}` : null,
       kinds.size ? `kinds=${[...kinds].join(",")}` : null,
-      freeBrowseGraph.edgeCount === 0 || honesty.projected_edges_only
-        ? "EdgeStore empty → projected edges only"
-        : durableKinds.length
-          ? `durable_in_hop=${durableKinds.join(",")}`
-          : "no durable kinds in this hop",
+      honesty.edge_store_unavailable
+        ? "EdgeStore unavailable → projected edges only"
+        : freeBrowseGraph.edgeCount === 0 || honesty.projected_edges_only
+          ? "EdgeStore empty → projected edges only"
+          : durableKinds.length
+            ? `durable_in_hop=${durableKinds.join(",")}`
+            : "no durable kinds in this hop",
     ].filter(Boolean);
     memoryGraphBrowseMeta.hidden = false;
     memoryGraphBrowseMeta.textContent = parts.join(" · ");

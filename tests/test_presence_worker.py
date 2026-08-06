@@ -1701,3 +1701,158 @@ def test_set_meal_budget_persist_failure_leaves_live_state(paths, monkeypatch):
         assert snap["meal_budget"]["meal_budget_tokens"] == 250_000
     finally:
         _stop_join(worker, stop, t)
+
+
+# ── P2 warm-on-start: EdgeStore open SM + single-flight + retry ─────────────
+
+
+def test_edge_store_open_retry_clears_unavailable(paths, monkeypatch):
+    """Soft-fail Unavailable must not stick forever — null handle and retry.
+
+    Real sticky path: fail_soft returns UnavailableEdgeStore which is not None;
+    old ensure returned it forever. On transient retry we clear and re-open.
+    """
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.edges import JsonlEdgeStore, UnavailableEdgeStore
+    import elyra.memory.edges as edges_mod
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+        ),
+    )
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+
+    calls = {"n": 0}
+
+    def flaky_open(paths_arg, settings_arg=None, *, fail_soft=True):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return UnavailableEdgeStore("edge_backend_open_failed:SimulatedIO")
+        return JsonlEdgeStore(paths_arg, settings_arg or MemorySettings())
+
+    monkeypatch.setattr(edges_mod, "open_edge_store", flaky_open)
+    # Worker imports open_edge_store inside the method — patch module used there.
+    import elyra.presence.worker as worker_mod
+
+    # open_edge_store is imported inside _ensure_edge_store from elyra.memory.edges
+    monkeypatch.setattr(
+        "elyra.memory.edges.open_edge_store", flaky_open
+    )
+
+    first = worker._ensure_edge_store()  # noqa: SLF001
+    assert isinstance(first, UnavailableEdgeStore)
+    assert worker._edge_store_state == "unavailable"  # noqa: SLF001
+    assert worker._edge_store_open_failed is False  # noqa: SLF001 — transient
+    assert calls["n"] == 1
+
+    # Immediate re-ensure still returns Unavailable (backoff not elapsed).
+    second = worker._ensure_edge_store()  # noqa: SLF001
+    assert isinstance(second, UnavailableEdgeStore)
+    assert calls["n"] == 1  # no re-open yet
+
+    # Advance past backoff → retry nulls Unavailable and opens real store.
+    worker._edge_store_next_retry_at = 0.0  # noqa: SLF001
+    third = worker._ensure_edge_store()  # noqa: SLF001
+    assert not isinstance(third, UnavailableEdgeStore)
+    assert worker._edge_store_state == "ready"  # noqa: SLF001
+    assert calls["n"] == 2
+    assert third is worker._edge_store  # noqa: SLF001
+
+    st = worker.edge_store_open_status()
+    assert st["state"] == "ready"
+    assert st["attempts"] == 2
+
+
+def test_edge_store_permanent_import_error_no_retry(paths, monkeypatch):
+    """ImportError-class reason is permanent — no auto-retry loop."""
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.edges import UnavailableEdgeStore
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+        ),
+    )
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+
+    calls = {"n": 0}
+
+    def always_import_fail(*_a, **_k):
+        calls["n"] += 1
+        return UnavailableEdgeStore("edge_backend_unavailable")
+
+    monkeypatch.setattr("elyra.memory.edges.open_edge_store", always_import_fail)
+
+    first = worker._ensure_edge_store()  # noqa: SLF001
+    assert isinstance(first, UnavailableEdgeStore)
+    assert worker._edge_store_open_failed is True  # noqa: SLF001
+    worker._edge_store_next_retry_at = 0.0  # noqa: SLF001
+    second = worker._ensure_edge_store()  # noqa: SLF001
+    assert isinstance(second, UnavailableEdgeStore)
+    assert calls["n"] == 1  # no second open
+
+
+def test_edge_store_single_flight_open(paths, monkeypatch):
+    """Two concurrent ensures share one open (single-flight lock)."""
+    from dataclasses import replace
+
+    from elyra.memory.config import MemorySettings
+    from elyra.memory.edges import JsonlEdgeStore
+
+    settings = replace(
+        default_settings(),
+        memory=MemorySettings(
+            write_atoms=True,
+            enabled=True,
+            backend="jsonl",
+            durable_edges_enabled=True,
+        ),
+    )
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop(), settings=settings)
+
+    barrier = threading.Barrier(2)
+    calls = {"n": 0}
+    lock = threading.Lock()
+
+    def slow_open(paths_arg, settings_arg=None, *, fail_soft=True):
+        with lock:
+            calls["n"] += 1
+        time.sleep(0.15)
+        return JsonlEdgeStore(paths_arg, settings_arg or MemorySettings())
+
+    monkeypatch.setattr("elyra.memory.edges.open_edge_store", slow_open)
+
+    results: list[Any] = [None, None]
+    errors: list[BaseException | None] = [None, None]
+
+    def target(idx: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            results[idx] = worker._ensure_edge_store()  # noqa: SLF001
+        except BaseException as exc:  # noqa: BLE001
+            errors[idx] = exc
+
+    t0 = threading.Thread(target=target, args=(0,))
+    t1 = threading.Thread(target=target, args=(1,))
+    t0.start()
+    t1.start()
+    t0.join(timeout=10)
+    t1.join(timeout=10)
+    assert errors[0] is None and errors[1] is None
+    assert results[0] is not None and results[1] is not None
+    assert results[0] is results[1]
+    assert calls["n"] == 1
+    assert worker._edge_store_state == "ready"  # noqa: SLF001

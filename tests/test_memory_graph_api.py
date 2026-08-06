@@ -1078,3 +1078,123 @@ def test_graph_overview_backfill_dev_default_on(paths):
         )
     finally:
         h.close()
+
+
+# ── P2 warm-on-start: Graph empty vs unavailable honesty ────────────────────
+
+
+def test_graph_overview_true_empty_not_unavailable(paths):
+    """Healthy empty store → edge_store_empty; never edge_store_unavailable."""
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            directed_traversal_enabled=True,
+            durable_edges_enabled=True,
+        ),
+    )
+    try:
+        code, body = h.get("/api/memory/graph")
+        assert code == 200, body
+        assert body["edge_count"] == 0
+        assert body["edge_store"]["ok"] is True
+        assert body["honesty"]["edge_store_empty"] is True
+        assert body["honesty"].get("edge_store_unavailable") is not True
+        assert "EdgeStore empty" in (body["honesty"].get("note") or "")
+        assert "unavailable" not in (body["honesty"].get("note") or "").lower()
+    finally:
+        h.close()
+
+
+def test_graph_overview_unavailable_not_labeled_empty(paths, monkeypatch):
+    """Unavailable EdgeStore must never be honesty-labeled 'EdgeStore empty'."""
+    from elyra.memory.edges import UnavailableEdgeStore
+
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            directed_traversal_enabled=True,
+            durable_edges_enabled=True,
+        ),
+    )
+    try:
+        def boom_ensure():
+            return UnavailableEdgeStore("edge_backend_open_failed:Simulated")
+
+        h.worker._ensure_edge_store = boom_ensure  # type: ignore[method-assign]
+        h.worker._edge_store_state = "unavailable"  # noqa: SLF001
+        h.worker._edge_store_error = "edge_backend_open_failed:Simulated"  # noqa: SLF001
+
+        code, body = h.get("/api/memory/graph")
+        assert code == 200, body
+        assert body["edge_count"] == 0
+        assert body["edge_store"]["ok"] is False
+        assert body["honesty"]["edge_store_empty"] is False
+        assert body["honesty"]["edge_store_unavailable"] is True
+        note = body["honesty"].get("note") or ""
+        assert "unavailable" in note.lower()
+        assert "EdgeStore empty" not in note
+        assert body["honesty"]["projected_edges_only"] is True
+        assert "error" in body["edge_store"]
+    finally:
+        h.close()
+
+
+def test_graph_overview_surfaces_disk_and_parity_fields(paths):
+    """When health provides disk/parity, Graph edge_store surfaces them."""
+    from elyra.memory.edges import open_edge_store
+    from elyra.memory.edges import DurableEdge, new_edge_id
+    from elyra.memory.config import EDGE_SCHEMA_VERSION
+    from elyra.memory.weights import EDGE_CREATED_WITH
+
+    h = _ApiHarness(
+        paths,
+        memory=MemorySettings(
+            enabled=True,
+            write_atoms=True,
+            backend="jsonl",
+            directed_traversal_enabled=True,
+            durable_edges_enabled=True,
+        ),
+    )
+    try:
+        estore = h.worker._ensure_edge_store()  # noqa: SLF001
+        assert estore is not None
+        now = "2026-08-06T12:00:00Z"
+        estore.put_edge(
+            DurableEdge(
+                edge_id=new_edge_id(),
+                src_atom_id="a1",
+                dst_atom_id="a2",
+                edge_kind=EDGE_CREATED_WITH,
+                created_at=now,
+                updated_at=now,
+                reason="test",
+                schema_version=EDGE_SCHEMA_VERSION,
+            )
+        )
+        # Monkeypatch health to include lance-style disk/parity fields.
+        real_health = estore.health
+
+        def health_with_parity():
+            hdict = dict(real_health())
+            hdict["disk_edge_count"] = hdict["edge_count"]
+            hdict["edge_count_parity"] = True
+            return hdict
+
+        estore.health = health_with_parity  # type: ignore[method-assign]
+
+        code, body = h.get("/api/memory/graph")
+        assert code == 200, body
+        assert body["edge_count"] >= 1
+        assert body["honesty"]["edge_store_empty"] is False
+        assert body["edge_store"].get("disk_edge_count") == body["edge_count"]
+        assert body["edge_store"].get("edge_count_parity") is True
+        assert body["honesty"].get("edge_count_parity") is True
+    finally:
+        h.close()

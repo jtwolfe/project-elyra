@@ -2014,11 +2014,17 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 _LOG.exception("graph overview session peek failed")
 
-        # EdgeStore health for glass honesty (counts; empty store still ok).
+        # EdgeStore health for glass honesty (KD-ES-PARITY / Graph empty-vs-unavail).
+        # Never label unavailable / parity-fail as "EdgeStore empty".
         edge_count = 0
         edges_by_kind: dict[str, int] = {}
         edge_backend: str | None = None
         edge_ok = False
+        edge_error: str | None = None
+        disk_edge_count: int | None = None
+        edge_count_parity: bool | None = None
+        edge_open_state: str | None = None
+        estore: Any = None
         ensure_edges = getattr(self.worker, "_ensure_edge_store", None)
         if callable(ensure_edges):
             try:
@@ -2038,15 +2044,84 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                         edge_backend = (
                             str(eh.get("backend")) if eh.get("backend") else None
                         )
+                        if eh.get("error") is not None:
+                            edge_error = str(eh.get("error"))
+                        if "disk_edge_count" in eh and eh.get("disk_edge_count") is not None:
+                            try:
+                                disk_edge_count = int(eh["disk_edge_count"])
+                            except (TypeError, ValueError):
+                                disk_edge_count = None
+                        if "edge_count_parity" in eh:
+                            edge_count_parity = bool(eh.get("edge_count_parity"))
             except Exception:  # noqa: BLE001
                 _LOG.exception("graph overview edge health peek failed")
+                edge_error = edge_error or "edge_health_peek_failed"
+
+        open_status_fn = getattr(self.worker, "edge_store_open_status", None)
+        if callable(open_status_fn):
+            try:
+                ost = open_status_fn() or {}
+                if isinstance(ost, dict):
+                    edge_open_state = (
+                        str(ost.get("state")) if ost.get("state") else None
+                    )
+                    if edge_error is None and ost.get("error"):
+                        edge_error = str(ost.get("error"))
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Classify UnavailableEdgeStore / null / open SM.
+        from elyra.memory.edges import UnavailableEdgeStore
+
+        is_unavailable_handle = isinstance(estore, UnavailableEdgeStore)
+        if is_unavailable_handle and edge_error is None:
+            edge_error = str(getattr(estore, "reason", "") or "edge_store_unavailable")
+        if estore is None and edge_open_state in ("unavailable", "opening"):
+            is_unavailable_handle = True
 
         # Overview is always 200; ok tracks store health (flags may be off).
-        # EdgeStore empty → free-browse/neighbors still work via projected
-        # structural (+ optional semantic_hop); durable kinds absent (#61 / PR8).
+        # True empty = healthy store with RAM=0 (and disk=0 when known).
+        # Unavailable / parity-fail must NEVER be labeled "EdgeStore empty".
         durable_on = bool(trav_flags.get("durable_edges_enabled"))
         backfill_dev_on = bool(trav_flags.get("edge_backfill_dev_enabled"))
-        edge_store_empty = edge_count == 0
+        parity_hard_fail = (
+            disk_edge_count is not None
+            and disk_edge_count > 0
+            and edge_count == 0
+        ) or (
+            edge_error is not None
+            and (
+                edge_error.startswith("edge_load_parity_failure")
+                or edge_error == "edge_count_parity_mismatch"
+            )
+        )
+        parity_mismatch = (
+            edge_count_parity is False
+            and edge_count > 0
+            and disk_edge_count is not None
+            and disk_edge_count > 0
+            and disk_edge_count != edge_count
+        )
+        edge_store_unavailable = bool(
+            is_unavailable_handle
+            or edge_open_state == "unavailable"
+            or (estore is None and edge_error)
+            or (not edge_ok and edge_error and not parity_mismatch and edge_count == 0)
+        )
+        # Honest empty only when store is ok (or open-ready with zero rows).
+        edge_store_empty = (
+            not edge_store_unavailable
+            and not parity_hard_fail
+            and not parity_mismatch
+            and edge_count == 0
+            and edge_ok
+        )
+        # Free-browse uses projected edges when durable fabric is absent OR empty.
+        projected_edges_only = (
+            edge_store_empty
+            or edge_store_unavailable
+            or parity_hard_fail
+        )
         honesty_notes: list[str] = []
         if not trav_flags.get("directed_traversal_enabled"):
             honesty_notes.append(
@@ -2058,7 +2133,25 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "no active or last walk yet — start via traverse tools "
                 "or debug POST"
             )
-        if edge_store_empty:
+        if edge_store_unavailable or parity_hard_fail:
+            reason = edge_error or "edge_store_unavailable"
+            if parity_hard_fail:
+                honesty_notes.append(
+                    "load parity failure — do not trust zero; do not backfill "
+                    f"as empty (RAM={edge_count} disk={disk_edge_count}; "
+                    f"reason={reason})"
+                )
+            else:
+                honesty_notes.append(
+                    "edge store unavailable — not empty fabric; "
+                    f"reason={reason}"
+                )
+        elif parity_mismatch:
+            honesty_notes.append(
+                f"edge count parity mismatch RAM={edge_count} "
+                f"disk={disk_edge_count}"
+            )
+        elif edge_store_empty:
             honesty_notes.append(
                 "EdgeStore empty (edge_count=0) — free-browse/neighbors show "
                 "projected structural edges (+ optional semantic_hop) only; "
@@ -2077,6 +2170,21 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 backfill_last = last_bf()
             except Exception:  # noqa: BLE001
                 backfill_last = None
+        edge_store_payload: dict[str, Any] = {
+            "ok": edge_ok and not edge_store_unavailable,
+            "backend": edge_backend,
+            "edge_count": edge_count,
+            "edges_by_kind": edges_by_kind,
+            "durable_edges_enabled": durable_on,
+        }
+        if disk_edge_count is not None:
+            edge_store_payload["disk_edge_count"] = disk_edge_count
+        if edge_count_parity is not None:
+            edge_store_payload["edge_count_parity"] = edge_count_parity
+        if edge_error is not None:
+            edge_store_payload["error"] = edge_error
+        if edge_open_state is not None:
+            edge_store_payload["state"] = edge_open_state
         self._json(
             200,
             {
@@ -2087,13 +2195,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 "edge_kind_legend": edge_kind_legend(),
                 "edge_count": edge_count,
                 "edges_by_kind": edges_by_kind,
-                "edge_store": {
-                    "ok": edge_ok,
-                    "backend": edge_backend,
-                    "edge_count": edge_count,
-                    "edges_by_kind": edges_by_kind,
-                    "durable_edges_enabled": durable_on,
-                },
+                "edge_store": edge_store_payload,
                 "edge_backfill": {
                     "dev_enabled": backfill_dev_on,
                     "last": backfill_last,
@@ -2123,7 +2225,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "durable_edges_enabled": durable_on,
                     "edge_backfill_dev_enabled": backfill_dev_on,
                     "edge_store_empty": edge_store_empty,
-                    "projected_edges_only": edge_store_empty,
+                    "edge_store_unavailable": edge_store_unavailable
+                    or parity_hard_fail,
+                    "edge_count_parity": edge_count_parity,
+                    "projected_edges_only": projected_edges_only,
                     "note": (
                         " · ".join(honesty_notes) if honesty_notes else None
                     ),

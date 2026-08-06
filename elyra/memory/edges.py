@@ -1678,6 +1678,19 @@ class LanceEdgeStore:
             except (TypeError, ValueError):
                 continue
             self._index_put(edge)
+        # KD-ES-PARITY: disk>0 & RAM=0 is load failure — not an honest empty store.
+        disk_n = _table_row_count(self._table)
+        ram_n = len(self._by_id)
+        if disk_n is not None and disk_n > 0 and ram_n == 0:
+            raise MemoryUnavailable(
+                f"edge_load_parity_failure: disk_edge_count={disk_n} ram=0"
+            )
+        _LOG.info(
+            "memory.edges.load_complete edges=%d disk=%s parity=%s backend=lance",
+            ram_n,
+            disk_n if disk_n is not None else "?",
+            (ram_n == disk_n) if disk_n is not None else "?",
+        )
 
     def _index_remove(self, edge_id: str) -> DurableEdge | None:
         old = self._by_id.pop(edge_id, None)
@@ -1887,6 +1900,13 @@ class LanceEdgeStore:
             return stored
 
     def health(self) -> dict[str, Any]:
+        """Health with KD-ES-PARITY honesty.
+
+        - disk=0, RAM=0 → ok (true empty)
+        - disk>0, RAM=0 → ok=false (load parity failure; open should have failed)
+        - disk≠RAM, both >0 → ok=false (parity mismatch; not ready fabric)
+        - disk=RAM → ok=true
+        """
         with self._lock:
             if self._closed:
                 return {
@@ -1898,10 +1918,11 @@ class LanceEdgeStore:
             by_kind: dict[str, int] = {}
             for e in self._by_id.values():
                 by_kind[e.edge_kind] = by_kind.get(e.edge_kind, 0) + 1
+            ram_n = len(self._by_id)
             out: dict[str, Any] = {
                 "ok": True,
                 "backend": "lance",
-                "edge_count": len(self._by_id),
+                "edge_count": ram_n,
                 "lance_dir": str(self.lance_dir),
                 "edges_by_kind": by_kind,
                 "durable_edges_enabled": is_durable_edges_enabled(
@@ -1912,10 +1933,18 @@ class LanceEdgeStore:
                 if self._table is not None and hasattr(
                     self._table, "count_rows"
                 ):
-                    out["disk_edge_count"] = int(self._table.count_rows())
-                    out["edge_count_parity"] = (
-                        out["edge_count"] == out["disk_edge_count"]
-                    )
+                    disk_n = int(self._table.count_rows())
+                    out["disk_edge_count"] = disk_n
+                    parity = ram_n == disk_n
+                    out["edge_count_parity"] = parity
+                    if disk_n > 0 and ram_n == 0:
+                        # Critical: do not report honest empty fabric.
+                        out["ok"] = False
+                        out["error"] = "edge_load_parity_failure"
+                    elif not parity:
+                        # R1 lock: partial / mismatch → not ready.
+                        out["ok"] = False
+                        out["error"] = "edge_count_parity_mismatch"
             except Exception:  # noqa: BLE001
                 pass
             return out
@@ -2015,8 +2044,13 @@ def open_edge_store(
 
     Uses ``settings.backend`` (jsonl | lance). Lance requires ``lancedb``.
     When ``fail_soft`` (default), open failure returns
-    ``UnavailableEdgeStore`` with reason ``edge_backend_unavailable`` so
-    promote can soft-skip edge writes. When ``fail_soft=False``, re-raises.
+    ``UnavailableEdgeStore`` so promote can soft-skip edge writes.
+    When ``fail_soft=False``, re-raises.
+
+    Soft-fail reason strings (worker permanent vs transient classification):
+    - ``edge_backend_unavailable`` — ImportError / missing lancedb (permanent)
+    - ``edge_backend_open_failed`` — open/IO/materialize error (transient)
+    - ``edge_load_parity_failure`` — disk>0 & RAM=0 after load (integrity)
     """
     cfg = settings or MemorySettings()
     backend = (cfg.backend or "jsonl").strip().lower()
@@ -2033,16 +2067,35 @@ def open_edge_store(
             if fail_soft:
                 return UnavailableEdgeStore("edge_backend_unavailable")
             raise MemoryUnavailable("edge_backend_unavailable") from None
+        except MemoryUnavailable as exc:
+            reason = str(exc) or "edge_backend_open_failed"
+            # Preserve parity/integrity reason prefix for worker classification.
+            if reason.startswith("edge_load_parity_failure"):
+                soft_reason = reason
+            else:
+                soft_reason = f"edge_backend_open_failed:{reason}"
+            _LOG.warning(
+                "edge backend=lance open failed (%s); soft_reason=%s",
+                reason,
+                soft_reason if fail_soft else "raise",
+            )
+            if fail_soft:
+                return UnavailableEdgeStore(soft_reason)
+            raise
         except Exception as exc:
             _LOG.warning(
                 "edge backend=lance open failed (%s: %s); "
-                "edge_backend_unavailable",
+                "edge_backend_open_failed",
                 type(exc).__name__,
                 exc,
             )
             if fail_soft:
-                return UnavailableEdgeStore("edge_backend_unavailable")
-            raise MemoryUnavailable("edge_backend_unavailable") from exc
+                return UnavailableEdgeStore(
+                    f"edge_backend_open_failed:{type(exc).__name__}"
+                )
+            raise MemoryUnavailable(
+                f"edge_backend_open_failed:{type(exc).__name__}"
+            ) from exc
     elif backend not in ("jsonl", "lance"):
         _LOG.warning("unknown edge backend %r; using jsonl", backend)
 
@@ -2050,13 +2103,17 @@ def open_edge_store(
         return JsonlEdgeStore(paths, cfg)
     except Exception as exc:
         _LOG.warning(
-            "edge backend=jsonl open failed (%s: %s); edge_backend_unavailable",
+            "edge backend=jsonl open failed (%s: %s); edge_backend_open_failed",
             type(exc).__name__,
             exc,
         )
         if fail_soft:
-            return UnavailableEdgeStore("edge_backend_unavailable")
-        raise MemoryUnavailable("edge_backend_unavailable") from exc
+            return UnavailableEdgeStore(
+                f"edge_backend_open_failed:{type(exc).__name__}"
+            )
+        raise MemoryUnavailable(
+            f"edge_backend_open_failed:{type(exc).__name__}"
+        ) from exc
 
 
 def _list_atoms_for_backfill(atom_store: Any, max_atoms: int) -> list[Any]:

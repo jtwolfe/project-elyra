@@ -497,6 +497,134 @@ def test_unavailable_edge_store_reason():
     assert u.count_edges_for_atom("x") == 0
 
 
+# ── P2 warm-on-start: reopen / parity honesty ───────────────────────────────
+
+
+def test_jsonl_write_close_reopen_count_matches(paths):
+    """W2a reopen contract (jsonl): put N → close → open → count N."""
+    cfg = MemorySettings(backend="jsonl", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    n = 5
+    for i in range(n):
+        store.put_edge(
+            _edge(
+                src="S",
+                dst=f"D{i}",
+                kind=EDGE_CREATED_WITH,
+                edge_id=f"e_reopen_{i}",
+            )
+        )
+    assert store.count_edges_for_atom("S") == n
+    h1 = store.health()
+    assert h1["ok"] is True
+    assert h1["edge_count"] == n
+    store.close()
+
+    reopened = open_edge_store(paths, cfg, fail_soft=False)
+    try:
+        assert reopened.count_edges_for_atom("S") == n
+        h2 = reopened.health()
+        assert h2["ok"] is True
+        assert h2["edge_count"] == n
+        assert h2["backend"] == "jsonl"
+    finally:
+        reopened.close()
+
+
+@lance_only
+def test_lance_write_close_reopen_count_and_parity(paths):
+    """W2a reopen contract (lance): put N → close → open → count N + parity."""
+    cfg = MemorySettings(backend="lance", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    n = 7
+    for i in range(n):
+        store.put_edge(
+            _edge(
+                src="S_lp",
+                dst=f"D{i}",
+                kind=EDGE_CREATED_WITH,
+                edge_id=f"e_lpr_{i}",
+            )
+        )
+    h1 = store.health()
+    assert h1["ok"] is True
+    assert h1["edge_count"] == n
+    assert h1.get("disk_edge_count") == n
+    assert h1.get("edge_count_parity") is True
+    store.close()
+
+    reopened = open_edge_store(paths, cfg, fail_soft=False)
+    try:
+        assert reopened.count_edges_for_atom("S_lp") == n
+        h2 = reopened.health()
+        assert h2["ok"] is True
+        assert h2["edge_count"] == n
+        assert h2.get("disk_edge_count") == n
+        assert h2.get("edge_count_parity") is True
+    finally:
+        reopened.close()
+
+
+@lance_only
+def test_lance_health_parity_mismatch_ok_false(paths, monkeypatch):
+    """KD-ES-PARITY: health.ok=false when RAM≠disk (both >0)."""
+    from elyra.memory import edges as edges_mod
+
+    cfg = MemorySettings(backend="lance", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    store.put_edge(_edge(src="S", dst="D", kind=EDGE_CREATED_WITH, edge_id="e1"))
+    store.put_edge(
+        _edge(src="S", dst="D2", kind=EDGE_CREATED_WITH, edge_id="e2")
+    )
+    # Inject a fake table count that disagrees with RAM.
+    real_table = store._table  # noqa: SLF001
+
+    class _FakeTable:
+        def count_rows(self):
+            return 99
+
+        def __getattr__(self, name):
+            return getattr(real_table, name)
+
+    store._table = _FakeTable()  # noqa: SLF001
+    h = store.health()
+    assert h["edge_count"] == 2
+    assert h["disk_edge_count"] == 99
+    assert h["edge_count_parity"] is False
+    assert h["ok"] is False
+    assert h["error"] == "edge_count_parity_mismatch"
+    store.close()
+
+
+@lance_only
+def test_lance_ram_zero_disk_positive_open_unavailable(paths, monkeypatch):
+    """disk>0 & RAM=0 → open fail_soft returns Unavailable (not empty store)."""
+    from elyra.memory import edges as edges_mod
+
+    cfg = MemorySettings(backend="lance", durable_edges_enabled=True)
+    store = open_edge_store(paths, cfg, fail_soft=False)
+    store.put_edge(
+        _edge(src="S", dst="D", kind=EDGE_CREATED_WITH, edge_id="e_only")
+    )
+    store.close()
+
+    # Materialize returns empty arrow while disk still has rows.
+    import pyarrow as pa
+
+    def _empty_materialize(table):
+        n = edges_mod._table_row_count(table)
+        assert n is not None and n > 0
+        return pa.Table.from_pylist([], schema=table.schema)
+
+    monkeypatch.setattr(edges_mod, "_materialize_edges_arrow", _empty_materialize)
+    soft = open_edge_store(paths, cfg, fail_soft=True)
+    assert isinstance(soft, UnavailableEdgeStore)
+    assert "edge_load_parity_failure" in soft.reason
+    h = soft.health()
+    assert h["ok"] is False
+    assert h["edge_count"] == 0
+
+
 def test_enforce_outgoing_budgets_helper(jsonl_store):
     cfg = MemorySettings(edge_recalls_max=2)
     for i in range(4):
