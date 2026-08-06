@@ -34,10 +34,21 @@
     return `\uE000MDPH${i}\uE001`;
   }
 
+  /** Raw * / _ emphasis (no HTML protection). Safe only on plain or fully stashed text. */
+  function applyEmphasisPlain(t) {
+    t = String(t);
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
+    t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
+    return t;
+  }
+
   /**
    * Protect HTML regions, run fn, restore.
-   * 1) Full <code>…</code> spans (text inside must not get * / _ emphasis)
-   * 2) Remaining tags so attributes (target="_blank") and href path underscores survive
+   * 1) Full <a>…</a> (label already emphasized at build; pairing must not cross anchors)
+   * 2) Full <code>…</code> (snake_case in backticks)
+   * 3) Remaining tags (attrs, void imgs) so target="_blank" / href paths survive
    */
   function withProtectedTags(html, fn) {
     const slots = [];
@@ -47,7 +58,9 @@
       return phToken(i);
     };
     let t = String(html == null ? "" : html);
-    // Whole code spans first so snake_case inside backticks is never italicized.
+    // Whole anchors first: multi-underscore labels + later _e_ must not pair across </a>.
+    t = t.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, stash);
+    // Whole code spans so snake_case inside backticks is never italicized.
     t = t.replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, stash);
     // Remaining open/close/void tags (attrs + shells).
     t = t.replace(/<[^>]+>/g, stash);
@@ -58,15 +71,12 @@
     });
   }
 
-  /** Bold/italic after links/code — tags and code spans must already be HTML. */
+  /**
+   * Bold/italic after links/code — full anchors/code spans and remaining tags protected
+   * so emphasis pairing cannot cross element boundaries (Issue 7).
+   */
   function applyEmphasis(html) {
-    return withProtectedTags(html, (t) => {
-      t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-      t = t.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
-      t = t.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-      t = t.replace(/(^|[^_])_([^_]+)_/g, "$1<em>$2</em>");
-      return t;
-    });
+    return withProtectedTags(html, applyEmphasisPlain);
   }
 
   /**
@@ -107,32 +117,30 @@
       )}" loading="lazy" />`;
     });
 
-    // links [text](url)
+    // links [text](url) — emphasize label before wrap so whole <a> can be stashed
+    // without losing label italics, and without pairing across the anchor (Issue 7).
     t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, url) => {
+      const labelHtml = applyEmphasisPlain(escape(label));
       const resolved = resolve(url);
       if (!resolved || /^data:/i.test(resolved)) {
         const u = String(url || "").trim();
         if (/^https?:\/\//i.test(u)) {
-          return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${escape(
-            label
-          )}</a>`;
+          return `<a href="${escape(u)}" target="_blank" rel="noopener noreferrer">${labelHtml}</a>`;
         }
         return escape(`[${label}](${url})`);
       }
       const external = /^https?:\/\//i.test(resolved);
       if (external) {
-        return `<a href="${escape(resolved)}" target="_blank" rel="noopener noreferrer">${escape(
-          label
-        )}</a>`;
+        return `<a href="${escape(resolved)}" target="_blank" rel="noopener noreferrer">${labelHtml}</a>`;
       }
       return `<a class="md-att-link" href="${escape(
         resolved
-      )}" target="_blank" rel="noopener noreferrer">${escape(label)}</a>`;
+      )}" target="_blank" rel="noopener noreferrer">${labelHtml}</a>`;
     });
 
     // inline code
     t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escape(code)}</code>`);
-    // bold / italic — tag-protected (KD-MD1 / #88A)
+    // bold / italic — full anchors/code protected (KD-MD1 / #88A / Issue 7)
     t = applyEmphasis(t);
     return t;
   }

@@ -134,6 +134,26 @@ def test_inline_code_snake_case_not_italicized():
     assert "<em>y</em>" in html
 
 
+def test_multi_underscore_link_label_no_cross_pair():
+    """Whole anchors stashed: multi-_ labels must not pair with later emphasis."""
+    html = _render("[_lab_el_](https://a.com) and _e_")
+    assert 'target="_blank"' in html
+    assert 'href="https://a.com"' in html
+    # Outer trailing emphasis
+    assert "<em>e</em>" in html
+    # Anchor must stay well-formed (no em spanning across </a>)
+    assert "<em></a>" not in html
+    assert "</a> and </em>" not in html
+    assert re.search(r"<a\b[^>]*>[\s\S]*?</a>", html)
+    # Label still gets first paired underscore pass inside the anchor
+    assert "<em>lab</em>" in html
+    # Single-pair label still works with outer text
+    html2 = _render("[_label_](https://a.com) and _e_")
+    assert re.search(r"<a\b[^>]*><em>label</em></a>", html2)
+    assert "<em>e</em>" in html2
+    assert "<em></a>" not in html2
+
+
 def test_identifier_underscores_match_current_paired_behavior():
     """Bare a_b_c pair-matches as a<em>b</em>c under current underscore rules."""
     html = _render("a_b_c")
