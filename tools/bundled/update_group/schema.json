@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "conversation_id": {
+      "type": "string",
+      "description": "group:<id> to update (required; not taken from wake context)"
+    },
+    "name": {
+      "type": "string",
+      "description": "New non-empty group name"
+    },
+    "description": {
+      "type": "string",
+      "description": "New description; omit to leave unchanged. Host null/clear via explicit null if the model API allows; empty string strips to null."
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Full replacement member list (non-empty)"
+    }
+  },
+  "required": ["conversation_id"],
+  "additionalProperties": false
+}

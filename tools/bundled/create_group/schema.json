@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Group display name (non-empty)"
+    },
+    "members": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "description": "Human user_ids in the group. Explicit only; host does not auto-add operator or wake user."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional group description"
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "Optional group:<id> for tests/seeds; omit to mint UUID"
+    }
+  },
+  "required": ["name", "members"],
+  "additionalProperties": false
+}
