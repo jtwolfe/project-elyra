@@ -1,13 +1,15 @@
-"""Social tool builtins — speak, wait_user, schedule_wake.
+"""Social tool builtins — speak, wait_user, schedule_wake, create_group, update_group.
 
 Scope: thin wrappers that map tool args → ToolResult / presence ports.
 In scope: speak transport (KD3 resolve + KD20 group null user_id), WaitArm +
-ends_moment with conversation_id, timer enqueue via TimerService.
+ends_moment with conversation_id, timer enqueue via TimerService, group
+topology mutators (create_group / update_group → ConversationsStore).
 Out of scope: do-loop ends_moment batch abort (PR11), phase machine, glass for wait.
 
 ONLY speak (via transport) writes assistant glass rows — never bare content.
 wait_user ends the moment (loop trusts ends_moment); later batch calls are
 loop responsibility. schedule_wake records a durable timer only.
+create_group / update_group never auto-add operator or ctx.user_id to members.
 """
 
 from __future__ import annotations
@@ -230,6 +232,141 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         arm_wait=arm,
         counts_as_speak=False,
     )
+
+
+def create_group(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    """Create a multi-party group conversation (explicit members only).
+
+    Args (schema): ``name`` (required), ``members`` (required non-empty list),
+    optional ``description``, optional ``conversation_id`` (tests/seeds).
+
+    Does **not** auto-insert ``ctx.user_id`` or operator into members.
+    Success → ``ok=True``, payload with conversation record + actor_user_id.
+    Failures use stable ``error_reason`` on result and payload (KD-T7).
+    """
+    from elyra.conversations import ConversationsStore, validate_conversation_id
+
+    raw_name = args.get("name")
+    if raw_name is None and "name" not in args:
+        return _tool_err("missing_name")
+    if not isinstance(raw_name, str):
+        return _tool_err("invalid_name", detail="name must be a string")
+    if not raw_name.strip():
+        return _tool_err("missing_name")
+
+    clean, m_err, m_detail = _clean_tool_members(args.get("members"))
+    if m_err:
+        return _tool_err(m_err, detail=m_detail)
+
+    # description: omit vs null vs str — fail closed on wrong type (KD-T8)
+    desc_kw: str | None
+    if "description" not in args:
+        desc_kw = None  # store default
+    else:
+        description = args.get("description")
+        if description is not None and not isinstance(description, str):
+            return _tool_err(
+                "invalid_description",
+                detail="description must be str or null",
+            )
+        desc_kw = description  # str or None; store strips empty str → null
+
+    cid_kw: str | None = None
+    if "conversation_id" in args and args.get("conversation_id") not in (None, ""):
+        raw_cid = args.get("conversation_id")
+        if not isinstance(raw_cid, str):
+            return _tool_err("invalid_conversation_id")
+        try:
+            cid_kw = validate_conversation_id(raw_cid.strip())
+        except ValueError as exc:
+            return _tool_err("invalid_conversation_id", detail=str(exc))
+        if not cid_kw.startswith("group:"):
+            return _tool_err(
+                "invalid_conversation_id", detail="must be group:…"
+            )
+
+    try:
+        rec = ConversationsStore(ctx.paths).create_group(
+            name=raw_name,
+            members=clean,  # type: ignore[arg-type]
+            description=desc_kw,
+            conversation_id=cid_kw,
+        )
+    except (ValueError, KeyError, OSError) as exc:
+        return _map_store_error(exc)
+
+    payload: dict[str, Any] = {
+        "conversation": rec,
+        "actor_user_id": _actor_user_id(ctx),
+    }
+    labels = _optional_member_labels(ctx, rec.get("members") or [])
+    if labels:
+        payload["member_labels"] = labels
+    return ToolResult(ok=True, payload=payload)
+
+
+def update_group(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    """Partial group update — args conversation_id only; members full replace.
+
+    Args (schema): ``conversation_id`` (required ``group:…``), optional
+    ``name`` / ``description`` / ``members`` (at least one field required).
+    Never defaults conversation_id from ``ctx.conversation_id`` (KD-T4).
+    """
+    from elyra.conversations import ConversationsStore, validate_conversation_id
+
+    raw_cid = args.get("conversation_id")
+    if not isinstance(raw_cid, str) or not raw_cid.strip():
+        return _tool_err("missing_conversation_id")
+    try:
+        cid = validate_conversation_id(raw_cid.strip())
+    except ValueError as exc:
+        return _tool_err("invalid_conversation_id", detail=str(exc))
+    if not cid.startswith("group:"):
+        return _tool_err("not_a_group", detail=cid)
+
+    # Existence: prefer get() for clear conversation_not_found before update
+    store = ConversationsStore(ctx.paths)
+    existing = store.get(cid)
+    if existing is None:
+        return _tool_err("conversation_not_found", detail=cid)
+    if existing.get("type") != "group":
+        return _tool_err("not_a_group", detail=cid)
+
+    kwargs: dict[str, Any] = {}
+    if "name" in args:
+        name = args.get("name")
+        if name is None:
+            return _tool_err("invalid_name", detail="group name cannot be null")
+        if not isinstance(name, str) or not name.strip():
+            return _tool_err("invalid_name")
+        kwargs["name"] = name
+    if "description" in args:
+        description = args.get("description")
+        if description is not None and not isinstance(description, str):
+            return _tool_err("invalid_description")
+        kwargs["description"] = description  # None clears; str strips in store
+    if "members" in args:
+        clean, m_err, m_detail = _clean_tool_members(args.get("members"))
+        if m_err:
+            return _tool_err(m_err, detail=m_detail)
+        kwargs["members"] = clean
+
+    if not kwargs:
+        return _tool_err("no_fields_to_update")
+
+    try:
+        rec = store.update(cid, **kwargs)
+    except (ValueError, KeyError, OSError) as exc:
+        return _map_store_error(exc)
+
+    payload: dict[str, Any] = {
+        "conversation": rec,
+        "actor_user_id": _actor_user_id(ctx),
+    }
+    labels = _optional_member_labels(ctx, rec.get("members") or [])
+    if labels:
+        payload["member_labels"] = labels
+    return ToolResult(ok=True, payload=payload)
 
 
 def schedule_wake(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -657,3 +794,101 @@ def _optional_str_id(args: dict[str, Any], key: str) -> str | None | bool:
     if not text:
         return None
     return text
+
+
+# ---------------------------------------------------------------------------
+# Group topology helpers (create_group / update_group)
+# ---------------------------------------------------------------------------
+
+
+def _tool_err(reason: str, *, detail: str | None = None) -> ToolResult:
+    """Fail closed with stable error_reason on result and payload (KD-T7)."""
+    payload: dict[str, Any] = {"error_reason": reason}
+    if detail:
+        payload["detail"] = detail
+    return ToolResult(ok=False, payload=payload, error_reason=reason)
+
+
+def _map_store_error(exc: BaseException) -> ToolResult:
+    """Map ConversationsStore exceptions to stable error_reason strings."""
+    if isinstance(exc, KeyError):
+        return _tool_err("conversation_not_found", detail=str(exc))
+    if isinstance(exc, OSError):
+        return _tool_err("store_error", detail=str(exc))
+    msg = str(exc)
+    low = msg.lower()
+    if "already exists" in low:
+        return _tool_err("conversation_exists", detail=msg)
+    if "no update fields" in low:
+        return _tool_err("no_fields_to_update", detail=msg)
+    if "group name cannot be null" in low or "name must be" in low:
+        return _tool_err("invalid_name", detail=msg)
+    if "members must be" in low:
+        # Empty list → missing_members; other member shape → invalid_members
+        if "non-empty" in low:
+            return _tool_err("missing_members", detail=msg)
+        return _tool_err("invalid_members", detail=msg)
+    if "description must be" in low:
+        return _tool_err("invalid_description", detail=msg)
+    if "must be group" in low or "invalid conversation_id" in low:
+        return _tool_err("invalid_conversation_id", detail=msg)
+    if "dm members must be" in low:
+        return _tool_err("not_a_group", detail=msg)
+    return _tool_err("invalid_args", detail=msg)
+
+
+def _clean_tool_members(
+    members: Any,
+) -> tuple[list[str] | None, str | None, str | None]:
+    """Strip + dedupe + validate members (REST parity without HTTP side effects).
+
+    Returns ``(clean_ids, error_reason, detail)``.
+    """
+    from elyra.identity.layout import validate_user_id
+
+    if members is None:
+        return None, "missing_members", None
+    if not isinstance(members, list):
+        return None, "invalid_members", "members must be a list"
+    if not members:
+        return None, "missing_members", None
+    clean: list[str] = []
+    seen: set[str] = set()
+    for m in members:
+        if not isinstance(m, str):
+            return None, "invalid_members", "members must be user_id strings"
+        try:
+            uid = validate_user_id(m.strip())  # strip before validate (REST)
+        except ValueError as exc:
+            return None, "invalid_user_id", f"{m!r}: {exc}"
+        if uid not in seen:
+            seen.add(uid)
+            clean.append(uid)
+    if not clean:
+        return None, "missing_members", None
+    return clean, None, None
+
+
+def _actor_user_id(ctx: ToolContext) -> str | None:
+    """Snapshot ctx.user_id for result provenance only (not a member claim)."""
+    if ctx.user_id and str(ctx.user_id).strip():
+        return str(ctx.user_id).strip()
+    return None
+
+
+def _optional_member_labels(
+    ctx: ToolContext, members: list[Any]
+) -> dict[str, str] | None:
+    """Soft display labels from UsersStore when available (extras['users'])."""
+    users = ctx.extras.get("users") if isinstance(ctx.extras, dict) else None
+    if users is None or not hasattr(users, "display_label"):
+        return None
+    labels: dict[str, str] = {}
+    for m in members:
+        if not isinstance(m, str) or not m.strip():
+            continue
+        try:
+            labels[m] = str(users.display_label(m))
+        except (TypeError, ValueError, AttributeError, KeyError):
+            continue
+    return labels or None
