@@ -966,7 +966,7 @@ def test_static_index_served(paths):
         assert "continuous-toggle" in html
         assert "Continuous work" in html
         assert "pill-autopilot" in html
-        # #126 PR3: Memory → Schedule tab (active-only; after Moments)
+        # #126 PR3/PR4: Memory → Schedule tab (active + optional history)
         assert 'data-memory-tab="schedule"' in html
         assert 'id="memory-tab-schedule"' in html
         assert 'id="schedule-continuous"' in html
@@ -974,17 +974,20 @@ def test_static_index_served(paths):
         assert 'id="schedule-waits-list"' in html
         assert 'id="schedule-counts"' in html
         assert "Schedule" in html
-        # Tab order: Moments then Schedule (not history UI in PR3)
+        # Tab order: Moments then Schedule then Atoms
         assert html.index('data-memory-tab="moments"') < html.index(
             'data-memory-tab="schedule"'
         )
         assert html.index('data-memory-tab="schedule"') < html.index(
             'data-memory-tab="atoms"'
         )
-        # PR3 has no history toggle (that is PR4)
-        assert "include_history" not in html
-        assert "schedule-history" not in html
-        assert "Show recent history" not in html
+        # PR4: history toggle + history sections (honest due/expiry ordering copy)
+        assert 'id="schedule-history-toggle"' in html
+        assert "Show recent history" in html
+        assert 'id="schedule-history"' in html
+        assert 'id="schedule-history-timers-list"' in html
+        assert 'id="schedule-history-waits-list"' in html
+        assert "Recent by due/expiry time (not fire time)" in html
         # Schedule lists: plain list-panel (not list-panel-auto)
         timers_list = re.search(
             r'id="schedule-timers-list"[^>]*class="([^"]*)"',
@@ -1129,14 +1132,15 @@ def test_static_app_js_active_panel_poll(paths):
         # Wiring: nav assigns activePanel; tick pushes active-panel refresh.
         assert "activePanel = name" in js
         assert "tasks.push(refreshActivePanel" in js
-        # #126 PR3: Memory Schedule tab wiring (not identifier-only)
+        # #126 PR3/PR4: Memory Schedule tab wiring (not identifier-only)
         assert "function refreshSchedule" in js
         assert "function renderSchedule" in js
+        assert "function renderScheduleHistory" in js
         assert "function patchScheduleRelativeTimes" in js
         assert "function formatRelativeWhen" in js
         assert "function schedulePayloadFingerprint" in js
+        assert "function scheduleHistoryEnabled" in js
         assert "function serverMinuteBucket" in js
-        assert 'fetchJson("/api/schedule")' in js or "fetchJson('/api/schedule')" in js
         assert 'memoryActiveTab === "schedule"' in js
         assert "await refreshSchedule({ force })" in js or "refreshSchedule({ force })" in js
         assert "lastScheduleFp" in js
@@ -1144,7 +1148,7 @@ def test_static_app_js_active_panel_poll(paths):
         # Dual soft-refresh call sites (payload fp + minute-bucket relative patch)
         assert "minuteFp !== lastScheduleMinuteFp" in js
         assert "patchScheduleRelativeTimes(data)" in js
-        assert "schedulePayloadFingerprint(data)" in js
+        assert "schedulePayloadFingerprint(data" in js
         assert "serverMinuteBucket(data && data.server_time)" in js or (
             "serverMinuteBucket(data" in js
         )
@@ -1160,6 +1164,10 @@ def test_static_app_js_active_panel_poll(paths):
         )
         assert fp_fn is not None, "schedulePayloadFingerprint body not found"
         assert "server_time" not in fp_fn.group(1)
+        # History mode is part of fingerprint so toggle rebuilds list
+        assert "include_history" in fp_fn.group(1)
+        assert "history_timers" in fp_fn.group(1)
+        assert "history_waits" in fp_fn.group(1)
         # Fingerprints committed after full render (not before wipe)
         refresh_fn = re.search(
             r"async function refreshSchedule\s*\([^)]*\)\s*\{(.*?)\n\}",
@@ -1172,11 +1180,21 @@ def test_static_app_js_active_panel_poll(paths):
         assert refresh_body.index("renderSchedule(data)") < refresh_body.rindex(
             "lastScheduleFp"
         )
+        # PR4: real schedule URL wiring (active-only vs include_history)
+        assert '"/api/schedule"' in refresh_body or "'/api/schedule'" in refresh_body
+        assert "fetchJson(url)" in refresh_body or "fetchJson(url " in refresh_body
+        assert "include_history=1" in refresh_body
+        assert "history_limit=20" in refresh_body
+        assert "scheduleHistoryEnabled" in refresh_body
         # Empty states for zero-collection paths
         assert "No scheduled timers." in js
         assert "No pending waits." in js
-        # Active-only: PR3 must not request history
-        assert "include_history" not in js
+        assert "No recent terminal rows (by due/expiry time)." in js
+        # History toggle → force refreshSchedule
+        assert "scheduleHistoryToggle.addEventListener" in js
+        assert 'scheduleHistoryToggle.addEventListener("change"' in js or (
+            "scheduleHistoryToggle.addEventListener('change'" in js
+        )
         # Continuous meta targets rail control (single source of truth).
         assert "continuous-status-rail" in js
         # BUG-meal-01: meal budget range → PATCH + soft-poll focus guard

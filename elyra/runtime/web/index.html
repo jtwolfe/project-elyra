@@ -313,6 +313,14 @@
             </div>
             <div class="schedule-toolbar">
               <span id="schedule-counts" class="muted status-helper"></span>
+              <label class="toggle-label schedule-history-label" for="schedule-history-toggle">
+                <input
+                  type="checkbox"
+                  id="schedule-history-toggle"
+                  class="schedule-history-toggle"
+                />
+                <span class="toggle-text">Show recent history</span>
+              </label>
             </div>
             <section class="schedule-block" aria-label="Timers">
               <h3 class="schedule-heading">
@@ -325,6 +333,33 @@
                 Waits <span id="schedule-waits-badge" class="badge">0</span>
               </h3>
               <div id="schedule-waits-list" class="list-panel">loading…</div>
+            </section>
+            <section
+              id="schedule-history"
+              class="schedule-block schedule-history"
+              aria-label="Recent history"
+              hidden
+            >
+              <h3 class="schedule-heading">
+                Recent by due/expiry time (not fire time)
+              </h3>
+              <p class="muted status-helper schedule-history-hint">
+                Terminal timers and waits, ordered by original wake/expires (not fire/answer wall time).
+              </p>
+              <section class="schedule-block" aria-label="History timers">
+                <h4 class="schedule-heading">
+                  History timers
+                  <span id="schedule-history-timers-badge" class="badge">0</span>
+                </h4>
+                <div id="schedule-history-timers-list" class="list-panel"></div>
+              </section>
+              <section class="schedule-block" aria-label="History waits">
+                <h4 class="schedule-heading">
+                  History waits
+                  <span id="schedule-history-waits-badge" class="badge">0</span>
+                </h4>
+                <div id="schedule-history-waits-list" class="list-panel"></div>
+              </section>
             </section>
           </div>
           <div id="memory-tab-atoms" class="memory-tab-panel" role="tabpanel" hidden>

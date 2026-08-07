@@ -38,6 +38,12 @@ const scheduleTimersBadge = $("#schedule-timers-badge");
 const scheduleWaitsBadge = $("#schedule-waits-badge");
 const scheduleTimersList = $("#schedule-timers-list");
 const scheduleWaitsList = $("#schedule-waits-list");
+const scheduleHistoryToggle = $("#schedule-history-toggle");
+const scheduleHistory = $("#schedule-history");
+const scheduleHistoryTimersBadge = $("#schedule-history-timers-badge");
+const scheduleHistoryWaitsBadge = $("#schedule-history-waits-badge");
+const scheduleHistoryTimersList = $("#schedule-history-timers-list");
+const scheduleHistoryWaitsList = $("#schedule-history-waits-list");
 const memoryContextFlags = $("#memory-context-flags");
 const memoryContextBody = $("#memory-context-body");
 const memoryLadderRebuildBtn = $("#memory-ladder-rebuild-btn");
@@ -3174,15 +3180,24 @@ async function refreshMoments(opts = {}) {
   }
 }
 
-// ── Memory → Schedule (timers / waits / continuous; #126 PR3) ─────────
+// ── Memory → Schedule (timers / waits / continuous / history; #126) ───
+
+/** Whether the Schedule tab history toggle is on (default off). */
+function scheduleHistoryEnabled() {
+  return Boolean(scheduleHistoryToggle && scheduleHistoryToggle.checked);
+}
 
 /**
  * Identity-bearing fingerprint for Schedule soft-refresh.
  * Excludes pure relative labels and raw server_time (minute bucket is separate).
+ * Includes history mode + history rows so toggle / terminal churn rebuilds.
  */
-function schedulePayloadFingerprint(data) {
+function schedulePayloadFingerprint(data, opts = {}) {
   const d = data || {};
-  const timers = (Array.isArray(d.timers) ? d.timers : []).map((t) => ({
+  const includeHistory = Boolean(
+    opts.includeHistory != null ? opts.includeHistory : scheduleHistoryEnabled()
+  );
+  const mapTimer = (t) => ({
     id: t.id,
     status: t.status,
     wake_at: t.wake_at,
@@ -3190,8 +3205,8 @@ function schedulePayloadFingerprint(data) {
     goal_id: t.goal_id,
     task_id: t.task_id,
     wake_id: t.wake_id,
-  }));
-  const waits = (Array.isArray(d.waits) ? d.waits : []).map((w) => ({
+  });
+  const mapWait = (w) => ({
     id: w.id,
     status: w.status,
     expires_at: w.expires_at,
@@ -3200,11 +3215,22 @@ function schedulePayloadFingerprint(data) {
     choices: w.choices,
     moment_id: w.moment_id,
     wake_id: w.wake_id,
-  }));
+  });
+  const timers = (Array.isArray(d.timers) ? d.timers : []).map(mapTimer);
+  const waits = (Array.isArray(d.waits) ? d.waits : []).map(mapWait);
+  const historyTimers = includeHistory
+    ? (Array.isArray(d.history_timers) ? d.history_timers : []).map(mapTimer)
+    : [];
+  const historyWaits = includeHistory
+    ? (Array.isArray(d.history_waits) ? d.history_waits : []).map(mapWait)
+    : [];
   const c = d.continuous || {};
   return stableFingerprint({
+    include_history: includeHistory ? 1 : 0,
     timers,
     waits,
+    history_timers: historyTimers,
+    history_waits: historyWaits,
     counts: d.counts || null,
     continuous: {
       enabled: c.enabled,
@@ -3372,6 +3398,60 @@ function renderScheduleWaitCard(w, serverTimeIso) {
   return card;
 }
 
+function renderScheduleHistory(data, serverTime) {
+  const show = scheduleHistoryEnabled();
+  if (scheduleHistory) {
+    if (show) scheduleHistory.removeAttribute("hidden");
+    else scheduleHistory.setAttribute("hidden", "");
+  }
+  if (!show) {
+    if (scheduleHistoryTimersList) scheduleHistoryTimersList.innerHTML = "";
+    if (scheduleHistoryWaitsList) scheduleHistoryWaitsList.innerHTML = "";
+    if (scheduleHistoryTimersBadge) setTextIfChanged(scheduleHistoryTimersBadge, "0");
+    if (scheduleHistoryWaitsBadge) setTextIfChanged(scheduleHistoryWaitsBadge, "0");
+    return;
+  }
+
+  const d = data || {};
+  const historyTimers = Array.isArray(d.history_timers) ? d.history_timers : [];
+  const historyWaits = Array.isArray(d.history_waits) ? d.history_waits : [];
+
+  if (scheduleHistoryTimersBadge) {
+    setTextIfChanged(scheduleHistoryTimersBadge, String(historyTimers.length));
+  }
+  if (scheduleHistoryWaitsBadge) {
+    setTextIfChanged(scheduleHistoryWaitsBadge, String(historyWaits.length));
+  }
+
+  if (scheduleHistoryTimersList) {
+    scheduleHistoryTimersList.innerHTML = "";
+    if (!historyTimers.length) {
+      scheduleHistoryTimersList.innerHTML =
+        `<p class="muted empty">No recent terminal rows (by due/expiry time).</p>`;
+    } else {
+      for (const t of historyTimers) {
+        scheduleHistoryTimersList.appendChild(
+          renderScheduleTimerCard(t, serverTime)
+        );
+      }
+    }
+  }
+
+  if (scheduleHistoryWaitsList) {
+    scheduleHistoryWaitsList.innerHTML = "";
+    if (!historyWaits.length) {
+      scheduleHistoryWaitsList.innerHTML =
+        `<p class="muted empty">No recent terminal rows (by due/expiry time).</p>`;
+    } else {
+      for (const w of historyWaits) {
+        scheduleHistoryWaitsList.appendChild(
+          renderScheduleWaitCard(w, serverTime)
+        );
+      }
+    }
+  }
+}
+
 function renderSchedule(data) {
   const d = data || {};
   const timers = Array.isArray(d.timers) ? d.timers : [];
@@ -3424,12 +3504,19 @@ function renderSchedule(data) {
       }
     }
   }
+
+  renderScheduleHistory(d, serverTime);
 }
 
 /** Patch only relative/overdue text nodes (no list rebuild / scroll wipe). */
 function patchScheduleRelativeTimes(data) {
   const serverTime = (data && data.server_time) || null;
-  const roots = [scheduleTimersList, scheduleWaitsList].filter(Boolean);
+  const roots = [
+    scheduleTimersList,
+    scheduleWaitsList,
+    scheduleHistoryTimersList,
+    scheduleHistoryWaitsList,
+  ].filter(Boolean);
   for (const root of roots) {
     root.querySelectorAll(".schedule-rel[data-due-iso]").forEach((el) => {
       const iso = el.dataset.dueIso;
@@ -3443,9 +3530,13 @@ function patchScheduleRelativeTimes(data) {
 
 async function refreshSchedule(opts = {}) {
   const force = Boolean(opts.force);
-  // PR3: active-only defaults (history query lands in a later PR).
-  const data = await fetchJson("/api/schedule");
-  const fp = schedulePayloadFingerprint(data);
+  const includeHistory = scheduleHistoryEnabled();
+  // Active-only default; opt-in history via toggle (#126 PR4).
+  const url = includeHistory
+    ? "/api/schedule?include_history=1&history_limit=20"
+    : "/api/schedule";
+  const data = await fetchJson(url);
+  const fp = schedulePayloadFingerprint(data, { includeHistory });
   const minuteFp = serverMinuteBucket(data && data.server_time);
   const hasDom =
     (scheduleTimersList && scheduleTimersList.childElementCount > 0) ||
@@ -7057,6 +7148,14 @@ document.querySelectorAll(".memory-tab").forEach((btn) => {
     refreshMemory({ force: true }).catch((e) => panelLoadError("Memory", e));
   });
 });
+if (scheduleHistoryToggle) {
+  scheduleHistoryToggle.addEventListener("change", () => {
+    // History mode is part of fingerprint; force rebuild on toggle.
+    refreshSchedule({ force: true }).catch((e) =>
+      panelLoadError("Memory schedule history", e)
+    );
+  });
+}
 if (memoryAtomsApply) {
   memoryAtomsApply.addEventListener("click", () => {
     refreshMemoryAtoms({ force: true }).catch((e) =>
