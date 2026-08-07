@@ -2265,6 +2265,97 @@ def test_static_pr6_operator_conversation_ui(paths):
         h.close()
 
 
+def test_static_pr7_product_chat_shell(paths):
+    """PR7: /chat product shell — route, chrome hide, honesty footer, force conversation."""
+    h = _ApiHarness(paths)
+    try:
+        # SPA fallthrough: GET /chat and /chat/ return 200 HTML (index.html).
+        for chat_path in ("/chat", "/chat/"):
+            req = urllib.request.Request(h.base + chat_path, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                assert resp.status == 200, chat_path
+                ctype = resp.headers.get("Content-Type", "")
+                assert "html" in ctype.lower() or ctype == "", ctype
+                html = resp.read().decode("utf-8")
+            assert "<!DOCTYPE html>" in html or "<html" in html.lower()
+            # Same SPA shell as operator /
+            assert 'id="session-conversation-select"' in html
+            assert 'id="session-user-select"' in html
+            assert "Session user (impersonate)" in html
+            assert "Private Chat" in html
+            assert 'id="session-new-group-btn"' in html
+            # Product honesty footer markup (shown via JS/CSS on /chat)
+            assert 'id="product-dogfood-footer"' in html
+            assert "local dogfood — not authenticated" in html
+            # Operator chrome markers still in HTML (hidden by product-chat CSS)
+            assert 'data-panel="goals"' in html
+            assert "operator-only" in html
+            assert 'id="operator-nav"' in html
+
+        # Operator / still serves full shell (regression)
+        req_root = urllib.request.Request(h.base + "/", method="GET")
+        with urllib.request.urlopen(req_root, timeout=5) as resp:
+            assert resp.status == 200
+            root_html = resp.read().decode("utf-8")
+        assert 'data-panel="goals"' in root_html
+        assert 'id="product-dogfood-footer"' in root_html  # present but hidden
+
+        req_js = urllib.request.Request(h.base + "/app.js", method="GET")
+        with urllib.request.urlopen(req_js, timeout=5) as resp:
+            assert resp.status == 200
+            js = resp.read().decode("utf-8")
+
+        # Path detect + product shell apply
+        assert "PRODUCT_CHAT" in js
+        assert "function applyProductShell" in js
+        assert "function forceProductConversationMode" in js
+        assert 'classList.add("product-chat")' in js or (
+            "classList.add('product-chat')" in js
+        )
+        assert "product-dogfood-footer" in js
+        # Force conversation mode wiring
+        assert 'view_mode: "conversation"' in js or (
+            "view_mode: 'conversation'" in js
+        )
+        assert "forceProductConversationMode" in js
+        # Boot: product force + ?as= deep-link (first paint)
+        assert "bootClientSession" in js
+        assert "forceProductConversationMode" in js
+        assert "switchSessionUser(asUser.trim())" in js or (
+            "switchSessionUser(asUser" in js
+        )
+        assert 'params.get("as")' in js or "params.get('as')" in js
+        # applyProductShell invoked on boot / first paint
+        assert "applyProductShell()" in js
+        # Nav ignore operator panels in product mode
+        assert "PRODUCT_CHAT && btn.dataset.panel" in js or (
+            "PRODUCT_CHAT && btn.dataset.panel" in js.replace(" ", "")
+        )
+        # Forensic still gated
+        assert "if (!PRODUCT_CHAT)" in js
+        assert "All messages (forensic)" in js
+        # Concurrent multi-window dogfood documentation pointer (§7A)
+        assert "sessionStorage" in js
+        assert "elyra.clientId" in js
+        # Comment / pointer for concurrent bar (design §7A)
+        assert "concurrent" in js.lower() or "multi-window" in js.lower()
+
+        req_css = urllib.request.Request(h.base + "/style.css", method="GET")
+        with urllib.request.urlopen(req_css, timeout=5) as resp:
+            assert resp.status == 200
+            css = resp.read().decode("utf-8")
+        # Product mode CSS hide rules
+        assert "body.product-chat" in css
+        assert ".product-dogfood-footer" in css
+        assert "operator-only" in css or "#panel-goals" in css
+        # Hides operator panels
+        assert "#panel-goals" in css
+        assert "#panel-memory" in css
+        assert "#panel-status" in css
+    finally:
+        h.close()
+
+
 def test_view_mode_all_lists_global_messages(paths):
     """Operator forensic view_mode=all returns unfiltered messages feed."""
     from elyra.conversations import ConversationsStore

@@ -3845,3 +3845,42 @@ body {
   pointer-events: none;
   user-select: none;
 }
+
+/* ---------------------------------------------------------------------------
+ * Product /chat shell (PR7 / design §8)
+ * Path /chat → body.product-chat: hide operator chrome; keep Brand + session
+ * (Private Chat + groups) + chat panel/composer. Forensic all is JS-gated.
+ * --------------------------------------------------------------------------- */
+.product-dogfood-footer {
+  margin: 0.55rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+body.product-chat .product-dogfood-footer {
+  display: block;
+}
+
+/* Operator panels + nav (goals/memory/tools/identity/secrets/status). */
+body.product-chat .operator-only,
+body.product-chat .nav-btn.operator-only,
+body.product-chat #panel-goals,
+body.product-chat #panel-memory,
+body.product-chat #panel-tools,
+body.product-chat #panel-identity,
+body.product-chat #panel-secrets,
+body.product-chat #panel-status {
+  display: none !important;
+}
+
+/* Only Chat remains in product mode — hide the whole operator nav rail. */
+body.product-chat #operator-nav,
+body.product-chat nav.nav {
+  display: none;
+}
+
+/* Soften chat panel lead copy on product surface (optional density). */
+body.product-chat #panel-chat > .panel-head p.muted {
+  max-width: 42rem;
+}

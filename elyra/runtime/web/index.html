@@ -23,14 +23,14 @@
             <div class="brand-sub" id="brand-sub">Project Elyra</div>
           </div>
         </div>
-        <nav class="nav">
+        <nav class="nav" id="operator-nav" aria-label="Operator panels">
           <button type="button" class="nav-btn active" data-panel="chat">Chat</button>
-          <button type="button" class="nav-btn" data-panel="goals">Goals</button>
-          <button type="button" class="nav-btn" data-panel="memory">Memory</button>
-          <button type="button" class="nav-btn" data-panel="tools">Tools</button>
-          <button type="button" class="nav-btn" data-panel="identity">Identity</button>
-          <button type="button" class="nav-btn" data-panel="secrets">Secrets</button>
-          <button type="button" class="nav-btn" data-panel="status">Status</button>
+          <button type="button" class="nav-btn operator-only" data-panel="goals">Goals</button>
+          <button type="button" class="nav-btn operator-only" data-panel="memory">Memory</button>
+          <button type="button" class="nav-btn operator-only" data-panel="tools">Tools</button>
+          <button type="button" class="nav-btn operator-only" data-panel="identity">Identity</button>
+          <button type="button" class="nav-btn operator-only" data-panel="secrets">Secrets</button>
+          <button type="button" class="nav-btn operator-only" data-panel="status">Status</button>
         </nav>
         <div class="rail-session" title="Who is at the keyboard (message attribution)">
           <label class="session-label" for="session-user-select">Session user (impersonate)</label>
@@ -53,6 +53,10 @@
           </button>
           <p class="session-hint muted">
             Per-tab client session — not login. Who is typing and which thread.
+          </p>
+          <!-- Product /chat honesty footer (design §8 / §7A.11); shown only in product mode. -->
+          <p id="product-dogfood-footer" class="product-dogfood-footer muted" hidden>
+            local dogfood — not authenticated
           </p>
         </div>
         <div class="rail-effort" role="group" aria-label="Reasoning effort">
@@ -209,7 +213,7 @@
           </form>
         </section>
 
-        <section id="panel-goals" class="panel">
+        <section id="panel-goals" class="panel operator-only">
           <header class="panel-head">
             <h1>Goals</h1>
             <p class="muted">Open goals and progress.</p>
@@ -217,7 +221,7 @@
           <div id="goals-list" class="list-panel">loading…</div>
         </section>
 
-        <section id="panel-memory" class="panel">
+        <section id="panel-memory" class="panel operator-only">
           <header class="panel-head panel-head-row">
             <div>
               <h1>Memory</h1>
@@ -680,7 +684,7 @@
           </div>
         </section>
 
-        <section id="panel-tools" class="panel">
+        <section id="panel-tools" class="panel operator-only">
           <header class="panel-head panel-head-row">
             <div>
               <h1>Tools &amp; skills</h1>
@@ -747,7 +751,7 @@
           </div>
         </section>
 
-        <section id="panel-identity" class="panel">
+        <section id="panel-identity" class="panel operator-only">
           <header class="panel-head">
             <h1>Identity</h1>
             <p class="muted">
@@ -818,7 +822,7 @@
           </div>
         </section>
 
-        <section id="panel-secrets" class="panel">
+        <section id="panel-secrets" class="panel operator-only">
           <header class="panel-head">
             <h1>Secrets</h1>
             <p class="muted">
@@ -876,7 +880,7 @@
           </div>
         </section>
 
-        <section id="panel-status" class="panel">
+        <section id="panel-status" class="panel operator-only">
           <header class="panel-head">
             <h1>Status</h1>
             <p class="muted">Provider, budget, and runtime health.</p>

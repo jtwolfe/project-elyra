@@ -268,8 +268,20 @@ let conversationsCache = [];
 /** Cached users list for group modal multi-select. */
 let usersCache = [];
 /**
- * Product /chat shell (PR7) — hide forensic "all" and force conversation mode.
- * Operator `/` keeps forensic view_mode=all.
+ * Product /chat shell (PR7, design §8 / KD7).
+ * Path detect: `/chat` and `/chat/*` → hide operator chrome, force
+ * view_mode=conversation, show honesty footer. Operator `/` keeps forensic
+ * view_mode=all and full Goals/Memory/Tools/Identity/Secrets/Status nav.
+ *
+ * Concurrent multi-window dogfood bar (design §7A — STATE pointer):
+ * - Each browser tab/window mints an independent sessionStorage `elyra.clientId`
+ *   (KD21). Session binding is per client_id — no process-global last-writer-wins.
+ * - Dogfood: open two windows as different users (`/chat?as=jim`, `/chat?as=sam`)
+ *   concurrently; each has its own Private Chat / group binding.
+ * - Residual (documented, not multi-moment): shared PresenceWorker phase +
+ *   interject buffer for all clients. Prefer idle-between-turns for clean demos.
+ * - See docs/design/glass/design-multi-user-conversations.md §7A / §8.
+ *   Dogfood checklist STATE: docs/state/multi-user-conversations-dogfood.md (PR8).
  */
 const PRODUCT_CHAT = (function isProductChat() {
   if (typeof location === "undefined" || typeof location.pathname !== "string") {
@@ -280,6 +292,12 @@ const PRODUCT_CHAT = (function isProductChat() {
 })();
 /** Sentinel select value for forensic all-messages view (operator only). */
 const VIEW_ALL_SENTINEL = "__view:all__";
+/**
+ * Last raw view_mode from the server before product-shell normalize.
+ * Used to persist force conversation when a client carried forensic "all"
+ * from a prior operator `/` visit (same sessionStorage client_id).
+ */
+let sessionRawViewMode = null;
 /** Display labels: self + per-user goes_by. */
 let labelCache = { self: "Elyra", users: {} };
 /** Selected user id in identity panel (may differ from session for review). */
@@ -360,7 +378,9 @@ function applySessionPayload(session) {
     sessionConversationId = session.conversation_id;
   }
   if (session.view_mode) {
-    // Product /chat never enables forensic all (KD7 / PR7 prep).
+    // Product /chat never enables forensic all (KD7 / §8) — client normalize +
+    // forceProductConversationMode() may PUT to clear server residual "all".
+    sessionRawViewMode = session.view_mode;
     sessionViewMode =
       PRODUCT_CHAT && session.view_mode === "all"
         ? "conversation"
@@ -386,6 +406,50 @@ function applySessionPayload(session) {
     updateBrandChrome();
   }
   updateConversationChrome();
+}
+
+/**
+ * Apply product /chat shell chrome (design §8).
+ * Hides operator nav/panels via body.product-chat CSS; forces chat panel;
+ * reveals honesty footer. Safe to call on every paint; no-ops on operator `/`.
+ */
+function applyProductShell() {
+  if (!PRODUCT_CHAT) return;
+  if (typeof document === "undefined") return;
+  document.body.classList.add("product-chat");
+  document.documentElement.classList.add("product-chat");
+  activePanel = "chat";
+  document.querySelectorAll(".nav-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.panel === "chat");
+  });
+  document.querySelectorAll(".panel").forEach((p) => {
+    p.classList.toggle("active", p.id === "panel-chat");
+  });
+  const footer = document.getElementById("product-dogfood-footer");
+  if (footer) footer.hidden = false;
+  // Operator deep-links (#memory etc.) are no-ops in product mode (§8.2).
+  // Hash is ignored; chat stays active.
+}
+
+/**
+ * Persist view_mode=conversation when product shell loads with residual forensic
+ * "all" on this client (e.g. same sessionStorage client visited operator `/`).
+ */
+async function forceProductConversationMode() {
+  if (!PRODUCT_CHAT) return null;
+  sessionViewMode = "conversation";
+  if (sessionRawViewMode !== "all") return null;
+  try {
+    const data = await fetchJson("/api/session", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ view_mode: "conversation" }),
+    });
+    applySessionPayload(data);
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 /** Self display name for glass chrome (fallback Elyra). */
@@ -9575,6 +9639,8 @@ if (identityPromoteUserBtn) {
 
 autosizeComposer();
 updateBrandChrome();
+// Product /chat first paint: hide operator chrome before session boot (design §8).
+applyProductShell();
 
 /** True after mint → GET session → optional ?as= PUT (KD21 §7A.8). Gates tick. */
 let sessionBooted = false;
@@ -9599,6 +9665,10 @@ function refreshActivePanel(opts = {}) {
 
 document.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
+    // Product /chat: ignore operator panel nav (Goals/Memory/…); stay on chat (§8.2).
+    if (PRODUCT_CHAT && btn.dataset.panel && btn.dataset.panel !== "chat") {
+      return;
+    }
     document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
@@ -9651,11 +9721,15 @@ async function tick() {
   }
 }
 
-// Boot order (KD21 §7A.8): mint client_id → GET /api/session → optional ?as=
-// switchSessionUser (PUT + re-sync selects) → then first tick + interval.
+// Boot order (KD21 §7A.8 / product §8 first-paint):
+// mint client_id → GET /api/session → product force view_mode conversation →
+// optional ?as= switchSessionUser (PUT + re-sync selects) → then first tick.
 // Do not poll before bind; after ?as= rebuild Private Chat as dm:<asUser>.
+// Multi-window concurrent: each window's sessionStorage client_id is independent
+// (design §7A) — Jim and Sam tabs do not stomp each other.
 (function bootClientSession() {
   getClientId(); // mint/load sessionStorage elyra.clientId
+  applyProductShell();
   const params =
     typeof URLSearchParams !== "undefined"
       ? new URLSearchParams(window.location.search || "")
@@ -9664,9 +9738,14 @@ async function tick() {
   refreshLabelCache()
     .then(() => {
       updateBrandChrome();
+      // Product shell: clear residual forensic view_mode=all on this client.
+      return forceProductConversationMode().catch(() => null);
+    })
+    .then(() => {
       if (asUser && asUser.trim() && asUser.trim() !== sessionUserId) {
         // switchSessionUser: PUT user + refreshLabelCache so session-user select,
         // Private Chat dm:<asUser>, and member-filtered groups match before tick.
+        // Dogfood deep-link: /chat?as=jim (design §8 first paint).
         return switchSessionUser(asUser.trim()).catch(() => null);
       }
       return null;
