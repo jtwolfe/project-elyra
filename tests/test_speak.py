@@ -675,3 +675,199 @@ def test_registry_execute_speak_with_path(
     assert result.payload.get("attachment_ids")
     rows = _assistant_rows(paths)
     assert rows[0]["attachments"]
+
+
+# ---------------------------------------------------------------------------
+# PR3c — KD3 resolve + KD20 group null user_id (T8, T15, DM peer stamp)
+# ---------------------------------------------------------------------------
+
+
+def test_t8_group_social_kind_missing_conversation_no_dm_demotion(paths) -> None:
+    """T8: social_kind=group, conversation_id=None, user_id set → missing_conversation.
+
+    Must not write dm:jim (no silent group→DM demotion).
+    """
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        moment_id="m-t8",
+        user_id="jim",
+        conversation_id=None,
+        extras={"social_kind": "group"},
+    )
+    result = speak_handler({"text": "should not land"}, ctx)
+    assert result.ok is False
+    assert result.counts_as_speak is False
+    assert result.error_reason == "missing_conversation"
+    assert result.payload["reason"] == "missing_conversation"
+    assert result.payload["transport_ok"] is False
+    assert _assistant_rows(paths) == []
+    # No glass row with dm:jim either
+    all_rows = list_messages(paths=paths)
+    assert all_rows == []
+
+
+def test_t8_group_social_kind_user_id_arg_still_missing_conversation(paths) -> None:
+    """Bare user_id arg under social_kind=group does not open a DM."""
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        user_id="jim",
+        conversation_id=None,
+        extras={"social_kind": "group"},
+    )
+    result = speak_handler({"text": "nope", "user_id": "jim"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "missing_conversation"
+    assert _assistant_rows(paths) == []
+
+
+def test_t15_group_speak_delivery_user_id_none(paths) -> None:
+    """T15: group speak → SpeakDelivery.user_id None + glass row null, not operator."""
+    from elyra.conversations import ConversationsStore
+
+    store = ConversationsStore(paths)
+    store.create_group(
+        name="Room",
+        members=["jim", "sam"],
+        conversation_id="group:room1",
+    )
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        moment_id="m-t15",
+        user_id="jim",
+        conversation_id="group:room1",
+        extras={"social_kind": "group"},
+    )
+    result = speak_handler({"text": "hello room"}, ctx)
+    assert result.ok is True, result.error_reason
+    assert result.counts_as_speak is True
+    # Payload JSON null for user_id (not omitted as inventing operator)
+    assert "user_id" in result.payload
+    assert result.payload["user_id"] is None
+    assert result.payload["conversation_id"] == "group:room1"
+    assert result.payload["transport_ok"] is True
+
+    rows = _assistant_rows(paths)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["content"] == "hello room"
+    assert row.get("conversation_id") == "group:room1"
+    assert row.get("user_id") is None
+    assert row.get("user_id") != "operator"
+    # Hard pin: never coerce group to operator
+    assert row.get("user_id") not in ("operator", "jim", "sam")
+
+
+def test_deliver_group_conversation_forces_null_user_id(transport: SpeakTransport, paths) -> None:
+    """Transport KD20: conversation_id=group:* → user_id None regardless of input."""
+    result = transport.deliver(
+        "group hi",
+        user_id="operator",
+        conversation_id="group:g1",
+        moment_id="m",
+    )
+    assert result.ok is True
+    assert result.user_id is None
+    assert result.conversation_id == "group:g1"
+    payload = result.as_payload()
+    assert payload["user_id"] is None
+    assert payload["conversation_id"] == "group:g1"
+    row = _assistant_rows(paths)[0]
+    assert row.get("user_id") is None
+    assert row.get("conversation_id") == "group:g1"
+
+
+def test_speak_dm_peer_stamp_via_user_id_shorthand(paths) -> None:
+    """DM shorthand user_id=jim → conversation dm:jim + peer stamp on assistant row."""
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        user_id="operator",
+        moment_id="m-dm",
+    )
+    result = speak_handler({"text": "for jim", "user_id": "jim"}, ctx)
+    assert result.ok is True
+    assert result.payload["user_id"] == "jim"
+    assert result.payload["conversation_id"] == "dm:jim"
+    row = _assistant_rows(paths)[0]
+    assert row["user_id"] == "jim"
+    assert row["conversation_id"] == "dm:jim"
+
+
+def test_speak_dm_peer_stamp_via_conversation_id(paths) -> None:
+    """Explicit conversation_id=dm:sam stamps peer even when ctx.user_id differs."""
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        user_id="operator",
+        moment_id="m-dm2",
+    )
+    result = speak_handler(
+        {"text": "hi sam", "conversation_id": "dm:sam"},
+        ctx,
+    )
+    assert result.ok is True
+    assert result.payload["conversation_id"] == "dm:sam"
+    assert result.payload["user_id"] == "sam"
+    row = _assistant_rows(paths)[0]
+    assert row["conversation_id"] == "dm:sam"
+    # Assistant peer stamp is the DM peer (sam), not the session speaker.
+    assert row["user_id"] == "sam"
+
+
+def test_speak_ctx_conversation_id_group_without_arg(paths) -> None:
+    """ctx.conversation_id group is used when arg omitted."""
+    from elyra.conversations import ConversationsStore
+
+    ConversationsStore(paths).create_group(
+        name="G", members=["alice"], conversation_id="group:gctx"
+    )
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        user_id="alice",
+        conversation_id="group:gctx",
+        extras={"social_kind": "group"},
+    )
+    result = speak_handler({"text": "from ctx"}, ctx)
+    assert result.ok is True
+    assert result.payload["user_id"] is None
+    assert result.payload["conversation_id"] == "group:gctx"
+    assert _assistant_rows(paths)[0].get("user_id") is None
+
+
+def test_speak_pure_work_missing_conversation_fail_closed(paths) -> None:
+    """No address + no user on pure work → missing_conversation."""
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(
+        paths=paths,
+        speak=transport,
+        moment_id="solo",
+        user_id=None,
+        conversation_id=None,
+        extras={"social_kind": "none"},
+    )
+    result = speak_handler({"text": "projective?"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "missing_conversation"
+    assert _assistant_rows(paths) == []
+
+
+def test_speak_unknown_group_conversation_not_found(paths) -> None:
+    transport = SpeakTransport(paths)
+    ctx = ToolContext(paths=paths, speak=transport, user_id="jim")
+    result = speak_handler(
+        {"text": "?", "conversation_id": "group:does-not-exist"},
+        ctx,
+    )
+    assert result.ok is False
+    assert result.error_reason == "conversation_not_found"
+    assert _assistant_rows(paths) == []

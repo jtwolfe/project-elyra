@@ -11,7 +11,12 @@ Arm a durable wait and stop the moment (`ends_moment`, `stop_reason=wait`).
 - Required: `prompt` — question or prompt for the user.
 - Optional: `choices` — multi-choice options (omit or empty for free text).
 - Optional: `timeout_seconds` — wait timeout. Host default is **300s** (5 minutes). Free-text waits (empty `choices`) also default to **300s** when omitted. Prefer longer for open-ended discussion or custom typed answers.
-- Optional: `user_id` — who to wait on (defaults to active wake user / operator).
+- Optional: `conversation_id` — social address (`dm:<user>` or `group:<id>`).
+  Same resolution as `speak`. Group waits arm on the room; members only match
+  when their client session is bound to that group.
+- Optional: `user_id` — arming / notify stamp (defaults to active wake user).
+  For groups this is **not** the sole match key — membership + session binding
+  apply.
 
 ## Guidance
 

@@ -1,8 +1,8 @@
 """Glass delivery transport for the speak product act.
 
 Scope: write user-visible assistant rows via messages.append_message only.
-In scope: deliver(text, user_id, moment_id, attachments?) → SpeakDelivery with
-transport status; optional outbound media (PR8 / KD8) bound to the new row.
+In scope: deliver(text, user_id, conversation_id?, moment_id, attachments?) →
+SpeakDelivery with transport status; optional outbound media (PR8 / KD8).
 Out of scope: wait_user, schedule_wake, do-loop mark_spoke, beat tape.
 
 Ownership: this module is the sole production path for assistant glass rows.
@@ -24,23 +24,32 @@ class SpeakDelivery:
 
     ``ok`` mirrors transport success. Callers map this onto ToolResult and
     set ``counts_as_speak`` only when ``ok`` is True.
+
+    ``user_id`` is Optional (KD20): group delivers use ``None`` (JSON null);
+    DM/legacy use a non-null peer stamp. Never coerce group success to
+    ``\"operator\"``.
     """
 
     ok: bool
     text: str
-    user_id: str
+    user_id: str | None
     message_id: str | None = None
     moment_id: str | None = None
     reason: str | None = None
+    conversation_id: str | None = None
     # Outbound media inventory written on the assistant row (PR8).
     attachments: tuple[dict[str, Any], ...] = ()
 
     def as_payload(self) -> dict[str, Any]:
-        """Model-visible transport status (always includes transport_ok)."""
+        """Model-visible transport status (always includes transport_ok).
+
+        ``user_id`` is always present — JSON ``null`` when group (T15).
+        ``conversation_id`` included when set.
+        """
         payload: dict[str, Any] = {
             "transport_ok": self.ok,
             "text": self.text,
-            "user_id": self.user_id,
+            "user_id": self.user_id,  # may be None → JSON null
         }
         if self.message_id is not None:
             payload["message_id"] = self.message_id
@@ -48,6 +57,8 @@ class SpeakDelivery:
             payload["moment_id"] = self.moment_id
         if self.reason is not None:
             payload["reason"] = self.reason
+        if self.conversation_id is not None:
+            payload["conversation_id"] = self.conversation_id
         if self.attachments:
             payload["attachments"] = list(self.attachments)
             payload["attachment_ids"] = [
@@ -88,6 +99,7 @@ class SpeakTransport:
         text: str,
         *,
         user_id: str | None = "operator",
+        conversation_id: str | None = None,
         moment_id: str | None = None,
         reasoning: str = "",
         attachments: list[Any] | None = None,
@@ -98,12 +110,19 @@ class SpeakTransport:
         already registered in the media store (unbound). After a successful
         append, each id is bound to the new message id.
 
+        ``conversation_id`` stamps the social address on the glass row (C12).
+        Group conversations force ``user_id=None`` (KD20) regardless of the
+        incoming user_id stamp.
+
         Returns SpeakDelivery(ok=False, reason=…) without writing when input is
         invalid. Empty/whitespace ``text`` is always rejected — even when
         attachments are present (KD8 caption policy). On I/O or append failure,
         returns ok=False with reason — never raises for expected transport faults.
         """
-        uid = _normalize_user_id(user_id)
+        cid = _normalize_conversation_id(conversation_id)
+        # Conversation-aware normalize BEFORE append and before SpeakDelivery
+        # (KD20). Group → None; DM blank → peer; null conversation → operator.
+        uid = _normalize_user_id(user_id, conversation_id=cid)
         att_dicts, att_err = _normalize_delivery_attachments(attachments)
         if att_err is not None:
             return SpeakDelivery(
@@ -111,6 +130,7 @@ class SpeakTransport:
                 text=text if isinstance(text, str) else "",
                 user_id=uid,
                 moment_id=moment_id,
+                conversation_id=cid,
                 reason=att_err,
             )
         if not isinstance(text, str):
@@ -119,6 +139,7 @@ class SpeakTransport:
                 text="",
                 user_id=uid,
                 moment_id=moment_id,
+                conversation_id=cid,
                 reason="invalid_text",
             )
         # Preserve intentional internal whitespace; reject empty / whitespace-only.
@@ -129,6 +150,7 @@ class SpeakTransport:
                 text=text,
                 user_id=uid,
                 moment_id=moment_id,
+                conversation_id=cid,
                 reason="empty_text",
                 attachments=tuple(att_dicts),
             )
@@ -140,6 +162,7 @@ class SpeakTransport:
                 user_id=uid,
                 reasoning=reasoning or "",
                 moment_id=moment_id,
+                conversation_id=cid,
                 attachments=att_dicts if att_dicts else None,
                 paths=self._paths,
             )
@@ -151,6 +174,7 @@ class SpeakTransport:
                     text=text,
                     user_id=uid,
                     moment_id=moment_id,
+                    conversation_id=cid,
                     reason="append_failed:invalid_return",
                     attachments=tuple(att_dicts),
                 )
@@ -163,15 +187,20 @@ class SpeakTransport:
                         user_id=uid,
                         message_id=msg.id,
                         moment_id=moment_id or msg.moment_id,
+                        conversation_id=cid,
                         reason=bind_err,
                         attachments=tuple(att_dicts),
                     )
+            # Best-effort activity stamp for conversation list ordering.
+            if cid is not None:
+                _touch_conversation_activity(cid, paths=self._paths)
             return SpeakDelivery(
                 ok=True,
                 text=text,
                 user_id=uid,
                 message_id=msg.id,
                 moment_id=moment_id or msg.moment_id,
+                conversation_id=cid,
                 reason=None,
                 attachments=tuple(att_dicts),
             )
@@ -181,19 +210,71 @@ class SpeakTransport:
                 text=text,
                 user_id=uid,
                 moment_id=moment_id,
+                conversation_id=cid,
                 reason=f"append_failed:{type(exc).__name__}",
                 attachments=tuple(att_dicts),
             )
 
 
-def _normalize_user_id(user_id: str | None) -> str:
-    """Default blank/None to operator; strip whitespace."""
+def _normalize_conversation_id(conversation_id: str | None) -> str | None:
+    if not isinstance(conversation_id, str):
+        return None
+    stripped = conversation_id.strip()
+    return stripped or None
+
+
+def _normalize_user_id(
+    user_id: str | None,
+    *,
+    conversation_id: str | None = None,
+) -> str | None:
+    """Conversation-aware user_id for assistant glass rows (KD20).
+
+    | conversation_id | incoming user_id | stored |
+    | group:…         | any              | None   |
+    | dm:…            | blank/None       | peer from suffix (else operator) |
+    | dm:…            | non-blank        | that string (peer stamp) |
+    | null            | blank/None       | \"operator\" (legacy / solo) |
+    | null            | non-blank        | that string |
+
+    Failure paths that know a group conversation also leave user_id=None —
+    never re-normalize group failures to operator after a group-aware path.
+    """
+    cid = conversation_id
+    if isinstance(cid, str) and cid.startswith("group:"):
+        return None
+
+    stripped: str | None
     if user_id is None:
-        return "operator"
-    if not isinstance(user_id, str):
-        return "operator"
-    stripped = user_id.strip()
-    return stripped if stripped else "operator"
+        stripped = None
+    elif not isinstance(user_id, str):
+        stripped = None
+    else:
+        s = user_id.strip()
+        stripped = s if s else None
+
+    if isinstance(cid, str) and cid.startswith("dm:"):
+        if stripped is not None:
+            return stripped
+        peer = cid[3:].strip()
+        return peer if peer else "operator"
+
+    # null / missing conversation_id — legacy solo / tool path
+    if stripped is not None:
+        return stripped
+    return "operator"
+
+
+def _touch_conversation_activity(
+    conversation_id: str, *, paths: ElyraPaths
+) -> None:
+    """Best-effort ConversationsStore.touch_activity (never raises to callers)."""
+    try:
+        from elyra.conversations import ConversationsStore
+
+        ConversationsStore(paths).touch_activity(conversation_id)
+    except Exception:  # noqa: BLE001 — soft; glass row already written
+        pass
 
 
 def _normalize_delivery_attachments(

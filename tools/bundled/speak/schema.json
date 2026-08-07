@@ -5,9 +5,13 @@
       "type": "string",
       "description": "Caption / message content delivered to the user via glass/chat. Required and must be non-empty even when attachments are present."
     },
+    "conversation_id": {
+      "type": "string",
+      "description": "Social address dm:<user> or group:<id>. Prefer when known; required for group wakes if context lost the room."
+    },
     "user_id": {
       "type": "string",
-      "description": "Recipient user id (defaults to active wake user or operator)"
+      "description": "DM shorthand (dm:<user_id>) or arming stamp. Defaults from wake user on DM; not used as room address when social_kind is group."
     },
     "attachment_ids": {
       "type": "array",

@@ -1092,10 +1092,14 @@ function setWaitChoicesDisabled(disabled) {
 }
 
 /**
- * Pure: true when a pending wait is armed for the session user (KD-W2).
- * Uses last server-confirmed pending_wait shape; does not invent waits.
+ * Pure: true when a pending wait is armed for this client session (KD-W2 / KD24).
+ * Prefer server-computed matches_session (group-safe). Fallback: exact user_id
+ * (DM-only correctness when status lacked client header).
  */
 function waitArmedForSessionUser(pending, userId) {
+  if (pending && typeof pending.matches_session === "boolean") {
+    return pending.status === "pending" && pending.matches_session;
+  }
   return Boolean(
     pending &&
       pending.status === "pending" &&

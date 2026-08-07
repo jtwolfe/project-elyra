@@ -98,9 +98,15 @@ class PendingWait:
     armed_at: str | None = None  # when arm_wait persisted (for elapsed)
     status: str = STATUS_PENDING
     wake_id: str | None = None  # wait_timeout wake if timed out
+    # Social address (PR3c / KD12). Missing on load → None (legacy DM-only match).
+    conversation_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        row = asdict(self)
+        # Omit null conversation_id for legacy-shaped disk rows.
+        if row.get("conversation_id") is None:
+            del row["conversation_id"]
+        return row
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PendingWait:
@@ -108,6 +114,10 @@ class PendingWait:
         if not isinstance(choices, list):
             choices = list(choices)
         timeout = data.get("timeout")
+        raw_cid = data.get("conversation_id")
+        cid: str | None = None
+        if isinstance(raw_cid, str) and raw_cid.strip():
+            cid = raw_cid.strip()
         return cls(
             id=str(data.get("id") or data.get("wait_id")),
             prompt=str(data.get("prompt") or ""),
@@ -121,6 +131,7 @@ class PendingWait:
             armed_at=data.get("armed_at"),
             status=str(data.get("status") or STATUS_PENDING),
             wake_id=data.get("wake_id"),
+            conversation_id=cid,
         )
 
 
@@ -281,6 +292,14 @@ class TimerService:
             "prompt": wait.prompt,
             "user_id": wait.user_id,
         }
+        if wait.conversation_id:
+            payload["conversation_id"] = wait.conversation_id
+            # Derive social_kind at enqueue so lost cid still leaves group gate
+            # for KD3 if a future path drops conversation_id (PR3b stamp).
+            if wait.conversation_id.startswith("group:"):
+                payload["social_kind"] = "group"
+            elif wait.conversation_id.startswith("dm:"):
+                payload["social_kind"] = "dm"
         elapsed_s = _wait_elapsed_s(wait, now_dt)
         if elapsed_s is not None:
             payload["wait_elapsed_s"] = elapsed_s
@@ -456,6 +475,7 @@ class TimerService:
         timeout: float | None = None,
         choices: list[str] | None = None,
         wait_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> PendingWait:
         """Persist a pending wait. Caller may later check_timeouts / answer / cancel."""
         armed_at = _now_iso()
@@ -470,6 +490,10 @@ class TimerService:
             parse_utc(str(expires_at))
             expires_s = str(expires_at)
 
+        cid: str | None = None
+        if isinstance(conversation_id, str) and conversation_id.strip():
+            cid = conversation_id.strip()
+
         wait = PendingWait(
             id=wait_id or str(uuid.uuid4()),
             prompt=prompt,
@@ -480,6 +504,7 @@ class TimerService:
             timeout=float(timeout) if timeout is not None else None,
             armed_at=armed_at,
             status=STATUS_PENDING,
+            conversation_id=cid,
         )
         with self._lock:
             self._install_wait(wait)

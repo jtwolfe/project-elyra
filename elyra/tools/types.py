@@ -38,6 +38,9 @@ class WaitArm:
     prompt: str
     choices: list[str]
     user_id: str
+    # Social address (PR3c / KD12). Arming stamp stays in user_id; group match
+    # uses conversation_id + session binding, not user_id alone.
+    conversation_id: str | None = None
 
 
 @dataclass(frozen=True)

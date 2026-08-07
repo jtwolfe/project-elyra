@@ -12,7 +12,12 @@ visible chat.
 
 - Required: `text` — the message caption/content. **Must be non-empty** even
   when attachments are present (host rejects empty text + media-only speaks).
-- Optional: `user_id` — recipient (defaults to the active wake user / operator).
+- Optional: `conversation_id` — social address (`dm:<user>` or `group:<id>`).
+  Prefer when known (group wakes always need this or wake-stamped ctx).
+- Optional: `user_id` — DM shorthand (`dm:<user_id>`) or arming stamp. On pure
+  DM wakes defaults from context; **not** used as room address when the host
+  social_kind is group (fail closed `missing_conversation` instead of demoting
+  to a private DM).
 - Optional: `attachments` — list of `{ path, filename?, kind? }` sandbox paths
   (e.g. after writing `tmp/plot.png`). Host ingests into the durable media store
   and projects a read-only mirror under `media/`.

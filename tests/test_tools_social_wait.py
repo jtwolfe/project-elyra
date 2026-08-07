@@ -140,7 +140,8 @@ def test_wait_user_free_text_uses_free_text_timeout(
 
 
 def test_wait_user_default_timeout_without_settings(paths, timers: TimerService) -> None:
-    ctx = ToolContext(paths=paths, timers=timers, moment_id="m")
+    # user_id required for KD3 address resolution (no silent operator invent).
+    ctx = ToolContext(paths=paths, timers=timers, moment_id="m", user_id="operator")
     result = wait_user({"prompt": "?"}, ctx)
     assert result.ok is True
     assert result.arm_wait is not None
@@ -292,7 +293,7 @@ def test_wait_user_arm_wait_value_error_no_ends_moment(
         raise ValueError("expires_at or timeout is required")
 
     monkeypatch.setattr(timers, "arm_wait", boom)
-    ctx = ToolContext(paths=paths, timers=timers, moment_id="m")
+    ctx = ToolContext(paths=paths, timers=timers, moment_id="m", user_id="operator")
     result = wait_user({"prompt": "?"}, ctx)
     assert result.ok is False
     assert result.ends_moment is False
@@ -511,3 +512,172 @@ def test_openai_tools_includes_social_wait_tools(registry: ToolRegistry) -> None
     wait_tool = next(t for t in tools if t["function"]["name"] == "wait_user")
     assert "prompt" in wait_tool["function"]["parameters"]["properties"]
     assert "prompt" in wait_tool["function"]["parameters"]["required"]
+
+
+# ---------------------------------------------------------------------------
+# PR3c — wait conversation_id arm + group wait match (T9, non-member)
+# ---------------------------------------------------------------------------
+
+
+def test_wait_user_arms_with_conversation_id(ctx: ToolContext, timers: TimerService) -> None:
+    result = wait_user(
+        {
+            "prompt": "Pick",
+            "choices": ["a", "b"],
+            "conversation_id": "dm:operator",
+        },
+        ctx,
+    )
+    assert result.ok is True
+    arm = result.arm_wait
+    assert arm is not None
+    assert arm.conversation_id == "dm:operator"
+    assert result.payload["conversation_id"] == "dm:operator"
+    pending = timers.get_wait(arm.wait_id)
+    assert pending is not None
+    assert pending.conversation_id == "dm:operator"
+
+
+def test_wait_user_group_arm_persists_conversation(
+    paths, timers: TimerService
+) -> None:
+    from elyra.conversations import ConversationsStore
+
+    ConversationsStore(paths).create_group(
+        name="Team",
+        members=["jim", "sam"],
+        conversation_id="group:team1",
+    )
+    ctx = ToolContext(
+        paths=paths,
+        timers=timers,
+        settings=default_settings(),
+        moment_id="m-g",
+        user_id="jim",
+        conversation_id="group:team1",
+        extras={"social_kind": "group"},
+    )
+    result = wait_user({"prompt": "Ship?", "choices": ["yes", "no"]}, ctx)
+    assert result.ok is True
+    arm = result.arm_wait
+    assert arm is not None
+    assert arm.conversation_id == "group:team1"
+    assert arm.user_id == "jim"  # arming stamp, not room
+    pending = timers.get_wait(arm.wait_id)
+    assert pending is not None
+    assert pending.conversation_id == "group:team1"
+    assert pending.user_id == "jim"
+
+
+def test_wait_user_t8_group_kind_missing_conversation(paths, timers: TimerService) -> None:
+    """Same KD3 gate as speak: social_kind=group without room → fail closed."""
+    ctx = ToolContext(
+        paths=paths,
+        timers=timers,
+        settings=default_settings(),
+        user_id="jim",
+        conversation_id=None,
+        extras={"social_kind": "group"},
+    )
+    result = wait_user({"prompt": "Lost room?"}, ctx)
+    assert result.ok is False
+    assert result.error_reason == "missing_conversation"
+    assert result.ends_moment is False
+    assert result.arm_wait is None
+    assert timers.list_waits() == []
+
+
+def test_wait_matches_dm_exact_user() -> None:
+    from elyra.presence.user_input import wait_matches
+
+    wait = {
+        "status": "pending",
+        "user_id": "jim",
+        "conversation_id": "dm:jim",
+    }
+    assert wait_matches("jim", wait) is True
+    assert wait_matches("sam", wait) is False
+
+
+def test_wait_matches_group_member_and_session_binding(paths) -> None:
+    """T9 pure: member on dm:self false; member bound to group true; non-member false."""
+    from elyra.conversations import ConversationsStore
+    from elyra.presence.user_input import wait_matches
+
+    store = ConversationsStore(paths)
+    store.create_group(
+        name="G",
+        members=["jim", "sam"],
+        conversation_id="group:room9",
+    )
+    wait = {
+        "status": "pending",
+        "user_id": "jim",  # arming stamp
+        "conversation_id": "group:room9",
+    }
+    # Member viewing Private Chat (dm:self) does not match
+    assert (
+        wait_matches(
+            "jim",
+            wait,
+            store,
+            session_conversation_id="dm:jim",
+        )
+        is False
+    )
+    # Member after binding session to group → true
+    assert (
+        wait_matches(
+            "jim",
+            wait,
+            store,
+            session_conversation_id="group:room9",
+        )
+        is True
+    )
+    # Non-member reject even when session bound to group
+    assert (
+        wait_matches(
+            "eve",
+            wait,
+            store,
+            session_conversation_id="group:room9",
+        )
+        is False
+    )
+    # Member of group but session on other group → false
+    assert (
+        wait_matches(
+            "sam",
+            wait,
+            store,
+            session_conversation_id="group:other",
+        )
+        is False
+    )
+
+
+def test_wait_matches_group_unknown_conversation_fail_closed(paths) -> None:
+    from elyra.conversations import ConversationsStore
+    from elyra.presence.user_input import wait_matches
+
+    store = ConversationsStore(paths)
+    wait = {
+        "status": "pending",
+        "user_id": "jim",
+        "conversation_id": "group:missing",
+    }
+    assert (
+        wait_matches(
+            "jim", wait, store, session_conversation_id="group:missing"
+        )
+        is False
+    )
+
+
+def test_wait_matches_null_conversation_legacy_user() -> None:
+    from elyra.presence.user_input import wait_matches
+
+    wait = {"status": "pending", "user_id": "operator"}
+    assert wait_matches("operator", wait) is True
+    assert wait_matches("jim", wait) is False

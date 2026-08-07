@@ -1846,3 +1846,191 @@ def test_post_dm_defaults_from_session(paths):
                 break
     finally:
         h.close()
+
+
+# ---------------------------------------------------------------------------
+# PR3c — status matches_session (KD24) + T9 group wait binding
+# ---------------------------------------------------------------------------
+
+
+def test_t9_status_matches_session_group_wait(paths):
+    """T9: member on dm:self → matches_session false; after PUT group → true.
+
+    Non-member client stays false. Asserts server-enriched status payload hard.
+    """
+    from elyra.conversations import ConversationsStore
+    from elyra.presence.timers import STATUS_PENDING
+
+    users = UsersStore(paths)
+    users.create_user("Jim", user_id="jim", provisional=True)
+    users.create_user("Sam", user_id="sam", provisional=True)
+    users.create_user("Eve", user_id="eve", provisional=True)
+
+    store = ConversationsStore(paths)
+    store.create_group(
+        name="Room",
+        members=["jim", "sam"],
+        conversation_id="group:waitroom",
+    )
+
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        # Seed durable group wait (arming stamp jim) without going through loop.
+        h.worker._timers.arm_wait(  # noqa: SLF001
+            wait_id="g-wait-1",
+            prompt="Ship it?",
+            choices=["yes", "no"],
+            user_id="jim",
+            moment_id="m0",
+            timeout=600.0,
+            conversation_id="group:waitroom",
+        )
+        # Bind jim client to Private Chat (dm:self)
+        code, sess = h.put(
+            "/api/session",
+            {"user_id": "jim", "conversation_id": "dm:jim"},
+            client_id="c-jim",
+        )
+        assert code == 200, sess
+        assert sess["conversation_id"] == "dm:jim"
+
+        code, st = h.get("/api/status", client_id="c-jim")
+        assert code == 200
+        pending = st.get("pending_wait")
+        assert isinstance(pending, dict), st
+        assert pending.get("id") == "g-wait-1" or pending.get("wait_id") == "g-wait-1"
+        assert pending.get("conversation_id") == "group:waitroom"
+        assert pending.get("status") == STATUS_PENDING or pending.get("status") == "pending"
+        # Hard assert: matches_session present and false while on dm:self
+        assert "matches_session" in pending
+        assert pending["matches_session"] is False
+
+        # PUT session to the group → matches_session true
+        code, sess2 = h.put(
+            "/api/session",
+            {"conversation_id": "group:waitroom"},
+            client_id="c-jim",
+        )
+        assert code == 200, sess2
+        assert sess2["conversation_id"] == "group:waitroom"
+        assert sess2["user_id"] == "jim"
+
+        code, st2 = h.get("/api/status", client_id="c-jim")
+        assert code == 200
+        pending2 = st2.get("pending_wait")
+        assert isinstance(pending2, dict)
+        assert pending2["matches_session"] is True
+
+        # Non-member client bound to group → matches_session false
+        code, sess_eve = h.put(
+            "/api/session",
+            {"user_id": "eve", "conversation_id": "group:waitroom"},
+            client_id="c-eve",
+        )
+        assert code == 200, sess_eve
+        code, st_eve = h.get("/api/status", client_id="c-eve")
+        assert code == 200
+        pending_eve = st_eve.get("pending_wait")
+        assert isinstance(pending_eve, dict)
+        assert pending_eve["matches_session"] is False
+
+        # Unknown client header on read-only status → matches_session false (no mint)
+        code, st_unk = h.get("/api/status", client_id="never-registered-xyz")
+        assert code == 200
+        pending_unk = st_unk.get("pending_wait")
+        assert isinstance(pending_unk, dict)
+        assert pending_unk.get("matches_session") is False
+    finally:
+        h.close()
+
+
+def test_t9_wait_reply_member_on_dm_self_does_not_match(paths):
+    """Group wait: member on dm:self does not route wait_reply (same gate as status)."""
+    from elyra.conversations import ConversationsStore
+
+    users = UsersStore(paths)
+    users.create_user("Jim", user_id="jim", provisional=True)
+    users.create_user("Sam", user_id="sam", provisional=True)
+
+    store = ConversationsStore(paths)
+    store.create_group(
+        name="Room",
+        members=["jim", "sam"],
+        conversation_id="group:waitroom2",
+    )
+
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        h.worker._timers.arm_wait(  # noqa: SLF001
+            wait_id="g-wait-2",
+            prompt="?",
+            choices=["y"],
+            user_id="jim",
+            moment_id="m0",
+            timeout=600.0,
+            conversation_id="group:waitroom2",
+        )
+        # Force waiting phase so free-text would match if user matched
+        h.worker._phase = "waiting"  # noqa: SLF001
+
+        code, sess = h.put(
+            "/api/session",
+            {"user_id": "jim", "conversation_id": "dm:jim"},
+            client_id="c-jim",
+        )
+        assert code == 200, sess
+        code, body = h.post(
+            "/api/wait/reply",
+            {"content": "y", "choice": "y"},
+            client_id="c-jim",
+        )
+        # Does not answer the group wait while on Private Chat
+        assert body.get("routed") != "wait_reply", body
+        # Wait still pending
+        still = h.worker._timers.get_wait("g-wait-2")  # noqa: SLF001
+        assert still is not None
+        assert still.status == "pending"
+
+        # Bind to group and answer
+        code, sess2 = h.put(
+            "/api/session",
+            {"conversation_id": "group:waitroom2"},
+            client_id="c-jim",
+        )
+        assert code == 200, sess2
+        assert sess2["conversation_id"] == "group:waitroom2"
+        code2, body2 = h.post(
+            "/api/wait/reply",
+            {"content": "y", "choice": "y"},
+            client_id="c-jim",
+        )
+        assert code2 == 200, body2
+        assert body2.get("ok") is True
+        assert body2.get("routed") == "wait_reply"
+        answered = h.worker._timers.get_wait("g-wait-2")  # noqa: SLF001
+        assert answered is not None
+        assert answered.status == "answered"
+    finally:
+        h.close()
+
+
+def test_status_without_client_header_omits_or_false_matches_session(paths):
+    """Missing X-Elyra-Client: do not invent matches_session true."""
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        h.worker._timers.arm_wait(  # noqa: SLF001
+            wait_id="dm-w",
+            prompt="?",
+            user_id="operator",
+            moment_id="m",
+            timeout=600.0,
+            conversation_id="dm:operator",
+        )
+        code, st = h.get("/api/status", client_id=None)
+        assert code == 200
+        pending = st.get("pending_wait")
+        assert isinstance(pending, dict)
+        # Omit or false — never invent true without a known client
+        assert pending.get("matches_session") in (None, False)
+    finally:
+        h.close()

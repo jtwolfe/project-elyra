@@ -1,7 +1,8 @@
 """Social tool builtins — speak, wait_user, schedule_wake.
 
 Scope: thin wrappers that map tool args → ToolResult / presence ports.
-In scope: speak transport, WaitArm + ends_moment, timer enqueue via TimerService.
+In scope: speak transport (KD3 resolve + KD20 group null user_id), WaitArm +
+ends_moment with conversation_id, timer enqueue via TimerService.
 Out of scope: do-loop ends_moment batch abort (PR11), phase machine, glass for wait.
 
 ONLY speak (via transport) writes assistant glass rows — never bare content.
@@ -25,12 +26,16 @@ _DEFAULT_FREE_TEXT_TIMEOUT_S = 300
 
 
 def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    """Address a user via glass transport.
+    """Address a conversation (or DM shorthand) via glass transport.
 
     Args (schema): ``text`` (required caption — non-empty even with media),
-    optional ``user_id`` (defaults to ``ctx.user_id`` or ``operator``),
-    optional ``attachment_ids`` (re-send host ids → new att_id same sha),
-    optional ``attachments`` (``[{path, filename?, kind?}]`` sandbox paths).
+    optional ``conversation_id`` (prefer when known), optional ``user_id``
+    (DM shorthand / arming stamp; defaults via KD3 resolver), optional
+    ``attachment_ids`` / ``attachments``.
+
+    Resolution (KD3): arg conversation_id → ctx.conversation_id → user_id arg
+    DM shorthand → ctx.user_id DM (skipped when social_kind==group) →
+    fail closed ``missing_conversation``.
 
     Success → ``ok=True``, ``counts_as_speak=True``, payload with transport_ok.
     Transport failure → ``ok=False``, reason in payload (and error_reason).
@@ -49,18 +54,31 @@ def speak(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     if not raw_text.strip():
         return _text_error("empty_text", args, ctx)
 
+    conversation_id, conv_err = _resolve_conversation_id(args, ctx)
+    if conv_err is not None:
+        return _text_error(conv_err, args, ctx, conversation_id=conversation_id)
+
+    # Arming / media stamp (session speaker). Group glass rows force user_id=None
+    # inside transport (KD20); peer stamp for DM comes from conversation_id.
+    speaker_id = _resolve_speaker_user_id(args, ctx)
+    deliver_user_id = _deliver_user_id_for(conversation_id, speaker_id)
+
     transport = _resolve_transport(ctx)
-    user_id = _resolve_user_id(args, ctx)
     moment_id = ctx.moment_id or None
 
     # Resolve optional outbound media before deliver so failures never write glass.
-    att_list, att_err = _resolve_speak_attachments(args, ctx, user_id=user_id)
+    att_list, att_err = _resolve_speak_attachments(
+        args, ctx, user_id=speaker_id or "operator"
+    )
     if att_err is not None:
-        return _text_error(att_err, args, ctx)
+        return _text_error(
+            att_err, args, ctx, conversation_id=conversation_id
+        )
 
     delivery = transport.deliver(
         raw_text,
-        user_id=user_id,
+        user_id=deliver_user_id,
+        conversation_id=conversation_id,
         moment_id=moment_id if moment_id else None,
         attachments=att_list if att_list else None,
     )
@@ -90,7 +108,8 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
       - ``timeout_seconds`` (optional int) — default from settings.wait
         (300 multi-choice / 300 free-text when omitted; prefer longer for
         open-ended questions)
-      - ``user_id`` (optional) — defaults to ctx.user_id / operator
+      - ``conversation_id`` (optional) — social address (KD3 same as speak)
+      - ``user_id`` (optional) — arming / notify stamp; defaults to ctx.user_id
 
     Success → ``ok=True``, ``ends_moment=True``, ``stop_reason="wait"``,
     ``arm_wait=WaitArm(...)``, ``counts_as_speak=False``.
@@ -144,7 +163,20 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             counts_as_speak=False,
         )
 
-    user_id = _resolve_user_id(args, ctx)
+    conversation_id, conv_err = _resolve_conversation_id(args, ctx)
+    if conv_err is not None:
+        return ToolResult(
+            ok=False,
+            payload={
+                "reason": conv_err,
+                "user_id": _resolve_speaker_user_id(args, ctx),
+            },
+            error_reason=conv_err,
+            counts_as_speak=False,
+        )
+
+    # Arming stamp = session speaker (not room for group waits — KD12).
+    user_id = _resolve_speaker_user_id(args, ctx) or "operator"
     wait_id = str(uuid.uuid4())
     arm = WaitArm(
         wait_id=wait_id,
@@ -152,6 +184,7 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         prompt=prompt,
         choices=choices,
         user_id=user_id,
+        conversation_id=conversation_id,
     )
 
     # Durable snapshot for presence timers when host injected TimerService.
@@ -165,6 +198,7 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
                 user_id=arm.user_id,
                 moment_id=ctx.moment_id or "",
                 timeout=float(arm.timeout_seconds),
+                conversation_id=arm.conversation_id,
             )
         except (ValueError, TypeError, OSError) as exc:
             return ToolResult(
@@ -186,6 +220,8 @@ def wait_user(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         "moment_id": ctx.moment_id or "",
         "armed": timers is not None,
     }
+    if arm.conversation_id is not None:
+        payload["conversation_id"] = arm.conversation_id
     return ToolResult(
         ok=True,
         payload=payload,
@@ -288,18 +324,165 @@ def schedule_wake(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def _text_error(
-    reason: str, args: dict[str, Any], ctx: ToolContext
+    reason: str,
+    args: dict[str, Any],
+    ctx: ToolContext,
+    *,
+    conversation_id: str | None = None,
 ) -> ToolResult:
+    """Fail closed without writing glass.
+
+    Payload user_id uses conversation-aware rules when conversation_id is
+    known (group → null); otherwise diagnostic speaker/operator stamp.
+    """
+    from elyra.speak.transport import _normalize_user_id
+
+    speaker = _resolve_speaker_user_id(args, ctx)
+    uid = _normalize_user_id(speaker, conversation_id=conversation_id)
+    payload: dict[str, Any] = {
+        "transport_ok": False,
+        "reason": reason,
+        "user_id": uid,
+    }
+    if conversation_id is not None:
+        payload["conversation_id"] = conversation_id
     return ToolResult(
         ok=False,
-        payload={
-            "transport_ok": False,
-            "reason": reason,
-            "user_id": _resolve_user_id(args, ctx),
-        },
+        payload=payload,
         error_reason=reason,
         counts_as_speak=False,
     )
+
+
+def _social_kind(ctx: ToolContext) -> str:
+    """Host social_kind from extras (stamped at enqueue). Absent → \"none\"."""
+    raw = ctx.extras.get("social_kind") if isinstance(ctx.extras, dict) else None
+    if raw in ("group", "dm", "none"):
+        return str(raw)
+    return "none"
+
+
+def _resolve_conversation_id(
+    args: dict[str, Any], ctx: ToolContext
+) -> tuple[str | None, str | None]:
+    """KD3 speak/wait address resolution.
+
+    Order:
+      1. Explicit non-blank ``conversation_id`` arg (validate format / type)
+      2. Else ``ctx.conversation_id`` when non-blank
+      3. Else non-blank ``user_id`` **arg** → DM shorthand (skipped when
+         social_kind == group — fail closed, no silent group→DM demotion)
+      4. Else ``ctx.user_id`` → ``dm:<ctx.user_id>`` when social_kind != group
+      5. Else ``missing_conversation``
+
+    Returns ``(conversation_id | None, error_reason | None)``.
+    """
+    from elyra.conversations import (
+        ConversationsStore,
+        dm_id_for_user,
+        validate_conversation_id,
+    )
+    from elyra.identity.layout import validate_user_id
+
+    kind = _social_kind(ctx)
+
+    # 1. Explicit arg
+    raw_cid = args.get("conversation_id")
+    if isinstance(raw_cid, str) and raw_cid.strip():
+        try:
+            cid = validate_conversation_id(raw_cid.strip())
+        except ValueError:
+            return None, "invalid_conversation_id"
+        # Soft-ensure DM exists; group must already exist (fail closed).
+        if cid.startswith("dm:"):
+            try:
+                ConversationsStore(ctx.paths).ensure_dm(cid[3:])
+            except (ValueError, OSError):
+                pass
+        elif cid.startswith("group:"):
+            rec = ConversationsStore(ctx.paths).get(cid)
+            if rec is None:
+                return None, "conversation_not_found"
+        return cid, None
+    if raw_cid is not None and raw_cid != "":
+        # Present but not a usable string (null / int / blank already handled).
+        if not isinstance(raw_cid, str):
+            return None, "invalid_conversation_id"
+
+    # 2. ctx.conversation_id (wake-stamped; includes groups)
+    if isinstance(ctx.conversation_id, str) and ctx.conversation_id.strip():
+        try:
+            cid = validate_conversation_id(ctx.conversation_id.strip())
+        except ValueError:
+            return None, "invalid_conversation_id"
+        if cid.startswith("dm:"):
+            try:
+                ConversationsStore(ctx.paths).ensure_dm(cid[3:])
+            except (ValueError, OSError):
+                pass
+        return cid, None
+
+    # 3. Explicit user_id arg → intentional DM shorthand
+    raw_uid = args.get("user_id")
+    if isinstance(raw_uid, str) and raw_uid.strip():
+        if kind == "group":
+            # Model forgot the room — never demote group wake to dm:speaker.
+            return None, "missing_conversation"
+        try:
+            peer = validate_user_id(raw_uid.strip())
+        except ValueError:
+            return None, "invalid_user_id"
+        try:
+            ConversationsStore(ctx.paths).ensure_dm(peer)
+        except (ValueError, OSError):
+            pass
+        return dm_id_for_user(peer), None
+
+    # 4. ctx.user_id DM fallback — skipped for social_kind=group (T8)
+    if kind != "group" and ctx.user_id is not None and str(ctx.user_id).strip():
+        try:
+            peer = validate_user_id(str(ctx.user_id).strip())
+        except ValueError:
+            return None, "invalid_user_id"
+        try:
+            ConversationsStore(ctx.paths).ensure_dm(peer)
+        except (ValueError, OSError):
+            pass
+        return dm_id_for_user(peer), None
+
+    # 5. Fail closed
+    return None, "missing_conversation"
+
+
+def _resolve_speaker_user_id(args: dict[str, Any], ctx: ToolContext) -> str | None:
+    """Arming / media stamp: args.user_id → ctx.user_id → None (not operator).
+
+    Operator default is applied only at deliver normalize when conversation is
+    null (legacy) or as wait arming last resort.
+    """
+    raw = args.get("user_id")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    if ctx.user_id is not None and str(ctx.user_id).strip():
+        return str(ctx.user_id).strip()
+    return None
+
+
+def _deliver_user_id_for(
+    conversation_id: str | None, speaker_id: str | None
+) -> str | None:
+    """User_id passed into SpeakTransport.deliver (pre-normalize intent).
+
+    Group: always None (KD20 — never stamp member or operator).
+    DM: peer from ``dm:<peer>`` suffix (assistant peer stamp / legacy filters).
+    Null conversation should not reach here after KD3 success.
+    """
+    if isinstance(conversation_id, str) and conversation_id.startswith("group:"):
+        return None
+    if isinstance(conversation_id, str) and conversation_id.startswith("dm:"):
+        peer = conversation_id[3:].strip()
+        return peer if peer else speaker_id
+    return speaker_id
 
 
 def _resolve_speak_attachments(
@@ -375,16 +558,6 @@ def _resolve_timers(ctx: ToolContext) -> TimerService | None:
     if isinstance(extra, TimerService):
         return extra
     return None
-
-
-def _resolve_user_id(args: dict[str, Any], ctx: ToolContext) -> str:
-    """Args user_id wins when non-blank; else ctx.user_id; else operator."""
-    raw = args.get("user_id")
-    if isinstance(raw, str) and raw.strip():
-        return raw.strip()
-    if ctx.user_id is not None and str(ctx.user_id).strip():
-        return str(ctx.user_id).strip()
-    return "operator"
 
 
 def _parse_choices(raw: Any) -> tuple[list[str], str | None]:

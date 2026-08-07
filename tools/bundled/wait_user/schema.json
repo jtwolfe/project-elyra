@@ -15,9 +15,13 @@
       "minimum": 0,
       "description": "Seconds before wait_timeout wake (default 300; free-text also defaults 300). Prefer longer for open-ended human replies."
     },
+    "conversation_id": {
+      "type": "string",
+      "description": "Social address dm:<user> or group:<id>. Same resolution as speak; group waits require session bound to the room."
+    },
     "user_id": {
       "type": "string",
-      "description": "User to wait on (defaults to active wake user or operator)"
+      "description": "Arming / notify stamp (defaults to active wake user). Group match uses membership + session conversation, not this alone."
     }
   },
   "required": ["prompt"],

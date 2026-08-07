@@ -258,7 +258,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             snap = self.state.snapshot()
             # PresenceWorker.status_snapshot: phase, hop_count, last_tool,
             # pending_wait, continue_injects, queue_depth_by_band, …
+            # Worker stays client-agnostic (no matches_session) — KD24.
             snap.update(self.worker.status_snapshot())
+            # Enrich pending_wait with matches_session for this client (KD24).
+            self._enrich_pending_wait_matches_session(snap)
             try:
                 from elyra.media.activity import recent_media_activity
                 from elyra.media.gc import media_stats
@@ -3031,6 +3034,68 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
     def _client_sessions(self) -> ClientSessionsRegistry | None:
         return getattr(self, "client_sessions", None)
+
+    def _enrich_pending_wait_matches_session(self, snap: dict[str, Any]) -> None:
+        """KD24: after client-agnostic ``status_snapshot()``, enrich pending_wait.
+
+        - Ensure ``conversation_id`` is present when the wait record has it.
+        - When request has valid ``X-Elyra-Client`` **and** that client is known
+          in the registry → set ``matches_session`` via ``wait_matches``.
+        - Unknown client header on read-only status → omit or ``false``; **do not**
+          create a map entry (KD25).
+        - Missing header → omit ``matches_session`` (or leave unset).
+        """
+        pending = snap.get("pending_wait")
+        if not isinstance(pending, dict):
+            return
+
+        from elyra.presence.user_input import wait_matches
+
+        client_id, cerr = self._parse_client_header()
+        if cerr:
+            # Invalid header: do not invent membership.
+            pending["matches_session"] = False
+            return
+        if client_id is None:
+            # Missing header — leave matches_session unset (UI falls back to user_id).
+            return
+
+        reg = self._client_sessions()
+        if reg is None:
+            pending["matches_session"] = False
+            return
+
+        # Read-only resolve: never create registry entry on GET /api/status (KD25).
+        _cid, sess, _minted = reg.resolve(client_id, allow_create=False)
+        if not isinstance(sess, dict):
+            # Unknown client — omit inventing membership.
+            pending["matches_session"] = False
+            return
+
+        session_user = str(sess.get("user_id") or _DEFAULT_SESSION_USER).strip()
+        if not session_user:
+            session_user = _DEFAULT_SESSION_USER
+        session_cid_raw = sess.get("conversation_id")
+        session_cid = (
+            session_cid_raw.strip()
+            if isinstance(session_cid_raw, str) and session_cid_raw.strip()
+            else None
+        )
+
+        conv_store = None
+        wait_cid = pending.get("conversation_id")
+        if isinstance(wait_cid, str) and wait_cid.startswith("group:"):
+            try:
+                conv_store = ConversationsStore(self.paths)
+            except Exception:  # noqa: BLE001
+                conv_store = None
+
+        pending["matches_session"] = wait_matches(
+            session_user,
+            pending,
+            conv_store,
+            session_conversation_id=session_cid,
+        )
 
     def _parse_client_header(self) -> tuple[str | None, str | None]:
         """Return ``(client_id | None, error_reason | None)``.

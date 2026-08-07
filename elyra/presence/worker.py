@@ -1235,6 +1235,18 @@ class PresenceWorker:
                     "reason": "resetting",
                 }
             pending = self._pending_wait_unlocked()
+            # ConversationsStore for group wait membership (KD12). Soft import
+            # so unit tests without conversations package layout still route DM.
+            conv_store = None
+            if pending and (pending.get("conversation_id") or "").startswith(
+                "group:"
+            ):
+                try:
+                    from elyra.conversations import ConversationsStore
+
+                    conv_store = ConversationsStore(self.paths)
+                except Exception:  # noqa: BLE001 — fail closed on group match
+                    conv_store = None
             decision = decide_user_input(
                 content,
                 user_id,
@@ -1243,6 +1255,8 @@ class PresenceWorker:
                 phase=self._phase,
                 pending_wait=pending,
                 has_attachments=has_attachments,
+                session_conversation_id=cid,
+                conversations=conv_store,
             )
             if not decision.get("ok"):
                 return dict(decision)
@@ -4103,6 +4117,7 @@ class PresenceWorker:
                 user_id=arm.user_id,
                 moment_id=moment_id,
                 timeout=float(arm.timeout_seconds),
+                conversation_id=getattr(arm, "conversation_id", None),
             )
         except (ValueError, TypeError, OSError) as exc:
             _LOG.exception("backstop arm_wait failed: %s", exc)

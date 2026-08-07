@@ -23,17 +23,27 @@ WAIT_TOOL = REPO_ROOT / "tools" / "bundled" / "wait_user" / "TOOL.md"
 
 
 def _extract_wait_armed_fn(js: str) -> str:
-    m = re.search(
-        r"(function waitArmedForSessionUser\s*\([^)]*\)\s*\{.*?\n\})",
-        js,
-        re.DOTALL,
-    )
-    assert m is not None, "waitArmedForSessionUser must be defined in app.js"
-    return m.group(1)
+    # Brace-balanced extract so nested matches_session branch is included (KD24).
+    start = js.find("function waitArmedForSessionUser")
+    assert start >= 0, "waitArmedForSessionUser must be defined in app.js"
+    brace = js.find("{", start)
+    assert brace >= 0
+    depth = 0
+    i = brace
+    while i < len(js):
+        ch = js[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return js[start : i + 1]
+        i += 1
+    raise AssertionError("unbalanced braces in waitArmedForSessionUser")
 
 
 def test_wait_armed_for_session_user_pure():
-    """pending + status pending + matching user_id → armed; edge cases false."""
+    """pending + status pending + matching user_id → armed; matches_session preferred."""
     js = APP_JS.read_text(encoding="utf-8")
     fn_src = _extract_wait_armed_fn(js)
 
@@ -49,6 +59,22 @@ def test_wait_armed_for_session_user_pure():
         ({"status": "pending", "user_id": 1}, "1", True),
         ({"status": "pending"}, "operator", False),  # empty user_id ≠ operator
         ({"status": "pending", "user_id": ""}, "", True),
+        # KD24: server matches_session wins over user_id mismatch / match
+        (
+            {"status": "pending", "user_id": "other", "matches_session": True},
+            "operator",
+            True,
+        ),
+        (
+            {"status": "pending", "user_id": "operator", "matches_session": False},
+            "operator",
+            False,
+        ),
+        (
+            {"status": "answered", "user_id": "operator", "matches_session": True},
+            "operator",
+            False,
+        ),
     ]
 
     node = shutil.which("node")
@@ -78,8 +104,10 @@ def test_wait_armed_for_session_user_pure():
         assert proc.returncode == 0, proc.stderr or proc.stdout
         return
 
-    # Python mirror when node unavailable (same contract as JS).
+    # Python mirror when node unavailable (same contract as JS / KD24).
     def wait_armed(pending, user_id) -> bool:
+        if pending and isinstance(pending.get("matches_session"), bool):
+            return pending.get("status") == "pending" and pending["matches_session"]
         if not pending:
             return False
         if pending.get("status") != "pending":
