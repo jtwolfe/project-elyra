@@ -3,6 +3,8 @@
 Scope: REST JSON + SPA fallthrough for operator glass.
 In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users),
+  schedule inspect GET /api/schedule (timer/wait active + optional history;
+  lightweight continuous; #126),
   tool/skill package inspector (GET detail + package VCS versions, read-only),
   multi-user session + identity panel (grants, promote, list/create users),
   provider/model/credential mutators, live usage + hard-stop override,
@@ -272,6 +274,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 self._json(400, {"ok": False, "error": str(exc)})
                 return
             self._json(200, {"goals": goals})
+            return
+
+        if path == "/api/schedule":
+            self._get_schedule(qs)
             return
 
         if path == "/api/moments":
@@ -726,6 +732,152 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(503, {"ok": False, "error": "resetting"})
             return True
         return False
+
+    # ── Schedule inspect (#126) ──────────────────────────────────────────
+
+    def _get_schedule(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/schedule — active timers/waits, optional history, continuous.
+
+        Read-only; uses live ``worker.timers`` (not a second TimerService).
+        Continuous via lightweight ``worker.continuous_status()`` — never
+        ``status_snapshot()``. Do not call ``_reject_if_resetting`` (catalog GET).
+        """
+        from datetime import UTC, datetime
+
+        from elyra.presence.timers import (
+            STATUS_ANSWERED,
+            STATUS_CANCELLED,
+            STATUS_FIRED,
+            STATUS_PENDING,
+            STATUS_SCHEDULED,
+            STATUS_TIMED_OUT,
+        )
+
+        timer_statuses = {STATUS_SCHEDULED, STATUS_FIRED, STATUS_CANCELLED}
+        wait_statuses = {
+            STATUS_PENDING,
+            STATUS_ANSWERED,
+            STATUS_TIMED_OUT,
+            STATUS_CANCELLED,
+        }
+        view_all_cap = 200
+        terminal_timer = {STATUS_FIRED, STATUS_CANCELLED}
+        terminal_wait = {STATUS_ANSWERED, STATUS_TIMED_OUT, STATUS_CANCELLED}
+
+        view = (qs.get("view") or ["active"])[0].strip().lower()
+        if view not in ("active", "all"):
+            self._json(400, {"ok": False, "error": "invalid view"})
+            return
+
+        include_history = (qs.get("include_history") or ["0"])[0].lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        try:
+            history_limit = int((qs.get("history_limit") or ["20"])[0])
+        except (TypeError, ValueError):
+            self._json(400, {"ok": False, "error": "invalid history_limit"})
+            return
+        history_limit = max(0, min(100, history_limit))
+
+        timer_status_raw = (qs.get("timer_status") or [None])[0]
+        wait_status_raw = (qs.get("wait_status") or [None])[0]
+        if timer_status_raw is not None and timer_status_raw not in timer_statuses:
+            self._json(400, {"ok": False, "error": "invalid timer_status"})
+            return
+        if wait_status_raw is not None and wait_status_raw not in wait_statuses:
+            self._json(400, {"ok": False, "error": "invalid wait_status"})
+            return
+
+        try:
+            svc = self.worker.timers
+            all_timers = svc.list_timers(status=None)  # wake_at ASC, id ASC
+            all_waits = svc.list_waits(status=None)  # expires_at ASC, id ASC
+
+            # counts over full maps (not filtered primary slice)
+            timers_scheduled = sum(
+                1 for t in all_timers if t.status == STATUS_SCHEDULED
+            )
+            timers_fired = sum(1 for t in all_timers if t.status == STATUS_FIRED)
+            timers_cancelled = sum(
+                1 for t in all_timers if t.status == STATUS_CANCELLED
+            )
+            waits_pending = sum(1 for w in all_waits if w.status == STATUS_PENDING)
+            waits_answered = sum(
+                1 for w in all_waits if w.status == STATUS_ANSWERED
+            )
+            waits_timed_out = sum(
+                1 for w in all_waits if w.status == STATUS_TIMED_OUT
+            )
+            waits_cancelled = sum(
+                1 for w in all_waits if w.status == STATUS_CANCELLED
+            )
+            counts = {
+                "timers_scheduled": timers_scheduled,
+                "timers_fired": timers_fired,
+                "timers_cancelled": timers_cancelled,
+                "timers_total": len(all_timers),
+                "waits_pending": waits_pending,
+                "waits_answered": waits_answered,
+                "waits_timed_out": waits_timed_out,
+                "waits_cancelled": waits_cancelled,
+                "waits_total": len(all_waits),
+            }
+
+            # Primary filters (precedence: status override > view)
+            if timer_status_raw is not None:
+                primary_timers = [t for t in all_timers if t.status == timer_status_raw]
+            elif view == "active":
+                primary_timers = [
+                    t for t in all_timers if t.status == STATUS_SCHEDULED
+                ]
+            else:
+                primary_timers = all_timers[:view_all_cap]
+
+            if wait_status_raw is not None:
+                primary_waits = [w for w in all_waits if w.status == wait_status_raw]
+            elif view == "active":
+                primary_waits = [
+                    w for w in all_waits if w.status == STATUS_PENDING
+                ]
+            else:
+                primary_waits = all_waits[:view_all_cap]
+
+            history_timers: list[dict[str, Any]] = []
+            history_waits: list[dict[str, Any]] = []
+            if include_history:
+                # Terminal only; sort by original due/expiry DESC (not fire time)
+                term_timers = [t for t in all_timers if t.status in terminal_timer]
+                term_timers.sort(key=lambda t: (t.wake_at, t.id), reverse=True)
+                history_timers = [
+                    t.to_dict() for t in term_timers[:history_limit]
+                ]
+                term_waits = [w for w in all_waits if w.status in terminal_wait]
+                term_waits.sort(key=lambda w: (w.expires_at, w.id), reverse=True)
+                history_waits = [
+                    w.to_dict() for w in term_waits[:history_limit]
+                ]
+
+            continuous = self.worker.continuous_status()
+            server_time = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+            self._json(
+                200,
+                {
+                    "ok": True,
+                    "server_time": server_time,
+                    "timers": [t.to_dict() for t in primary_timers],
+                    "waits": [w.to_dict() for w in primary_waits],
+                    "history_timers": history_timers,
+                    "history_waits": history_waits,
+                    "counts": counts,
+                    "continuous": continuous,
+                },
+            )
+        except Exception:
+            _LOG.exception("GET /api/schedule failed")
+            self._json(500, {"ok": False, "error": "schedule_unavailable"})
 
     # ── Memory inspect (PR9) ─────────────────────────────────────────────
 

@@ -6,8 +6,9 @@ full reset port (reset_runtime_state under lock while idle).
 Out of scope: HTTP/web, tool internals, glass UI panels.
 
 Public API: enqueue_wake, enqueue_user_message, interject, resolve_user_input,
-busy, active_moment_id, pending_wait, status_snapshot, reset_runtime_state,
-set_continuous_enabled, set_dev_speed, set_semantic_wait, set_meal_budget.
+busy, active_moment_id, pending_wait, status_snapshot, continuous_status, timers,
+reset_runtime_state, set_continuous_enabled, set_dev_speed, set_semantic_wait,
+set_meal_budget.
 Must not import runtime.web.
 """
 
@@ -1010,6 +1011,11 @@ class PresenceWorker:
         return self._queue
 
     @property
+    def timers(self) -> TimerService:
+        """Durable timer/wait store (Glass schedule inspect, tools)."""
+        return self._timers
+
+    @property
     def phase(self) -> str:
         with self._lock:
             return self._phase
@@ -1192,6 +1198,19 @@ class PresenceWorker:
             out["wake_id"] = item.id
             out["message_id"] = mid
             return out
+
+    def continuous_status(self) -> dict[str, Any]:
+        """Lightweight continuous block for Glass (same keys as status continuous).
+
+        Does **not** build meal/context/memory/viewing. Safe for ``/api/schedule``.
+        """
+        with self._lock:
+            pending_continues = len(self._queue.pending_of_kind("moment_continue"))
+            return continuous_status_block(
+                self._continuous,
+                self.settings.continuous,
+                pending_moment_continues=pending_continues,
+            )
 
     def status_snapshot(self) -> dict[str, Any]:
         """Snapshot for ``/api/status`` (phase, hops, queue depths, wait)."""
