@@ -3,6 +3,7 @@
 Scope: REST JSON + SPA fallthrough for operator glass.
 In scope: status, messages, wait reply, continuous toggle, full reset,
   lean glass catalogs (goals, moments, tools, skills, identity/users),
+  conversation CRUD GET/POST/PATCH /api/conversations (C12 PR3d),
   schedule inspect GET /api/schedule (timer/wait active + optional history;
   lightweight continuous; #126),
   tool/skill package inspector (GET detail + package VCS versions, read-only),
@@ -18,7 +19,8 @@ In scope: status, messages, wait reply, continuous toggle, full reset,
   MM #124 PR4 — POST vectors/neighbors media-as-query (att_id ± q);
   Phase 2a PR-A5 — graph overview/session/neighbors + optional debug POST).
 Out of scope: Glass draft editors, multi-party chat protocol,
-  TTS, vision expand, glass UI rewrite, glass promote/revert for packages.
+  TTS, vision expand, glass UI rewrite, glass promote/revert for packages,
+  #131 real multi-user auth / keep trays / full presence (hooks only).
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 _LOG = logging.getLogger(__name__)
 
 from elyra.config import ElyraPaths
-from elyra.conversations import ConversationsStore
+from elyra.conversations import ConversationsStore, validate_conversation_id
 from elyra.goals import GoalsStore
 from elyra.identity import (
     IdentityStore,
@@ -47,7 +49,12 @@ from elyra.identity import (
     load_active_token_set,
     mint_grant,
 )
-from elyra.identity.layout import content_sha256, read_text_or_empty
+from elyra.identity.layout import (
+    content_sha256,
+    read_text_or_empty,
+    validate_user_id,
+    write_json_atomic,
+)
 from elyra.runtime.client_sessions import (
     ClientSessionsRegistry,
     InvalidClientId,
@@ -158,6 +165,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     moments: MomentStore
     identity: IdentityStore
     users: UsersStore
+    conversations: ConversationsStore
     tools: ToolRegistry | None
     skills: SkillCatalog | None
     # Per-client glass session registry (KD21); bound at server start.
@@ -425,6 +433,14 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, {"users": self._list_users_summary()})
             return
 
+        if path == "/api/conversations" or path == "/api/conversations/":
+            self._get_conversations(qs)
+            return
+
+        if path.startswith("/api/conversations/"):
+            self._get_conversation_detail(path)
+            return
+
         if path == "/api/session":
             self._get_session()
             return
@@ -612,6 +628,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._post_users(body)
             return
 
+        if path == "/api/conversations" or path == "/api/conversations/":
+            self._post_conversations(body)
+            return
+
         if path == "/api/identity/grants":
             self._post_identity_grants(body)
             return
@@ -660,6 +680,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         if path == "/api/usage":
             self._patch_usage(body)
+            return
+
+        if path.startswith("/api/conversations/"):
+            self._patch_conversation(path, body)
             return
 
         self._json(404, {"error": "not found"})
@@ -3425,6 +3449,224 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             )
         return rows
 
+    # ── Conversations CRUD (C12 PR3d) ─────────────────────────────────────
+
+    def _parse_conversation_id_from_path(self, path: str) -> str | None:
+        """Extract + validate conversation_id from ``/api/conversations/{id}``.
+
+        Returns validated id, or None after sending 400 (path jail / bad shape).
+        """
+        prefix = "/api/conversations/"
+        if not path.startswith(prefix):
+            self._json(400, {"ok": False, "error": "invalid conversation id"})
+            return None
+        rest = unquote(path[len(prefix) :])
+        if not rest or "/" in rest:
+            self._json(400, {"ok": False, "error": "invalid conversation id"})
+            return None
+        try:
+            return validate_conversation_id(rest)
+        except ValueError:
+            self._json(400, {"ok": False, "error": "invalid conversation id"})
+            return None
+
+    def _member_labels(self, members: list[Any]) -> dict[str, str]:
+        """Map each validated member user_id → display_label (dogfood, not auth)."""
+        labels: dict[str, str] = {}
+        for m in members:
+            if not isinstance(m, str):
+                continue
+            try:
+                # Fail closed: only label jail-valid user ids.
+                uid = validate_user_id(m)
+            except ValueError:
+                continue
+            labels[uid] = self.users.display_label(uid)
+        return labels
+
+    def _clean_members_list(self, members: Any) -> list[str] | None:
+        """Validate + strip + dedupe member user_ids; send 400 and return None on error.
+
+        Same strip policy as ``?member=`` query (whitespace-tolerant, jail-strict).
+        Validates each id *before* store lookup so bad members always 400 (even
+        when the conversation id is unknown — consistent vs existence 404).
+        """
+        if not isinstance(members, list) or not members:
+            self._json(
+                400,
+                {"ok": False, "error": "members must be a non-empty list"},
+            )
+            return None
+        clean: list[str] = []
+        seen: set[str] = set()
+        for m in members:
+            if not isinstance(m, str):
+                self._json(
+                    400,
+                    {"ok": False, "error": "members must be user_id strings"},
+                )
+                return None
+            try:
+                uid = validate_user_id(m.strip())
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return None
+            if uid not in seen:
+                seen.add(uid)
+                clean.append(uid)
+        if not clean:
+            self._json(
+                400,
+                {"ok": False, "error": "members must be a non-empty list"},
+            )
+            return None
+        return clean
+
+    def _conversation_payload(self, rec: dict[str, Any]) -> dict[str, Any]:
+        """Full conversation record + member display labels."""
+        out = dict(rec)
+        members = out.get("members") or []
+        if not isinstance(members, list):
+            members = []
+            out["members"] = members
+        out["member_labels"] = self._member_labels(members)
+        return out
+
+    def _get_conversations(self, qs: dict[str, list[str]]) -> None:
+        """GET /api/conversations — list summaries; optional ``?member=`` filter."""
+        member_raw = (qs.get("member") or [None])[0]
+        type_raw = (qs.get("type") or [None])[0]
+        member: str | None = None
+        conv_type: str | None = None
+        if member_raw is not None and str(member_raw).strip():
+            member = str(member_raw).strip()
+        if type_raw is not None and str(type_raw).strip():
+            # Case-normalize like POST body type (DM/Group → dm/group).
+            conv_type = str(type_raw).strip().lower()
+        try:
+            rows = self.conversations.list(
+                member_user_id=member,
+                type=conv_type,
+            )
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc)})
+            return
+        self._json(200, {"conversations": rows})
+
+    def _get_conversation_detail(self, path: str) -> None:
+        """GET /api/conversations/{id} — full record + member labels."""
+        cid = self._parse_conversation_id_from_path(path)
+        if cid is None:
+            return
+        rec = self.conversations.get(cid)
+        if rec is None:
+            self._json(404, {"ok": False, "error": "conversation not found"})
+            return
+        self._json(200, {"conversation": self._conversation_payload(rec)})
+
+    def _post_conversations(self, body: dict[str, Any]) -> None:
+        """POST /api/conversations — create group or ensure DM.
+
+        Group: ``{ name, members[], description? }`` (optional ``type:"group"``).
+        DM: ``{ type:"dm", user_id }`` (idempotent ensure).
+        Default group only when ``type`` is omitted or null — non-string type → 400.
+        """
+        if self._reject_if_resetting():
+            return
+
+        # Resolve type: omitted/null → group path; non-str → 400; str → lower.
+        if "type" in body:
+            raw_type = body.get("type")
+            if raw_type is None:
+                conv_type: str | None = None
+            elif not isinstance(raw_type, str):
+                self._json(400, {"ok": False, "error": "invalid conversation type"})
+                return
+            else:
+                conv_type = raw_type.strip().lower() or None
+        else:
+            conv_type = None
+
+        # Ensure DM path.
+        if conv_type == "dm":
+            user_id = body.get("user_id")
+            if not isinstance(user_id, str) or not user_id.strip():
+                self._json(400, {"ok": False, "error": "user_id required"})
+                return
+            try:
+                rec = self.conversations.ensure_dm(user_id.strip())
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return
+            self._json(200, {"ok": True, "conversation": self._conversation_payload(rec)})
+            return
+
+        # Create group (default when type omitted/null or type=group).
+        if conv_type is not None and conv_type != "group":
+            self._json(400, {"ok": False, "error": "invalid conversation type"})
+            return
+        name = body.get("name")
+        members = body.get("members")
+        description = body.get("description")
+        conversation_id = body.get("conversation_id")
+        if not isinstance(name, str) or not name.strip():
+            self._json(400, {"ok": False, "error": "name required"})
+            return
+        clean_members = self._clean_members_list(members)
+        if clean_members is None:
+            return
+        if description is not None and not isinstance(description, str):
+            self._json(400, {"ok": False, "error": "description must be str or null"})
+            return
+        if conversation_id is not None and not isinstance(conversation_id, str):
+            self._json(400, {"ok": False, "error": "invalid conversation_id"})
+            return
+        try:
+            rec = self.conversations.create_group(
+                name=name,
+                members=clean_members,
+                description=description if isinstance(description, str) else None,
+                conversation_id=conversation_id.strip()
+                if isinstance(conversation_id, str) and conversation_id.strip()
+                else None,
+            )
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc)})
+            return
+        self._json(201, {"ok": True, "conversation": self._conversation_payload(rec)})
+
+    def _patch_conversation(self, path: str, body: dict[str, Any]) -> None:
+        """PATCH /api/conversations/{id} — name / description / members."""
+        if self._reject_if_resetting():
+            return
+        cid = self._parse_conversation_id_from_path(path)
+        if cid is None:
+            return
+        kwargs: dict[str, Any] = {}
+        if "name" in body:
+            kwargs["name"] = body.get("name")
+        if "description" in body:
+            kwargs["description"] = body.get("description")
+        if "members" in body:
+            # Validate members before store.update so bad ids → 400 even if
+            # conversation is missing (existence check would otherwise 404).
+            clean_members = self._clean_members_list(body.get("members"))
+            if clean_members is None:
+                return
+            kwargs["members"] = clean_members
+        if not kwargs:
+            self._json(400, {"ok": False, "error": "no update fields"})
+            return
+        try:
+            rec = self.conversations.update(cid, **kwargs)
+        except KeyError:
+            self._json(404, {"ok": False, "error": "conversation not found"})
+            return
+        except ValueError as exc:
+            self._json(400, {"ok": False, "error": str(exc)})
+            return
+        self._json(200, {"ok": True, "conversation": self._conversation_payload(rec)})
+
     def _draft_sha_self(self) -> str | None:
         path = self.identity.draft_path()
         if not path.is_file():
@@ -5699,6 +5941,7 @@ def start_api_server(
     moments: MomentStore | None = None,
     identity: IdentityStore | None = None,
     users: UsersStore | None = None,
+    conversations: ConversationsStore | None = None,
     tools: ToolRegistry | None = ...,  # type: ignore[assignment]
     skills: SkillCatalog | None = ...,  # type: ignore[assignment]
 ) -> tuple[ThreadingHTTPServer, threading.Thread]:
@@ -5741,6 +5984,7 @@ def start_api_server(
             "moments": moments or MomentStore(paths),
             "identity": identity or IdentityStore(paths),
             "users": users_store,
+            "conversations": conversations or ConversationsStore(paths),
             "tools": tools,
             "skills": skills,
             "conversations": conversations_store,
