@@ -1676,29 +1676,38 @@ def test_post_group_message_stamps_conversation_and_social_kind(paths):
         assert row.get("conversation_id") == "group:room1"
         assert row.get("user_id") == "jim"
 
-        # Wake payload must carry both stamps.
-        pending = h.worker._queue.pending()  # noqa: SLF001
-        social = [
-            w
-            for w in pending
-            if w.kind == "user_message"
-            and (w.payload or {}).get("content") == "hello group"
-        ]
-        # Wake may already be claimed if worker is running — also check events.
-        if social:
-            payload = social[0].payload or {}
-            assert payload.get("conversation_id") == "group:room1"
-            assert payload.get("social_kind") == "group"
-            assert payload.get("user_id") == "jim"
-        else:
-            # Worker may have claimed; inspect via wake_id on response if present.
-            wake_id = r.get("wake_id")
-            if wake_id:
-                item = h.worker._queue.get(wake_id)  # noqa: SLF001
-                if item is not None:
-                    payload = item.payload or {}
-                    assert payload.get("conversation_id") == "group:room1"
-                    assert payload.get("social_kind") == "group"
+        # Message in route payload (when present) should also carry conversation_id.
+        msg_body = r.get("message")
+        if isinstance(msg_body, dict):
+            assert msg_body.get("conversation_id") == "group:room1"
+            assert msg_body.get("user_id") == "jim"
+
+        # Hermetic pin: wake payload must carry both stamps (require locate).
+        wake_id = r.get("wake_id")
+        item = None
+        if wake_id:
+            item = h.worker._queue.get(wake_id)  # noqa: SLF001
+        if item is None:
+            pending = h.worker._queue.pending()  # noqa: SLF001
+            claimed = h.worker._queue.claimed()  # noqa: SLF001
+            candidates = list(pending) + list(claimed)
+            item = next(
+                (
+                    w
+                    for w in candidates
+                    if w.kind == "user_message"
+                    and (w.payload or {}).get("content") == "hello group"
+                ),
+                None,
+            )
+        assert item is not None, (
+            f"T5 wake not found for social_kind stamp check; wake_id={wake_id!r} "
+            f"response={r!r}"
+        )
+        payload = item.payload or {}
+        assert payload.get("conversation_id") == "group:room1"
+        assert payload.get("social_kind") == "group"
+        assert payload.get("user_id") == "jim"
     finally:
         h.close()
 

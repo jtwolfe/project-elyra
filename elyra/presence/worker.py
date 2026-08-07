@@ -249,24 +249,18 @@ def _conversation_id_from_wake(wake: WakeItem) -> str | None:
     return stripped or None
 
 
-def _social_kind_from_payload(
-    payload: Mapping[str, Any] | None,
-    *,
-    conversation_id: str | None = None,
-) -> str | None:
-    """Return stamped social_kind for social enqueues; None when pure work.
-
-    Prefer explicit payload ``social_kind`` in {group, dm}; else derive from
-    conversation_id when present. Pure work leaves this None (omitted).
-    """
-    if payload:
-        kind = payload.get("social_kind")
-        if kind in ("group", "dm"):
-            return str(kind)
-    if isinstance(conversation_id, str) and conversation_id.strip():
-        from elyra.conversations import social_kind_for
-
-        return social_kind_for(conversation_id.strip())
+def _conversation_id_from_wait_obj(wait_obj: Any) -> str | None:
+    """Read soft conversation_id from a PendingWait / wait-like object."""
+    if wait_obj is None:
+        return None
+    raw = getattr(wait_obj, "conversation_id", None)
+    if raw is None and hasattr(wait_obj, "to_dict"):
+        try:
+            raw = (wait_obj.to_dict() or {}).get("conversation_id")
+        except Exception:  # noqa: BLE001 — soft
+            raw = None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
     return None
 
 
@@ -4613,8 +4607,12 @@ class PresenceWorker:
     ) -> dict[str, Any]:
         """Mark wait answered and enqueue wait_reply (phase stays waiting).
 
-        Prefer wait record conversation_id when present (PR3c stores it on
-        WaitArm); else use caller-stamped social fields from session/body.
+        Prefer wait-record ``conversation_id`` when present (PR3c stores it on
+        WaitArm / PendingWait). Read the wait object via ``mark_wait_answered``
+        return value (or ``get_wait``, which includes answered rows) — never
+        ``list_waits()`` pending-only after mark, which cannot see the row.
+        When the wait address wins, re-derive ``social_kind`` from that id so a
+        group wait is not stamped ``social_kind=dm`` from a Private Chat session.
         """
         text = content.strip() if isinstance(content, str) else ""
         choice_s = (
@@ -4622,27 +4620,20 @@ class PresenceWorker:
             if isinstance(choice, str)
             else (str(choice) if choice is not None else "")
         )
-        wait_cid: str | None = None
-        wait_kind: str | None = None
+        wait_obj: Any = None
         if wait_id:
             try:
-                self._timers.mark_wait_answered(wait_id)
+                # mark_wait_answered returns the wait (incl. after status→answered).
+                wait_obj = self._timers.mark_wait_answered(wait_id)
             except KeyError:
                 _LOG.warning("wait_reply for unknown wait_id=%s", wait_id)
-            # Pull conversation_id from durable wait when available (PR3c+).
-            try:
-                for w in self._timers.list_waits():
-                    wid = getattr(w, "id", None) or getattr(w, "wait_id", None)
-                    if str(wid) != str(wait_id):
-                        continue
-                    raw = getattr(w, "conversation_id", None)
-                    if raw is None and hasattr(w, "to_dict"):
-                        raw = (w.to_dict() or {}).get("conversation_id")
-                    if isinstance(raw, str) and raw.strip():
-                        wait_cid = raw.strip()
-                    break
-            except Exception:  # noqa: BLE001 — soft; fall back to caller stamp
-                pass
+                # Still try get_wait (covers races / already-terminal rows).
+                try:
+                    wait_obj = self._timers.get_wait(wait_id)
+                except Exception:  # noqa: BLE001
+                    wait_obj = None
+
+        wait_cid = _conversation_id_from_wait_obj(wait_obj)
 
         mid = message_id or str(uuid.uuid4())
         payload: dict[str, Any] = {
@@ -4654,9 +4645,15 @@ class PresenceWorker:
             payload["wait_id"] = wait_id
         if choice_s:
             payload["choice"] = choice_s
-        # Prefer wait record address; else caller (session) stamps.
-        cid = wait_cid or conversation_id
-        kind = wait_kind or social_kind
+        # Prefer wait record address; when wait wins, kind must match wait cid.
+        if wait_cid is not None:
+            from elyra.conversations import social_kind_for
+
+            cid = wait_cid
+            kind = social_kind_for(wait_cid)
+        else:
+            cid = conversation_id
+            kind = social_kind
         _stamp_social_payload(payload, conversation_id=cid, social_kind=kind)
         item = self._queue.enqueue("wait_reply", payload)
         # Phase stays waiting until claim → in_moment (design).

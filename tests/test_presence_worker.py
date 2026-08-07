@@ -2255,6 +2255,102 @@ def test_interject_overflow_retains_conversation_and_social_kind(paths):
         _stop_join(worker, stop, t)
 
 
+def test_interject_remainder_flush_retains_social_stamps(paths):
+    """Remainder flush retains conversation_id + social_kind (T6 / §3.6)."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def on_call(_kwargs: Any) -> None:
+        entered.set()
+        release.wait(timeout=3.0)
+
+    stub = _stub_loop(on_call=on_call)
+    worker, stop = _make_worker(paths, run_do_loop_fn=stub)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message(
+            "busy-rem",
+            conversation_id="group:g-rem",
+            social_kind="group",
+        )
+        assert entered.wait(timeout=2.0)
+
+        r = worker.interject(
+            "note-rem",
+            user_id="jim",
+            conversation_id="group:g-rem",
+            social_kind="group",
+        )
+        assert r["ok"] is True
+        assert worker.status_snapshot()["interject_depth"] == 1
+
+        # Force remainder flush (end-moment path uses the same helper).
+        with worker._lock:  # noqa: SLF001
+            worker._flush_interjects_as_wakes_unlocked()  # noqa: SLF001
+
+        rem = [
+            w
+            for w in worker._queue.pending()  # noqa: SLF001
+            if (w.payload or {}).get("from_interject_remainder")
+            and (w.payload or {}).get("content") == "note-rem"
+        ]
+        assert rem, "expected from_interject_remainder wake"
+        payload = rem[0].payload or {}
+        assert payload.get("conversation_id") == "group:g-rem"
+        assert payload.get("social_kind") == "group"
+        assert payload.get("user_id") == "jim"
+        assert worker.status_snapshot()["interject_depth"] == 0
+    finally:
+        release.set()
+        _stop_join(worker, stop, t)
+
+
+def test_wait_reply_prefers_wait_conversation_over_caller(paths):
+    """Wait-record conversation_id wins over caller/session; kind re-derived.
+
+    Group wait + DM session stamps must not mismatch social_kind=dm.
+    """
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    try:
+        wait = worker.timers.arm_wait(
+            prompt="pick one",
+            user_id="jim",
+            moment_id="m-wait",
+            timeout=600.0,
+            choices=["a", "b"],
+            wait_id="wait-group-1",
+        )
+        # Synthetic field until PR3c persists WaitArm.conversation_id on PendingWait.
+        wait.conversation_id = "group:wait-room"  # type: ignore[attr-defined]
+
+        result = worker._apply_wait_reply_unlocked(  # noqa: SLF001
+            content="answer from group",
+            user_id="jim",
+            choice="a",
+            wait_id=wait.id,
+            message_id="msg-wait-1",
+            conversation_id="dm:jim",  # caller Private Chat — must lose
+            social_kind="dm",
+        )
+        assert result.get("ok") is True
+        wake_id = result.get("wake_id")
+        assert wake_id
+        item = worker._queue.get(wake_id)  # noqa: SLF001
+        assert item is not None
+        payload = item.payload or {}
+        assert payload.get("conversation_id") == "group:wait-room"
+        assert payload.get("social_kind") == "group"
+        assert payload.get("user_id") == "jim"
+        assert payload.get("wait_id") == "wait-group-1"
+
+        # Wait is answered; get_wait still returns it (list pending would not).
+        answered = worker.timers.get_wait(wait.id)
+        assert answered is not None
+        assert answered.status != "pending"
+    finally:
+        stop.set()
+
+
 def test_build_tool_context_stamps_social_kind_from_payload(paths):
     """_build_tool_context copies conversation_id + extras social_kind from wake."""
     worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
