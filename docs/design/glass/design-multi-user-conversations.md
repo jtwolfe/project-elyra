@@ -15,7 +15,7 @@
 | **Packaging** | [#118](https://github.com/jtwolfe/project-elyra/issues/118) C12 · epic [#111](https://github.com/jtwolfe/project-elyra/issues/111) |
 | **Implement issues** | [#127](https://github.com/jtwolfe/project-elyra/issues/127) glass_tail · [#128](https://github.com/jtwolfe/project-elyra/issues/128) operator thread · [#129](https://github.com/jtwolfe/project-elyra/issues/129) group + `/chat` |
 | **Residual gate** | [#131](https://github.com/jtwolfe/project-elyra/issues/131) keep trays / full presence / real auth — **hooks only** |
-| **Related designs** | [design-identity-self-other-multi-user.md](../../docs/design/identity/design-identity-self-other-multi-user.md) (shipped) · [design-instance-continuity-glass-tail-directed-keep.md](../../docs/design/memory/design-instance-continuity-glass-tail-directed-keep.md) · [docs/state/architecture.md](../../docs/state/architecture.md) · [docs/goal/v0.1.md](../../docs/goal/v0.1.md) |
+| **Related designs** | [design-identity-self-other-multi-user.md](../identity/design-identity-self-other-multi-user.md) (shipped) · [design-instance-continuity-glass-tail-directed-keep.md](../memory/design-instance-continuity-glass-tail-directed-keep.md) · [docs/state/architecture.md](../../state/architecture.md) · [docs/goal/v0.1.md](../../goal/v0.1.md) |
 | **Supersedes** | Design revision `b6d0f506` (v1). **v2 change surface:** process-global `glass_session.json` → **per-client session registry** so multi-window / multi-browser dogfood works without last-writer-wins. Conversation model, glass_tail, speak/wait, #131 hooks, solo null conversation preserved. |
 
 ---
@@ -1430,7 +1430,6 @@ Checklist in `docs/state/multi-user-conversations-dogfood.md` maps 1:1 to this t
 | **KD1** | **Conversation is first-class social address** (`dm:<user_id>`, `group:<uuid>`). | Operator lock; enables groups without second tool. |
 | **KD2** | **Message `user_id` = speaker** (user); assistant **DM** stamps peer user_id; assistant **group** stamps **`user_id=null`**, conversation_id authoritative. | Compat + honest group actor chips. |
 | **KD3** | **speak/wait resolve:** arg/ctx conversation_id → (DM only) user_id shorthand / ctx.user_id; **step 4 skipped when `social_kind=="group"`**; else `missing_conversation`. social_kind stamped at enqueue (§3.6). | Fail closed beats wrong room; T8 implementable. |
-| **KD20** | **Group deliver:** conversation-aware normalize **before** append; `SpeakDelivery.user_id: str \| None`; `as_payload` JSON `null` when None; `append_message` explicit None not coerced; T15 asserts delivery + glass row. | Makes KD2 real against current transport (`user_id: str` + pre-normalize). |
 | **KD4** | **glass_tail strict conversation filter** (no soft global fill). Legacy DM fill only for pre-cutover null conversation_id rows. **Not client-scoped.** | Prevents #127 bleed; multi-client same group shares tip. |
 | **KD5** | **Solo / non-social wakes: empty glass_tail**; never inject any client session conversation. | Operator lock; continuous work purity. |
 | **KD6** | **Speaker labels** via single helper (estimate + select); group user lines always labeled; DM optional short form. | Attribution + honest floor accounting. |
@@ -1447,6 +1446,7 @@ Checklist in `docs/state/multi-user-conversations-dogfood.md` maps 1:1 to this t
 | **KD17** | **`list_messages`: scan all → filter → last-N** (never limit-then-filter). | Multi-user interleave correctness. |
 | **KD18** | **Per-client session load normalize** missing conversation→`dm:user`, view_mode→`conversation`; full RMW save **per client key** (never process-global user_id-only write). | Legacy + concurrent safety. |
 | **KD19** | **SOCIAL_WAKE_KINDS for rebuild_outer** = continuous_policy set; **wait_timeout stays non-social** for glass_tail this pass. | Avoid dual definition bugs. |
+| **KD20** | **Group deliver:** conversation-aware normalize **before** append; `SpeakDelivery.user_id: str \| None`; `as_payload` JSON `null` when None; `append_message` explicit None not coerced; T15 asserts delivery + glass row. | Makes KD2 real against current transport (`user_id: str` + pre-normalize). |
 | **KD21** | **Client-bound session registry:** sessionStorage UUID + `X-Elyra-Client` + `data/runtime/client_sessions.json` map. New tab/window = new client; tab-duplicate may clone. | Concurrent multi-principal dogfood without real auth. |
 | **KD22** | **Legacy `glass_session.json`:** one-shot import under lock when map empty; write deprecation stub; never write product session state back. | Backward compat without dual source of truth. |
 | **KD23** | **Speaker/match from client session** on `POST /api/messages` and `POST /api/wait/reply` when durable client bound (header or mint); body user_id ignored if mismatch. **Lands in PR3a.** | Prevents body/header identity split; concurrent speak-as-session-user server-enforced early. |
