@@ -91,7 +91,11 @@ DIRECTED_KEEP_OMIT_BUDGET = "budget"
 # Glass-tail band (S1 / #93 instance continuity).
 GLASS_TAIL_CHANNEL = "glass_tail"
 GLASS_TAIL_LABEL = "glass-tail"
-SOCIAL_WAKE_KINDS = frozenset({"user_message", "wait_reply", "wait_timeout"})
+# Glass-tail social bit (KD19): aligned with continuous_policy.SOCIAL_WAKE_KINDS.
+# wait_timeout is **non-social** for glass_tail scope — do not re-add it here.
+# rebuild_outer imports continuous_policy as the authoritative source of truth;
+# this export exists for callers that still import from meal and must match.
+SOCIAL_WAKE_KINDS = frozenset({"user_message", "wait_reply"})
 
 
 @dataclass(frozen=True)
@@ -2414,12 +2418,24 @@ def compose_meal(
     temporal_items = _temporal_items(kept, compact, open_moment_id)
 
     # Semantic supporting channel (Phase 2).
-    # S5: prefer glass-tail last user as query seed on social wakes (OQ8).
+    # S5 / §4.5: prefer glass-tail last user as query seed on social wakes.
+    # Seed only from scoped sources (KD4/KD5) — never unscoped glass_list:
+    # (a) glass_tail_meta["last_user_text"] from select, else
+    # (b) _last_glass_user_text on conversation-eligible rows only.
+    # Non-social + null conversation: force no glass seed (no foreign tip).
     glass_seed_text: str | None = None
-    if glass_tail_meta and isinstance(glass_tail_meta.get("last_user_text"), str):
-        glass_seed_text = glass_tail_meta.get("last_user_text") or None
-    if not glass_seed_text and glass_list:
-        glass_seed_text = _last_glass_user_text(glass_list)
+    if not social_wake and conv_id is None:
+        glass_seed_text = None
+    else:
+        if glass_tail_meta and isinstance(
+            glass_tail_meta.get("last_user_text"), str
+        ):
+            glass_seed_text = glass_tail_meta.get("last_user_text") or None
+        if not glass_seed_text and glass_list:
+            scoped_for_seed = _eligible_glass_rows(
+                glass_list, conversation_id=conv_id
+            )
+            glass_seed_text = _last_glass_user_text(scoped_for_seed)
 
     semantic_items: list[MealItem] = []
     semantic_omitted: str | None = None

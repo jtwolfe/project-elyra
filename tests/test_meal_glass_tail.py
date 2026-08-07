@@ -1169,3 +1169,135 @@ def test_glass_tail_no_soft_global_fill():
     # Floor target clamped to available (1), so shortfall may be false — still
     # must not invent foreign rows.
     assert meta["window"] == 1
+
+
+def test_compose_seed_not_from_unscoped_glass_when_non_social(store, paths):
+    """§4.5 / KD5: non-social leftover glass_rows must not seed semantic query."""
+    from elyra.memory.embed.mock import MockEmbedder
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    glass = [
+        _glass_conv(
+            mid="s1",
+            role="user",
+            content="sam secret seed",
+            user_id="sam",
+            conversation_id="dm:sam",
+        ),
+        _glass_conv(
+            mid="j1",
+            role="user",
+            content="jim leftover",
+            user_id="jim",
+            conversation_id="dm:jim",
+        ),
+    ]
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(paths)
+    pkg = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=20_000,
+        glass_rows=glass,
+        social_wake=False,
+        conversation_id=None,
+        settings=MemorySettings(
+            semantic_enabled=True,
+            semantic_wait_for_select=False,
+        ),
+        index=idx,
+        embedder=emb,
+    )
+    # No glass_tail pack
+    assert not any(i.channel == GLASS_TAIL_CHANNEL for i in pkg.items)
+    assert pkg.glass_tail_meta is None
+    # Semantic seed must not use foreign leftover tip (seed_source empty, not glass_tail)
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta.get("seed_source") != "glass_tail"
+    # empty_seed or no_hits/no index content — never glass_tail provenance
+    assert pkg.semantic_select_meta.get("seed_source") in (
+        "empty",
+        "open_moment",
+        None,
+    ) or pkg.semantic_omitted_reason is not None
+    # Hard: seed_source must not claim glass_tail from leftover rows
+    assert pkg.semantic_select_meta.get("seed_source") != "glass_tail"
+
+
+def test_compose_seed_scoped_assistant_only_no_foreign_user(store, paths):
+    """Scoped tip assistant-only + foreign user rows → seed stays non-foreign."""
+    from elyra.memory.embed.mock import MockEmbedder
+    from elyra.memory.index import MemoryEmbeddingIndex
+
+    glass = [
+        _glass_conv(
+            mid="s1",
+            role="user",
+            content="sam secret seed",
+            user_id="sam",
+            conversation_id="dm:sam",
+            created_at="2026-07-30T08:00:00Z",
+        ),
+        _glass_conv(
+            mid="j-a",
+            role="assistant",
+            content="jim assistant only",
+            user_id="jim",
+            conversation_id="dm:jim",
+            created_at="2026-07-30T08:01:00Z",
+        ),
+    ]
+    items, meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        floor_messages=1,
+        max_messages=20,
+    )
+    assert items
+    assert meta["last_user_text"] is None  # no user line in scope
+
+    emb = MockEmbedder()
+    idx = MemoryEmbeddingIndex(paths)
+    pkg = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=20_000,
+        glass_rows=glass,
+        social_wake=True,
+        conversation_id="dm:jim",
+        settings=MemorySettings(
+            semantic_enabled=True,
+            semantic_wait_for_select=False,
+        ),
+        index=idx,
+        embedder=emb,
+    )
+    assert pkg.glass_tail_meta is not None
+    assert pkg.glass_tail_meta.get("last_user_text") is None
+    # Semantic must not fall back to sam's unscoped user text → not glass_tail
+    assert pkg.semantic_select_meta is not None
+    assert pkg.semantic_select_meta.get("seed_source") != "glass_tail"
+    # Pack still includes jim assistant only
+    tail = [i for i in pkg.items if i.channel == GLASS_TAIL_CHANNEL]
+    assert any("jim assistant only" in i.content for i in tail)
+    assert not any("sam secret" in i.content for i in tail)
+
+
+def test_meal_social_wake_kinds_aligned_no_wait_timeout():
+    """KD19: meal.SOCIAL_WAKE_KINDS matches continuous_policy (no wait_timeout)."""
+    from elyra.loop.continuous_policy import (
+        SOCIAL_WAKE_KINDS as POLICY_KINDS,
+    )
+    from elyra.memory.meal import SOCIAL_WAKE_KINDS as MEAL_KINDS
+    from elyra.presence import worker as worker_mod
+
+    assert "wait_timeout" not in MEAL_KINDS
+    assert MEAL_KINDS == POLICY_KINDS
+    assert MEAL_KINDS == frozenset({"user_message", "wait_reply"})
+    # Worker binds continuous_policy set (no wait_timeout)
+    assert worker_mod.SOCIAL_WAKE_KINDS is POLICY_KINDS or (
+        worker_mod.SOCIAL_WAKE_KINDS == POLICY_KINDS
+        and "wait_timeout" not in worker_mod.SOCIAL_WAKE_KINDS
+    )
