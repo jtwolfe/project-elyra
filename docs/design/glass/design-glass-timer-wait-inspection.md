@@ -6,7 +6,7 @@
 | **Product** | project-elyra |
 | **Author** | _TBD_ |
 | **Date** | 2026-08-06 |
-| **Status** | Draft |
+| **Status** | Active |
 | **Issue** | [#126](https://github.com/jtwolfe/project-elyra/issues/126) — Glass Memory: timer/wait inspection (schedulability surface) |
 | **Feature branch** | `feature/timer-vis` (created from `working` @ `ecc5537`) |
 | **Integration tip** | Land stack on `feature/timer-vis`; merge **once** to `working` when complete ([branch-law](../../dev/branch-law.md)) |
