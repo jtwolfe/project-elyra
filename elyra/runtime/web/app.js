@@ -265,6 +265,15 @@ let sessionViewMode = "conversation";
 let sessionConversation = null;
 /** Cached conversation list for the select (groups + current DM). */
 let conversationsCache = [];
+/**
+ * Throttle for GET /api/conversations?member= discovery poll (KD-U1 / KD-U1a).
+ * List is not re-fetched every 1.5s tick — default 3000ms; dogfood bar ≤5s.
+ */
+const CONVERSATIONS_POLL_MS = 3000;
+/** Last list-poll attempt (ms); advances on failure too (anti-spam). */
+let lastConversationsPollAt = 0;
+/** Last list-fetch error string or null — for showNotice dedupe (KD-U2). */
+let conversationsListError = null;
 /** Cached users list for group modal multi-select. */
 let usersCache = [];
 /**
@@ -7923,15 +7932,63 @@ function renderUserChips(users, selectedId) {
   }
 }
 
+function shouldRefreshConversations() {
+  return Date.now() - lastConversationsPollAt >= CONVERSATIONS_POLL_MS;
+}
+
+/**
+ * Member-filtered conversation list for the select (KD-U1 / KD-U2).
+ * force: true ignores throttle (boot / switch / create); always advances
+ * lastConversationsPollAt so background polls stay spaced. Failures preserve
+ * last good conversationsCache and surface a deduped notice.
+ */
+async function refreshConversationsList({ force = false } = {}) {
+  if (!force && !shouldRefreshConversations() && lastConversationsPollAt > 0) {
+    return conversationsCache;
+  }
+  // Advance throttle at START of attempt (including failures): intentional.
+  // Prevents tight retry spam on persistent offline; recovery waits one interval.
+  // force: true ignores throttle gate above and still updates lastConversationsPollAt.
+  lastConversationsPollAt = Date.now();
+  const memberQ = encodeURIComponent(getSessionUserId());
+  try {
+    const convs = await fetchJson(`/api/conversations?member=${memberQ}`);
+    conversationsCache = (convs && convs.conversations) || [];
+    const prevErr = conversationsListError;
+    conversationsListError = null;
+    populateConversationSelect(conversationsCache);
+    updateConversationChrome();
+    if (sessionConversationSelect) {
+      sessionConversationSelect.title = "";
+      sessionConversationSelect.removeAttribute("data-error");
+    }
+    // Clear sticky failure notice only when recovering from error → success
+    if (prevErr) {
+      showNotice("Conversation list restored");
+    }
+    return conversationsCache;
+  } catch (err) {
+    // Fail visibly — do NOT wipe cache to []
+    const msg = String(err.message || err);
+    // KD-U2: showNotice only when error string changes (or first failure).
+    if (conversationsListError !== msg) {
+      conversationsListError = msg;
+      showNotice(`Conversation list failed: ${msg}`);
+    }
+    // Always keep select title / data-error current (cheap, no toast spam)
+    if (sessionConversationSelect) {
+      sessionConversationSelect.title = `List refresh failed: ${msg}`;
+      sessionConversationSelect.setAttribute("data-error", "1");
+    }
+    throw err;
+  }
+}
+
 async function refreshLabelCache() {
   try {
-    const memberQ = encodeURIComponent(getSessionUserId());
-    const [session, users, convs] = await Promise.all([
+    const [session, users] = await Promise.all([
       fetchJson("/api/session"),
       fetchJson("/api/users"),
-      fetchJson(`/api/conversations?member=${memberQ}`).catch(() => ({
-        conversations: [],
-      })),
     ]);
     // Server is source of truth for this client (KD21).
     applySessionPayload(session);
@@ -7942,12 +7999,11 @@ async function refreshLabelCache() {
         labelCache.users[u.user_id] = u.goes_by || u.user_id;
       }
     }
-    conversationsCache = (convs && convs.conversations) || [];
     populateSessionSelect(rows);
-    populateConversationSelect(conversationsCache);
-    updateConversationChrome();
+    // Conversations list: fail-visible shared helper (no silent empty catch).
+    await refreshConversationsList({ force: true });
   } catch {
-    /* offline */
+    /* offline — session/users soft path; list failures surface in helper */
   }
 }
 
@@ -8229,12 +8285,19 @@ async function createGroupFromModal(ev) {
     });
     const conv = (data && data.conversation) || data;
     const cid = conv && conv.id;
+    const sessionUid = getSessionUserId();
     closeGroupModal();
     showNotice(`Created group ${conv.name || cid || ""}`.trim());
-    if (cid) {
+    // Force list even if tick is mid-flight (independent of tickInFlight) — KD-U3.
+    await refreshConversationsList({ force: true }).catch(() => {});
+    if (cid && members.includes(sessionUid)) {
       await switchConversation(cid);
+    } else if (cid) {
+      showNotice(
+        `Created ${conv.name || cid} (you are not a member — switch session user or add yourself to open it).`
+      );
+      await refreshMessages({ force: true });
     } else {
-      await refreshLabelCache();
       await refreshMessages({ force: true });
     }
   } catch (err) {
@@ -9702,6 +9765,11 @@ async function tick() {
   tickInFlight = true;
   try {
     const tasks = [refreshStatus(), refreshMessages()];
+    // Topology discovery for multi-client dogfood (throttled inside helper) — KD-U1.
+    // .catch so list failure never aborts status/messages; helper surfaces notice.
+    if (shouldRefreshConversations()) {
+      tasks.push(refreshConversationsList().catch(() => {}));
+    }
     // Also poll the active catalog panel so creates appear without nav re-click.
     // Moments is under Memory (active tab) — no separate activePanel.
     if (

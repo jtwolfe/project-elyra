@@ -1211,6 +1211,124 @@ def test_static_index_served(paths):
         h.close()
 
 
+def test_static_app_js_conversations_list_poll(paths):
+    """PR1 KD-U1–U5: conversation list discovery poll + create membership gate needles.
+
+    T-U2: refreshConversationsList + CONVERSATIONS_POLL_MS
+    T-U3: tick schedules throttled list refresh
+    T-U4: no silent empty catch on conversations leg
+    T-U5: createGroupFromModal switches only when session user ∈ members
+    """
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+            js = resp.read().decode("utf-8")
+
+        # T-U2: poll constant + extracted list helper
+        assert "CONVERSATIONS_POLL_MS" in js
+        assert re.search(r"CONVERSATIONS_POLL_MS\s*=\s*3000", js)
+        assert "function refreshConversationsList" in js
+        assert "function shouldRefreshConversations" in js
+        assert "lastConversationsPollAt" in js
+        assert "conversationsListError" in js
+
+        # T-U3: tick schedules conversations refresh when throttle elapsed
+        tick_m = re.search(
+            r"async function tick\s*\(\s*\)\s*\{(.*?)\n// Boot order",
+            js,
+            re.DOTALL,
+        )
+        if tick_m is None:
+            tick_m = re.search(
+                r"async function tick\s*\(\s*\)\s*\{(.*)",
+                js,
+                re.DOTALL,
+            )
+        assert tick_m is not None, "tick() body not found"
+        tick_body = tick_m.group(1)[:2000]
+        assert "shouldRefreshConversations" in tick_body
+        assert "refreshConversationsList" in tick_body
+        assert "tasks.push(refreshConversationsList" in tick_body
+
+        # T-U4: absence of conversations-leg silent empty catch
+        assert ".catch(() => ({ conversations: [] }))" not in js
+        assert ".catch(()=>({conversations:[]}))" not in js.replace(" ", "")
+        # refreshLabelCache must not invent empty membership on list failure
+        rlc_m = re.search(
+            r"async function refreshLabelCache\s*\(\s*\)\s*\{(.*?)\n(?:async )?function ",
+            js,
+            re.DOTALL,
+        )
+        assert rlc_m is not None, "refreshLabelCache body not found"
+        rlc_body = rlc_m.group(1)
+        assert "refreshConversationsList" in rlc_body
+        assert "conversations: []" not in rlc_body
+        assert "/api/conversations?member=" in js
+
+        # Fail-visible + cache preserve + notice dedupe (KD-U2)
+        rcl_m = re.search(
+            r"async function refreshConversationsList\s*\([^)]*\)\s*\{(.*?)\n(?:async )?function ",
+            js,
+            re.DOTALL,
+        )
+        assert rcl_m is not None, "refreshConversationsList body not found"
+        rcl_body = rcl_m.group(1)
+        assert "conversationsListError" in rcl_body
+        assert "showNotice" in rcl_body
+        assert "Conversation list failed" in rcl_body
+        assert "data-error" in rcl_body
+        # Must not assign conversationsCache = [] on error path
+        catch_m = re.search(r"catch\s*\([^)]*\)\s*\{(.*)\}\s*$", rcl_body, re.DOTALL)
+        if catch_m is None:
+            catch_m = re.search(r"catch\s*\([^)]*\)\s*\{(.*?)\n\s*\}", rcl_body, re.DOTALL)
+        assert catch_m is not None, "refreshConversationsList catch not found"
+        catch_body = catch_m.group(1)
+        assert "conversationsCache" not in catch_body or "conversationsCache =" not in catch_body
+
+        # T-U5: createGroupFromModal membership gate before switchConversation
+        cg_m = re.search(
+            r"async function createGroupFromModal\s*\([^)]*\)\s*\{(.*?)\n(?:async )?function ",
+            js,
+            re.DOTALL,
+        )
+        assert cg_m is not None, "createGroupFromModal body not found"
+        cg_body = cg_m.group(1)
+        assert "members.includes(sessionUid)" in cg_body or (
+            "members.includes(" in cg_body and "sessionUid" in cg_body
+        )
+        assert "switchConversation" in cg_body
+        # Gate must appear as condition around switch, not always switch
+        assert re.search(
+            r"if\s*\([^)]*members\.includes\(sessionUid\)[^)]*\)\s*\{[^}]*switchConversation",
+            cg_body,
+            re.DOTALL,
+        ) or (
+            "members.includes(sessionUid)" in cg_body
+            and cg_body.index("members.includes(sessionUid)")
+            < cg_body.index("switchConversation")
+        )
+        # Always force list refresh after create (independent of tickInFlight)
+        assert "refreshConversationsList({ force: true })" in cg_body or (
+            "refreshConversationsList({force: true})" in cg_body
+        )
+
+        # KD-U4: bound-group inject still present for already-bound non-member session
+        pop_m = re.search(
+            r"function populateConversationSelect\s*\([^)]*\)\s*\{(.*?)\nfunction ",
+            js,
+            re.DOTALL,
+        )
+        assert pop_m is not None, "populateConversationSelect body not found"
+        pop_body = pop_m.group(1)
+        assert "sessionConversationId" in pop_body
+        assert 'startsWith("group:")' in pop_body or "startsWith('group:')" in pop_body
+        assert "groups.push" in pop_body
+    finally:
+        h.close()
+
+
 def test_static_app_js_active_panel_poll(paths):
     """Glass app.js polls the active catalog panel and tracks selection."""
     h = _ApiHarness(paths)
