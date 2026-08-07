@@ -160,7 +160,6 @@ const sessionNewGuestBtn = $("#session-new-guest-btn");
 const continuousToggles = document.querySelectorAll(
   ".continuous-toggle:not(#usage-override-toggle):not(#dev-speed-toggle):not(#semantic-wait-toggle)"
 );
-const continuousMetaEls = [$("#continuous-status-rail")].filter(Boolean);
 const continuousSummary = $("#continuous-summary");
 const continuousBadge = $("#continuous-badge");
 const continuousDetail = $("#continuous-detail");
@@ -2308,11 +2307,8 @@ function renderContinuous(s) {
     });
   }
 
-  const meta = formatContinuousMeta(c);
-  continuousMetaEls.forEach((el) => {
-    el.textContent = meta;
-  });
-
+  // Honesty meta lives on Status (#continuous-detail / #continuous-badge).
+  // Rail compact meta el removed with the rail toggle (PR4).
   if (continuousSummary) {
     continuousSummary.hidden = false;
     if (continuousBadge) {
@@ -3261,7 +3257,7 @@ function renderScheduleContinuous(c) {
   const head = document.createElement("div");
   head.className = "card-head";
   const title = document.createElement("strong");
-  title.textContent = "Continuous";
+  title.textContent = "Continue open work";
   const badge = document.createElement("span");
   badge.className = enabled ? "badge badge-open" : "badge";
   badge.textContent = enabled ? "on" : "off";
@@ -3272,13 +3268,13 @@ function renderScheduleContinuous(c) {
   meta.className = "muted";
   // Same field names as formatContinuousMeta / Status continuous strip.
   if (!enabled) {
-    meta.textContent = "continuous: off";
+    meta.textContent = "continue open work: off";
   } else {
     const streak = Number(cont.streak) || 0;
     const max = Number(cont.max_streak) || 0;
     const pending = Number(cont.pending_moment_continues) || 0;
     const parts = [
-      "continuous: on",
+      "continue open work: on",
       `streak ${streak}/${max}`,
       `pending continues ${pending}`,
     ];

@@ -964,7 +964,8 @@ def test_static_index_served(paths):
         assert "wait-choices" in html
         assert "notice" in html
         assert "continuous-toggle" in html
-        assert "Continuous work" in html
+        assert "Continue open work" in html
+        assert "Continuous work" not in html
         assert "pill-autopilot" in html
         # #126 PR3/PR4: Memory → Schedule tab (active + optional history)
         assert 'data-memory-tab="schedule"' in html
@@ -1023,13 +1024,24 @@ def test_static_index_served(paths):
         # #88: pure markdown helpers load before app.js
         assert 'src="/markdown.js"' in html
         assert html.index('src="/markdown.js"') < html.index('src="/app.js"')
-        # Continuous control lives in the rail (single source of truth).
-        assert "continuous-toggle-rail" in html
-        assert "rail-continuous" in html
-        assert "continuous-status-rail" in html
-        # Removed per-panel chat/status header toggles (avoid duplication).
+        # Continuous control lives on Status (rail primary removed).
+        assert "continuous-toggle-status" in html
+        assert 'id="continuous-toggle-status"' in html
+        assert "continuous-toggle-rail" not in html
+        assert "rail-continuous" not in html
+        assert "continuous-status-rail" not in html
+        # Chat header toggle still absent (no duplication).
         assert "continuous-toggle-chat" not in html
-        assert "continuous-toggle-status" not in html
+        # Status continuous card: toggle class + honesty detail el for PATCH/render path.
+        cont_status = re.search(
+            r'id="continuous-toggle-status"[^>]*class="([^"]*)"',
+            html,
+        )
+        assert cont_status is not None, "continuous-toggle-status input not found"
+        assert "continuous-toggle" in cont_status.group(1)
+        assert 'id="continuous-detail"' in html
+        assert 'id="continuous-badge"' in html
+        assert 'id="continuous-summary"' in html
         # Moments list is content-sized; detail owns leftover space.
         assert "list-panel-auto" in html
         # Phase 0 provider / usage glass (PR7 web).
@@ -1229,8 +1241,22 @@ def test_static_app_js_active_panel_poll(paths):
         assert 'scheduleHistoryToggle.addEventListener("change"' in js or (
             "scheduleHistoryToggle.addEventListener('change'" in js
         )
-        # Continuous meta targets rail control (single source of truth).
-        assert "continuous-status-rail" in js
+        # Continuous control on Status: rail meta el gone; honesty via #continuous-detail.
+        assert "continuous-status-rail" not in js
+        assert "continuous-toggle-rail" not in js
+        assert "continuousMetaEls" not in js
+        assert "continuousDetail" in js
+        assert "continuousBadge" in js
+        assert "setContinuousEnabled" in js
+        assert '"/api/continuous"' in js or "'/api/continuous'" in js
+        # Schedule strip retitled (read-only; no second toggle).
+        assert 'textContent = "Continue open work"' in js or (
+            "textContent = 'Continue open work'" in js
+        )
+        assert "renderScheduleContinuous" in js
+        # Status honesty meta includes skip reason (honest_exit surfaces here).
+        assert "last skip:" in js or "last_skip_reason" in js
+        assert "pending continues:" in js
         # BUG-meal-01: meal budget range → PATCH + soft-poll focus guard
         assert 'meal-budget-fraction' in js
         assert "/api/meal-budget" in js

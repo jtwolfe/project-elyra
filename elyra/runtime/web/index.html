@@ -44,14 +44,6 @@
             Who is typing in this session.
           </p>
         </div>
-        <div class="rail-continuous continuous-control" title="Hybrid continuous work (autopilot)">
-          <label class="toggle-label" for="continuous-toggle-rail">
-            <input type="checkbox" id="continuous-toggle-rail" class="continuous-toggle" />
-            <span class="toggle-track" aria-hidden="true"></span>
-            <span class="toggle-text">Continuous work</span>
-          </label>
-          <div id="continuous-status-rail" class="continuous-meta muted">off</div>
-        </div>
         <div class="rail-effort" role="group" aria-label="Reasoning effort">
           <div class="rail-foot-label muted">Effort</div>
           <div
@@ -1166,8 +1158,19 @@
             <div id="continuous-summary" class="continuous-summary">
               <div class="card continuous-card status-card">
                 <div class="card-head">
-                  <strong>Continuous work</strong>
+                  <strong>Continue open work</strong>
                   <span id="continuous-badge" class="badge">off</span>
+                </div>
+                <p class="muted status-helper">
+                  When ON, presence may chain moments after progress if open goals remain —
+                  unless you audit the ledger then stop, or wait.
+                </p>
+                <div class="continuous-control">
+                  <label class="toggle-label" for="continuous-toggle-status">
+                    <input type="checkbox" id="continuous-toggle-status" class="continuous-toggle" />
+                    <span class="toggle-track" aria-hidden="true"></span>
+                    <span class="toggle-text">Continue open work</span>
+                  </label>
                 </div>
                 <p id="continuous-detail" class="muted">—</p>
               </div>

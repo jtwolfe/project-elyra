@@ -168,13 +168,8 @@ body {
   box-shadow: inset 2px 0 0 var(--gold-primary);
 }
 
-.rail-continuous {
-  margin-top: auto;
-  align-items: flex-start;
-  min-width: 0;
-}
-
 .rail-effort {
+  margin-top: auto;
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -1772,17 +1767,6 @@ body {
   min-width: 9.5rem;
 }
 
-.rail-continuous.continuous-control {
-  align-items: flex-start;
-  min-width: 0;
-  width: 100%;
-}
-
-.rail-continuous .continuous-meta {
-  text-align: left;
-  max-width: none;
-}
-
 .toggle-label {
   display: inline-flex;
   align-items: center;
@@ -2964,11 +2948,8 @@ body {
     flex-direction: row;
     flex-wrap: wrap;
   }
-  .rail-continuous {
-    margin-top: 0;
-    width: auto;
-  }
   .rail-effort {
+    margin-top: 0;
     width: auto;
     min-width: 0;
   }
