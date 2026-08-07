@@ -30,6 +30,7 @@ Living docs for **what the product does today**. Designs and PR plans live under
 | [time-and-identity.md](time-and-identity.md) | Self ≠ user, draft/promote, work-origin USER, time layers |
 | [known-bugs.md](known-bugs.md) | Deferred product bugs / dogfood backlog |
 | [grok-build-dogfood.md](grok-build-dogfood.md) | Operator checklist for current Grok Build instrument |
+| [multi-user-conversations-dogfood.md](multi-user-conversations-dogfood.md) | C12 multi-user / group / concurrent sessions dogfood checklist |
 | [usage-and-pacing.md](usage-and-pacing.md) | SuperGrok pool vs Elyra ledger, burst, override |
 
 ## Memory (as implemented)

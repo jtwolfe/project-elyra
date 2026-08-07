@@ -4,6 +4,11 @@ Module owns types + load/save + pure helpers only (KD-TRAY-SOT).
 In-process source of truth is ``TraversalRegistry`` (not this module).
 Persist path: ``data/runtime/directed_keep_tray.json``.
 
+Instance-global today (one tray for the process). Future multi-user residual
+(#131 A): optional key by ``conversation_id`` or ``"_solo"`` — **hook only**;
+no per-conversation entry field, no meal directed_keep filter by conversation
+in the C12 stack (KD10).
+
 Out of scope: meal packing, soft-recall (S5), graph UX (S6).
 Replace/remove for model keep updates live on DirectedKeepTray (merge_confirm + remove_ids).
 """

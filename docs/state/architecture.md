@@ -73,6 +73,7 @@ Inventory from the live package tree (top-level domains + one-line role). Root m
 | **`memory/`** | Atoms, meal, ladder, graph, Lance/JSONL stores, temporal, keep tray; `memory/embed/` |
 | **`identity/`** | Self digest store, gates/grants, orient-user resolver |
 | **`users/`** | Per-user digest store (other; multi-user prep) |
+| **`conversations/`** | DM/group social address store (`dm:` / `group:`; C12 multi-user) |
 | **`goals/`** | Durable goals/tasks ledger (*what*; separate from wakes) |
 | **`speak/`** | Glass delivery of assistant rows (sole writer path for speak) |
 | **`media/`** | Attachments, STT/TTS hooks, meal expand, GC |
@@ -95,9 +96,10 @@ Default home is the repo (or `ELYRA_HOME`). Runtime data lives under `data/` (cr
 | `wakes/` | Durable wake queue |
 | `identity/` | Self digest (versioned; draft → promote) |
 | `users/` | Other-user digests |
+| `conversations/` | DM/group records + index (C12 social address) |
 | `goals/` | Goals / tasks ledger |
 | `memory/` | Stretch 2 atom store (JSONL / optional Lance) |
-| `runtime/` | `continuous.json`, `provider.json`, `usage.json`, prefs |
+| `runtime/` | `continuous.json`, `provider.json`, `usage.json`, prefs; `client_sessions.json` (per-client dogfood principals); keep tray |
 | `secrets/` | Mode `0700` — API key + named `values/` |
 | `media/` | Content-addressed attachments |
 | `browser/` | Optional Playwright session data |
@@ -156,7 +158,7 @@ Local `provider=local` is a reserved/stub surface — not the day-to-day path.
 |------|---------------------|
 | Memory fidelity | Substrate past empty chat log; long-horizon quality still early |
 | Semantic / 2a | Code present; **default flags off**; live dogfood not claimed complete |
-| Multi-user | Prep landed (identity/users); not full multi-party product |
+| Multi-user | Conversations + per-client sessions + `/chat` landed (C12 code); live dogfood open — [multi-user-conversations-dogfood.md](multi-user-conversations-dogfood.md); #131 auth/keep/presence residual |
 | GPU embed (Radeon VII / ROCm) | Dev path under [radeon-vii/](radeon-vii/); Tensile inject machine-local — [known-bugs.md](known-bugs.md) BUG-mem-gpu-01 |
 | Inference freezes | Do not use Gemma `inference.md` / historical live-eval stages for setup |
 | Autonomy / safety | External host controls required — root README **DANGER** |
