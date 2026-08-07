@@ -54,6 +54,7 @@ Design documents and PR plans that implement goals. Status-indexed catalogue (fo
 | [design-glass-aurimago-gold-polish.md](glass/design-glass-aurimago-gold-polish.md) | Shipped | Glass gold theme polish |
 | [design-glass-multimodal-attachments.md](glass/design-glass-multimodal-attachments.md) | Active / next stack | STT/TTS, durable attachments, Grok vision |
 | [design-glass-timer-wait-inspection.md](glass/design-glass-timer-wait-inspection.md) | **Active** | Memory → Schedule tab; GET /api/schedule; timer/wait inspection (#126 / feature/timer-vis) |
+| [design-multi-user-conversations.md](glass/design-multi-user-conversations.md) | **Active** | C12 multi-user/group chat v2 — Conversation store, glass_tail scope, concurrent `/chat` client sessions (KD21–25); #131 hooks only (#118 / #127–129) |
 
 ---
 
