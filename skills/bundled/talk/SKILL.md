@@ -31,7 +31,8 @@ Pick the first that applies:
 
 1. **`speak`** — always first on social wakes (greeting / answer / ack). Prefer `conversation_id` when orient/ctx shows the room (`dm:…` or `group:…`). On pure DM wakes, `user_id` DM shorthand is fine; **never** demote a group wake into a private DM.
 2. Then optionally ledger tools: `create_goal`, `create_task`, `list_goals`, `get_goal`, `update_goal`, `update_task`.
-3. Then hand off only **after** speak: `load_skill` with exact name `plan-work`, `do-work`, or `create-tool` when warranted.
+3. Topology (when the human asks to form or edit a work group): `create_group` / `update_group` with **explicit** `members` only — do **not** assume operator/creator is a member. After create, **`speak` to the returned `conversation_id`** if the room needs a message; members discover the group via Glass/`/chat` list poll (not push).
+4. Then hand off only **after** speak: `load_skill` with exact name `plan-work`, `do-work`, or `create-tool` when warranted.
 
 ## Hard rules
 
