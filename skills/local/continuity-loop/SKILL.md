@@ -37,7 +37,7 @@ Keep agency alive across moments without busywork or silent free-text “done.�
 4. Leave evidence: task notes and/or `tmp/` artifact.
 5. If more real work remains → next ready task, or `schedule_wake` for a **timed** step with reason + optional goal/task link.
 6. If the human must decide or reply → `speak` + `wait_user`.
-7. If nothing useful remains → `rest` / honest idle (backstop matters while goals stay open; idle is correct when they do not need action).
+7. If nothing useful remains → `rest` / honest idle (backstop matters while goals stay open; idle is correct when they do not need action). Under Continue open work **ON**, “nothing useful” means **audited** idle: follow `rest` First action (ledger inspect via `list_goals` / `get_goal` / `get_task`, then no_tools) — not silent free-text after thrash while goals stay open.
 8. Before goal close → `load_skill` name `review-work`.
 
 ### Stage map
@@ -57,6 +57,7 @@ Keep agency alive across moments without busywork or silent free-text “done.�
 
 - Ready tasks that are chores only to tickle continuous-work
 - Silent free-text completion with no ledger/sandbox evidence
+- Bare free-text stop after tools without ledger inspect while continuous ON (prefer audit-then-idle via `rest`)
 - `schedule_wake` spam instead of real task decomposition
 - Closing goals inside `do-work` without review
 - Treating continuous-work as permission to monologue without goals
