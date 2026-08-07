@@ -173,9 +173,57 @@ Formats: [tools-and-skills.md](tools-and-skills.md).
 
 ## 11. Continuous work (opt-in, post-core)
 
-Default **OFF**. When enabled (Glass / `PATCH /api/continuous`), presence may inject a budgeted in-moment work-continue HOST and, after finalize with non-speak progress + open work, enqueue a gated `moment_continue` wake. Prefer *pending* `task_ready` only — never re-arm ready tasks. Distinct from time-idle continue (`continue_policy.py`).
+**Product framing: Continue open work** — a **progress-gated chain on open ledger work**, not “always alive” / autopilot forever. Default **OFF**.
 
-Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Design: [design-continuous-work-orient-ledger-reset.md](../design/stretch-1/design-continuous-work-orient-ledger-reset.md).
+When enabled (Glass / `PATCH /api/continuous`), presence may inject a budgeted in-moment work-continue HOST and, after finalize with non-speak progress + open work, enqueue a gated `moment_continue` wake. Prefer *pending* `task_ready` only — never re-arm ready tasks. Distinct from time-idle continue (`continue_policy.py`).
+
+**Tracker / design:** [#130](https://github.com/jtwolfe/project-elyra/issues/130) package; refine design [design-continuous-work-refine.md](../design/stretch-1/design-continuous-work-refine.md) (**Active** — Option A + Status move + HOST/skills). Shipped baseline: [design-continuous-work-orient-ledger-reset.md](../design/stretch-1/design-continuous-work-orient-ledger-reset.md).
+
+### Outer continue — honest exits (skip / stop paths)
+
+Outer gate: `should_enqueue_moment_continue` in `elyra/loop/continuous_policy.py`. Canonical `last_skip_reason` values:
+
+| Skip / stop path | `last_skip_reason` / mechanism | Notes |
+|------------------|-------------------------------|-------|
+| Toggle OFF | `disabled` | No enqueue; cancels pending `moment_continue` only |
+| Non-allowlist stop | `stop_reason` | Includes `wait` (`wait_user` arms wait → no outer continue) |
+| Pending wait | `pending_wait` | Durable wait present |
+| Dedupe | `dedupe` | Already one pending `moment_continue` |
+| Streak exhausted | `streak` | Default max 8 consecutive continues |
+| Cooldown | `cooldown` | Default 30s since last enqueue (or flood tick) |
+| No non-speak progress | `no_progress` | No successful non-speak tool **and** no ledger mutation |
+| **Honest exit (Option A)** | **`honest_exit`** | See below — **refine package; not yet on all tips until PR2 lands** |
+| Pure social | `pure_social` | Social wake + no tools/ledger |
+| Prefer pending task_ready | `pending_task_ready` | Never synthesize task_ready (K4/K16) |
+| Empty ledger | `no_open_work` | K18 |
+| Flood thrash | `flood` | Majority flood formula; starts cooldown |
+
+Stop allowlist for outer continue: `{no_tools, time_continue_declined, max_hops}` only.
+
+### Option A — audit then idle (normative for refine package)
+
+**Invariant:** Keep model stop as `no_tools` for honest idle. Change only the **outer continue** decision.
+
+When continuous is ON and the moment stops with `stop_reason=no_tools` **after a successful ledger audit** this moment (`list_goals` / `get_goal` / `get_task` with `ToolResult.ok`), **do not enqueue** `moment_continue` even if open goals remain and non-speak tools ran earlier. Skip reason: **`honest_exit`**.
+
+- Audit set (single source: `LEDGER_AUDIT_TOOLS` in continuous_policy): `{list_goals, get_goal, get_task}`.
+- **Does not** count: failed inspects, thrash skip-identical, orient goals slice, host `_has_open_work` re-read, free-text “I checked,” mutating ledger tools alone.
+- Gate placement: after progress gate, before pure_social. Streak/cooldown/dedupe may still mask the observable reason (product outcome: no enqueue either way).
+- `time_continue_declined` / `max_hops` do **not** auto-exit via Option A in v1.
+
+**HOST contract (one-liner, after refine PR2):** under Continue open work ON — call tools if useful; to halt honestly, inspect ledger then stop with no tools; `wait_user` pauses the chain; bare stop after tools without a ledger check may re-wake.
+
+Decision archaeology: [design-continuous-work-refine.md](../design/stretch-1/design-continuous-work-refine.md).
+
+### Live-eval note (`S-cont-*`)
+
+Live-eval: `S-cont-*` in `scripts/live_eval/scenarios.yaml`; OFF baselines `S-social` / `S-tools` / `S-mono` remain the regression gate. Continuous live stage remains operator-gated.
+
+**Expected drift after Option A:** scenarios that allow outer continue when open work remains may see **fewer continues** if the model calls `list_goals` / other audit tools before stop (`honest_exit`). No scenario rewrite required in v1 unless a harness asserts enqueue; document frequency change only.
+
+### Not continuous
+
+Proactive / autotelic experiment mode is a separate **Draft** catalog entry — not wired, not a continuous policy extension: [design-proactive-autotelic-experiment-mode.md](../design/stretch-1/design-proactive-autotelic-experiment-mode.md). Parallel only to Phase 3 procedural [#117](https://github.com/jtwolfe/project-elyra/issues/117).
 
 ---
 

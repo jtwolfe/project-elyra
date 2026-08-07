@@ -29,7 +29,9 @@ Design documents and PR plans that implement goals. Status-indexed catalogue (fo
 | Doc | Status | Notes |
 |-----|--------|-------|
 | [design-stretch-1-implementation.md](stretch-1/design-stretch-1-implementation.md) | Shipped | Stretch 1 design + PR plan |
-| [design-continuous-work-orient-ledger-reset.md](stretch-1/design-continuous-work-orient-ledger-reset.md) | Shipped (mostly) | Continuous work + orient/ledger + reset |
+| [design-continuous-work-orient-ledger-reset.md](stretch-1/design-continuous-work-orient-ledger-reset.md) | Shipped (mostly) | Continuous work + orient/ledger + reset; exit gap → refine Option A |
+| [design-continuous-work-refine.md](stretch-1/design-continuous-work-refine.md) | **Active** | Continue open work: Status toggle + honest exit A (`honest_exit`) + HOST/skills/docs (#130 / `feature/refine-continious-work`) |
+| [design-proactive-autotelic-experiment-mode.md](stretch-1/design-proactive-autotelic-experiment-mode.md) | **Draft** | Proactive/autotelic experiment mode — **not wired**, not continuous, parallel #117 only |
 | [design-post-skill-commitment.md](stretch-1/design-post-skill-commitment.md) | Shipped / historical | Post-skill commitment |
 | [design-tool-thrash-recovery.md](stretch-1/design-tool-thrash-recovery.md) | Shipped / historical | Tool thrash recovery |
 | [design-gemma-sampling-hygiene-staged.md](stretch-1/design-gemma-sampling-hygiene-staged.md) | **Superseded / Freeze** | Do not follow for setup; superseded by remove-gemma |

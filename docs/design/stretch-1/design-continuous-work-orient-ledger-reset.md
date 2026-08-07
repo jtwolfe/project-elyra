@@ -1224,6 +1224,8 @@ Prior stages (S-social / S-tools / S-mono) remain regression gate; continuous OF
 
 ## Open Questions
 
+**Superseded exit gap:** honest idle under continuous ON (audit then `no_tools` still re-woke) is addressed by Option A in [design-continuous-work-refine.md](design-continuous-work-refine.md) (#130) — not a re-open of the rows below.
+
 All product questions for this design are **closed**. Implementers follow the decisions below; do not re-open without a new design revision.
 
 | # | Topic | Decision | Closed |
