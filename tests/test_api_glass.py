@@ -2216,8 +2216,42 @@ def test_static_pr6_operator_conversation_ui(paths):
         # Boot gates tick until session bound (past issue)
         assert "sessionBooted" in js
         assert "if (!sessionBooted) return" in js
+        # Boot ?as= re-syncs rail via switchSessionUser (not bare PUT alone)
+        assert "bootClientSession" in js
+        assert "switchSessionUser(asUser.trim())" in js or (
+            "switchSessionUser(asUser" in js
+        )
+        # Forensic all only on operator `/` — PRODUCT_CHAT path gate (not id-only)
+        assert "PRODUCT_CHAT" in js
+        assert '=== "/chat"' in js or "=== '/chat'" in js
+        assert 'startsWith("/chat/")' in js or "startsWith('/chat/')" in js
+        assert "if (!PRODUCT_CHAT)" in js
+        assert "All messages (forensic)" in js
+        assert "VIEW_ALL_SENTINEL" in js
+        # populateConversationSelect gates forensic option on PRODUCT_CHAT
+        pop_fn = re.search(
+            r"function populateConversationSelect\s*\([^)]*\)\s*\{(.*?)\nfunction ",
+            js,
+            re.DOTALL,
+        )
+        assert pop_fn is not None, "populateConversationSelect body not found"
+        pop_body = pop_fn.group(1)
+        assert "if (!PRODUCT_CHAT)" in pop_body
+        assert "All messages (forensic)" in pop_body
+        assert "VIEW_ALL_SENTINEL" in pop_body
+        # switchConversation no-ops forensic on product shell
+        sw_fn = re.search(
+            r"async function switchConversation\s*\([^)]*\)\s*\{(.*?)\n(?:async )?function ",
+            js,
+            re.DOTALL,
+        )
+        assert sw_fn is not None, "switchConversation body not found"
+        assert "PRODUCT_CHAT" in sw_fn.group(1)
         # Session user label string used in HTML (impersonate)
         assert "impersonate" in html.lower()
+        # Empty-state: single #group-members-empty path (no list duplicate copy)
+        assert "groupMembersEmpty.hidden" in js
+        assert "No users available to invite." in html
         # CSS tokens for chips / group form
         req_css = urllib.request.Request(h.base + "/style.css", method="GET")
         with urllib.request.urlopen(req_css, timeout=5) as resp:

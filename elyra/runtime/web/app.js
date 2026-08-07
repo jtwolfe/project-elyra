@@ -8107,12 +8107,9 @@ function fillGroupMembersChecklist(users) {
   if (!groupMembersList) return;
   const list = Array.isArray(users) ? users : [];
   groupMembersList.innerHTML = "";
+  // Single empty path: #group-members-empty only (no duplicate list placeholder).
   if (groupMembersEmpty) groupMembersEmpty.hidden = list.length > 0;
   if (!list.length) {
-    const p = document.createElement("p");
-    p.className = "muted";
-    p.textContent = "No users available to invite.";
-    groupMembersList.appendChild(p);
     return;
   }
   const sessionUid = getSessionUserId();
@@ -9654,8 +9651,9 @@ async function tick() {
   }
 }
 
-// Boot order (KD21 §7A.8): mint client_id → GET /api/session → optional ?as= PUT
-// → then first tick + interval (do not poll before bind).
+// Boot order (KD21 §7A.8): mint client_id → GET /api/session → optional ?as=
+// switchSessionUser (PUT + re-sync selects) → then first tick + interval.
+// Do not poll before bind; after ?as= rebuild Private Chat as dm:<asUser>.
 (function bootClientSession() {
   getClientId(); // mint/load sessionStorage elyra.clientId
   const params =
@@ -9667,15 +9665,9 @@ async function tick() {
     .then(() => {
       updateBrandChrome();
       if (asUser && asUser.trim() && asUser.trim() !== sessionUserId) {
-        return fetchJson("/api/session", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: asUser.trim() }),
-        })
-          .then((data) => {
-            applySessionPayload(data);
-          })
-          .catch(() => null);
+        // switchSessionUser: PUT user + refreshLabelCache so session-user select,
+        // Private Chat dm:<asUser>, and member-filtered groups match before tick.
+        return switchSessionUser(asUser.trim()).catch(() => null);
       }
       return null;
     })
