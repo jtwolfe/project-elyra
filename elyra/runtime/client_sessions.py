@@ -228,7 +228,7 @@ class ClientSessionsRegistry:
                 # Keep group unless we can see membership later; store keeps group.
                 cid = old_cid
 
-        out = {
+        out: dict[str, Any] = {
             "user_id": uid,
             "conversation_id": cid,
             "view_mode": vm,
@@ -238,6 +238,11 @@ class ClientSessionsRegistry:
                 else utc_now_iso()
             ),
         }
+        # Preserve soft activity_at (mutating put stamps it; GET resolve does not).
+        # Used by orient recently-active secondary fill (C12 PR5 / KD15).
+        act = base.get("activity_at")
+        if isinstance(act, str) and act.strip():
+            out["activity_at"] = act.strip()
         return out
 
     def _disk_mtime_ns(self) -> int | None:
@@ -380,6 +385,23 @@ class ClientSessionsRegistry:
             self._load_unlocked()
             return list(self._clients.keys())
 
+    def list_entries(self) -> list[dict[str, Any]]:
+        """Return session entry dicts (copy) for soft activity / diagnostics.
+
+        Each dict includes ``client_id`` plus session fields. Read-only; does
+        not mint or touch ``updated_at`` / ``activity_at``.
+        """
+        with self._lock:
+            self._load_unlocked()
+            out: list[dict[str, Any]] = []
+            for cid, ent in self._clients.items():
+                if not isinstance(ent, dict):
+                    continue
+                row = dict(ent)
+                row["client_id"] = cid
+                out.append(row)
+            return out
+
     def resolve(
         self,
         client_id: str | None,
@@ -437,7 +459,12 @@ class ClientSessionsRegistry:
         view_mode: str | None = None,
         create_if_missing: bool = True,
     ) -> dict[str, Any]:
-        """Full RMW put for one client key. Never wipes other clients."""
+        """Full RMW put for one client key. Never wipes other clients.
+
+        Stamps ``activity_at`` on every successful put (mutating path). Orient
+        soft recently-active uses this as secondary signal; pure GET resolve
+        create does not stamp activity_at.
+        """
         cid = validate_client_id(client_id)
         with self._lock:
             self._load_unlocked()
@@ -458,8 +485,9 @@ class ClientSessionsRegistry:
                         conversation_id=conversation_id,
                         view_mode=view_mode,
                     )
-                    self._clients[cid] = entry
-                    self._persist_unlocked()
+                entry["activity_at"] = utc_now_iso()
+                self._clients[cid] = entry
+                self._persist_unlocked()
                 return dict(entry)
 
             # Existing: RMW merge (user switch auto-DM handled in normalize).
@@ -469,6 +497,7 @@ class ClientSessionsRegistry:
                 conversation_id=conversation_id,
                 view_mode=view_mode,
             )
+            entry["activity_at"] = utc_now_iso()
             self._clients[cid] = entry
             self._persist_unlocked()
             return dict(entry)

@@ -96,6 +96,13 @@ class LoopSettings:
     # tokens today; meal-content review will re-tune before v0.1.
     orient_skill_catalog_max_tokens: int = 800
     orient_goals_max_tokens: int = 600
+    # C12 PR5: multi-user orient map (Participants / Recently active / Active chats).
+    # Design defaults: participants_max_tokens=800, recently_active_hours=24,
+    # active_chats_limit=6. Soft presence only — not #131 full presence product.
+    orient_participants_max_tokens: int = 800
+    orient_recently_active_hours: int = 24
+    orient_recently_active_limit: int = 8
+    orient_active_chats_limit: int = 6
     # Optional generation lever (K12 / item 5): pin tool_choice=required on the
     # hop while a commit-eligible skill is pending after load_skill. Default OFF;
     # evidence-gated — do not enable until Phase A live gate fails.

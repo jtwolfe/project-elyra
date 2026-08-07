@@ -26,6 +26,11 @@ from typing import Any, Callable, Mapping, Sequence
 from elyra.config import ElyraPaths
 from elyra.goals import GoalsStore
 from elyra.identity import IdentityStore
+from elyra.identity.orient_blocks import (
+    build_active_chats_block,
+    build_participants_block,
+    build_recently_active_block,
+)
 from elyra.identity.orient_user import resolve_orient_user
 from elyra.llm.client import ChatClient
 from elyra.loop.context import assemble_outer_meal
@@ -3628,6 +3633,55 @@ class PresenceWorker:
             )
             skill_bias_s = format_skill_bias(wake.kind, payload, goals_list)
 
+            # C12 PR5 / KD15: Participants / Recently active / Active chats.
+            # Pure work → empty Participants + Active chats; USER stays
+            # single work-origin slot (resolve_orient_user). Soft recently-
+            # active is global (messages first; session activity_at secondary).
+            social_for_orient = wake.kind in SOCIAL_WAKE_KINDS
+            conv_id_orient = _conversation_id_from_wake(wake)
+            peer_for_orient = _user_id_from_wake(wake)
+            try:
+                from elyra.conversations import ConversationsStore
+
+                conv_store = ConversationsStore(self.paths)
+                conv_store.ensure_layout()
+            except Exception:  # noqa: BLE001 — fail soft; empty social map
+                conv_store = None
+            session_entries: list[dict[str, Any]] | None = None
+            try:
+                from elyra.runtime.client_sessions import ClientSessionsRegistry
+
+                session_entries = ClientSessionsRegistry(self.paths).list_entries()
+            except Exception:  # noqa: BLE001
+                session_entries = None
+            participants_s = build_participants_block(
+                social=social_for_orient,
+                conversation_id=conv_id_orient,
+                peer_user_id=peer_for_orient,
+                conversations=conv_store,
+                users=self._users,
+                max_tokens=int(
+                    getattr(loop, "orient_participants_max_tokens", 800) or 800
+                ),
+            )
+            recently_active_s = build_recently_active_block(
+                glass_rows=glass,
+                session_entries=session_entries,
+                users=self._users,
+                hours=int(
+                    getattr(loop, "orient_recently_active_hours", 24) or 24
+                ),
+                limit=int(
+                    getattr(loop, "orient_recently_active_limit", 8) or 8
+                ),
+            )
+            active_chats_s = build_active_chats_block(
+                social=social_for_orient,
+                conversations=conv_store,
+                users=self._users,
+                limit=int(getattr(loop, "orient_active_chats_limit", 6) or 6),
+            )
+
             from elyra.media import MediaStore
             from elyra.media.prompt import (
                 expand_meal_for_provider,
@@ -3645,8 +3699,9 @@ class PresenceWorker:
             if use_memory_meal:
                 try:
                     from elyra.loop.context import fill_orient, format_now
+                    # SOCIAL_WAKE_KINDS: module-level continuous_policy import
+                    # (do not re-import here — shadows and UnboundLocalError).
                     from elyra.memory.meal import (
-                        SOCIAL_WAKE_KINDS,
                         compose_meal,
                         compose_outer_messages,
                         expand_memory_meal_for_provider,
@@ -3664,6 +3719,9 @@ class PresenceWorker:
                         goals=goals_slice,
                         skill_catalog=skill_catalog_s,
                         skill_bias=skill_bias_s,
+                        participants=participants_s,
+                        recently_active=recently_active_s,
+                        active_chats=active_chats_s,
                     )
                     # Overlay runtime wait toggle so first outer + re-outer both
                     # honor glass/API wait-for-select (CPU dogfood).
@@ -3744,6 +3802,9 @@ class PresenceWorker:
                 goals=goals_slice,
                 skill_catalog=skill_catalog_s,
                 skill_bias=skill_bias_s,
+                participants=participants_s,
+                recently_active=recently_active_s,
+                active_chats=active_chats_s,
                 wake_content=wake_content_s,
                 wake_message_id=wake_message_id_s,
                 sliding_input_tokens=budget,

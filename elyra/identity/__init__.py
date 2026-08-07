@@ -14,6 +14,11 @@ from elyra.identity.grants import (
     mint_grant,
 )
 from elyra.identity.layout import content_sha256, mint_user_id, mint_version_id, validate_user_id
+from elyra.identity.orient_blocks import (
+    build_active_chats_block,
+    build_participants_block,
+    build_recently_active_block,
+)
 from elyra.identity.orient_user import resolve_orient_user
 from elyra.identity.store import (
     SEED_V1_SHA256,
@@ -30,6 +35,9 @@ __all__ = [
     "SEED_V1_SHA256",
     "SEED_V1_TEXT",
     "SELF_V2_MARKER",
+    "build_active_chats_block",
+    "build_participants_block",
+    "build_recently_active_block",
     "consume_grant",
     "content_sha256",
     "evaluate_promote_gate",
