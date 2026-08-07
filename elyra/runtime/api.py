@@ -783,6 +783,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         timer_status_raw = (qs.get("timer_status") or [None])[0]
         wait_status_raw = (qs.get("wait_status") or [None])[0]
+        if timer_status_raw is not None:
+            timer_status_raw = timer_status_raw.strip().lower()
+        if wait_status_raw is not None:
+            wait_status_raw = wait_status_raw.strip().lower()
         if timer_status_raw is not None and timer_status_raw not in timer_statuses:
             self._json(400, {"ok": False, "error": "invalid timer_status"})
             return

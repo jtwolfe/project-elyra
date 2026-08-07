@@ -327,6 +327,8 @@ def test_schedule_invalid_params(harness: _ApiHarness) -> None:
         ("/api/schedule?wait_status=bogus", "invalid wait_status"),
         ("/api/schedule?timer_status=pending", "invalid timer_status"),
         ("/api/schedule?wait_status=scheduled", "invalid wait_status"),
+        # still invalid after normalize
+        ("/api/schedule?timer_status=NotAStatus", "invalid timer_status"),
     ]
     for path, err in cases:
         code, body = harness.get(path)
@@ -373,18 +375,84 @@ def test_schedule_history_include_false_stable_empty(harness: _ApiHarness) -> No
 
 
 def test_schedule_history_limit_clamped(harness: _ApiHarness) -> None:
-    # history_limit > 100 clamps to 100; still 200 OK with empty history
-    code, body = harness.get(
-        "/api/schedule?include_history=1&history_limit=500"
-    )
-    assert code == 200
-    assert body["history_timers"] == []
-    # negative clamps to 0
-    code, body2 = harness.get(
+    """Clamp bounds returned history rows when terminal data is present."""
+    svc = harness.worker.timers
+    # Seed 3 fired timers so clamp assertions are not empty-collection only.
+    for i in range(3):
+        past = (
+            datetime.now(UTC) - timedelta(hours=3 - i)
+        ).isoformat().replace("+00:00", "Z")
+        svc.schedule_timer(past, reason=f"term-{i}")
+    svc.schedule_due(now=datetime.now(UTC))
+    assert harness.worker.timers.list_timers(status="fired")
+    assert len(svc.list_timers(status=None)) == 3
+
+    # negative → clamp 0 → empty history despite terminals
+    code, body0 = harness.get(
         "/api/schedule?include_history=1&history_limit=-3"
     )
     assert code == 200
-    assert body2["history_timers"] == []
+    assert body0["history_timers"] == []
+    assert body0["counts"]["timers_fired"] == 3
+
+    # explicit 0 → empty
+    code, body_z = harness.get(
+        "/api/schedule?include_history=1&history_limit=0"
+    )
+    assert code == 200
+    assert body_z["history_timers"] == []
+
+    # positive under total
+    code, body2 = harness.get(
+        "/api/schedule?include_history=1&history_limit=2"
+    )
+    assert code == 200
+    assert len(body2["history_timers"]) == 2
+
+    # >100 clamps to 100; with only 3 terminals, returns all 3 (not unclamped dump)
+    code, body_hi = harness.get(
+        "/api/schedule?include_history=1&history_limit=500"
+    )
+    assert code == 200
+    assert len(body_hi["history_timers"]) == 3
+
+    # Upper clamp 100: seed enough terminals and assert len == 100
+    for i in range(100):
+        past = (
+            datetime.now(UTC) - timedelta(hours=10, minutes=i)
+        ).isoformat().replace("+00:00", "Z")
+        svc.schedule_timer(past, reason=f"bulk-{i}")
+    svc.schedule_due(now=datetime.now(UTC))
+    assert body_hi["counts"]["timers_fired"] == 3  # prior response snapshot
+    fired_n = len(svc.list_timers(status="fired"))
+    assert fired_n >= 103
+    code, body_cap = harness.get(
+        "/api/schedule?include_history=1&history_limit=500"
+    )
+    assert code == 200
+    assert len(body_cap["history_timers"]) == 100
+    assert body_cap["counts"]["timers_fired"] == fired_n
+
+
+def test_schedule_status_override_normalized(harness: _ApiHarness) -> None:
+    """timer_status / wait_status accept strip + case fold (curl ergonomics)."""
+    svc = harness.worker.timers
+    t = svc.schedule_timer(_past(1), reason="done")
+    svc.schedule_due(now=datetime.now(UTC))
+    w = svc.arm_wait(
+        prompt="q", user_id="op", moment_id="m", timeout=60
+    )
+    svc.mark_wait_answered(w.id)
+
+    code, body = harness.get(
+        "/api/schedule?timer_status=Fired&wait_status=%20answered%20"
+    )
+    assert code == 200
+    assert len(body["timers"]) == 1
+    assert body["timers"][0]["id"] == t.id
+    assert body["timers"][0]["status"] == "fired"
+    assert len(body["waits"]) == 1
+    assert body["waits"][0]["status"] == "answered"
 
 
 def test_worker_timers_property(paths) -> None:
