@@ -165,12 +165,13 @@ class ConversationsStore:
             return None
         return data
 
-    def _write_record(self, rec: dict[str, Any]) -> None:
-        """Persist full record + upsert index summary (caller holds lock)."""
+    def _upsert_index_summary(self, rec: dict[str, Any]) -> None:
+        """Upsert index summary for ``rec`` (caller holds lock).
+
+        Safe to call when the by_id record already exists — used to heal
+        dual-write gaps (record on disk, index missing the id).
+        """
         cid = rec["id"]
-        path = self._record_path(cid)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(path, rec)
         index = self._load_index()
         summaries = index.setdefault("conversations", [])
         if not isinstance(summaries, list):
@@ -188,17 +189,57 @@ class ConversationsStore:
         index["schema_version"] = 1
         write_json_atomic(self.index_path, index)
 
-    def _remove_from_index(self, conversation_id: str) -> None:
+    def _write_record(self, rec: dict[str, Any]) -> None:
+        """Persist full record then index summary (caller holds lock).
+
+        Order: by_id record first, then index. If the index write fails after
+        the record succeeds, the exception propagates but the record remains;
+        callers that re-enter (``ensure_dm``, ``list`` heal, create-exists)
+        re-upsert the index so durable state converges.
+        """
+        cid = rec["id"]
+        path = self._record_path(cid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(path, rec)
+        self._upsert_index_summary(rec)
+
+    def _heal_index_for_record(self, rec: dict[str, Any]) -> None:
+        """Ensure index lists ``rec`` (no-op if already present and current)."""
+        self._upsert_index_summary(rec)
+
+    def _scan_by_id_orphans(self) -> list[dict[str, Any]]:
+        """Load by_id records whose ids are missing from the index."""
         index = self._load_index()
-        summaries = index.get("conversations") or []
-        if not isinstance(summaries, list):
-            return
-        index["conversations"] = [
-            row
-            for row in summaries
-            if not (isinstance(row, dict) and row.get("id") == conversation_id)
-        ]
-        write_json_atomic(self.index_path, index)
+        known: set[str] = set()
+        for row in index.get("conversations") or []:
+            if isinstance(row, dict) and isinstance(row.get("id"), str):
+                known.add(row["id"])
+        orphans: list[dict[str, Any]] = []
+        by_id = self.by_id_dir
+        if not by_id.is_dir():
+            return orphans
+        for child in by_id.iterdir():
+            if not child.is_file() or child.suffix != ".json":
+                continue
+            cid = filename_to_conversation_id(child.name)
+            if cid is None or cid in known:
+                continue
+            try:
+                validate_conversation_id(cid)
+            except ValueError:
+                continue
+            data = load_json_object(child)
+            if data is None or not isinstance(data.get("id"), str):
+                continue
+            orphans.append(data)
+        return orphans
+
+    def _heal_index_orphans(self) -> int:
+        """Upsert any by_id records missing from index. Return heal count."""
+        orphans = self._scan_by_id_orphans()
+        for rec in orphans:
+            self._upsert_index_summary(rec)
+        return len(orphans)
 
     # ── public API ───────────────────────────────────────────────────────
 
@@ -228,6 +269,9 @@ class ConversationsStore:
 
         with self._lock:
             self.ensure_layout()
+            # Heal dual-write orphans (by_id present, index missing) so list
+            # remains complete after a partial write failure.
+            self._heal_index_orphans()
             index = self._load_index()
             out: list[dict[str, Any]] = []
             for row in index.get("conversations") or []:
@@ -250,13 +294,18 @@ class ConversationsStore:
             return out
 
     def ensure_dm(self, user_id: str) -> dict[str, Any]:
-        """Idempotent: create ``dm:<user_id>`` if missing; return full record."""
+        """Idempotent: create ``dm:<user_id>`` if missing; return full record.
+
+        When the by_id record already exists, re-upserts the index summary so
+        a prior dual-write gap (record ok, index failed) is healed.
+        """
         peer = validate_user_id(user_id)
         cid = dm_id_for_user(peer)
         with self._lock:
             self.ensure_layout()
             existing = self._load_record(cid)
             if existing is not None:
+                self._heal_index_for_record(existing)
                 return dict(existing)
             now = utc_now_iso()
             rec: dict[str, Any] = {
@@ -304,7 +353,10 @@ class ConversationsStore:
 
         with self._lock:
             self.ensure_layout()
-            if self._load_record(cid) is not None:
+            existing = self._load_record(cid)
+            if existing is not None:
+                # Heal index if dual-write left an orphan, then fail closed.
+                self._heal_index_for_record(existing)
                 raise ValueError(f"conversation_id already exists: {cid!r}")
             if description is None:
                 desc: str | None = None
@@ -334,8 +386,14 @@ class ConversationsStore:
         description: Any = _UNSET,
         members: Any = _UNSET,
     ) -> dict[str, Any]:
-        """Partial update of name / description / members. Raises if missing."""
+        """Partial update of name / description / members. Raises if missing.
+
+        At least one of ``name`` / ``description`` / ``members`` must be set;
+        a no-op call raises ``ValueError`` (avoids churning ``updated_at``).
+        """
         cid = validate_conversation_id(conversation_id)
+        if name is _UNSET and description is _UNSET and members is _UNSET:
+            raise ValueError("no update fields")
         with self._lock:
             self.ensure_layout()
             rec = self._load_record(cid)

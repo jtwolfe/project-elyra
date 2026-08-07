@@ -11,7 +11,9 @@ write-invariant enforcement (KD16 — callers / later PRs).
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -21,6 +23,11 @@ from typing import Any
 from elyra.config import ElyraPaths, resolve_paths
 
 MESSAGES_FILENAME = "messages.jsonl"
+
+# Process-local serialize for append vs full-file rewrite (migrate). Does not
+# coordinate multi-process writers — see migrate_legacy_conversation_ids.
+_messages_io_lock = threading.Lock()
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,8 +129,10 @@ def append_message(
         attachments=atts,
         meta=dict(meta) if meta is not None else None,
     )
-    with _path(p).open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(_message_to_row(msg), ensure_ascii=False) + "\n")
+    line = json.dumps(_message_to_row(msg), ensure_ascii=False) + "\n"
+    with _messages_io_lock:
+        with _path(p).open("a", encoding="utf-8") as handle:
+            handle.write(line)
     return msg
 
 
@@ -259,56 +268,123 @@ def migrate_legacy_conversation_ids(
     """Eager rewrite: stamp ``conversation_id=dm:<user_id>`` on legacy rows.
 
     Rows already carrying conversation_id are left unchanged. Rows with null
-    conversation_id and non-null user_id get ``dm:{user_id}``. Atomic replace
-    of messages.jsonl. Prefer lazy list_messages fill for dogfood; this is
-    an optional helper for small logs / operators.
+    conversation_id and a **path-jail-safe** non-null user_id get
+    ``dm:{user_id}``. Rows with malformed user_id are left unstamped (lazy
+    list_messages fill still matches them by user_id).
+
+    **Quiesce requirement:** stop PresenceWorker and any other process that
+    may append to ``messages.jsonl`` before calling. A process-local lock
+    serializes with ``append_message`` in *this* process only; multi-process
+    writers are not coordinated. Before replace, size/mtime are re-checked;
+    if the log grew (e.g. another process appended), migrate **aborts**
+    without replacing so concurrent appends are not lost
+    (``ok=False``, ``error="messages_changed"``).
+
+    Prefer lazy ``list_messages`` fill for dogfood; this is an optional
+    helper for small logs / operators under quiesced writers.
     """
+    from elyra.identity.layout import validate_user_id
+
     p = paths or resolve_paths()
     file = _path(p)
-    if not file.is_file():
-        return {"ok": True, "rewritten": 0, "total": 0, "path": str(file)}
 
-    rewritten = 0
-    total = 0
-    out_lines: list[str] = []
-    with file.open(encoding="utf-8") as handle:
-        for line in handle:
-            raw = line.strip()
-            if not raw:
-                continue
-            try:
-                row = json.loads(raw)
-            except json.JSONDecodeError:
-                out_lines.append(raw)
-                continue
-            if not isinstance(row, dict):
-                out_lines.append(raw)
-                continue
-            total += 1
-            if _row_conversation_id(row) is None:
-                uid = row.get("user_id")
-                if isinstance(uid, str) and uid.strip():
-                    row = dict(row)
-                    row["conversation_id"] = f"dm:{uid.strip()}"
-                    rewritten += 1
-            out_lines.append(json.dumps(row, ensure_ascii=False))
+    with _messages_io_lock:
+        if not file.is_file():
+            return {
+                "ok": True,
+                "rewritten": 0,
+                "total": 0,
+                "skipped_invalid_user_id": 0,
+                "path": str(file),
+            }
 
-    text = ("\n".join(out_lines) + "\n") if out_lines else ""
-    tmp = file.with_name(
-        f"{file.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
-    )
-    try:
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(file)
-    except Exception:
         try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    return {
-        "ok": True,
-        "rewritten": rewritten,
-        "total": total,
-        "path": str(file),
-    }
+            st0 = file.stat()
+        except OSError as exc:
+            return {
+                "ok": False,
+                "error": "stat_failed",
+                "detail": str(exc),
+                "path": str(file),
+            }
+        size0, mtime0 = st0.st_size, st0.st_mtime_ns
+
+        rewritten = 0
+        total = 0
+        skipped_invalid = 0
+        out_lines: list[str] = []
+        with file.open(encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    out_lines.append(raw)
+                    continue
+                if not isinstance(row, dict):
+                    out_lines.append(raw)
+                    continue
+                total += 1
+                if _row_conversation_id(row) is None:
+                    uid = row.get("user_id")
+                    if isinstance(uid, str) and uid.strip():
+                        try:
+                            safe_uid = validate_user_id(uid.strip())
+                        except ValueError:
+                            skipped_invalid += 1
+                            _LOG.warning(
+                                "migrate_legacy_conversation_ids: skip invalid "
+                                "user_id=%r on row id=%r",
+                                uid,
+                                row.get("id"),
+                            )
+                        else:
+                            row = dict(row)
+                            row["conversation_id"] = f"dm:{safe_uid}"
+                            rewritten += 1
+                out_lines.append(json.dumps(row, ensure_ascii=False))
+
+        text = ("\n".join(out_lines) + "\n") if out_lines else ""
+        tmp = file.with_name(
+            f"{file.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        )
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            # Detect concurrent multi-process growth before replace.
+            try:
+                st1 = file.stat()
+            except OSError as exc:
+                tmp.unlink(missing_ok=True)
+                return {
+                    "ok": False,
+                    "error": "stat_failed",
+                    "detail": str(exc),
+                    "path": str(file),
+                }
+            if st1.st_size != size0 or st1.st_mtime_ns != mtime0:
+                tmp.unlink(missing_ok=True)
+                return {
+                    "ok": False,
+                    "error": "messages_changed",
+                    "detail": "messages.jsonl changed during migrate; abort",
+                    "rewritten": 0,
+                    "total": total,
+                    "skipped_invalid_user_id": skipped_invalid,
+                    "path": str(file),
+                }
+            tmp.replace(file)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return {
+            "ok": True,
+            "rewritten": rewritten,
+            "total": total,
+            "skipped_invalid_user_id": skipped_invalid,
+            "path": str(file),
+        }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from elyra.config import ElyraPaths
 from elyra.messages import (
@@ -367,3 +368,85 @@ def test_migrate_empty_log(tmp_path):
     assert result["ok"] is True
     assert result["rewritten"] == 0
     assert result["total"] == 0
+
+
+def test_migrate_skips_invalid_user_id(tmp_path):
+    """Malformed historical user_id is not stamped as conversation_id."""
+    paths = _paths(tmp_path)
+    log = paths.data_dir / "messages.jsonl"
+    rows = [
+        {
+            "id": "bad",
+            "role": "user",
+            "content": "weird",
+            "user_id": "../escape",
+            "created_at": "2020-01-01T00:00:00+00:00",
+            "reasoning": "",
+            "moment_id": None,
+        },
+        {
+            "id": "good",
+            "role": "user",
+            "content": "ok",
+            "user_id": "jim",
+            "created_at": "2020-01-01T00:00:01+00:00",
+            "reasoning": "",
+            "moment_id": None,
+        },
+    ]
+    log.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+    )
+    result = migrate_legacy_conversation_ids(paths=paths)
+    assert result["ok"] is True
+    assert result["rewritten"] == 1
+    assert result["skipped_invalid_user_id"] == 1
+    loaded = {r["id"]: r for r in list_messages(limit=0, paths=paths)}
+    assert loaded["good"]["conversation_id"] == "dm:jim"
+    assert loaded["bad"].get("conversation_id") is None
+    assert loaded["bad"]["user_id"] == "../escape"
+
+
+def test_migrate_aborts_if_log_grows_before_replace(tmp_path, monkeypatch):
+    """Concurrent growth during migrate → abort without replace (no data loss)."""
+    paths = _paths(tmp_path)
+    append_message(
+        "user",
+        "pre",
+        user_id="jim",
+        paths=paths,
+    )
+    log = paths.data_dir / "messages.jsonl"
+    extra = {
+        "id": "concurrent",
+        "role": "user",
+        "content": "during-migrate",
+        "user_id": "sam",
+        "created_at": "2020-01-01T00:00:00+00:00",
+        "reasoning": "",
+        "moment_id": None,
+    }
+
+    orig_write_text = Path.write_text
+
+    def grow_then_write(self, data, encoding=None, errors=None, newline=None):
+        # When writing the migrate tmp file, simulate another process appending.
+        if ".tmp" in self.name and "messages.jsonl" in self.name:
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(extra) + "\n")
+        return orig_write_text(
+            self, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    monkeypatch.setattr(Path, "write_text", grow_then_write)
+    result = migrate_legacy_conversation_ids(paths=paths)
+    assert result["ok"] is False
+    assert result["error"] == "messages_changed"
+    # Both pre and concurrent rows still present (no destructive replace).
+    rows = list_messages(limit=0, paths=paths)
+    contents = {r["content"] for r in rows}
+    assert "pre" in contents
+    assert "during-migrate" in contents
+    # Pre row still legacy (no conversation_id stamp from aborted migrate).
+    pre = next(r for r in rows if r["content"] == "pre")
+    assert pre.get("conversation_id") is None

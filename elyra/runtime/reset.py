@@ -96,25 +96,21 @@ def clear_conversations(paths: ElyraPaths) -> dict[str, Any]:
     Removes index + by_id records; recreates empty layout so ensure_layout is
     a no-op after reset. Identity/users are preserved (not under this tree).
     """
+    from elyra.identity.layout import write_json_atomic
+
     root = _assert_under(
         paths.data_dir / "conversations", paths.data_dir, label="conversations"
     )
     removed = 0
     if root.is_dir():
         removed = _clear_dir_contents(root)
-    # Re-scaffold empty layout (index + by_id).
+    # Re-scaffold empty layout (index + by_id); atomic index write.
     root.mkdir(parents=True, exist_ok=True)
     by_id = root / "by_id"
     by_id.mkdir(parents=True, exist_ok=True)
-    index = root / "index.json"
-    index.write_text(
-        json.dumps(
-            {"schema_version": 1, "conversations": []},
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+    write_json_atomic(
+        root / "index.json",
+        {"schema_version": 1, "conversations": []},
     )
     return {"step": "conversations", "removed": removed}
 

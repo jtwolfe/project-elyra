@@ -29,7 +29,9 @@ from elyra.presence.worker import PresenceWorker
 from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
 from elyra.media import MediaStore
+from elyra.conversations import ConversationsStore
 from elyra.runtime.reset import (
+    clear_conversations,
     clear_goals,
     clear_media,
     clear_messages,
@@ -205,6 +207,15 @@ def test_normalize_reset_flags_defaults_and_ignores_skills():
 def test_clear_helpers_preserve_identity_users_skills_local(paths):
     # Seed ephemeral + preserved product.
     append_message("user", "hello", paths=paths)
+    # KD9: conversations cleared with messages; identity/users must survive.
+    convs = ConversationsStore(paths)
+    convs.ensure_dm("jim")
+    convs.create_group(
+        name="Dogfood",
+        members=["jim", "operator"],
+        conversation_id="group:dogfood",
+    )
+    assert convs.list()
     goals = GoalsStore(paths)
     goals.create_goal("g1")
     moments = MomentStore(paths)
@@ -282,12 +293,18 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     clear_wakes_disk(paths)
     clear_moments(paths)
     clear_messages(paths)
+    clear_conversations(paths)
     clear_media(paths)
     clear_goals(paths)
     clear_sandbox(paths)
     clear_tool_drafts(paths)
 
     assert list_messages(paths=paths) == []
+    assert ConversationsStore(paths).list() == []
+    assert not (
+        paths.data_dir / "conversations" / "by_id" / "dm_jim.json"
+    ).is_file()
+    assert (paths.data_dir / "conversations" / "index.json").is_file()
     assert GoalsStore(paths).list_goals() == []
     assert MomentStore(paths).list_moments() == []
     assert not sandbox.exists()

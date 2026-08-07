@@ -230,6 +230,17 @@ def test_update_missing_raises(store):
         store.update("group:missing", name="x")
 
 
+def test_update_no_fields_raises(store):
+    store.ensure_dm("jim")
+    with pytest.raises(ValueError, match="no update fields"):
+        store.update("dm:jim")
+    # updated_at unchanged
+    before = store.get("dm:jim")["updated_at"]
+    with pytest.raises(ValueError, match="no update fields"):
+        store.update("dm:jim")
+    assert store.get("dm:jim")["updated_at"] == before
+
+
 def test_update_dm_members_must_match_peer(store):
     store.ensure_dm("jim")
     with pytest.raises(ValueError, match="dm members"):
@@ -330,3 +341,137 @@ def test_clear_conversations_zero_state(paths):
         (paths.data_dir / "conversations" / "index.json").read_text(encoding="utf-8")
     )
     assert data["conversations"] == []
+
+
+# ── dual-write heal / corrupt index edge paths ───────────────────────────────
+
+
+def test_ensure_dm_heals_orphan_record_missing_from_index(store, paths):
+    """Record on disk + index missing entry → ensure_dm re-upserts index."""
+    rec = store.ensure_dm("jim")
+    # Drop index entry while leaving by_id record.
+    index_path = paths.data_dir / "conversations" / "index.json"
+    index_path.write_text(
+        json.dumps({"schema_version": 1, "conversations": []}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    assert store.get("dm:jim") is not None
+    # list without heal path would be empty if we only trusted index before heal
+    # — ensure_dm must heal.
+    out = store.ensure_dm("jim")
+    assert out["id"] == rec["id"]
+    assert out["created_at"] == rec["created_at"]
+    ids = {c["id"] for c in store.list()}
+    assert "dm:jim" in ids
+    data = json.loads(index_path.read_text(encoding="utf-8"))
+    assert any(r.get("id") == "dm:jim" for r in data["conversations"])
+
+
+def test_list_heals_by_id_orphans(store, paths):
+    """list() scans by_id and re-upserts orphans into index."""
+    store.ensure_dm("sam")
+    # Manually write a by_id record not in index.
+    orphan = {
+        "id": "dm:jim",
+        "type": "dm",
+        "members": ["jim"],
+        "name": None,
+        "description": None,
+        "created_at": "2020-01-01T00:00:00+00:00",
+        "updated_at": "2020-01-01T00:00:00+00:00",
+        "last_message_at": None,
+    }
+    by_id = paths.data_dir / "conversations" / "by_id" / "dm_jim.json"
+    by_id.write_text(json.dumps(orphan, indent=2) + "\n", encoding="utf-8")
+    # Index only has sam
+    index_path = paths.data_dir / "conversations" / "index.json"
+    data = json.loads(index_path.read_text(encoding="utf-8"))
+    assert all(r.get("id") != "dm:jim" for r in data["conversations"])
+
+    listed = store.list()
+    ids = {c["id"] for c in listed}
+    assert "dm:jim" in ids
+    assert "dm:sam" in ids
+    # Index durable after heal
+    data2 = json.loads(index_path.read_text(encoding="utf-8"))
+    assert any(r.get("id") == "dm:jim" for r in data2["conversations"])
+
+
+def test_index_write_failure_then_ensure_dm_heals(store, paths, monkeypatch):
+    """Simulate index write failure after record write; ensure_dm heals list."""
+    from elyra.conversations import store as store_mod
+    from elyra.identity.layout import write_json_atomic as real_write
+
+    fail_index = {"n": 0}
+
+    def flaky_write(path, data):
+        # Fail only the first index.json write during create.
+        if path.name == "index.json" and fail_index["n"] == 0:
+            fail_index["n"] += 1
+            raise OSError("simulated index write failure")
+        return real_write(path, data)
+
+    monkeypatch.setattr(store_mod, "write_json_atomic", flaky_write)
+    with pytest.raises(OSError, match="simulated index write failure"):
+        store.ensure_dm("jim")
+
+    # Record survived on disk (dual-write: record first).
+    assert (paths.data_dir / "conversations" / "by_id" / "dm_jim.json").is_file()
+    # Retry heals index (writes no longer fail).
+    monkeypatch.setattr(store_mod, "write_json_atomic", real_write)
+    out = store.ensure_dm("jim")
+    assert out["id"] == "dm:jim"
+    assert any(c["id"] == "dm:jim" for c in store.list())
+
+
+def test_create_group_exists_heals_index_then_raises(store, paths, monkeypatch):
+    """Partial create (record ok, index fail) → retry heals then raises exists."""
+    from elyra.conversations import store as store_mod
+    from elyra.identity.layout import write_json_atomic as real_write
+
+    fail_index = {"n": 0}
+
+    def flaky_write(path, data):
+        if path.name == "index.json" and fail_index["n"] == 0:
+            fail_index["n"] += 1
+            raise OSError("simulated index write failure")
+        return real_write(path, data)
+
+    monkeypatch.setattr(store_mod, "write_json_atomic", flaky_write)
+    with pytest.raises(OSError, match="simulated index write failure"):
+        store.create_group(
+            name="Room",
+            members=["jim"],
+            conversation_id="group:room1",
+        )
+    assert (
+        paths.data_dir / "conversations" / "by_id" / "group_room1.json"
+    ).is_file()
+
+    monkeypatch.setattr(store_mod, "write_json_atomic", real_write)
+    with pytest.raises(ValueError, match="already exists"):
+        store.create_group(
+            name="Room",
+            members=["jim"],
+            conversation_id="group:room1",
+        )
+    # Index healed on the exists path so list sees the group.
+    assert any(c["id"] == "group:room1" for c in store.list())
+    assert store.get("group:room1") is not None
+
+
+def test_corrupt_index_json_still_allows_get_and_ensure(store, paths):
+    """Invalid index.json does not crash get/ensure; layout recovers."""
+    store.ensure_dm("jim")
+    index_path = paths.data_dir / "conversations" / "index.json"
+    index_path.write_text("NOT JSON{{{", encoding="utf-8")
+
+    # get reads by_id directly
+    assert store.get("dm:jim") is not None
+    # ensure_dm heals index entry
+    store.ensure_dm("jim")
+    listed = store.list()
+    assert any(c["id"] == "dm:jim" for c in listed)
+    # Index is valid JSON again after heal write
+    data = json.loads(index_path.read_text(encoding="utf-8"))
+    assert isinstance(data.get("conversations"), list)
