@@ -988,6 +988,25 @@ def test_static_index_served(paths):
         assert 'id="schedule-history-timers-list"' in html
         assert 'id="schedule-history-waits-list"' in html
         assert "Recent by due/expiry time (not fire time)" in html
+        # KD4 / acceptance: history default off — no checked; section starts hidden
+        toggle_tag = re.search(
+            r'<input\b[^>]*\bid="schedule-history-toggle"[^>]*>',
+            html,
+            re.DOTALL,
+        )
+        assert toggle_tag is not None, "schedule-history-toggle input not found"
+        assert not re.search(r"\bchecked\b", toggle_tag.group(0)), (
+            "history toggle must default off (no checked attribute)"
+        )
+        hist_sec = re.search(
+            r'<section\b[^>]*\bid="schedule-history"[^>]*>',
+            html,
+            re.DOTALL,
+        )
+        assert hist_sec is not None, "schedule-history section not found"
+        assert re.search(r"\bhidden\b", hist_sec.group(0)), (
+            "schedule-history must start with hidden"
+        )
         # Schedule lists: plain list-panel (not list-panel-auto)
         timers_list = re.search(
             r'id="schedule-timers-list"[^>]*class="([^"]*)"',
@@ -1145,6 +1164,7 @@ def test_static_app_js_active_panel_poll(paths):
         assert "await refreshSchedule({ force })" in js or "refreshSchedule({ force })" in js
         assert "lastScheduleFp" in js
         assert "lastScheduleMinuteFp" in js
+        assert "scheduleLoadGen" in js
         # Dual soft-refresh call sites (payload fp + minute-bucket relative patch)
         assert "minuteFp !== lastScheduleMinuteFp" in js
         assert "patchScheduleRelativeTimes(data)" in js
@@ -1156,6 +1176,16 @@ def test_static_app_js_active_panel_poll(paths):
         assert "schedule-rel" in js
         assert "dataset.dueIso" in js
         assert ".schedule-rel[data-due-iso]" in js
+        # Soft-refresh-with-history: patch roots include history lists
+        patch_fn = re.search(
+            r"function patchScheduleRelativeTimes\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert patch_fn is not None, "patchScheduleRelativeTimes body not found"
+        patch_body = patch_fn.group(1)
+        assert "scheduleHistoryTimersList" in patch_body
+        assert "scheduleHistoryWaitsList" in patch_body
         # Payload fingerprint must not fold bare server_time (would thrash every poll)
         fp_fn = re.search(
             r"function schedulePayloadFingerprint\s*\([^)]*\)\s*\{(.*?)\n\}",
@@ -1186,6 +1216,10 @@ def test_static_app_js_active_panel_poll(paths):
         assert "include_history=1" in refresh_body
         assert "history_limit=20" in refresh_body
         assert "scheduleHistoryEnabled" in refresh_body
+        # Stale-response guard for soft/force mode-flip race
+        assert "scheduleLoadGen" in refresh_body
+        assert "gen !== scheduleLoadGen" in refresh_body
+        assert "includeHistory !== scheduleHistoryEnabled()" in refresh_body
         # Empty states for zero-collection paths
         assert "No scheduled timers." in js
         assert "No pending waits." in js

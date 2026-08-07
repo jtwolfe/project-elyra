@@ -469,6 +469,8 @@ let lastMomentsListFp = null;
 let lastScheduleFp = null;
 /** Floored server minute for Schedule relative-time patch (#126). */
 let lastScheduleMinuteFp = null;
+/** Bumped per refreshSchedule so stale in-flight responses (mode flip race) are ignored. */
+let scheduleLoadGen = 0;
 let lastAtomsListFp = null;
 let lastAtomDetailFp = null;
 let lastVectorsFp = null;
@@ -3531,11 +3533,16 @@ function patchScheduleRelativeTimes(data) {
 async function refreshSchedule(opts = {}) {
   const force = Boolean(opts.force);
   const includeHistory = scheduleHistoryEnabled();
+  const gen = ++scheduleLoadGen;
   // Active-only default; opt-in history via toggle (#126 PR4).
   const url = includeHistory
     ? "/api/schedule?include_history=1&history_limit=20"
     : "/api/schedule";
   const data = await fetchJson(url);
+  // Discard stale completions: a newer refresh (e.g. history toggle force)
+  // or a mode flip while this request was in flight wins.
+  if (gen !== scheduleLoadGen) return;
+  if (includeHistory !== scheduleHistoryEnabled()) return;
   const fp = schedulePayloadFingerprint(data, { includeHistory });
   const minuteFp = serverMinuteBucket(data && data.server_time);
   const hasDom =
