@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 _LOG = logging.getLogger(__name__)
 
 from elyra.config import ElyraPaths
+from elyra.conversations import ConversationsStore
 from elyra.goals import GoalsStore
 from elyra.identity import (
     IdentityStore,
@@ -46,7 +47,12 @@ from elyra.identity import (
     load_active_token_set,
     mint_grant,
 )
-from elyra.identity.layout import content_sha256, read_text_or_empty, write_json_atomic
+from elyra.identity.layout import content_sha256, read_text_or_empty
+from elyra.runtime.client_sessions import (
+    ClientSessionsRegistry,
+    InvalidClientId,
+    parse_client_id_header,
+)
 from elyra.llm.auth import VALID_SOURCES, resolve_bearer
 from elyra.llm.oauth_store import public_meta as oauth_public_meta
 from elyra.llm.queue import ChatRequestGate
@@ -98,7 +104,8 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 # Path params: single safe segment (matches users/moment id style).
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-# Local dogfood session (not auth) — under data/runtime/.
+# Local dogfood session (not auth) — per-client registry under data/runtime/.
+# Legacy glass_session.json is one-shot migrated (KD22); never product SoT after.
 _GLASS_SESSION_REL = Path("runtime") / "glass_session.json"
 _DEFAULT_SESSION_USER = "operator"
 
@@ -154,29 +161,55 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     users: UsersStore
     tools: ToolRegistry | None
     skills: SkillCatalog | None
-    # Glass multi-user session (shared across requests; bound at server start).
+    # Per-client glass session registry (KD21); bound at server start.
+    client_sessions: ClientSessionsRegistry
+    # Conversations store for ensure_dm on session normalize (PR2 / KD18).
+    conversations: ConversationsStore
+    # Legacy process-global session (compat for tests that still set these;
+    # product reads go through client_sessions).
     glass_session: dict[str, Any]
     glass_session_lock: threading.RLock
 
     def log_message(self, format: str, *args: Any) -> None:
         return
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(
+        self,
+        code: int,
+        body: bytes,
+        content_type: str,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         """Write a complete response. Client disconnect is soft (hard reload)."""
         try:
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if extra_headers:
+                for k, v in extra_headers.items():
+                    self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             # Browser aborted (hard reload / navigation). Not a handler fault.
             return
 
-    def _json(self, code: int, payload: Any) -> None:
+    def _json(
+        self,
+        code: int,
+        payload: Any,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self._send(code, raw, "application/json; charset=utf-8")
+        self._send(
+            code,
+            raw,
+            "application/json; charset=utf-8",
+            extra_headers=extra_headers,
+        )
 
     def _read_json(self) -> dict[str, Any] | None:
         """Read a JSON object body with Content-Length pre-check (PR3).
@@ -365,7 +398,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/session":
-            self._json(200, self._session_payload())
+            self._get_session()
             return
 
         if path == "/api/secrets":
@@ -2974,56 +3007,144 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     def _session_path(self) -> Path:
         return self.paths.data_dir / _GLASS_SESSION_REL
 
+    def _client_sessions(self) -> ClientSessionsRegistry | None:
+        return getattr(self, "client_sessions", None)
+
+    def _parse_client_header(self) -> tuple[str | None, str | None]:
+        """Return ``(client_id | None, error_reason | None)``.
+
+        error_reason ``invalid_client_id`` when header present but bad.
+        """
+        raw = self.headers.get("X-Elyra-Client")
+        # BaseHTTPRequestHandler headers are case-insensitive.
+        try:
+            return parse_client_id_header(raw), None
+        except InvalidClientId:
+            return None, "invalid_client_id"
+
+    def _resolve_client_session(
+        self, *, allow_create: bool
+    ) -> tuple[str | None, dict[str, Any] | None, bool, str | None]:
+        """Resolve per-client session (KD21/KD25).
+
+        Returns ``(client_id, session|None, minted, error_reason|None)``.
+        On invalid header: ``(None, None, False, "invalid_client_id")``.
+        """
+        cid, err = self._parse_client_header()
+        if err:
+            return None, None, False, err
+        reg = self._client_sessions()
+        if reg is None:
+            # Tests without registry: ephemeral defaults, no durable map.
+            if allow_create and cid is None:
+                from elyra.runtime.client_sessions import mint_client_id
+
+                return mint_client_id(), {
+                    "user_id": _DEFAULT_SESSION_USER,
+                    "conversation_id": f"dm:{_DEFAULT_SESSION_USER}",
+                    "view_mode": "conversation",
+                    "updated_at": "",
+                }, True, None
+            if cid is not None and allow_create:
+                return cid, {
+                    "user_id": _DEFAULT_SESSION_USER,
+                    "conversation_id": f"dm:{_DEFAULT_SESSION_USER}",
+                    "view_mode": "conversation",
+                    "updated_at": "",
+                }, False, None
+            return cid, None, False, None
+        resolved_id, sess, minted = reg.resolve(cid, allow_create=allow_create)
+        return resolved_id, sess, minted, None
+
     def _load_session_user_id(self) -> str:
-        """Return active glass session user_id (memory + optional file)."""
-        lock = getattr(self, "glass_session_lock", None)
-        sess = getattr(self, "glass_session", None)
-        if lock is None or sess is None:
+        """Return session user for this request when known; else default.
+
+        Read-only resolve (no map create) for promote gates and similar.
+        Durable client bound → that client's user_id; otherwise operator.
+        """
+        _cid, sess, _minted, err = self._resolve_client_session(allow_create=False)
+        if err:
             return _DEFAULT_SESSION_USER
-        with lock:
+        if isinstance(sess, dict):
             uid = sess.get("user_id")
             if isinstance(uid, str) and uid.strip():
                 return uid.strip()
-            # Cold start: try disk.
-            try:
-                raw = self._session_path().read_text(encoding="utf-8")
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    disk_uid = data.get("user_id")
-                    if isinstance(disk_uid, str) and disk_uid.strip():
-                        sess["user_id"] = disk_uid.strip()
-                        return sess["user_id"]
-            except (OSError, json.JSONDecodeError, TypeError):
-                pass
-            sess["user_id"] = _DEFAULT_SESSION_USER
-            return _DEFAULT_SESSION_USER
+        return _DEFAULT_SESSION_USER
 
-    def _save_session_user_id(self, user_id: str) -> None:
-        lock = getattr(self, "glass_session_lock", None)
-        sess = getattr(self, "glass_session", None)
-        if lock is None or sess is None:
-            return
-        with lock:
-            sess["user_id"] = user_id
-            path = self._session_path()
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                write_json_atomic(path, {"user_id": user_id})
-            except OSError as exc:
-                _LOG.warning("glass_session write failed: %s", exc)
-
-    def _session_payload(self) -> dict[str, Any]:
-        uid = self._load_session_user_id()
+    def _session_payload_from(
+        self,
+        client_id: str | None,
+        sess: dict[str, Any] | None,
+        *,
+        ok: bool = True,
+    ) -> dict[str, Any]:
+        """Build GET/PUT /api/session JSON body."""
+        if sess is None:
+            uid = _DEFAULT_SESSION_USER
+            conv_id = f"dm:{uid}"
+            view_mode = "conversation"
+        else:
+            uid = str(sess.get("user_id") or _DEFAULT_SESSION_USER)
+            conv_id = str(sess.get("conversation_id") or f"dm:{uid}")
+            view_mode = str(sess.get("view_mode") or "conversation")
         goes_by = uid
         try:
             goes_by = self.users.display_label(uid)
         except ValueError:
             goes_by = uid
-        return {
+        conversation: dict[str, Any] | None = None
+        conv_store = getattr(self, "conversations", None)
+        if conv_store is not None:
+            try:
+                rec = conv_store.get(conv_id)
+                if rec is not None:
+                    conversation = {
+                        "id": rec.get("id"),
+                        "type": rec.get("type"),
+                        "name": rec.get("name"),
+                        "members": list(rec.get("members") or []),
+                    }
+            except Exception:  # noqa: BLE001
+                conversation = None
+        if conversation is None:
+            conversation = {
+                "id": conv_id,
+                "type": "dm" if conv_id.startswith("dm:") else "group",
+                "name": None,
+                "members": [uid] if conv_id.startswith("dm:") else [],
+            }
+        out: dict[str, Any] = {
+            "ok": ok,
             "user_id": uid,
             "goes_by": goes_by,
+            "conversation_id": conv_id,
+            "view_mode": view_mode,
             "self_display_name": self.identity.display_name(),
+            "conversation": conversation,
         }
+        if client_id:
+            out["client_id"] = client_id
+        return out
+
+    def _session_response_headers(
+        self, client_id: str | None, *, minted: bool
+    ) -> dict[str, str] | None:
+        if client_id and minted:
+            return {"X-Elyra-Client": client_id}
+        if client_id:
+            # Echo on bind so clients that adopted server mint can confirm.
+            return {"X-Elyra-Client": client_id}
+        return None
+
+    def _get_session(self) -> None:
+        """GET /api/session — bind/create per client (KD25 session-bind)."""
+        client_id, sess, minted, err = self._resolve_client_session(allow_create=True)
+        if err:
+            self._json(400, {"ok": False, "error": err})
+            return
+        payload = self._session_payload_from(client_id, sess, ok=True)
+        headers = self._session_response_headers(client_id, minted=minted)
+        self._json(200, payload, extra_headers=headers)
 
     def _versions_summary_from_get(self, got: dict[str, Any]) -> list[dict[str, Any]]:
         versions = got.get("versions") or []
@@ -3152,34 +3273,107 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         return content_sha256(body)
 
     def _put_session(self, body: dict[str, Any]) -> None:
-        """PUT /api/session — ``{ user_id }`` switch active local profile."""
+        """PUT /api/session — per-client RMW ``{ user_id, conversation_id?, view_mode? }``."""
         if self._reject_if_resetting():
             return
+        cid_hdr, err = self._parse_client_header()
+        if err:
+            self._json(400, {"ok": False, "error": err})
+            return
+
+        # Optional fields: at least one of user_id / conversation_id / view_mode.
         user_id = body.get("user_id")
-        if not isinstance(user_id, str) or not user_id.strip():
-            self._json(400, {"ok": False, "error": "user_id required"})
+        conversation_id = body.get("conversation_id")
+        view_mode = body.get("view_mode")
+        has_user = isinstance(user_id, str) and bool(user_id.strip())
+        has_conv = isinstance(conversation_id, str) and bool(conversation_id.strip())
+        has_view = isinstance(view_mode, str) and bool(view_mode.strip())
+        if not has_user and not has_conv and not has_view:
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "error": "user_id, conversation_id, or view_mode required",
+                },
+            )
             return
-        uid = user_id.strip()
-        if _safe_segment(uid) is None:
-            self._json(400, {"ok": False, "error": "invalid_user_id"})
-            return
-        # Prefer known users; allow switch to any jail-valid id that exists on disk.
-        known = set(self.users.list_user_ids())
-        if uid not in known:
-            # Existence: current/legacy/meta under users root.
-            try:
-                live = self.users.profile(uid)
-                meta_path = self.users.meta_path(uid)
-            except ValueError:
+
+        uid: str | None = None
+        if has_user:
+            uid = user_id.strip()  # type: ignore[union-attr]
+            if _safe_segment(uid) is None:
                 self._json(400, {"ok": False, "error": "invalid_user_id"})
                 return
-            if not live and not meta_path.is_file():
-                self._json(404, {"ok": False, "error": "user_not_found", "user_id": uid})
+            known = set(self.users.list_user_ids())
+            if uid not in known:
+                try:
+                    live = self.users.profile(uid)
+                    meta_path = self.users.meta_path(uid)
+                except ValueError:
+                    self._json(400, {"ok": False, "error": "invalid_user_id"})
+                    return
+                if not live and not meta_path.is_file():
+                    self._json(
+                        404, {"ok": False, "error": "user_not_found", "user_id": uid}
+                    )
+                    return
+
+        conv_arg: str | None = None
+        if has_conv:
+            from elyra.conversations import validate_conversation_id
+
+            try:
+                conv_arg = validate_conversation_id(conversation_id.strip())  # type: ignore[union-attr]
+            except ValueError:
+                self._json(400, {"ok": False, "error": "invalid_conversation_id"})
                 return
-        self._save_session_user_id(uid)
-        payload = self._session_payload()
-        payload["ok"] = True
-        self._json(200, payload)
+
+        view_arg: str | None = None
+        if has_view:
+            vm = view_mode.strip()  # type: ignore[union-attr]
+            if vm not in ("conversation", "all"):
+                self._json(400, {"ok": False, "error": "invalid_view_mode"})
+                return
+            view_arg = vm
+
+        reg = self._client_sessions()
+        minted = False
+        if reg is None:
+            # No registry: resolve mint path for response shape only.
+            client_id, sess, minted, _e = self._resolve_client_session(
+                allow_create=True
+            )
+            if sess is None:
+                sess = {
+                    "user_id": uid or _DEFAULT_SESSION_USER,
+                    "conversation_id": conv_arg or f"dm:{uid or _DEFAULT_SESSION_USER}",
+                    "view_mode": view_arg or "conversation",
+                }
+            else:
+                if uid is not None:
+                    sess["user_id"] = uid
+                if conv_arg is not None:
+                    sess["conversation_id"] = conv_arg
+                if view_arg is not None:
+                    sess["view_mode"] = view_arg
+            payload = self._session_payload_from(client_id, sess, ok=True)
+            headers = self._session_response_headers(client_id, minted=minted)
+            self._json(200, payload, extra_headers=headers)
+            return
+
+        # Ensure client exists (session-bind create), then RMW put.
+        client_id, _sess, minted = reg.resolve(cid_hdr, allow_create=True)
+        assert client_id is not None
+        sess = reg.put(
+            client_id,
+            user_id=uid,
+            conversation_id=conv_arg,
+            view_mode=view_arg,
+            create_if_missing=True,
+        )
+        payload = self._session_payload_from(client_id, sess, ok=True)
+        headers = self._session_response_headers(client_id, minted=minted)
+        self._json(200, payload, extra_headers=headers)
 
     def _post_users(self, body: dict[str, Any]) -> None:
         """POST /api/users — create provisional user (K18 mint)."""
@@ -4966,7 +5160,31 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         - idle → user_message (cancel stale wait for user when present)
         """
         content = str(body.get("content") or "").strip()
-        user_id = str(body.get("user_id") or "operator")
+        # KD23: speaker from durable client session (mint/create on social mutate).
+        client_id, sess, minted, cerr = self._resolve_client_session(allow_create=True)
+        if cerr:
+            self._json(400, {"ok": False, "error": cerr, "reason": cerr})
+            return
+        body_uid = body.get("user_id")
+        session_uid = (
+            str(sess.get("user_id")).strip()
+            if isinstance(sess, dict) and sess.get("user_id")
+            else _DEFAULT_SESSION_USER
+        )
+        if not session_uid:
+            session_uid = _DEFAULT_SESSION_USER
+        if (
+            isinstance(body_uid, str)
+            and body_uid.strip()
+            and body_uid.strip() != session_uid
+        ):
+            _LOG.warning(
+                "POST /api/messages body user_id=%s ignored; session user=%s client=%s",
+                body_uid.strip(),
+                session_uid,
+                client_id,
+            )
+        user_id = session_uid
         raw_ids = body.get("attachment_ids")
         attachment_ids: list[str] = []
         if raw_ids is not None:
@@ -5064,7 +5282,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             has_attachments=bool(attachment_ids),
         )
         payload = _route_payload(result, message=msg)
-        self._json(self._status_for_route(result), payload)
+        headers = self._session_response_headers(client_id, minted=minted)
+        self._json(self._status_for_route(result), payload, extra_headers=headers)
 
     def _post_wait_reply(self, body: dict[str, Any]) -> None:
         """POST /api/wait/reply — explicit wait answer (choice and/or free text).
@@ -5072,6 +5291,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         Always sets from_wait_api=True so a durable pending wait for the user
         routes to wait_reply even if phase briefly reads as idle.
         Message append is reset-gated (same as ``/api/messages``).
+        KD23: speaker from durable client session (body user_id ignored on mismatch).
         """
         content_raw = body.get("content")
         content = str(content_raw).strip() if content_raw is not None else ""
@@ -5083,7 +5303,30 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             choice = str(choice_raw).strip() if isinstance(choice_raw, str) else str(choice_raw)
             if not choice:
                 choice = None
-        user_id = str(body.get("user_id") or "operator")
+        client_id, sess, minted, cerr = self._resolve_client_session(allow_create=True)
+        if cerr:
+            self._json(400, {"ok": False, "error": cerr, "reason": cerr})
+            return
+        body_uid = body.get("user_id")
+        session_uid = (
+            str(sess.get("user_id")).strip()
+            if isinstance(sess, dict) and sess.get("user_id")
+            else _DEFAULT_SESSION_USER
+        )
+        if not session_uid:
+            session_uid = _DEFAULT_SESSION_USER
+        if (
+            isinstance(body_uid, str)
+            and body_uid.strip()
+            and body_uid.strip() != session_uid
+        ):
+            _LOG.warning(
+                "POST /api/wait/reply body user_id=%s ignored; session user=%s client=%s",
+                body_uid.strip(),
+                session_uid,
+                client_id,
+            )
+        user_id = session_uid
 
         if not content and not choice:
             self._json(
@@ -5112,7 +5355,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             message_id=msg.id,
         )
         payload = _route_payload(result, message=msg)
-        self._json(self._status_for_route(result), payload)
+        headers = self._session_response_headers(client_id, minted=minted)
+        self._json(self._status_for_route(result), payload, extra_headers=headers)
 
     @staticmethod
     def _status_for_route(result: dict[str, Any]) -> int:
@@ -5191,25 +5435,20 @@ def start_api_server(
     if skills is ...:
         skills = _try_skill_catalog(paths)
 
-    # Default session user: operator if present, else first known, else "operator".
     users_store = users or UsersStore(paths)
-    known_ids = users_store.list_user_ids()
-    default_uid = _DEFAULT_SESSION_USER
-    if default_uid not in known_ids and known_ids:
-        default_uid = known_ids[0]
-    # Prefer disk session if valid.
-    session_path = paths.data_dir / _GLASS_SESSION_REL
+    conversations_store = ConversationsStore(paths)
     try:
-        raw = session_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            disk_uid = data.get("user_id")
-            if isinstance(disk_uid, str) and disk_uid.strip():
-                candidate = disk_uid.strip()
-                if candidate in known_ids or not known_ids:
-                    default_uid = candidate
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
+        conversations_store.ensure_layout()
+    except OSError as exc:
+        _LOG.warning("conversations ensure_layout failed: %s", exc)
+
+    def _ensure_dm(user_id: str) -> dict[str, Any]:
+        return conversations_store.ensure_dm(user_id)
+
+    client_sessions = ClientSessionsRegistry(paths, ensure_dm=_ensure_dm)
+
+    # Compat default for any legacy glass_session attribute readers.
+    default_uid = _DEFAULT_SESSION_USER
 
     handler = type(
         "BoundHandler",
@@ -5228,6 +5467,8 @@ def start_api_server(
             "users": users_store,
             "tools": tools,
             "skills": skills,
+            "conversations": conversations_store,
+            "client_sessions": client_sessions,
             "glass_session": {"user_id": default_uid},
             "glass_session_lock": threading.RLock(),
         },

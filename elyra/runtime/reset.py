@@ -1,10 +1,11 @@
 """Full-reset path clears (disk only).
 
 Scope: absolute-path-guarded helpers that wipe ephemeral runtime product under
-ElyraPaths (moments, messages, conversations, goals, wakes files, sandbox
-contents, tool drafts, optional local tools).
+ElyraPaths (moments, messages, conversations, client_sessions, goals, wakes
+files, sandbox contents, tool drafts, optional local tools).
 In scope: path validation under data_dir / tools_dir; recreate empty dirs;
 empty goals.json / messages; clear data/conversations/ (KD9, with messages);
+clear data/runtime/client_sessions.json (KD21 concurrent dogfood sessions);
 never touch skills/local, identity, users, continuous.json, bundled
 tools/skills, or model paths.
 Out of scope: worker lock protocol, TimerService/WakeQueue memory, HTTP, Glass.
@@ -113,6 +114,17 @@ def clear_conversations(paths: ElyraPaths) -> dict[str, Any]:
         {"schema_version": 1, "conversations": []},
     )
     return {"step": "conversations", "removed": removed}
+
+
+def clear_client_sessions(paths: ElyraPaths) -> dict[str, Any]:
+    """Wipe ``data/runtime/client_sessions.json`` (KD21 — dogfood client registry).
+
+    Social/runtime dogfood state; cleared with messages/conversations on full
+    reset. Does not touch identity/users.
+    """
+    from elyra.runtime.client_sessions import clear_client_sessions as _clear
+
+    return _clear(paths)
 
 
 def clear_media(paths: ElyraPaths) -> dict[str, Any]:

@@ -240,11 +240,15 @@ const mealBudgetFraction = $("#meal-budget-fraction");
 const mealBudgetReadout = $("#meal-budget-readout");
 const mealBudgetMaxNote = $("#meal-budget-max-note");
 
-/** Active glass session user (who is typing) — not orient USER on pure work. */
-let sessionUserId =
-  (typeof localStorage !== "undefined" &&
-    localStorage.getItem("elyra.sessionUserId")) ||
-  "operator";
+/** Active glass session user (who is typing) — not orient USER on pure work.
+ * Server (per-client registry via X-Elyra-Client) is source of truth; held in
+ * JS memory only (KD21 — no localStorage identity authority).
+ */
+let sessionUserId = "operator";
+/** Bound conversation for this client (KD18); refreshed from GET /api/session. */
+let sessionConversationId = null;
+/** view_mode for this client: conversation | all */
+let sessionViewMode = "conversation";
 /** Display labels: self + per-user goes_by. */
 let labelCache = { self: "Elyra", users: {} };
 /** Selected user id in identity panel (may differ from session for review). */
@@ -253,8 +257,87 @@ let identityPanelUserId = sessionUserId;
 let lastMintedGrantToken = null;
 const REASON_BUFFER_FULL = "interjection_buffer_full";
 
+/**
+ * Mint UUID v4 for per-tab client id (sessionStorage preferred — KD21).
+ * Returns null if crypto unavailable (adopt from first GET /api/session).
+ */
+function mintClientId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    const buf = new Uint8Array(16);
+    crypto.getRandomValues(buf);
+    buf[6] = (buf[6] & 0x0f) | 0x40;
+    buf[8] = (buf[8] & 0x3f) | 0x80;
+    const h = [...buf].map((b) => b.toString(16).padStart(2, "0")).join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  return null;
+}
+
+/** Per-tab client id from sessionStorage (or memory fallback). */
+let _memoryClientId = null;
+function getClientId() {
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      let id = sessionStorage.getItem("elyra.clientId");
+      if (!id) {
+        id = mintClientId();
+        if (id) sessionStorage.setItem("elyra.clientId", id);
+      }
+      if (id) {
+        _memoryClientId = id;
+        return id;
+      }
+    }
+  } catch {
+    /* private mode / blocked storage */
+  }
+  if (!_memoryClientId) {
+    _memoryClientId = mintClientId();
+  }
+  return _memoryClientId;
+}
+
+function adoptClientId(id) {
+  if (!id || typeof id !== "string") return;
+  const trimmed = id.trim();
+  if (!trimmed) return;
+  _memoryClientId = trimmed;
+  try {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem("elyra.clientId", trimmed);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function getSessionUserId() {
   return sessionUserId || "operator";
+}
+
+function applySessionPayload(session) {
+  if (!session || typeof session !== "object") return;
+  if (session.client_id) adoptClientId(session.client_id);
+  if (session.user_id) {
+    sessionUserId = session.user_id;
+    identityPanelUserId = sessionUserId;
+  }
+  if (session.conversation_id) {
+    sessionConversationId = session.conversation_id;
+  }
+  if (session.view_mode) {
+    sessionViewMode = session.view_mode;
+  }
+  if (session.goes_by && session.user_id) {
+    labelCache.users[session.user_id] = session.goes_by;
+  }
+  if (session.self_display_name) {
+    labelCache.self = session.self_display_name;
+    updateBrandChrome();
+  }
 }
 
 /** Self display name for glass chrome (fallback Elyra). */
@@ -412,14 +495,28 @@ function showNotice(text, { sticky = false } = {}) {
   }
 }
 
-async function fetchJson(url, opts) {
-  const res = await fetch(url, opts);
+async function fetchJson(url, opts = {}) {
+  // Merge X-Elyra-Client without dropping call-site Content-Type / FormData headers (KD21).
+  const headers = Object.assign(
+    { "X-Elyra-Client": getClientId() || "" },
+    opts.headers || {}
+  );
+  if (!headers["X-Elyra-Client"]) delete headers["X-Elyra-Client"];
+  const res = await fetch(url, { ...opts, headers });
   const text = await res.text();
   let data;
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
     data = { raw: text };
+  }
+  // Adopt server-minted client_id (missing sessionStorage / first bind).
+  if (data && data.client_id && !getClientId()) {
+    adoptClientId(data.client_id);
+  } else if (data && data.client_id) {
+    const hdr = res.headers && res.headers.get && res.headers.get("X-Elyra-Client");
+    if (hdr) adoptClientId(hdr);
+    else if (!sessionStorageHasClientId()) adoptClientId(data.client_id);
   }
   if (!res.ok) {
     const msg =
@@ -430,6 +527,17 @@ async function fetchJson(url, opts) {
     throw err;
   }
   return data;
+}
+
+function sessionStorageHasClientId() {
+  try {
+    return !!(
+      typeof sessionStorage !== "undefined" &&
+      sessionStorage.getItem("elyra.clientId")
+    );
+  } catch {
+    return !!_memoryClientId;
+  }
 }
 
 function messagesFingerprint(messages) {
@@ -7649,22 +7757,8 @@ async function refreshLabelCache() {
       fetchJson("/api/session"),
       fetchJson("/api/users"),
     ]);
-    if (session && session.self_display_name) {
-      labelCache.self = session.self_display_name;
-    }
-    updateBrandChrome();
-    if (session && session.user_id) {
-      // Server is source of truth when available; keep localStorage in sync.
-      if (session.user_id !== sessionUserId) {
-        // Prefer localStorage if operator just switched (race); only adopt
-        // server when local is default or matches.
-        const local = localStorage.getItem("elyra.sessionUserId");
-        if (!local || local === session.user_id) {
-          sessionUserId = session.user_id;
-        }
-      }
-      labelCache.users[session.user_id] = session.goes_by || session.user_id;
-    }
+    // Server is source of truth for this client (KD21).
+    applySessionPayload(session);
     const rows = (users && users.users) || [];
     for (const u of rows) {
       if (u && u.user_id) {
@@ -7710,20 +7804,7 @@ async function switchSessionUser(userId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ user_id: userId }),
   });
-  sessionUserId = data.user_id || userId;
-  try {
-    localStorage.setItem("elyra.sessionUserId", sessionUserId);
-  } catch {
-    /* private mode */
-  }
-  if (data.goes_by) {
-    labelCache.users[sessionUserId] = data.goes_by;
-  }
-  if (data.self_display_name) {
-    labelCache.self = data.self_display_name;
-    updateBrandChrome();
-  }
-  identityPanelUserId = sessionUserId;
+  applySessionPayload(data);
   showNotice(`Session user: ${labelCache.users[sessionUserId] || sessionUserId}`);
   await Promise.all([
     refreshLabelCache(),
@@ -8516,7 +8597,15 @@ async function uploadPendingAttachments() {
       }
       formData.append("files", blob, att.name || "file");
     }
-    const res = await fetch("/api/media", { method: "POST", body: formData });
+    // Merge client header only — do not set Content-Type (FormData boundary).
+    const mediaHeaders = {};
+    const cid = getClientId();
+    if (cid) mediaHeaders["X-Elyra-Client"] = cid;
+    const res = await fetch("/api/media", {
+      method: "POST",
+      headers: mediaHeaders,
+      body: formData,
+    });
     const text = await res.text();
     let data;
     try {
@@ -8603,7 +8692,14 @@ async function transcribeRecordingBlob(blob, { keepAudio = true } = {}) {
   formData.append("origin", "user_recording");
   formData.append("file", blob, filename);
 
-  const res = await fetch("/api/stt", { method: "POST", body: formData });
+  const sttHeaders = {};
+  const cid = getClientId();
+  if (cid) sttHeaders["X-Elyra-Client"] = cid;
+  const res = await fetch("/api/stt", {
+    method: "POST",
+    headers: sttHeaders,
+    body: formData,
+  });
   const text = await res.text();
   let data;
   try {
@@ -9081,21 +9177,32 @@ if (identityPromoteUserBtn) {
 
 autosizeComposer();
 updateBrandChrome();
-// Sync session + labels before first paint of messages.
-refreshLabelCache()
-  .then(() => {
-    updateBrandChrome();
-    // Align server session with localStorage preference on boot.
-    if (sessionUserId) {
-      return fetchJson("/api/session", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: sessionUserId }),
-      }).catch(() => null);
-    }
-    return null;
-  })
-  .catch(() => {});
+// Boot order (KD21): mint client_id → GET /api/session → optional ?as= PUT → polls.
+(function bootClientSession() {
+  getClientId(); // mint/load sessionStorage elyra.clientId
+  const params =
+    typeof URLSearchParams !== "undefined"
+      ? new URLSearchParams(window.location.search || "")
+      : null;
+  const asUser = params && params.get("as");
+  refreshLabelCache()
+    .then(() => {
+      updateBrandChrome();
+      if (asUser && asUser.trim() && asUser.trim() !== sessionUserId) {
+        return fetchJson("/api/session", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: asUser.trim() }),
+        })
+          .then((data) => {
+            applySessionPayload(data);
+          })
+          .catch(() => null);
+      }
+      return null;
+    })
+    .catch(() => {});
+})();
 
 function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);

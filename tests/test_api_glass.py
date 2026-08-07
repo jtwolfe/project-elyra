@@ -65,8 +65,10 @@ def _stub_loop(**kwargs: Any) -> DoLoopResult:
 
 
 class _ApiHarness:
-    def __init__(self, paths) -> None:
+    def __init__(self, paths, *, client_id: str | None = "test-client-1") -> None:
         self.paths = paths
+        # Default durable client for single-principal tests (KD21).
+        self.client_id = client_id
         stop = threading.Event()
         queue = WakeQueue(paths)
         timers = TimerService(paths, queue)
@@ -127,8 +129,34 @@ class _ApiHarness:
         except Exception:  # noqa: BLE001
             pass
 
-    def get(self, path: str) -> tuple[int, Any]:
-        req = urllib.request.Request(self.base + path, method="GET")
+    def _merge_headers(
+        self,
+        base: dict[str, str] | None = None,
+        *,
+        client_id: str | None | object = ...,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        out: dict[str, str] = dict(base or {})
+        if headers:
+            out.update(headers)
+        cid: str | None
+        if client_id is ...:
+            cid = self.client_id
+        else:
+            cid = client_id  # type: ignore[assignment]
+        if cid:
+            out.setdefault("X-Elyra-Client", cid)
+        return out
+
+    def get(
+        self,
+        path: str,
+        *,
+        client_id: str | None | object = ...,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, Any]:
+        hdrs = self._merge_headers(client_id=client_id, headers=headers)
+        req = urllib.request.Request(self.base + path, method="GET", headers=hdrs)
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -139,13 +167,25 @@ class _ApiHarness:
             except json.JSONDecodeError:
                 return exc.code, body
 
-    def post(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+    def post(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        client_id: str | None | object = ...,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, Any]:
         data = json.dumps(payload).encode("utf-8")
+        hdrs = self._merge_headers(
+            {"Content-Type": "application/json"},
+            client_id=client_id,
+            headers=headers,
+        )
         req = urllib.request.Request(
             self.base + path,
             data=data,
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers=hdrs,
         )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -157,13 +197,25 @@ class _ApiHarness:
             except json.JSONDecodeError:
                 return exc.code, body
 
-    def patch(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+    def patch(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        client_id: str | None | object = ...,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, Any]:
         data = json.dumps(payload).encode("utf-8")
+        hdrs = self._merge_headers(
+            {"Content-Type": "application/json"},
+            client_id=client_id,
+            headers=headers,
+        )
         req = urllib.request.Request(
             self.base + path,
             data=data,
             method="PATCH",
-            headers={"Content-Type": "application/json"},
+            headers=hdrs,
         )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -175,13 +227,25 @@ class _ApiHarness:
             except json.JSONDecodeError:
                 return exc.code, body
 
-    def put(self, path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+    def put(
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        client_id: str | None | object = ...,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, Any]:
         data = json.dumps(payload).encode("utf-8")
+        hdrs = self._merge_headers(
+            {"Content-Type": "application/json"},
+            client_id=client_id,
+            headers=headers,
+        )
         req = urllib.request.Request(
             self.base + path,
             data=data,
             method="PUT",
-            headers={"Content-Type": "application/json"},
+            headers=hdrs,
         )
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
