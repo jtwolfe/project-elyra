@@ -2198,3 +2198,224 @@ def test_consumer_embedder_nonblocking_while_loading_status(paths):
     mem = worker.status_snapshot()["memory"]
     assert mem["embedder_state"] == "loading"
     assert mem["memory_warming"] is True
+
+
+# ---------------------------------------------------------------------------
+# PR3b — conversation_id + social_kind propagation
+# ---------------------------------------------------------------------------
+
+
+def test_interject_overflow_retains_conversation_and_social_kind(paths):
+    """Interject overflow wake retains conversation_id + social_kind (§3.6)."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def on_call(_kwargs: Any) -> None:
+        entered.set()
+        release.wait(timeout=3.0)
+
+    stub = _stub_loop(on_call=on_call)
+    worker, stop = _make_worker(paths, run_do_loop_fn=stub)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message(
+            "busy",
+            conversation_id="group:g-overflow",
+            social_kind="group",
+        )
+        assert entered.wait(timeout=2.0)
+
+        for i in range(8):
+            r = worker.interject(
+                f"note-{i}",
+                conversation_id="group:g-overflow",
+                social_kind="group",
+            )
+            assert r["ok"] is True
+
+        overflow = worker.interject(
+            "too-many",
+            user_id="jim",
+            conversation_id="group:g-overflow",
+            social_kind="group",
+        )
+        assert overflow["ok"] is False
+        assert overflow["reason"] == "interjection_buffer_full"
+        wake_id = overflow.get("wake_id")
+        assert wake_id
+        item = worker._queue.get(wake_id)  # noqa: SLF001
+        assert item is not None
+        payload = item.payload or {}
+        assert payload.get("conversation_id") == "group:g-overflow"
+        assert payload.get("social_kind") == "group"
+        assert payload.get("from_interject_overflow") is True
+        assert payload.get("user_id") == "jim"
+    finally:
+        release.set()
+        _stop_join(worker, stop, t)
+
+
+def test_build_tool_context_stamps_social_kind_from_payload(paths):
+    """_build_tool_context copies conversation_id + extras social_kind from wake."""
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    try:
+        from elyra.presence.queue import WakeItem, priority_for_kind
+
+        social_wake = WakeItem(
+            id="w-social",
+            kind="user_message",
+            priority=priority_for_kind("user_message"),
+            created_at="2026-01-01T00:00:00Z",
+            payload={
+                "content": "hi",
+                "user_id": "jim",
+                "conversation_id": "group:g1",
+                "social_kind": "group",
+            },
+        )
+        ctx = worker._build_tool_context(social_wake, "m1")  # noqa: SLF001
+        assert ctx.user_id == "jim"
+        assert ctx.conversation_id == "group:g1"
+        assert ctx.extras.get("social_kind") == "group"
+
+        pure_wake = WakeItem(
+            id="w-timer",
+            kind="timer",
+            priority=priority_for_kind("timer"),
+            created_at="2026-01-01T00:00:00Z",
+            payload={"reason": "tick"},
+        )
+        ctx2 = worker._build_tool_context(pure_wake, "m2")  # noqa: SLF001
+        assert ctx2.conversation_id is None
+        assert ctx2.extras.get("social_kind") == "none"
+    finally:
+        stop.set()
+
+
+def test_continuous_and_timer_wakes_have_no_conversation_id(paths):
+    """Continuous/timer enqueue must not invent conversation_id from any session."""
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    try:
+        # Simulate "client has dm" existing only as session state elsewhere —
+        # pure work paths must still omit conversation_id.
+        wid = worker.enqueue_wake("timer", {"reason": "solo work"})
+        item = worker._queue.get(wid)  # noqa: SLF001
+        assert item is not None
+        payload = item.payload or {}
+        assert payload.get("conversation_id") in (None, "")
+        assert payload.get("social_kind") in (None, "", "none")
+
+        # moment_continue payload shape (same as finalize path) has no social.
+        cont_id = worker.enqueue_wake(
+            "moment_continue",
+            {
+                "source_moment_id": "m-src",
+                "source_wake_kind": "timer",
+                "source_stop_reason": "no_tools",
+                "streak": 1,
+            },
+        )
+        cont = worker._queue.get(cont_id)  # noqa: SLF001
+        assert cont is not None
+        cp = cont.payload or {}
+        assert "conversation_id" not in cp or not cp.get("conversation_id")
+        assert cp.get("social_kind") in (None, "", "none")
+
+        # open_moment soft field stays unset for pure work.
+        mid = worker._moments.open_moment(  # noqa: SLF001
+            why_now="timer due",
+            user_id=None,
+            wake_id=wid,
+        )
+        meta = worker._moments.get_moment(mid)  # noqa: SLF001
+        assert meta is not None
+        assert not meta.get("conversation_id")
+    finally:
+        stop.set()
+
+
+def test_enqueue_user_message_stamps_social_fields(paths):
+    """enqueue_user_message / resolve_user_input stamp conversation + social_kind."""
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    try:
+        wid = worker.enqueue_user_message(
+            "group hi",
+            user_id="jim",
+            conversation_id="group:g2",
+        )
+        item = worker._queue.get(wid)  # noqa: SLF001
+        assert item is not None
+        payload = item.payload or {}
+        assert payload["conversation_id"] == "group:g2"
+        assert payload["social_kind"] == "group"
+        assert payload["user_id"] == "jim"
+
+        r = worker.resolve_user_input(
+            "dm hi",
+            user_id="sam",
+            conversation_id="dm:sam",
+        )
+        assert r.get("ok") is True
+        wake_id = r.get("wake_id")
+        assert wake_id
+        w = worker._queue.get(wake_id)  # noqa: SLF001
+        assert w is not None
+        assert (w.payload or {}).get("conversation_id") == "dm:sam"
+        assert (w.payload or {}).get("social_kind") == "dm"
+    finally:
+        stop.set()
+
+
+def test_open_moment_soft_conversation_id_from_wake(paths):
+    """open_moment persists soft conversation_id only when wake payload has it."""
+    entered = threading.Event()
+    release = threading.Event()
+    opened: list[str] = []
+
+    def on_call(kwargs: Any) -> None:
+        ctx = kwargs.get("ctx")
+        if ctx is not None:
+            opened.append(getattr(ctx, "conversation_id", None) or "")
+        entered.set()
+        release.wait(timeout=2.0)
+
+    stub = _stub_loop(on_call=on_call)
+    worker, stop = _make_worker(paths, run_do_loop_fn=stub)
+    t = _start(worker)
+    try:
+        worker.enqueue_user_message(
+            "social open",
+            user_id="jim",
+            conversation_id="dm:jim",
+            social_kind="dm",
+        )
+        assert entered.wait(timeout=2.0)
+        assert worker.active_moment_id is not None
+        meta = worker._moments.get_moment(worker.active_moment_id)  # noqa: SLF001
+        assert meta is not None
+        assert meta.get("conversation_id") == "dm:jim"
+        assert opened and opened[0] == "dm:jim"
+    finally:
+        release.set()
+        _stop_join(worker, stop, t)
+
+
+def test_append_message_if_allowed_conversation_id(paths):
+    """append_message_if_allowed forwards conversation_id to the row."""
+    from elyra.messages import list_messages
+
+    worker, stop = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    try:
+        msg, err = worker.append_message_if_allowed(
+            "user",
+            "stamped",
+            user_id="jim",
+            conversation_id="group:g3",
+        )
+        assert err is None
+        assert msg is not None
+        assert msg.conversation_id == "group:g3"
+        rows = list_messages(paths=paths, limit=10, conversation_id="group:g3")
+        assert any(r.get("content") == "stamped" for r in rows)
+    finally:
+        stop.set()

@@ -22,6 +22,9 @@ class InterjectItem:
     content: str
     user_id: str
     message_id: str | None = None
+    # Social address stamps (PR3b / §3.6): overflow enqueue must retain both.
+    conversation_id: str | None = None
+    social_kind: str | None = None
 
 
 @dataclass

@@ -71,6 +71,8 @@ class ToolContext:
     settings: Settings | None = None
     moment_id: str = ""
     user_id: str | None = None
+    # Social address from wake.payload only (never client session on pure work).
+    conversation_id: str | None = None
     registry: ToolRegistry | None = None
     # Glass delivery — speak builtin uses this; loop injects shared instance.
     speak: SpeakTransport | None = None

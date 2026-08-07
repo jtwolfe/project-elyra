@@ -36,6 +36,22 @@ _CONVERSATION_TYPES = frozenset({"dm", "group"})
 _UNSET = object()
 
 
+def social_kind_for(conversation_id: str | None) -> str:
+    """Derive host ``social_kind`` from conversation_id at enqueue time (KD3).
+
+    Returns ``\"group\"`` / ``\"dm\"``. Pure work / non-social wakes should omit
+    social_kind or use ``\"none\"`` — callers must not invent kind from any
+    client session. Legacy social with only user_id treats as DM-shaped.
+    """
+    if isinstance(conversation_id, str) and conversation_id.strip():
+        cid = conversation_id.strip()
+        if cid.startswith("group:"):
+            return "group"
+        if cid.startswith("dm:"):
+            return "dm"
+    return "dm"
+
+
 def validate_conversation_id(conversation_id: str) -> str:
     """Return ``conversation_id`` if well-formed and path-jail safe.
 
@@ -482,6 +498,7 @@ ConversationType = Literal["dm", "group"]
 __all__ = [
     "ConversationsStore",
     "ConversationType",
+    "social_kind_for",
     "validate_conversation_id",
     "conversation_id_to_filename",
     "filename_to_conversation_id",

@@ -96,10 +96,13 @@ class MomentStore:
         goal_ids: list[str] | None = None,
         task_ids: list[str] | None = None,
         moment_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> str:
         """Create open moment meta (``ended_at`` null) and return its id.
 
         Does not create a beat tape until the first ``append_beat``.
+        ``conversation_id`` is a soft optional field (social wakes only);
+        continuous/timer moments leave it unset — never invent from session.
         """
         mid = _validate_moment_id(moment_id) if moment_id is not None else str(uuid.uuid4())
         self._ensure_moments_dir()
@@ -122,6 +125,9 @@ class MomentStore:
             "wake_id": wake_id,
             "hop_count": 0,
         }
+        # Soft field: persist only when non-blank (pure work stays unscoped).
+        if isinstance(conversation_id, str) and conversation_id.strip():
+            meta["conversation_id"] = conversation_id.strip()
         self._append_index_line(meta)
         return mid
 

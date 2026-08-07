@@ -240,6 +240,58 @@ def _user_id_from_wake(wake: WakeItem) -> str | None:
     return str(uid)
 
 
+def _conversation_id_from_wake(wake: WakeItem) -> str | None:
+    """Soft conversation_id from wake.payload only (never invent from session)."""
+    cid = (wake.payload or {}).get("conversation_id")
+    if not isinstance(cid, str):
+        return None
+    stripped = cid.strip()
+    return stripped or None
+
+
+def _social_kind_from_payload(
+    payload: Mapping[str, Any] | None,
+    *,
+    conversation_id: str | None = None,
+) -> str | None:
+    """Return stamped social_kind for social enqueues; None when pure work.
+
+    Prefer explicit payload ``social_kind`` in {group, dm}; else derive from
+    conversation_id when present. Pure work leaves this None (omitted).
+    """
+    if payload:
+        kind = payload.get("social_kind")
+        if kind in ("group", "dm"):
+            return str(kind)
+    if isinstance(conversation_id, str) and conversation_id.strip():
+        from elyra.conversations import social_kind_for
+
+        return social_kind_for(conversation_id.strip())
+    return None
+
+
+def _stamp_social_payload(
+    payload: dict[str, Any],
+    *,
+    conversation_id: str | None = None,
+    social_kind: str | None = None,
+) -> dict[str, Any]:
+    """Mutate/return payload with conversation_id + social_kind when social."""
+    cid = conversation_id
+    if isinstance(cid, str):
+        cid = cid.strip() or None
+    kind = social_kind if social_kind in ("group", "dm") else None
+    if kind is None and cid is not None:
+        from elyra.conversations import social_kind_for
+
+        kind = social_kind_for(cid)
+    if cid is not None:
+        payload["conversation_id"] = cid
+    if kind is not None:
+        payload["social_kind"] = kind
+    return payload
+
+
 def compact_activity_event(beat: dict[str, Any]) -> dict[str, Any] | None:
     """Map a moment beat → small glass trail event (or None if uninteresting)."""
     if not isinstance(beat, dict):
@@ -888,6 +940,7 @@ class PresenceWorker:
         user_id: str | None = "operator",
         reasoning: str = "",
         moment_id: str | None = None,
+        conversation_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
         bind_attachment_ids: Sequence[str] | None = None,
@@ -900,6 +953,7 @@ class PresenceWorker:
         When ``bind_attachment_ids`` is set, each id is validated (exists,
         unbound or already bound to the new message id after append) and
         ``bound_message_id`` is set under the same lock (PR3 / KD23).
+        ``conversation_id`` is stamped on the row when provided (PR3b / KD16).
         Returns ``(message, None)`` on success or ``(None, error_dict)``.
         """
         with self._lock:
@@ -947,6 +1001,7 @@ class PresenceWorker:
                 user_id=user_id,
                 reasoning=reasoning,
                 moment_id=moment_id,
+                conversation_id=conversation_id,
                 attachments=resolved_atts,
                 meta=meta,
                 paths=self.paths,
@@ -1045,19 +1100,26 @@ class PresenceWorker:
         *,
         user_id: str = "operator",
         message_id: str | None = None,
+        conversation_id: str | None = None,
+        social_kind: str | None = None,
     ) -> str:
-        """Enqueue a ``user_message`` wake; returns wake id."""
+        """Enqueue a ``user_message`` wake; returns wake id.
+
+        When ``conversation_id`` / ``social_kind`` provided, stamps both on
+        the wake payload (social). Pure-work callers omit both.
+        """
         mid = message_id or str(uuid.uuid4())
+        payload: dict[str, Any] = {
+            "content": content,
+            "user_id": user_id,
+            "message_id": mid,
+        }
+        _stamp_social_payload(
+            payload, conversation_id=conversation_id, social_kind=social_kind
+        )
         with self._lock:
             self._raise_if_resetting_unlocked()
-            item = self._queue.enqueue(
-                "user_message",
-                {
-                    "content": content,
-                    "user_id": user_id,
-                    "message_id": mid,
-                },
-            )
+            item = self._queue.enqueue("user_message", payload)
             return item.id
 
     def interject(
@@ -1066,6 +1128,8 @@ class PresenceWorker:
         *,
         user_id: str = "operator",
         message_id: str | None = None,
+        conversation_id: str | None = None,
+        social_kind: str | None = None,
     ) -> dict[str, Any]:
         """Buffer an interjection when ``phase == in_moment``.
 
@@ -1076,9 +1140,20 @@ class PresenceWorker:
         ``routed`` stays ``interject`` so UI that branches on route does not
         treat overflow as a fresh idle chat.
 
-        When not in a moment: enqueue as ``user_message`` instead.
+        Overflow and remainder wakes retain ``conversation_id`` + ``social_kind``
+        (§3.6). When not in a moment: enqueue as ``user_message`` instead.
         """
         text = content if isinstance(content, str) else str(content)
+        cid = (
+            conversation_id.strip()
+            if isinstance(conversation_id, str) and conversation_id.strip()
+            else None
+        )
+        kind = social_kind if social_kind in ("group", "dm") else None
+        if kind is None and cid is not None:
+            from elyra.conversations import social_kind_for
+
+            kind = social_kind_for(cid)
         with self._lock:
             if self._continuous.resetting:
                 return {
@@ -1087,14 +1162,15 @@ class PresenceWorker:
                     "reason": "resetting",
                 }
             if self._phase != PHASE_IN_MOMENT:
-                wake_id = self._queue.enqueue(
-                    "user_message",
-                    {
-                        "content": text,
-                        "user_id": user_id,
-                        "message_id": message_id or str(uuid.uuid4()),
-                    },
-                ).id
+                payload: dict[str, Any] = {
+                    "content": text,
+                    "user_id": user_id,
+                    "message_id": message_id or str(uuid.uuid4()),
+                }
+                _stamp_social_payload(
+                    payload, conversation_id=cid, social_kind=kind
+                )
+                wake_id = self._queue.enqueue("user_message", payload).id
                 return {
                     "ok": True,
                     "routed": ROUTE_USER_MESSAGE,
@@ -1102,21 +1178,27 @@ class PresenceWorker:
                     "reason": "not_in_moment",
                 }
             item = InterjectItem(
-                content=text, user_id=user_id, message_id=message_id
+                content=text,
+                user_id=user_id,
+                message_id=message_id,
+                conversation_id=cid,
+                social_kind=kind,
             )
             ok, reason = self._interject.try_add(item)
             if ok:
                 return {"ok": True, "routed": ROUTE_INTERJECT}
             # Overflow → durable wake (do not drop); keep routed=interject.
-            wake_id = self._queue.enqueue(
-                "user_message",
-                {
-                    "content": text,
-                    "user_id": user_id,
-                    "message_id": message_id or str(uuid.uuid4()),
-                    "from_interject_overflow": True,
-                },
-            ).id
+            # Retain conversation_id + social_kind from the social enqueue.
+            overflow_payload: dict[str, Any] = {
+                "content": text,
+                "user_id": user_id,
+                "message_id": message_id or str(uuid.uuid4()),
+                "from_interject_overflow": True,
+            }
+            _stamp_social_payload(
+                overflow_payload, conversation_id=cid, social_kind=kind
+            )
+            wake_id = self._queue.enqueue("user_message", overflow_payload).id
             return {
                 "ok": False,
                 "routed": ROUTE_INTERJECT,
@@ -1133,8 +1215,24 @@ class PresenceWorker:
         from_wait_api: bool = False,
         message_id: str | None = None,
         has_attachments: bool = False,
+        conversation_id: str | None = None,
+        social_kind: str | None = None,
     ) -> dict[str, Any]:
-        """Route user input via the phase/wait state machine; apply side effects."""
+        """Route user input via the phase/wait state machine; apply side effects.
+
+        ``conversation_id`` / ``social_kind`` thread through all social routes
+        (interject, wait_reply, user_message) — §3.6 propagation matrix.
+        """
+        cid = (
+            conversation_id.strip()
+            if isinstance(conversation_id, str) and conversation_id.strip()
+            else None
+        )
+        kind = social_kind if social_kind in ("group", "dm") else None
+        if kind is None and cid is not None:
+            from elyra.conversations import social_kind_for
+
+            kind = social_kind_for(cid)
         with self._lock:
             if self._continuous.resetting:
                 return {
@@ -1158,7 +1256,11 @@ class PresenceWorker:
             routed = decision["routed"]
             if routed == ROUTE_INTERJECT:
                 result = self.interject(
-                    content, user_id=user_id, message_id=message_id
+                    content,
+                    user_id=user_id,
+                    message_id=message_id,
+                    conversation_id=cid,
+                    social_kind=kind,
                 )
                 out = dict(decision)
                 out.update(result)
@@ -1171,6 +1273,8 @@ class PresenceWorker:
                     choice=choice,
                     wait_id=decision.get("answer_wait_id"),
                     message_id=message_id,
+                    conversation_id=cid,
+                    social_kind=kind,
                 )
 
             # user_message
@@ -1188,14 +1292,15 @@ class PresenceWorker:
 
             mid = message_id or str(uuid.uuid4())
             text = content if isinstance(content, str) else str(content)
-            item = self._queue.enqueue(
-                "user_message",
-                {
-                    "content": text,
-                    "user_id": user_id,
-                    "message_id": mid,
-                },
+            payload: dict[str, Any] = {
+                "content": text,
+                "user_id": user_id,
+                "message_id": mid,
+            }
+            _stamp_social_payload(
+                payload, conversation_id=cid, social_kind=kind
             )
+            item = self._queue.enqueue("user_message", payload)
             out = dict(decision)
             out["wake_id"] = item.id
             out["message_id"] = mid
@@ -3412,6 +3517,9 @@ class PresenceWorker:
             if wake is None:
                 return None
             user_id = _user_id_from_wake(wake)
+            # Soft conversation_id from wake.payload only — never invent from
+            # any client session (continuous/timer stay null; PR3b / KD4 solo).
+            conv_id = _conversation_id_from_wake(wake)
             why = _why_now(wake)
             try:
                 self._moments.open_moment(
@@ -3419,6 +3527,7 @@ class PresenceWorker:
                     user_id=user_id,
                     wake_id=wake.id,
                     moment_id=moment_id,
+                    conversation_id=conv_id,
                 )
             except Exception:
                 # Do not leave a claimed-without-terminal wake.
@@ -4052,24 +4161,36 @@ class PresenceWorker:
 
     def _flush_interjects_as_wakes_unlocked(self) -> None:
         for item in self._interject.drain():
-            self._queue.enqueue(
-                "user_message",
-                {
-                    "content": item.content,
-                    "user_id": item.user_id,
-                    "message_id": item.message_id or str(uuid.uuid4()),
-                    "from_interject_remainder": True,
-                },
+            payload: dict[str, Any] = {
+                "content": item.content,
+                "user_id": item.user_id,
+                "message_id": item.message_id or str(uuid.uuid4()),
+                "from_interject_remainder": True,
+            }
+            _stamp_social_payload(
+                payload,
+                conversation_id=item.conversation_id,
+                social_kind=item.social_kind,
             )
+            self._queue.enqueue("user_message", payload)
 
     def _drain_interjections(self) -> Sequence[Any]:
         """Do-loop safe-point drain → list of content strings / dicts."""
         with self._lock:
             items = self._interject.drain()
-        return [
-            {"content": it.content, "user_id": it.user_id, "message_id": it.message_id}
-            for it in items
-        ]
+        out: list[dict[str, Any]] = []
+        for it in items:
+            row: dict[str, Any] = {
+                "content": it.content,
+                "user_id": it.user_id,
+                "message_id": it.message_id,
+            }
+            if it.conversation_id:
+                row["conversation_id"] = it.conversation_id
+            if it.social_kind:
+                row["social_kind"] = it.social_kind
+            out.append(row)
+        return out
 
     # ------------------------------------------------------------------
     # Tool context / ports
@@ -4219,12 +4340,22 @@ class PresenceWorker:
 
     def _build_tool_context(self, wake: WakeItem, moment_id: str) -> ToolContext:
         user_id = _user_id_from_wake(wake)  # may be None — do not force "operator"
+        payload = wake.payload or {}
+        # conversation_id + social_kind from wake.payload only — never invent
+        # from any client session (pure work / continuous stay unscoped).
+        conv_id = _conversation_id_from_wake(wake)
+        raw_kind = payload.get("social_kind")
+        if raw_kind in ("group", "dm"):
+            extras_kind = str(raw_kind)
+        else:
+            extras_kind = "none"
         return ToolContext(
             paths=self.paths,
             sandbox=self._ensure_sandbox(),
             settings=self.settings,
             moment_id=moment_id,
             user_id=user_id,
+            conversation_id=conv_id,
             registry=self._ensure_registry(),
             speak=self._ensure_speak(),
             timers=self._timers,
@@ -4235,6 +4366,7 @@ class PresenceWorker:
             extras={
                 "wake": wake,
                 "wake_kind": wake.kind,  # for identity promote gates
+                "social_kind": extras_kind,  # KD3 step-4 gate (group/dm/none)
                 "identity": self._identity,
                 "users": self._users,
                 # install_skill / growth tools reload the held catalog
@@ -4476,19 +4608,41 @@ class PresenceWorker:
         choice: str | None,
         wait_id: str | None,
         message_id: str | None,
+        conversation_id: str | None = None,
+        social_kind: str | None = None,
     ) -> dict[str, Any]:
-        """Mark wait answered and enqueue wait_reply (phase stays waiting)."""
+        """Mark wait answered and enqueue wait_reply (phase stays waiting).
+
+        Prefer wait record conversation_id when present (PR3c stores it on
+        WaitArm); else use caller-stamped social fields from session/body.
+        """
         text = content.strip() if isinstance(content, str) else ""
         choice_s = (
             choice.strip()
             if isinstance(choice, str)
             else (str(choice) if choice is not None else "")
         )
+        wait_cid: str | None = None
+        wait_kind: str | None = None
         if wait_id:
             try:
                 self._timers.mark_wait_answered(wait_id)
             except KeyError:
                 _LOG.warning("wait_reply for unknown wait_id=%s", wait_id)
+            # Pull conversation_id from durable wait when available (PR3c+).
+            try:
+                for w in self._timers.list_waits():
+                    wid = getattr(w, "id", None) or getattr(w, "wait_id", None)
+                    if str(wid) != str(wait_id):
+                        continue
+                    raw = getattr(w, "conversation_id", None)
+                    if raw is None and hasattr(w, "to_dict"):
+                        raw = (w.to_dict() or {}).get("conversation_id")
+                    if isinstance(raw, str) and raw.strip():
+                        wait_cid = raw.strip()
+                    break
+            except Exception:  # noqa: BLE001 — soft; fall back to caller stamp
+                pass
 
         mid = message_id or str(uuid.uuid4())
         payload: dict[str, Any] = {
@@ -4500,6 +4654,10 @@ class PresenceWorker:
             payload["wait_id"] = wait_id
         if choice_s:
             payload["choice"] = choice_s
+        # Prefer wait record address; else caller (session) stamps.
+        cid = wait_cid or conversation_id
+        kind = wait_kind or social_kind
+        _stamp_social_payload(payload, conversation_id=cid, social_kind=kind)
         item = self._queue.enqueue("wait_reply", payload)
         # Phase stays waiting until claim → in_moment (design).
         return {

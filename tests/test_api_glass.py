@@ -1627,3 +1627,213 @@ def test_static_glass_pr4_html_accepts_audio(paths):
         assert "attachments alone" in html or "media-only" in html.lower()
     finally:
         h.close()
+
+
+# ---------------------------------------------------------------------------
+# PR3b — conversation_id + social_kind on messages/wake propagation
+# ---------------------------------------------------------------------------
+
+
+def test_post_group_message_stamps_conversation_and_social_kind(paths):
+    """T5: POST group as client A → row + wake payload conversation_id + social_kind=group."""
+    from elyra.conversations import ConversationsStore
+    from elyra.messages import list_messages
+    from elyra.users import UsersStore
+
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        users = UsersStore(paths)
+        users.create_user("Jim", user_id="jim", provisional=True)
+        users.create_user("Sam", user_id="sam", provisional=True)
+        store = ConversationsStore(paths)
+        store.ensure_layout()
+        group = store.create_group(
+            name="Room",
+            members=["jim", "sam"],
+            conversation_id="group:room1",
+        )
+        assert group["id"] == "group:room1"
+
+        code, sess = h.put(
+            "/api/session",
+            {"user_id": "jim", "conversation_id": "group:room1"},
+            client_id="client-a",
+        )
+        assert code == 200, sess
+        assert sess["conversation_id"] == "group:room1"
+
+        code, r = h.post(
+            "/api/messages",
+            {"content": "hello group"},
+            client_id="client-a",
+        )
+        assert code == 200, r
+        assert r.get("ok") is True
+
+        msgs = list_messages(paths=paths, limit=50, conversation_id="group:room1")
+        row = next((m for m in msgs if m.get("content") == "hello group"), None)
+        assert row is not None, msgs
+        assert row.get("conversation_id") == "group:room1"
+        assert row.get("user_id") == "jim"
+
+        # Wake payload must carry both stamps.
+        pending = h.worker._queue.pending()  # noqa: SLF001
+        social = [
+            w
+            for w in pending
+            if w.kind == "user_message"
+            and (w.payload or {}).get("content") == "hello group"
+        ]
+        # Wake may already be claimed if worker is running — also check events.
+        if social:
+            payload = social[0].payload or {}
+            assert payload.get("conversation_id") == "group:room1"
+            assert payload.get("social_kind") == "group"
+            assert payload.get("user_id") == "jim"
+        else:
+            # Worker may have claimed; inspect via wake_id on response if present.
+            wake_id = r.get("wake_id")
+            if wake_id:
+                item = h.worker._queue.get(wake_id)  # noqa: SLF001
+                if item is not None:
+                    payload = item.payload or {}
+                    assert payload.get("conversation_id") == "group:room1"
+                    assert payload.get("social_kind") == "group"
+    finally:
+        h.close()
+
+
+def test_t17_two_clients_same_group_correct_speakers(paths):
+    """T17: two clients same group POST → both rows correct speakers."""
+    from elyra.conversations import ConversationsStore
+    from elyra.messages import list_messages
+    from elyra.users import UsersStore
+
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        users = UsersStore(paths)
+        users.create_user("Jim", user_id="jim", provisional=True)
+        users.create_user("Sam", user_id="sam", provisional=True)
+        store = ConversationsStore(paths)
+        store.ensure_layout()
+        store.create_group(
+            name="Shared",
+            members=["jim", "sam"],
+            conversation_id="group:shared",
+        )
+
+        h.put(
+            "/api/session",
+            {"user_id": "jim", "conversation_id": "group:shared"},
+            client_id="c-jim",
+        )
+        h.put(
+            "/api/session",
+            {"user_id": "sam", "conversation_id": "group:shared"},
+            client_id="c-sam",
+        )
+
+        code, r1 = h.post(
+            "/api/messages",
+            {"content": "jim says hi", "user_id": "sam"},  # body mismatch ignored
+            client_id="c-jim",
+        )
+        assert code == 200, r1
+        code, r2 = h.post(
+            "/api/messages",
+            {"content": "sam says hi", "user_id": "jim"},
+            client_id="c-sam",
+        )
+        assert code == 200, r2
+
+        msgs = list_messages(
+            paths=paths, limit=50, conversation_id="group:shared"
+        )
+        by_content = {m.get("content"): m for m in msgs}
+        assert by_content["jim says hi"].get("user_id") == "jim"
+        assert by_content["jim says hi"].get("conversation_id") == "group:shared"
+        assert by_content["sam says hi"].get("user_id") == "sam"
+        assert by_content["sam says hi"].get("conversation_id") == "group:shared"
+    finally:
+        h.close()
+
+
+def test_get_messages_defaults_to_session_conversation(paths):
+    """GET /api/messages defaults conversation_id from client session (view_mode=conversation)."""
+    from elyra.conversations import ConversationsStore
+    from elyra.messages import append_message
+    from elyra.users import UsersStore
+
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        users = UsersStore(paths)
+        users.create_user("Jim", user_id="jim", provisional=True)
+        users.create_user("Sam", user_id="sam", provisional=True)
+        store = ConversationsStore(paths)
+        store.ensure_layout()
+        store.ensure_dm("jim")
+        store.ensure_dm("sam")
+
+        append_message(
+            "user", "jim private", user_id="jim", conversation_id="dm:jim", paths=paths
+        )
+        append_message(
+            "user", "sam private", user_id="sam", conversation_id="dm:sam", paths=paths
+        )
+
+        h.put("/api/session", {"user_id": "jim"}, client_id="c-jim")
+        code, body = h.get("/api/messages?limit=50", client_id="c-jim")
+        assert code == 200, body
+        contents = [m.get("content") for m in body.get("messages") or []]
+        assert "jim private" in contents
+        assert "sam private" not in contents
+
+        # Explicit query overrides session
+        code, body = h.get(
+            "/api/messages?limit=50&conversation_id=dm:sam", client_id="c-jim"
+        )
+        assert code == 200
+        contents = [m.get("content") for m in body.get("messages") or []]
+        assert "sam private" in contents
+        assert "jim private" not in contents
+
+        # view=all forensic (global)
+        code, body = h.get("/api/messages?limit=50&view=all", client_id="c-jim")
+        assert code == 200
+        contents = [m.get("content") for m in body.get("messages") or []]
+        assert "jim private" in contents
+        assert "sam private" in contents
+    finally:
+        h.close()
+
+
+def test_post_dm_defaults_from_session(paths):
+    """POST without body conversation_id stamps session DM + social_kind=dm."""
+    from elyra.messages import list_messages
+    from elyra.users import UsersStore
+
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        users = UsersStore(paths)
+        users.create_user("Jim", user_id="jim", provisional=True)
+        h.put("/api/session", {"user_id": "jim"}, client_id="c-jim")
+        code, r = h.post(
+            "/api/messages",
+            {"content": "dm hello"},
+            client_id="c-jim",
+        )
+        assert code == 200, r
+        msgs = list_messages(paths=paths, limit=20)
+        row = next((m for m in msgs if m.get("content") == "dm hello"), None)
+        assert row is not None
+        assert row.get("conversation_id") == "dm:jim"
+        assert row.get("user_id") == "jim"
+
+        pending = h.worker._queue.pending()  # noqa: SLF001
+        for w in pending:
+            if (w.payload or {}).get("content") == "dm hello":
+                assert (w.payload or {}).get("social_kind") == "dm"
+                assert (w.payload or {}).get("conversation_id") == "dm:jim"
+                break
+    finally:
+        h.close()

@@ -286,8 +286,38 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/messages":
+            # GET filter: conversation_id query, view=all forensic, or default
+            # from durable client session when view_mode=conversation (PR3b).
+            # Read-only: never mint map entries (KD25).
             limit = int((qs.get("limit") or ["200"])[0])
-            self._json(200, {"messages": list_messages(limit=limit, paths=self.paths)})
+            view = (qs.get("view") or [None])[0]
+            conv_q = (qs.get("conversation_id") or [None])[0]
+            conversation_id: str | None = None
+            if isinstance(view, str) and view.strip() == "all":
+                conversation_id = None  # global forensic tail
+            elif isinstance(conv_q, str) and conv_q.strip():
+                conversation_id = conv_q.strip()
+            else:
+                _cid, sess, _m, err = self._resolve_client_session(
+                    allow_create=False
+                )
+                if not err and isinstance(sess, dict):
+                    vm = str(sess.get("view_mode") or "conversation")
+                    if vm == "conversation":
+                        scid = sess.get("conversation_id")
+                        if isinstance(scid, str) and scid.strip():
+                            conversation_id = scid.strip()
+                    # view_mode=all without query → global tail
+            self._json(
+                200,
+                {
+                    "messages": list_messages(
+                        limit=limit,
+                        conversation_id=conversation_id,
+                        paths=self.paths,
+                    )
+                },
+            )
             return
 
         if path == "/api/health":
@@ -3063,6 +3093,87 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 return uid.strip()
         return _DEFAULT_SESSION_USER
 
+    def _resolve_social_conversation_id(
+        self,
+        body: dict[str, Any],
+        sess: dict[str, Any] | None,
+        *,
+        user_id: str,
+        require: bool = True,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """Resolve conversation_id for social write paths (PR3b / KD16).
+
+        Order: body.conversation_id → client session conversation_id →
+        ensure_dm(user_id). When ``require`` and still unresolved → error dict.
+        Returns ``(conversation_id | None, error_dict | None)``.
+        """
+        from elyra.conversations import validate_conversation_id
+
+        raw = body.get("conversation_id") if isinstance(body, dict) else None
+        cid: str | None = None
+        if isinstance(raw, str) and raw.strip():
+            try:
+                cid = validate_conversation_id(raw.strip())
+            except ValueError:
+                return None, {
+                    "ok": False,
+                    "error": "invalid_conversation_id",
+                    "reason": "invalid_conversation_id",
+                }
+        if cid is None and isinstance(sess, dict):
+            scid = sess.get("conversation_id")
+            if isinstance(scid, str) and scid.strip():
+                try:
+                    cid = validate_conversation_id(scid.strip())
+                except ValueError:
+                    cid = None
+        conv_store = getattr(self, "conversations", None)
+        if cid is None:
+            # Default DM for speaker (ensure_dm when store available).
+            if conv_store is not None:
+                try:
+                    rec = conv_store.ensure_dm(user_id)
+                    rid = rec.get("id") if isinstance(rec, dict) else None
+                    if isinstance(rid, str) and rid.strip():
+                        cid = rid.strip()
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("ensure_dm failed user_id=%s: %s", user_id, exc)
+            if cid is None:
+                cid = f"dm:{user_id}"
+        else:
+            # Ensure DM record exists; validate group exists when store present.
+            if conv_store is not None:
+                try:
+                    if cid.startswith("dm:"):
+                        conv_store.ensure_dm(cid[3:])
+                    elif cid.startswith("group:"):
+                        rec = conv_store.get(cid)
+                        if rec is None:
+                            return None, {
+                                "ok": False,
+                                "error": "unknown_conversation",
+                                "reason": "unknown_conversation",
+                                "conversation_id": cid,
+                            }
+                except ValueError as exc:
+                    return None, {
+                        "ok": False,
+                        "error": "invalid_conversation_id",
+                        "reason": "invalid_conversation_id",
+                        "detail": str(exc),
+                    }
+        if require and not cid:
+            _LOG.error(
+                "social write missing conversation_id after defaults user_id=%s",
+                user_id,
+            )
+            return None, {
+                "ok": False,
+                "error": "missing_conversation",
+                "reason": "missing_conversation",
+            }
+        return cid, None
+
     def _session_payload_from(
         self,
         client_id: str | None,
@@ -5183,6 +5294,18 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 client_id,
             )
         user_id = session_uid
+        # PR3b: conversation_id from body or client session (ensure_dm default).
+        conversation_id, conv_err = self._resolve_social_conversation_id(
+            body, sess, user_id=user_id
+        )
+        if conv_err is not None:
+            self._json(400, conv_err)
+            return
+        assert conversation_id is not None
+        from elyra.conversations import social_kind_for
+
+        social_kind = social_kind_for(conversation_id)
+
         raw_ids = body.get("attachment_ids")
         attachment_ids: list[str] = []
         if raw_ids is not None:
@@ -5265,6 +5388,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             "user",
             content,
             user_id=user_id,
+            conversation_id=conversation_id,
             meta=meta if isinstance(meta, dict) else None,
             bind_attachment_ids=attachment_ids or None,
         )
@@ -5272,12 +5396,25 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(self._status_for_route(err), err)
             return
         assert msg is not None
+        # Soft activity touch (best-effort; never fail the social write).
+        conv_store = getattr(self, "conversations", None)
+        if conv_store is not None:
+            try:
+                conv_store.touch_activity(conversation_id)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning(
+                    "touch_activity failed conversation_id=%s: %s",
+                    conversation_id,
+                    exc,
+                )
         result = self.worker.resolve_user_input(
             content,
             user_id=user_id,
             message_id=msg.id,
             from_wait_api=False,
             has_attachments=bool(attachment_ids),
+            conversation_id=conversation_id,
+            social_kind=social_kind,
         )
         payload = _route_payload(result, message=msg)
         headers = self._session_response_headers(client_id, minted=minted)
@@ -5328,6 +5465,20 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                 client_id,
             )
         user_id = session_uid
+        # PR3b: stamp conversation on append + wait_reply wake when known.
+        # Prefer body conversation_id; else client session (wait record address
+        # takes precedence inside worker when WaitArm carries it — PR3c).
+        conversation_id, conv_err = self._resolve_social_conversation_id(
+            body, sess, user_id=user_id, require=False
+        )
+        if conv_err is not None:
+            self._json(400, conv_err)
+            return
+        social_kind: str | None = None
+        if conversation_id is not None:
+            from elyra.conversations import social_kind_for
+
+            social_kind = social_kind_for(conversation_id)
 
         if not content and not choice:
             self._json(
@@ -5342,7 +5493,10 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         display = content or (choice or "")
         msg, err = self.worker.append_message_if_allowed(
-            "user", display, user_id=user_id
+            "user",
+            display,
+            user_id=user_id,
+            conversation_id=conversation_id,
         )
         if err is not None:
             self._json(self._status_for_route(err), err)
@@ -5354,6 +5508,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             choice=choice,
             from_wait_api=True,
             message_id=msg.id,
+            conversation_id=conversation_id,
+            social_kind=social_kind,
         )
         payload = _route_payload(result, message=msg)
         headers = self._session_response_headers(client_id, minted=minted)

@@ -69,6 +69,8 @@ class MomentMeta(TypedDict, total=False):
     ended_at: str | None
     why_now: str
     user_id: str | None
+    # Soft optional — social wakes only; null/absent on continuous/timer (C12).
+    conversation_id: str | None
     goal_ids: list[str]
     task_ids: list[str]
     skills_used: list[str]
