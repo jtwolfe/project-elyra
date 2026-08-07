@@ -2063,3 +2063,221 @@ def test_status_without_client_header_omits_or_false_matches_session(paths):
         assert pending.get("matches_session") in (None, False)
     finally:
         h.close()
+
+
+# ---------------------------------------------------------------------------
+# PR6 — operator multi-conversation UI + session switch membership (T12)
+# ---------------------------------------------------------------------------
+
+
+def test_t12_session_switch_auto_dm_vs_keep_group(paths):
+    """T12: user switch auto-DM; keep group when member; non-member → DM."""
+    from elyra.conversations import ConversationsStore
+
+    store = ConversationsStore(paths)
+    store.ensure_layout()
+    store.create_group(
+        name="Room",
+        members=["jim", "sam"],
+        conversation_id="group:t12room",
+    )
+    h = _ApiHarness(paths, client_id="t12-client")
+    try:
+        # Seed users
+        for goes_by, uid in (("Jim", "jim"), ("Sam", "sam"), ("Eve", "eve")):
+            code, body = h.post(
+                "/api/users", {"goes_by": goes_by, "user_id": uid}
+            )
+            assert code in (200, 201), body
+
+        # Bind jim to group
+        code, sess = h.put(
+            "/api/session",
+            {"user_id": "jim", "conversation_id": "group:t12room"},
+            client_id="t12-client",
+        )
+        assert code == 200, sess
+        assert sess["user_id"] == "jim"
+        assert sess["conversation_id"] == "group:t12room"
+
+        # Switch to sam (member) → keep group
+        code, sess2 = h.put(
+            "/api/session",
+            {"user_id": "sam"},
+            client_id="t12-client",
+        )
+        assert code == 200, sess2
+        assert sess2["user_id"] == "sam"
+        assert sess2["conversation_id"] == "group:t12room"
+
+        # Switch to eve (non-member) → auto DM
+        code, sess3 = h.put(
+            "/api/session",
+            {"user_id": "eve"},
+            client_id="t12-client",
+        )
+        assert code == 200, sess3
+        assert sess3["user_id"] == "eve"
+        assert sess3["conversation_id"] == "dm:eve"
+
+        # DM→DM auto-switch (legacy KD18)
+        code, sess4 = h.put(
+            "/api/session",
+            {"user_id": "jim"},
+            client_id="t12-client",
+        )
+        assert code == 200, sess4
+        assert sess4["user_id"] == "jim"
+        assert sess4["conversation_id"] == "dm:jim"
+    finally:
+        h.close()
+
+
+def test_static_pr6_operator_conversation_ui(paths):
+    """PR6: operator multi-convo markup + app.js wiring (not identifier-only)."""
+    h = _ApiHarness(paths)
+    try:
+        req = urllib.request.Request(h.base + "/", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            assert resp.status == 200
+            html = resp.read().decode("utf-8")
+        # Labels + controls
+        assert "Session user (impersonate)" in html
+        assert 'id="session-conversation-select"' in html
+        assert 'id="session-new-group-btn"' in html
+        assert "New group…" in html or "New group" in html
+        assert 'id="chat-conversation-meta"' in html
+        assert 'id="chat-conversation-name"' in html
+        assert 'id="chat-member-chips"' in html
+        # Group create modal zero-state + form fields
+        assert 'id="group-modal"' in html
+        assert 'id="group-form"' in html
+        assert 'id="group-name-input"' in html
+        assert 'id="group-desc-input"' in html
+        assert 'id="group-members-list"' in html
+        assert 'id="group-members-empty"' in html
+        assert "No users available to invite." in html
+        # Honesty / dogfood copy (not real login)
+        assert "not login" in html.lower() or "impersonate" in html.lower()
+
+        req_js = urllib.request.Request(h.base + "/app.js", method="GET")
+        with urllib.request.urlopen(req_js, timeout=5) as resp:
+            assert resp.status == 200
+            js = resp.read().decode("utf-8")
+
+        # Core identifiers + wiring snippets (avoid identifier-only asserts)
+        assert "VIEW_ALL_SENTINEL" in js
+        assert "function populateConversationSelect" in js
+        assert "function switchConversation" in js
+        assert "function updateConversationChrome" in js
+        assert "function filterMessagesForView" in js
+        assert "function messagesListUrl" in js
+        assert "function openGroupModal" in js
+        assert "function createGroupFromModal" in js
+        assert "function fillGroupMembersChecklist" in js
+        assert "function waitArmedForSessionUser" in js
+        # Wiring: select change → switchConversation
+        assert "sessionConversationSelect.addEventListener" in js
+        assert 'sessionConversationSelect.addEventListener("change"' in js or (
+            "sessionConversationSelect.addEventListener('change'" in js
+        )
+        assert "switchConversation(val)" in js or "switchConversation(" in js
+        # New group button → open modal
+        assert "sessionNewGroupBtn.addEventListener" in js
+        assert "openGroupModal()" in js
+        # POST /api/conversations on create
+        assert '"/api/conversations"' in js or "'/api/conversations'" in js
+        assert "createGroupFromModal" in js
+        # Messages URL: forensic view=all + conversation_id query
+        assert "view=all" in js
+        assert "conversation_id=" in js
+        assert "function messagesListUrl" in js
+        # renderMessages uses filter; empty-state path for zero messages
+        assert "filterMessagesForView" in js
+        assert "No messages in this conversation yet." in js
+        assert "No messages yet." in js
+        # Wait bar prefers matches_session (KD24)
+        assert "matches_session" in js
+        wait_fn = re.search(
+            r"function waitArmedForSessionUser\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert wait_fn is not None, "waitArmedForSessionUser body not found"
+        assert "matches_session" in wait_fn.group(1)
+        # renderWaitBar gates on waitArmedForSessionUser
+        render_wait = re.search(
+            r"function renderWaitBar\s*\([^)]*\)\s*\{(.*?)\n(?:function |async function )",
+            js,
+            re.DOTALL,
+        )
+        assert render_wait is not None, "renderWaitBar body not found"
+        assert "waitArmedForSessionUser" in render_wait.group(1)
+        # Boot gates tick until session bound (past issue)
+        assert "sessionBooted" in js
+        assert "if (!sessionBooted) return" in js
+        # Session user label string used in HTML (impersonate)
+        assert "impersonate" in html.lower()
+        # CSS tokens for chips / group form
+        req_css = urllib.request.Request(h.base + "/style.css", method="GET")
+        with urllib.request.urlopen(req_css, timeout=5) as resp:
+            assert resp.status == 200
+            css = resp.read().decode("utf-8")
+        assert ".chat-conversation-meta" in css
+        assert ".member-chip" in css
+        assert ".group-form" in css
+        assert ".group-members-list" in css
+    finally:
+        h.close()
+
+
+def test_view_mode_all_lists_global_messages(paths):
+    """Operator forensic view_mode=all returns unfiltered messages feed."""
+    from elyra.conversations import ConversationsStore
+    from elyra.messages import append_message
+
+    store = ConversationsStore(paths)
+    store.ensure_layout()
+    store.ensure_dm("jim")
+    store.ensure_dm("sam")
+    append_message(
+        "user", "jim private", user_id="jim", conversation_id="dm:jim", paths=paths
+    )
+    append_message(
+        "user", "sam private", user_id="sam", conversation_id="dm:sam", paths=paths
+    )
+    h = _ApiHarness(paths, client_id="forensic-1")
+    try:
+        for goes_by, uid in (("Jim", "jim"), ("Sam", "sam")):
+            code, body = h.post(
+                "/api/users", {"goes_by": goes_by, "user_id": uid}
+            )
+            assert code in (200, 201), body
+        code, sess = h.put(
+            "/api/session",
+            {"user_id": "jim", "conversation_id": "dm:jim", "view_mode": "conversation"},
+            client_id="forensic-1",
+        )
+        assert code == 200, sess
+        code, body = h.get("/api/messages?limit=50", client_id="forensic-1")
+        assert code == 200
+        contents = [m.get("content") for m in body.get("messages") or []]
+        assert "jim private" in contents
+        assert "sam private" not in contents
+
+        code, sess2 = h.put(
+            "/api/session",
+            {"view_mode": "all"},
+            client_id="forensic-1",
+        )
+        assert code == 200, sess2
+        assert sess2.get("view_mode") == "all"
+        code, body2 = h.get(
+            "/api/messages?limit=50&view=all", client_id="forensic-1"
+        )
+        assert code == 200
+        contents2 = [m.get("content") for m in body2.get("messages") or []]
+        assert "jim private" in contents2
+        assert "sam private" in contents2
+    finally:
+        h.close()

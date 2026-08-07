@@ -139,6 +139,7 @@ class ClientSessionsRegistry:
         paths: ElyraPaths,
         *,
         ensure_dm: Callable[[str], dict[str, Any]] | None = None,
+        get_conversation: Callable[[str], dict[str, Any] | None] | None = None,
         max_clients: int = CLIENT_SESSION_MAX,
         ttl_days: int = CLIENT_SESSION_TTL_DAYS,
     ) -> None:
@@ -147,6 +148,8 @@ class ClientSessionsRegistry:
         # registry serialize on the same RLock (not per-instance only).
         self._lock = _lock_for_registry_path(self.path)
         self._ensure_dm = ensure_dm
+        # Optional conversation lookup for keep-group membership (KD18 / T12).
+        self._get_conversation = get_conversation
         self._max_clients = max(1, int(max_clients))
         self._ttl_days = max(0, int(ttl_days))
         # In-process cache; RMW with disk under lock. Reload when file mtime
@@ -173,6 +176,29 @@ class ClientSessionsRegistry:
             except Exception as exc:  # noqa: BLE001 — soft; fall back
                 _LOG.warning("ensure_dm failed for %s: %s", uid, exc)
         return f"dm:{uid}"
+
+    def _is_group_member(self, conversation_id: str, user_id: str) -> bool:
+        """True when user is listed in group members (KD18 keep-group).
+
+        Without a get_conversation callback, keep the group (legacy soft keep)
+        so tests that only wire ensure_dm still pass.
+        """
+        if self._get_conversation is None:
+            return True
+        try:
+            rec = self._get_conversation(conversation_id)
+        except Exception as exc:  # noqa: BLE001 — soft keep on lookup failure
+            _LOG.warning(
+                "get_conversation failed for %s: %s", conversation_id, exc
+            )
+            return True
+        if not isinstance(rec, dict):
+            # Unknown group → drop to DM for the new user.
+            return False
+        members = rec.get("members") or []
+        if not isinstance(members, list):
+            return False
+        return user_id in members
 
     def _normalize_entry(
         self,
@@ -225,8 +251,11 @@ class ClientSessionsRegistry:
                 and old_cid.startswith("group:")
                 and user_id is not None
             ):
-                # Keep group unless we can see membership later; store keeps group.
-                cid = old_cid
+                # Keep group if new user is a member; else fall back to dm:new (T12).
+                if self._is_group_member(old_cid, uid):
+                    cid = old_cid
+                else:
+                    cid = self._dm_id(uid)
 
         out = {
             "user_id": uid,

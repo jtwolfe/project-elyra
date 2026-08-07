@@ -216,7 +216,8 @@ def test_t16b_wait_reply_speaker_from_session(paths) -> None:
             {"content": "wait answer jim", "user_id": "sam"},
             client_id="c-jim",
         )
-        assert code in (200, 400), r1  # ok or no-wait client error — row may still append
+        # 200 ok / 400 client / 409 no_matching_wait (PR3c fail-closed gate)
+        assert code in (200, 400, 409), r1
         # Prefer successful append when worker allows
         if r1.get("ok") is True or r1.get("message"):
             msgs = list_messages(paths=paths, limit=50)

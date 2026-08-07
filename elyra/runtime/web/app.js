@@ -155,6 +155,18 @@ const brandNameEl = $("#brand-name");
 const brandSubEl = $("#brand-sub");
 const sessionUserSelect = $("#session-user-select");
 const sessionNewGuestBtn = $("#session-new-guest-btn");
+const sessionConversationSelect = $("#session-conversation-select");
+const sessionNewGroupBtn = $("#session-new-group-btn");
+const chatConversationMeta = $("#chat-conversation-meta");
+const chatConversationName = $("#chat-conversation-name");
+const chatMemberChips = $("#chat-member-chips");
+const groupModal = $("#group-modal");
+const groupForm = $("#group-form");
+const groupNameInput = $("#group-name-input");
+const groupDescInput = $("#group-desc-input");
+const groupMembersList = $("#group-members-list");
+const groupMembersEmpty = $("#group-members-empty");
+const groupCreateBtn = $("#group-create-btn");
 // Styled switch class is shared; exclude non-continuous controls so their
 // change handlers stay on their own PATCH paths (BUG-status-02 / #77).
 const continuousToggles = document.querySelectorAll(
@@ -249,6 +261,25 @@ let sessionUserId = "operator";
 let sessionConversationId = null;
 /** view_mode for this client: conversation | all */
 let sessionViewMode = "conversation";
+/** Last conversation summary from session payload (header chips). */
+let sessionConversation = null;
+/** Cached conversation list for the select (groups + current DM). */
+let conversationsCache = [];
+/** Cached users list for group modal multi-select. */
+let usersCache = [];
+/**
+ * Product /chat shell (PR7) — hide forensic "all" and force conversation mode.
+ * Operator `/` keeps forensic view_mode=all.
+ */
+const PRODUCT_CHAT = (function isProductChat() {
+  if (typeof location === "undefined" || typeof location.pathname !== "string") {
+    return false;
+  }
+  const p = location.pathname;
+  return p === "/chat" || p.startsWith("/chat/");
+})();
+/** Sentinel select value for forensic all-messages view (operator only). */
+const VIEW_ALL_SENTINEL = "__view:all__";
 /** Display labels: self + per-user goes_by. */
 let labelCache = { self: "Elyra", users: {} };
 /** Selected user id in identity panel (may differ from session for review). */
@@ -329,7 +360,23 @@ function applySessionPayload(session) {
     sessionConversationId = session.conversation_id;
   }
   if (session.view_mode) {
-    sessionViewMode = session.view_mode;
+    // Product /chat never enables forensic all (KD7 / PR7 prep).
+    sessionViewMode =
+      PRODUCT_CHAT && session.view_mode === "all"
+        ? "conversation"
+        : session.view_mode;
+  }
+  if (session.conversation && typeof session.conversation === "object") {
+    sessionConversation = session.conversation;
+  } else if (session.conversation_id) {
+    sessionConversation = {
+      id: session.conversation_id,
+      type: String(session.conversation_id).startsWith("group:")
+        ? "group"
+        : "dm",
+      name: null,
+      members: session.user_id ? [session.user_id] : [],
+    };
   }
   if (session.goes_by && session.user_id) {
     labelCache.users[session.user_id] = session.goes_by;
@@ -338,6 +385,7 @@ function applySessionPayload(session) {
     labelCache.self = session.self_display_name;
     updateBrandChrome();
   }
+  updateConversationChrome();
 }
 
 /** Self display name for glass chrome (fallback Elyra). */
@@ -1013,9 +1061,33 @@ async function playMessageTts(messageId, btn) {
   }
 }
 
+/**
+ * Client-side conversation filter when view_mode=conversation (belt + suspenders
+ * over server default). view_mode=all keeps the unfiltered forensic feed.
+ */
+function filterMessagesForView(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  if (sessionViewMode === "all" && !PRODUCT_CHAT) return list;
+  const cid = sessionConversationId;
+  if (!cid) return list;
+  return list.filter((m) => {
+    if (!m || typeof m !== "object") return false;
+    const mid = m.conversation_id;
+    if (mid == null || mid === "") {
+      // Legacy null conversation_id: include in DM when speaker matches peer.
+      if (String(cid).startsWith("dm:")) {
+        const peer = String(cid).slice(3);
+        return String(m.user_id || "") === peer || m.role === "assistant";
+      }
+      return false;
+    }
+    return String(mid) === String(cid);
+  });
+}
+
 function renderMessages(messages, { force = false } = {}) {
   if (!messagesEl) return;
-  const list = Array.isArray(messages) ? messages : [];
+  const list = filterMessagesForView(messages);
   const fp = messagesFingerprint(list);
   if (!force && fp === lastMessagesFp) {
     updateJumpLatestVisibility();
@@ -1024,6 +1096,18 @@ function renderMessages(messages, { force = false } = {}) {
   const stick = chatStickToBottom || isNearBottom(messagesEl);
   lastMessagesFp = fp;
   messagesEl.innerHTML = "";
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "muted messages-empty";
+    empty.textContent =
+      sessionViewMode === "all" && !PRODUCT_CHAT
+        ? "No messages yet."
+        : "No messages in this conversation yet.";
+    messagesEl.appendChild(empty);
+    if (stick) scrollMessagesToBottom();
+    else updateJumpLatestVisibility();
+    return;
+  }
   for (const m of list) {
     const div = document.createElement("div");
     const role = m.role === "user" ? "user" : "assistant";
@@ -1121,7 +1205,12 @@ function hideWaitBarOptimistic() {
 }
 
 function renderWaitBar(pending) {
-  if (!pending || pending.status !== "pending") {
+  // Gate on matches_session (KD24) — hide waits armed for other principals.
+  if (
+    !pending ||
+    pending.status !== "pending" ||
+    !waitArmedForSessionUser(pending, getSessionUserId())
+  ) {
     waitBar.hidden = true;
     waitChoices.innerHTML = "";
     waitPrompt.textContent = "";
@@ -1186,8 +1275,23 @@ async function sendWaitChoice(choice) {
   }
 }
 
+/**
+ * Build GET /api/messages URL from this client's session (view_mode + conversation).
+ * Server also defaults from durable client session; query makes intent explicit.
+ */
+function messagesListUrl() {
+  if (sessionViewMode === "all" && !PRODUCT_CHAT) {
+    return "/api/messages?limit=200&view=all";
+  }
+  const cid = sessionConversationId;
+  if (cid) {
+    return `/api/messages?limit=200&conversation_id=${encodeURIComponent(cid)}`;
+  }
+  return "/api/messages?limit=200";
+}
+
 async function refreshMessages(opts = {}) {
-  const data = await fetchJson("/api/messages?limit=200");
+  const data = await fetchJson(messagesListUrl());
   renderMessages(data.messages || [], opts);
 }
 
@@ -7757,19 +7861,27 @@ function renderUserChips(users, selectedId) {
 
 async function refreshLabelCache() {
   try {
-    const [session, users] = await Promise.all([
+    const memberQ = encodeURIComponent(getSessionUserId());
+    const [session, users, convs] = await Promise.all([
       fetchJson("/api/session"),
       fetchJson("/api/users"),
+      fetchJson(`/api/conversations?member=${memberQ}`).catch(() => ({
+        conversations: [],
+      })),
     ]);
     // Server is source of truth for this client (KD21).
     applySessionPayload(session);
     const rows = (users && users.users) || [];
+    usersCache = rows;
     for (const u of rows) {
       if (u && u.user_id) {
         labelCache.users[u.user_id] = u.goes_by || u.user_id;
       }
     }
+    conversationsCache = (convs && convs.conversations) || [];
     populateSessionSelect(rows);
+    populateConversationSelect(conversationsCache);
+    updateConversationChrome();
   } catch {
     /* offline */
   }
@@ -7801,8 +7913,137 @@ function populateSessionSelect(users) {
   }
 }
 
+/**
+ * Conversation select: Private Chat (dm:current) + groups + forensic all on `/`.
+ */
+function populateConversationSelect(conversations) {
+  if (!sessionConversationSelect) return;
+  const list = Array.isArray(conversations) ? conversations : [];
+  const uid = getSessionUserId();
+  const dmId = `dm:${uid}`;
+  const prev =
+    sessionViewMode === "all" && !PRODUCT_CHAT
+      ? VIEW_ALL_SENTINEL
+      : sessionConversationId || dmId;
+
+  sessionConversationSelect.innerHTML = "";
+
+  const dmOpt = document.createElement("option");
+  dmOpt.value = dmId;
+  dmOpt.textContent = "Private Chat";
+  if (prev === dmId) dmOpt.selected = true;
+  sessionConversationSelect.appendChild(dmOpt);
+
+  const groups = list.filter(
+    (c) => c && c.type === "group" && typeof c.id === "string"
+  );
+  // Also include groups from cache that list may have missed when already bound.
+  if (
+    sessionConversationId &&
+    String(sessionConversationId).startsWith("group:") &&
+    !groups.some((c) => c.id === sessionConversationId)
+  ) {
+    groups.push({
+      id: sessionConversationId,
+      type: "group",
+      name:
+        (sessionConversation && sessionConversation.name) ||
+        sessionConversationId,
+      members: (sessionConversation && sessionConversation.members) || [],
+    });
+  }
+  groups.sort((a, b) => {
+    const an = (a.name || a.id || "").toLowerCase();
+    const bn = (b.name || b.id || "").toLowerCase();
+    return an < bn ? -1 : an > bn ? 1 : 0;
+  });
+  for (const g of groups) {
+    const opt = document.createElement("option");
+    opt.value = g.id;
+    opt.textContent = g.name || g.id;
+    if (prev === g.id) opt.selected = true;
+    sessionConversationSelect.appendChild(opt);
+  }
+
+  // Forensic unfiltered feed — operator surface only (not /chat).
+  if (!PRODUCT_CHAT) {
+    const allOpt = document.createElement("option");
+    allOpt.value = VIEW_ALL_SENTINEL;
+    allOpt.textContent = "All messages (forensic)";
+    if (prev === VIEW_ALL_SENTINEL) allOpt.selected = true;
+    sessionConversationSelect.appendChild(allOpt);
+  }
+
+  // Ensure selection if prev was unknown.
+  if (sessionConversationSelect.value !== prev) {
+    const orphan = document.createElement("option");
+    orphan.value = prev;
+    orphan.textContent = prev === VIEW_ALL_SENTINEL ? "All messages (forensic)" : prev;
+    orphan.selected = true;
+    sessionConversationSelect.appendChild(orphan);
+  }
+}
+
+/** Header conversation name + member chips. */
+function updateConversationChrome() {
+  if (!chatConversationMeta) return;
+  if (sessionViewMode === "all" && !PRODUCT_CHAT) {
+    chatConversationMeta.hidden = false;
+    if (chatConversationName) {
+      chatConversationName.textContent = "All messages (forensic)";
+    }
+    if (chatMemberChips) chatMemberChips.innerHTML = "";
+    if (sessionConversationSelect) {
+      sessionConversationSelect.value = VIEW_ALL_SENTINEL;
+    }
+    return;
+  }
+  const cid = sessionConversationId || `dm:${getSessionUserId()}`;
+  const conv = sessionConversation || {};
+  let title = "Private Chat";
+  if (String(cid).startsWith("group:")) {
+    title = conv.name || cid;
+  } else if (String(cid).startsWith("dm:")) {
+    const peer = String(cid).slice(3);
+    const peerLabel = labelCache.users[peer] || peer;
+    title = peer === getSessionUserId() ? "Private Chat" : `DM · ${peerLabel}`;
+  }
+  chatConversationMeta.hidden = false;
+  if (chatConversationName) chatConversationName.textContent = title;
+
+  const members = Array.isArray(conv.members) ? conv.members.slice() : [];
+  if (String(cid).startsWith("dm:") && !members.length) {
+    members.push(String(cid).slice(3));
+  }
+  if (chatMemberChips) {
+    chatMemberChips.innerHTML = "";
+    // Always surface Elyra as the other party for DMs / groups.
+    const selfChip = document.createElement("span");
+    selfChip.className = "member-chip member-chip-self";
+    selfChip.textContent = selfDisplayName();
+    selfChip.title = "assistant";
+    chatMemberChips.appendChild(selfChip);
+    for (const mid of members) {
+      if (!mid) continue;
+      const chip = document.createElement("span");
+      chip.className = "member-chip";
+      chip.textContent = labelCache.users[mid] || mid;
+      chip.title = mid;
+      chatMemberChips.appendChild(chip);
+    }
+  }
+  if (sessionConversationSelect && sessionConversationSelect.value !== cid) {
+    // Soft-sync select without wiping options mid-render.
+    const has = Array.from(sessionConversationSelect.options).some(
+      (o) => o.value === cid
+    );
+    if (has) sessionConversationSelect.value = cid;
+  }
+}
+
 async function switchSessionUser(userId) {
   if (!userId) return;
+  // Server applies auto-DM vs keep-group membership (KD18 / T12).
   const data = await fetchJson("/api/session", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -7815,6 +8056,131 @@ async function switchSessionUser(userId) {
     refreshMessages({ force: true }),
     refreshIdentity({ force: true }).catch(() => {}),
   ]);
+}
+
+async function switchConversation(conversationId) {
+  if (!conversationId) return;
+  if (conversationId === VIEW_ALL_SENTINEL) {
+    if (PRODUCT_CHAT) return;
+    const data = await fetchJson("/api/session", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ view_mode: "all" }),
+    });
+    applySessionPayload(data);
+    showNotice("View: all messages (forensic)");
+  } else {
+    const data = await fetchJson("/api/session", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        view_mode: "conversation",
+      }),
+    });
+    applySessionPayload(data);
+    const label =
+      (data.conversation && data.conversation.name) || conversationId;
+    showNotice(`Conversation: ${label}`);
+  }
+  await Promise.all([
+    refreshLabelCache(),
+    refreshMessages({ force: true }),
+  ]);
+}
+
+function openGroupModal() {
+  if (!groupModal) return;
+  fillGroupMembersChecklist(usersCache);
+  if (groupNameInput) groupNameInput.value = "";
+  if (groupDescInput) groupDescInput.value = "";
+  groupModal.hidden = false;
+  if (groupNameInput) groupNameInput.focus();
+}
+
+function closeGroupModal() {
+  if (!groupModal) return;
+  groupModal.hidden = true;
+}
+
+function fillGroupMembersChecklist(users) {
+  if (!groupMembersList) return;
+  const list = Array.isArray(users) ? users : [];
+  groupMembersList.innerHTML = "";
+  if (groupMembersEmpty) groupMembersEmpty.hidden = list.length > 0;
+  if (!list.length) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No users available to invite.";
+    groupMembersList.appendChild(p);
+    return;
+  }
+  const sessionUid = getSessionUserId();
+  for (const u of list) {
+    if (!u || !u.user_id) continue;
+    const row = document.createElement("label");
+    row.className = "group-member-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.name = "group-member";
+    cb.value = u.user_id;
+    // Pre-check the current session user (typical dogfood: include self).
+    if (u.user_id === sessionUid) cb.checked = true;
+    const span = document.createElement("span");
+    const label = u.goes_by || u.user_id;
+    span.textContent = u.provisional
+      ? `${label} (${u.user_id} · provisional)`
+      : `${label} (${u.user_id})`;
+    row.appendChild(cb);
+    row.appendChild(span);
+    groupMembersList.appendChild(row);
+  }
+}
+
+async function createGroupFromModal(ev) {
+  if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+  const name = groupNameInput ? groupNameInput.value.trim() : "";
+  if (!name) {
+    showNotice("Group name required");
+    return;
+  }
+  const members = [];
+  if (groupMembersList) {
+    groupMembersList
+      .querySelectorAll('input[name="group-member"]:checked')
+      .forEach((el) => {
+        if (el.value) members.push(el.value);
+      });
+  }
+  if (!members.length) {
+    showNotice("Select at least one member");
+    return;
+  }
+  const description = groupDescInput ? groupDescInput.value.trim() : "";
+  const body = { name, members };
+  if (description) body.description = description;
+  if (groupCreateBtn) groupCreateBtn.disabled = true;
+  try {
+    const data = await fetchJson("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const conv = (data && data.conversation) || data;
+    const cid = conv && conv.id;
+    closeGroupModal();
+    showNotice(`Created group ${conv.name || cid || ""}`.trim());
+    if (cid) {
+      await switchConversation(cid);
+    } else {
+      await refreshLabelCache();
+      await refreshMessages({ force: true });
+    }
+  } catch (err) {
+    showNotice(String(err.message || err));
+  } finally {
+    if (groupCreateBtn) groupCreateBtn.disabled = false;
+  }
 }
 
 async function createProvisionalUser() {
@@ -9164,9 +9530,40 @@ if (sessionUserSelect) {
     switchSessionUser(uid).catch((e) => showNotice(String(e.message || e)));
   });
 }
+if (sessionConversationSelect) {
+  sessionConversationSelect.addEventListener("change", () => {
+    const val = sessionConversationSelect.value;
+    if (!val) return;
+    const current =
+      sessionViewMode === "all" && !PRODUCT_CHAT
+        ? VIEW_ALL_SENTINEL
+        : sessionConversationId;
+    if (val === current) return;
+    switchConversation(val).catch((e) =>
+      showNotice(String(e.message || e))
+    );
+  });
+}
 if (sessionNewGuestBtn) {
   sessionNewGuestBtn.addEventListener("click", () => {
     createProvisionalUser();
+  });
+}
+if (sessionNewGroupBtn) {
+  sessionNewGroupBtn.addEventListener("click", () => {
+    openGroupModal();
+  });
+}
+if (groupForm) {
+  groupForm.addEventListener("submit", (ev) => {
+    createGroupFromModal(ev).catch((e) =>
+      showNotice(String(e.message || e))
+    );
+  });
+}
+if (groupModal) {
+  groupModal.querySelectorAll("[data-group-dismiss]").forEach((el) => {
+    el.addEventListener("click", () => closeGroupModal());
   });
 }
 if (identityMintGrantBtn) {

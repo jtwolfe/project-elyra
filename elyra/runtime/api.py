@@ -5967,7 +5967,14 @@ def start_api_server(
     def _ensure_dm(user_id: str) -> dict[str, Any]:
         return conversations_store.ensure_dm(user_id)
 
-    client_sessions = ClientSessionsRegistry(paths, ensure_dm=_ensure_dm)
+    def _get_conversation(conversation_id: str) -> dict[str, Any] | None:
+        return conversations_store.get(conversation_id)
+
+    client_sessions = ClientSessionsRegistry(
+        paths,
+        ensure_dm=_ensure_dm,
+        get_conversation=_get_conversation,
+    )
 
     handler = type(
         "BoundHandler",

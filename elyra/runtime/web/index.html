@@ -33,15 +33,26 @@
           <button type="button" class="nav-btn" data-panel="status">Status</button>
         </nav>
         <div class="rail-session" title="Who is at the keyboard (message attribution)">
-          <label class="session-label" for="session-user-select">Session user</label>
-          <select id="session-user-select" class="session-select" aria-label="Session user">
+          <label class="session-label" for="session-user-select">Session user (impersonate)</label>
+          <select id="session-user-select" class="session-select" aria-label="Session user (impersonate)">
             <option value="operator">operator</option>
           </select>
           <button type="button" id="session-new-guest-btn" class="btn-secondary btn-sm session-new-btn">
             New guest…
           </button>
+          <label class="session-label" for="session-conversation-select">Conversation</label>
+          <select
+            id="session-conversation-select"
+            class="session-select"
+            aria-label="Conversation"
+          >
+            <option value="dm:operator">Private Chat</option>
+          </select>
+          <button type="button" id="session-new-group-btn" class="btn-secondary btn-sm session-new-btn">
+            New group…
+          </button>
           <p class="session-hint muted">
-            Who is typing in this session.
+            Per-tab client session — not login. Who is typing and which thread.
           </p>
         </div>
         <div class="rail-effort" role="group" aria-label="Reasoning effort">
@@ -122,6 +133,10 @@
               <p class="muted">
                 Talk with Elyra. Attach images, audio, or files — media is stored durably and shown in the message footer.
               </p>
+              <div id="chat-conversation-meta" class="chat-conversation-meta" hidden>
+                <span id="chat-conversation-name" class="chat-conversation-name"></span>
+                <div id="chat-member-chips" class="chat-member-chips" aria-label="Conversation members"></div>
+              </div>
             </div>
             <div id="chat-activity" class="chat-activity" hidden>
               <div class="chat-activity-main">
@@ -1284,6 +1299,50 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div id="group-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
+      <div class="modal-backdrop" data-group-dismiss></div>
+      <div class="modal-card">
+        <header class="modal-head">
+          <h2 id="group-modal-title">New group</h2>
+          <button type="button" class="link-btn" data-group-dismiss aria-label="Close">close</button>
+        </header>
+        <p class="muted">Create a multi-party conversation. Elyra is always present; pick human members.</p>
+        <form id="group-form" class="group-form">
+          <label class="group-form-label" for="group-name-input">
+            Name
+            <input
+              id="group-name-input"
+              type="text"
+              required
+              autocomplete="off"
+              maxlength="120"
+              placeholder="Team room"
+            />
+          </label>
+          <label class="group-form-label" for="group-desc-input">
+            Description <span class="muted">(optional)</span>
+            <textarea
+              id="group-desc-input"
+              rows="2"
+              maxlength="500"
+              placeholder="What this room is for"
+            ></textarea>
+          </label>
+          <fieldset class="group-members-fieldset">
+            <legend class="group-form-label">Members</legend>
+            <div id="group-members-list" class="group-members-list">
+              <p class="muted">Loading users…</p>
+            </div>
+            <p id="group-members-empty" class="muted" hidden>No users available to invite.</p>
+          </fieldset>
+          <div class="modal-actions">
+            <button type="button" class="btn-secondary" data-group-dismiss>Cancel</button>
+            <button type="submit" id="group-create-btn" class="btn-primary">Create group</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <div id="reset-modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="reset-modal-title">
