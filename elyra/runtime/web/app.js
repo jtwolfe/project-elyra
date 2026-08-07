@@ -32,6 +32,12 @@ const goalsList = $("#goals-list");
 const momentsList = $("#moments-list");
 const momentDetail = $("#moment-detail");
 const memoryRefreshBtn = $("#memory-refresh-btn");
+const scheduleContinuous = $("#schedule-continuous");
+const scheduleCounts = $("#schedule-counts");
+const scheduleTimersBadge = $("#schedule-timers-badge");
+const scheduleWaitsBadge = $("#schedule-waits-badge");
+const scheduleTimersList = $("#schedule-timers-list");
+const scheduleWaitsList = $("#schedule-waits-list");
 const memoryContextFlags = $("#memory-context-flags");
 const memoryContextBody = $("#memory-context-body");
 const memoryLadderRebuildBtn = $("#memory-ladder-rebuild-btn");
@@ -93,7 +99,7 @@ const memoryGraphBrowseEmpty = $("#memory-graph-browse-empty");
 const memoryGraphBrowseDetail = $("#memory-graph-browse-detail");
 /** @type {boolean} */
 let memoryVectorsRebuildInFlight = false;
-/** @type {"context" | "atoms" | "vectors" | "graph"} */
+/** @type {"context" | "moments" | "schedule" | "atoms" | "vectors" | "graph"} */
 let memoryActiveTab = "context";
 /** @type {string | null} */
 let selectedAtomId = null;
@@ -454,6 +460,11 @@ function setTextIfChanged(el, text) {
 // Soft-refresh fingerprints for catalog panels (BUG-glass-03 / #86).
 let lastGoalsFp = null;
 let lastMomentsListFp = null;
+let lastScheduleFp = null;
+/** Floored server minute for Schedule relative-time patch (#126). */
+let lastScheduleMinuteFp = null;
+/** Last schedule payload used for relative-time patch without full rebuild. */
+let lastScheduleData = null;
 let lastAtomsListFp = null;
 let lastAtomDetailFp = null;
 let lastVectorsFp = null;
@@ -550,6 +561,70 @@ function formatRelativeAge(iso) {
   } catch {
     return String(iso);
   }
+}
+
+/**
+ * Relative due/expiry label using server_time as "now" when available (#126).
+ * Active past → "overdue"; terminal past → "Xm ago"; future → "in Xm".
+ */
+function formatRelativeWhen(iso, serverTimeIso, status) {
+  if (!iso) return "—";
+  try {
+    const due = new Date(iso);
+    if (Number.isNaN(due.getTime())) return String(iso);
+    let nowMs = Date.now();
+    if (serverTimeIso) {
+      const server = new Date(serverTimeIso);
+      if (!Number.isNaN(server.getTime())) nowMs = server.getTime();
+    }
+    const deltaSec = Math.round((due.getTime() - nowMs) / 1000);
+    const st = String(status || "").toLowerCase();
+    const active = st === "scheduled" || st === "pending" || !st;
+    if (deltaSec >= 0) {
+      if (deltaSec < 45) return "in <1m";
+      if (deltaSec < 3600) return `in ${Math.round(deltaSec / 60)}m`;
+      if (deltaSec < 86400) return `in ${Math.round(deltaSec / 3600)}h`;
+      return `in ${Math.round(deltaSec / 86400)}d`;
+    }
+    // Past
+    if (active) return "overdue";
+    const ago = Math.abs(deltaSec);
+    if (ago < 45) return "just now";
+    if (ago < 3600) return `${Math.round(ago / 60)}m ago`;
+    if (ago < 86400) return `${Math.round(ago / 3600)}h ago`;
+    return `${Math.round(ago / 86400)}d ago`;
+  } catch {
+    return String(iso);
+  }
+}
+
+/** Floor server_time (or local now) to UTC minute string for soft-refresh. */
+function serverMinuteBucket(serverTimeIso) {
+  try {
+    let ms = Date.now();
+    if (serverTimeIso) {
+      const d = new Date(serverTimeIso);
+      if (!Number.isNaN(d.getTime())) ms = d.getTime();
+    }
+    return new Date(ms).toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
+  } catch {
+    return String(serverTimeIso || "");
+  }
+}
+
+/** Compact absolute ISO for schedule meta (trim ms / +00:00). */
+function formatScheduleIso(iso) {
+  if (!iso) return "—";
+  const s = String(iso);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
+  if (m) return `${m[1]}Z`;
+  return s.length > 20 ? s.slice(0, 20) : s;
+}
+
+function shortScheduleId(id) {
+  const s = String(id || "");
+  if (s.length <= 10) return s;
+  return `${s.slice(0, 8)}…`;
 }
 
 /** Short UTC hour label from ISO window start. */
@@ -3099,6 +3174,298 @@ async function refreshMoments(opts = {}) {
   if (momentSnapshotChanged(selectedMomentSnapshot, next)) {
     await loadMomentDetail(selectedMomentId, { soft: true });
   }
+}
+
+// ── Memory → Schedule (timers / waits / continuous; #126 PR3) ─────────
+
+/**
+ * Identity-bearing fingerprint for Schedule soft-refresh.
+ * Excludes pure relative labels and raw server_time (minute bucket is separate).
+ */
+function schedulePayloadFingerprint(data) {
+  const d = data || {};
+  const timers = (Array.isArray(d.timers) ? d.timers : []).map((t) => ({
+    id: t.id,
+    status: t.status,
+    wake_at: t.wake_at,
+    reason: t.reason,
+    goal_id: t.goal_id,
+    task_id: t.task_id,
+    wake_id: t.wake_id,
+  }));
+  const waits = (Array.isArray(d.waits) ? d.waits : []).map((w) => ({
+    id: w.id,
+    status: w.status,
+    expires_at: w.expires_at,
+    prompt: w.prompt,
+    user_id: w.user_id,
+    choices: w.choices,
+    moment_id: w.moment_id,
+    wake_id: w.wake_id,
+  }));
+  const c = d.continuous || {};
+  return stableFingerprint({
+    timers,
+    waits,
+    counts: d.counts || null,
+    continuous: {
+      enabled: c.enabled,
+      streak: c.streak,
+      max_streak: c.max_streak,
+      pending_moment_continues: c.pending_moment_continues,
+      last_skip_reason: c.last_skip_reason,
+      last_enqueue_at: c.last_enqueue_at,
+      cooldown_seconds: c.cooldown_seconds,
+    },
+  });
+}
+
+function scheduleStatusBadgeClass(status) {
+  const st = String(status || "").toLowerCase();
+  if (st === "scheduled" || st === "pending") return "badge badge-open";
+  if (st === "timed_out" || st === "cancelled") return "badge badge-bad";
+  return "badge";
+}
+
+function renderScheduleContinuous(c) {
+  if (!scheduleContinuous) return;
+  const cont = c && typeof c === "object" ? c : {};
+  const enabled = Boolean(cont.enabled);
+  scheduleContinuous.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = "Continuous";
+  const badge = document.createElement("span");
+  badge.className = enabled ? "badge badge-open" : "badge";
+  badge.textContent = enabled ? "on" : "off";
+  head.appendChild(title);
+  head.appendChild(badge);
+  scheduleContinuous.appendChild(head);
+  const meta = document.createElement("p");
+  meta.className = "muted";
+  // Same field names as formatContinuousMeta / Status continuous strip.
+  if (!enabled) {
+    meta.textContent = "continuous: off";
+  } else {
+    const streak = Number(cont.streak) || 0;
+    const max = Number(cont.max_streak) || 0;
+    const pending = Number(cont.pending_moment_continues) || 0;
+    const parts = [
+      "continuous: on",
+      `streak ${streak}/${max}`,
+      `pending continues ${pending}`,
+    ];
+    if (cont.last_skip_reason) {
+      parts.push(`last skip ${cont.last_skip_reason}`);
+    }
+    meta.textContent = parts.join(" · ");
+  }
+  scheduleContinuous.appendChild(meta);
+}
+
+function renderScheduleTimerCard(t, serverTimeIso) {
+  const card = document.createElement("article");
+  card.className = "card";
+  card.dataset.scheduleId = t.id || "";
+  card.dataset.scheduleKind = "timer";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = t.reason || shortScheduleId(t.id) || "timer";
+  const badge = document.createElement("span");
+  badge.className = scheduleStatusBadgeClass(t.status);
+  badge.textContent = t.status || "?";
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const abs = document.createElement("span");
+  abs.textContent = `wake ${formatScheduleIso(t.wake_at)}`;
+  meta.appendChild(abs);
+  meta.appendChild(document.createTextNode(" · "));
+  const rel = document.createElement("span");
+  rel.className = "schedule-rel";
+  rel.dataset.dueIso = t.wake_at || "";
+  rel.dataset.status = t.status || "scheduled";
+  const relText = formatRelativeWhen(t.wake_at, serverTimeIso, t.status);
+  rel.textContent = relText;
+  if (relText === "overdue") rel.classList.add("overdue");
+  meta.appendChild(rel);
+  meta.appendChild(document.createTextNode(" · "));
+  const idSpan = document.createElement("span");
+  idSpan.textContent = `id ${shortScheduleId(t.id)}`;
+  idSpan.title = t.id || "";
+  meta.appendChild(idSpan);
+  card.appendChild(meta);
+
+  const links = [];
+  if (t.goal_id) links.push(`goal ${t.goal_id}`);
+  if (t.task_id) links.push(`task ${t.task_id}`);
+  if (links.length) {
+    const extra = document.createElement("p");
+    extra.className = "muted";
+    extra.textContent = links.join(" · ");
+    card.appendChild(extra);
+  }
+  return card;
+}
+
+function renderScheduleWaitCard(w, serverTimeIso) {
+  const card = document.createElement("article");
+  card.className = "card";
+  card.dataset.scheduleId = w.id || "";
+  card.dataset.scheduleKind = "wait";
+
+  const head = document.createElement("div");
+  head.className = "card-head";
+  const title = document.createElement("strong");
+  title.textContent = w.prompt || shortScheduleId(w.id) || "wait";
+  const badge = document.createElement("span");
+  badge.className = scheduleStatusBadgeClass(w.status);
+  badge.textContent = w.status || "?";
+  head.appendChild(title);
+  head.appendChild(badge);
+  card.appendChild(head);
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const abs = document.createElement("span");
+  abs.textContent = `expires ${formatScheduleIso(w.expires_at)}`;
+  meta.appendChild(abs);
+  meta.appendChild(document.createTextNode(" · "));
+  const rel = document.createElement("span");
+  rel.className = "schedule-rel";
+  rel.dataset.dueIso = w.expires_at || "";
+  rel.dataset.status = w.status || "pending";
+  const relText = formatRelativeWhen(w.expires_at, serverTimeIso, w.status);
+  rel.textContent = relText;
+  if (relText === "overdue") rel.classList.add("overdue");
+  meta.appendChild(rel);
+  if (w.user_id) {
+    meta.appendChild(document.createTextNode(" · "));
+    const user = document.createElement("span");
+    user.textContent = `user ${w.user_id}`;
+    meta.appendChild(user);
+  }
+  meta.appendChild(document.createTextNode(" · "));
+  const idSpan = document.createElement("span");
+  idSpan.textContent = `id ${shortScheduleId(w.id)}`;
+  idSpan.title = w.id || "";
+  meta.appendChild(idSpan);
+  card.appendChild(meta);
+
+  const choices = Array.isArray(w.choices) ? w.choices.filter(Boolean) : [];
+  if (choices.length) {
+    const ch = document.createElement("p");
+    ch.className = "muted";
+    ch.textContent = `choices: ${choices.join(" · ")}`;
+    card.appendChild(ch);
+  }
+  if (w.moment_id) {
+    const mom = document.createElement("p");
+    mom.className = "muted";
+    mom.textContent = `moment ${w.moment_id}`;
+    card.appendChild(mom);
+  }
+  return card;
+}
+
+function renderSchedule(data) {
+  const d = data || {};
+  const timers = Array.isArray(d.timers) ? d.timers : [];
+  const waits = Array.isArray(d.waits) ? d.waits : [];
+  const counts = d.counts || {};
+  const serverTime = d.server_time || null;
+
+  renderScheduleContinuous(d.continuous);
+
+  if (scheduleTimersBadge) {
+    const n =
+      counts.timers_scheduled != null ? counts.timers_scheduled : timers.length;
+    setTextIfChanged(scheduleTimersBadge, String(n));
+  }
+  if (scheduleWaitsBadge) {
+    const n =
+      counts.waits_pending != null ? counts.waits_pending : waits.length;
+    setTextIfChanged(scheduleWaitsBadge, String(n));
+  }
+  if (scheduleCounts) {
+    const ts = counts.timers_scheduled ?? timers.length;
+    const wp = counts.waits_pending ?? waits.length;
+    const parts = [`active timers ${ts}`, `pending waits ${wp}`];
+    if (counts.timers_total != null || counts.waits_total != null) {
+      parts.push(
+        `store timers ${counts.timers_total ?? "—"} · waits ${counts.waits_total ?? "—"}`
+      );
+    }
+    setTextIfChanged(scheduleCounts, parts.join(" · "));
+  }
+
+  if (scheduleTimersList) {
+    scheduleTimersList.innerHTML = "";
+    if (!timers.length) {
+      scheduleTimersList.innerHTML = `<p class="muted empty">No scheduled timers.</p>`;
+    } else {
+      for (const t of timers) {
+        scheduleTimersList.appendChild(renderScheduleTimerCard(t, serverTime));
+      }
+    }
+  }
+
+  if (scheduleWaitsList) {
+    scheduleWaitsList.innerHTML = "";
+    if (!waits.length) {
+      scheduleWaitsList.innerHTML = `<p class="muted empty">No pending waits.</p>`;
+    } else {
+      for (const w of waits) {
+        scheduleWaitsList.appendChild(renderScheduleWaitCard(w, serverTime));
+      }
+    }
+  }
+}
+
+/** Patch only relative/overdue text nodes (no list rebuild / scroll wipe). */
+function patchScheduleRelativeTimes(data) {
+  const serverTime = (data && data.server_time) || null;
+  const roots = [scheduleTimersList, scheduleWaitsList].filter(Boolean);
+  for (const root of roots) {
+    root.querySelectorAll(".schedule-rel[data-due-iso]").forEach((el) => {
+      const iso = el.dataset.dueIso;
+      const status = el.dataset.status || "";
+      const next = formatRelativeWhen(iso, serverTime, status);
+      setTextIfChanged(el, next);
+      el.classList.toggle("overdue", next === "overdue");
+    });
+  }
+}
+
+async function refreshSchedule(opts = {}) {
+  const force = Boolean(opts.force);
+  // PR3: active-only defaults (history query lands in a later PR).
+  const data = await fetchJson("/api/schedule");
+  const fp = schedulePayloadFingerprint(data);
+  const minuteFp = serverMinuteBucket(data && data.server_time);
+  const hasDom =
+    (scheduleTimersList && scheduleTimersList.childElementCount > 0) ||
+    (scheduleWaitsList && scheduleWaitsList.childElementCount > 0);
+
+  if (!force && fp === lastScheduleFp && hasDom) {
+    lastScheduleData = data;
+    if (minuteFp !== lastScheduleMinuteFp) {
+      lastScheduleMinuteFp = minuteFp;
+      patchScheduleRelativeTimes(data);
+    }
+    return;
+  }
+
+  lastScheduleFp = fp;
+  lastScheduleMinuteFp = minuteFp;
+  lastScheduleData = data;
+  renderSchedule(data);
 }
 
 // ── Memory panel (PR9) ────────────────────────────────────────────────
@@ -6646,6 +7013,10 @@ async function refreshMemory(opts = {}) {
   const force = Boolean(opts.force);
   if (memoryActiveTab === "moments") {
     await refreshMoments({ force });
+    return;
+  }
+  if (memoryActiveTab === "schedule") {
+    await refreshSchedule({ force });
     return;
   }
   if (memoryActiveTab === "atoms") {

@@ -1385,6 +1385,63 @@ body {
   margin: 0;
 }
 
+/* Memory → Schedule: single scroll surface; lists size to content (not list-panel-auto). */
+#memory-tab-schedule.memory-tab-panel.active {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.memory-schedule-hint {
+  padding: 0.5rem 1.5rem 0.25rem;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.schedule-continuous {
+  margin: 0.35rem 1.5rem 0.25rem;
+  flex: 0 0 auto;
+  max-width: 720px;
+}
+
+.schedule-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.25rem 1.5rem 0.15rem;
+  flex: 0 0 auto;
+}
+
+.schedule-block {
+  margin-top: 0.75rem;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.schedule-heading {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+  padding: 0 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--cream, var(--text));
+}
+
+#memory-tab-schedule .list-panel {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
+  max-height: none;
+}
+
+.schedule-rel.overdue {
+  color: var(--bad, var(--warn));
+}
+
 .detail-panel {
   border-top: 1px solid var(--border);
   /* When open, detail owns leftover viewport under the list. */

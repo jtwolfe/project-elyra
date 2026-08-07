@@ -246,6 +246,15 @@
               type="button"
               class="memory-tab"
               role="tab"
+              data-memory-tab="schedule"
+              aria-selected="false"
+            >
+              Schedule
+            </button>
+            <button
+              type="button"
+              class="memory-tab"
+              role="tab"
               data-memory-tab="atoms"
               aria-selected="false"
             >
@@ -291,6 +300,32 @@
             </p>
             <div id="moments-list" class="list-panel list-panel-auto">loading…</div>
             <div id="moment-detail" class="list-panel detail-panel" hidden></div>
+          </div>
+          <div id="memory-tab-schedule" class="memory-tab-panel" role="tabpanel" hidden>
+            <p class="muted status-helper memory-schedule-hint">
+              Pending timers and user waits (next due first). Read-only.
+            </p>
+            <div
+              id="schedule-continuous"
+              class="card continuous-card status-card schedule-continuous"
+            >
+              loading…
+            </div>
+            <div class="schedule-toolbar">
+              <span id="schedule-counts" class="muted status-helper"></span>
+            </div>
+            <section class="schedule-block" aria-label="Timers">
+              <h3 class="schedule-heading">
+                Timers <span id="schedule-timers-badge" class="badge">0</span>
+              </h3>
+              <div id="schedule-timers-list" class="list-panel">loading…</div>
+            </section>
+            <section class="schedule-block" aria-label="Waits">
+              <h3 class="schedule-heading">
+                Waits <span id="schedule-waits-badge" class="badge">0</span>
+              </h3>
+              <div id="schedule-waits-list" class="list-panel">loading…</div>
+            </section>
           </div>
           <div id="memory-tab-atoms" class="memory-tab-panel" role="tabpanel" hidden>
             <div class="memory-atoms-toolbar">

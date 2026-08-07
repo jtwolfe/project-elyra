@@ -966,6 +966,25 @@ def test_static_index_served(paths):
         assert "continuous-toggle" in html
         assert "Continuous work" in html
         assert "pill-autopilot" in html
+        # #126 PR3: Memory → Schedule tab (active-only; after Moments)
+        assert 'data-memory-tab="schedule"' in html
+        assert 'id="memory-tab-schedule"' in html
+        assert 'id="schedule-continuous"' in html
+        assert 'id="schedule-timers-list"' in html
+        assert 'id="schedule-waits-list"' in html
+        assert 'id="schedule-counts"' in html
+        assert "Schedule" in html
+        # Tab order: Moments then Schedule (not history UI in PR3)
+        assert html.index('data-memory-tab="moments"') < html.index(
+            'data-memory-tab="schedule"'
+        )
+        assert html.index('data-memory-tab="schedule"') < html.index(
+            'data-memory-tab="atoms"'
+        )
+        # PR3 has no history toggle (that is PR4)
+        assert "include_history" not in html
+        assert "schedule-history" not in html
+        assert "Show recent history" not in html
         # #88: pure markdown helpers load before app.js
         assert 'src="/markdown.js"' in html
         assert html.index('src="/markdown.js"') < html.index('src="/app.js"')
@@ -1097,6 +1116,23 @@ def test_static_app_js_active_panel_poll(paths):
         # Wiring: nav assigns activePanel; tick pushes active-panel refresh.
         assert "activePanel = name" in js
         assert "tasks.push(refreshActivePanel" in js
+        # #126 PR3: Memory Schedule tab wiring (not identifier-only)
+        assert "function refreshSchedule" in js
+        assert "function renderSchedule" in js
+        assert "function patchScheduleRelativeTimes" in js
+        assert "function formatRelativeWhen" in js
+        assert "function schedulePayloadFingerprint" in js
+        assert "function serverMinuteBucket" in js
+        assert 'fetchJson("/api/schedule")' in js or "fetchJson('/api/schedule')" in js
+        assert 'memoryActiveTab === "schedule"' in js
+        assert "await refreshSchedule({ force })" in js or "refreshSchedule({ force })" in js
+        assert "lastScheduleFp" in js
+        assert "lastScheduleMinuteFp" in js
+        # Empty states for zero-collection paths
+        assert "No scheduled timers." in js
+        assert "No pending waits." in js
+        # Active-only: PR3 must not request history
+        assert "include_history" not in js
         # Continuous meta targets rail control (single source of truth).
         assert "continuous-status-rail" in js
         # BUG-meal-01: meal budget range → PATCH + soft-poll focus guard
