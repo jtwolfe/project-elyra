@@ -390,3 +390,138 @@ def test_hybrid_skips_when_message_id_on_glass_tail(store):
     )
     assert sum(1 for m in expanded if m.get("id") == wake_id) == 1
     assert len(expanded) == before
+
+
+# ---------------------------------------------------------------------------
+# PR4 / #127 — conversation-scoped tip + solo isolation (KD4/KD5)
+# ---------------------------------------------------------------------------
+
+
+def test_solo_non_social_empty_glass_tail_despite_client_dm_rows(store):
+    """KD5 solo isolation: continuous/timer-shaped compose never packs social tip.
+
+    Even when glass_rows contain a client DM session's conversation (dm:jim),
+    non-social + null conversation_id → empty glass_tail (never inject session).
+    """
+    glass = [
+        {
+            "id": "j1",
+            "role": "user",
+            "content": "client session dm tip must not bleed",
+            "user_id": "jim",
+            "conversation_id": "dm:jim",
+            "created_at": "2026-07-30T08:00:00Z",
+        },
+        {
+            "id": "j2",
+            "role": "assistant",
+            "content": "prior dm reply",
+            "user_id": "jim",
+            "conversation_id": "dm:jim",
+            "created_at": "2026-07-30T08:01:00Z",
+        },
+    ]
+    # Continuous / timer / wait_timeout shaped: social_wake=False, no conversation.
+    pkg = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=20_000,
+        glass_rows=glass,
+        social_wake=False,
+        conversation_id=None,
+    )
+    tail = [i for i in pkg.items if i.channel == GLASS_TAIL_CHANNEL]
+    assert tail == [], f"solo must not pack tip, got {[(i.role, i.content) for i in tail]}"
+    assert pkg.glass_tail_meta is None or pkg.glass_tail_meta.get("packed", 0) == 0
+
+    # After solo: social jim wake still scopes to dm:jim.
+    pkg_social = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=20_000,
+        glass_rows=glass,
+        social_wake=True,
+        conversation_id="dm:jim",
+    )
+    tail_s = [i for i in pkg_social.items if i.channel == GLASS_TAIL_CHANNEL]
+    assert tail_s, "social jim wake must still pack dm:jim tip"
+    assert pkg_social.glass_tail_meta is not None
+    assert pkg_social.glass_tail_meta.get("conversation_id") == "dm:jim"
+    assert pkg_social.glass_tail_meta.get("packed") == 2
+    bodies = [i.content for i in tail_s]
+    assert any("client session dm tip" in b or "must not bleed" in b for b in bodies)
+    assert any("prior dm reply" in b for b in bodies)
+
+
+def test_wait_timeout_non_social_no_glass_tail(store):
+    """KD19: wait_timeout remains non-social for glass_tail (empty tip)."""
+    from elyra.loop.continuous_policy import SOCIAL_WAKE_KINDS
+
+    assert "wait_timeout" not in SOCIAL_WAKE_KINDS
+    glass = [
+        {
+            "id": "w1",
+            "role": "user",
+            "content": "wait reply tip",
+            "user_id": "operator",
+            "conversation_id": "dm:operator",
+            "created_at": "2026-07-30T08:00:00Z",
+        },
+    ]
+    # rebuild_outer policy: wait_timeout → social_wake=False, empty tip.
+    pkg = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=20_000,
+        glass_rows=glass,
+        social_wake=False,  # wait_timeout
+        conversation_id=None,
+    )
+    assert not any(i.channel == GLASS_TAIL_CHANNEL for i in pkg.items)
+
+
+def test_conversation_scoped_tip_excludes_other_dm(store):
+    """Multi-user path: compose for dm:jim excludes sam rows (no soft fill)."""
+    glass = [
+        {
+            "id": "j1",
+            "role": "user",
+            "content": "jim rockets question",
+            "user_id": "jim",
+            "conversation_id": "dm:jim",
+            "created_at": "2026-07-30T08:00:00Z",
+        },
+        {
+            "id": "s1",
+            "role": "user",
+            "content": "sam secret topic",
+            "user_id": "sam",
+            "conversation_id": "dm:sam",
+            "created_at": "2026-07-30T08:01:00Z",
+        },
+        {
+            "id": "j2",
+            "role": "assistant",
+            "content": "jim answer",
+            "user_id": "jim",
+            "conversation_id": "dm:jim",
+            "created_at": "2026-07-30T08:02:00Z",
+        },
+    ]
+    pkg = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=50_000,
+        glass_rows=glass,
+        social_wake=True,
+        conversation_id="dm:jim",
+    )
+    tail = [i for i in pkg.items if i.channel == GLASS_TAIL_CHANNEL]
+    assert tail
+    blob = "\n".join(i.content for i in tail)
+    assert "jim rockets" in blob or "jim answer" in blob
+    assert "sam secret" not in blob
+    assert pkg.glass_tail_meta is not None
+    assert pkg.glass_tail_meta.get("conversation_id") == "dm:jim"
+    # Semantic seed hygiene: last_user_text from scoped tip only
+    assert "sam" not in (pkg.glass_tail_meta.get("last_user_text") or "")

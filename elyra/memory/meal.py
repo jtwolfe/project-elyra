@@ -1863,6 +1863,39 @@ def _glass_row_content(row: Mapping[str, Any]) -> str:
     return content
 
 
+def _glass_row_conversation_id(row: Mapping[str, Any]) -> str | None:
+    """Normalize row conversation_id: missing / null / blank → None."""
+    if "conversation_id" not in row:
+        return None
+    val = row.get("conversation_id")
+    if val is None:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        return s or None
+    return None
+
+
+def _glass_row_matches_conversation(
+    row: Mapping[str, Any], conversation_id: str
+) -> bool:
+    """Strict conversation scope (KD4 / §2.4) — no soft global fill.
+
+    - Explicit matching conversation_id always included.
+    - Legacy DM fill only: for ``dm:<uid>``, also rows with missing/null
+      conversation_id and ``user_id == uid`` (pre-cutover only).
+    - Groups: **never** legacy fill by member user_id.
+    """
+    row_cid = _glass_row_conversation_id(row)
+    if row_cid == conversation_id:
+        return True
+    if conversation_id.startswith("dm:") and row_cid is None:
+        peer = conversation_id[3:]
+        if peer and row.get("user_id") == peer:
+            return True
+    return False
+
+
 def _glass_row_media_ids(row: Mapping[str, Any]) -> list[str]:
     """Extract attachment content ids from a glass row (best-effort)."""
     atts = row.get("attachments")
@@ -1879,12 +1912,68 @@ def _glass_row_media_ids(row: Mapping[str, Any]) -> list[str]:
     return out
 
 
-def _glass_tail_item_from_row(row: Mapping[str, Any]) -> MealItem:
-    """Build one glass-tail MealItem with true role + wake_message_id stamp."""
+def _glass_tail_labeled_content(
+    row: Mapping[str, Any],
+    *,
+    conversation_id: str | None = None,
+    label_users: Mapping[str, str] | None = None,
+) -> str:
+    """Speaker-labeled glass content (KD6 — single helper for estimate + select).
+
+    - Group: user lines → ``[GoesBy (user_id)] content``
+    - DM: short ``[GoesBy] content`` when ``label_users`` provided; else raw
+    - Assistant: no user-style prefix; role stays assistant
+    """
+    content = _glass_row_content(row)
+    role = str(row.get("role") or "user")
+    if role != "user":
+        return content
+    uid_raw = row.get("user_id")
+    if uid_raw is None:
+        return content
+    uid = str(uid_raw).strip()
+    if not uid:
+        return content
+
+    cid = conversation_id.strip() if isinstance(conversation_id, str) else None
+    is_group = bool(cid and cid.startswith("group:"))
+    is_dm = bool(cid and cid.startswith("dm:"))
+
+    if is_group:
+        label = uid
+        if label_users is not None:
+            mapped = label_users.get(uid)
+            if isinstance(mapped, str) and mapped.strip():
+                label = mapped.strip()
+        return f"[{label} ({uid})] {content}"
+
+    if is_dm and label_users is not None:
+        mapped = label_users.get(uid)
+        label = mapped.strip() if isinstance(mapped, str) and mapped.strip() else uid
+        return f"[{label}] {content}"
+
+    return content
+
+
+def _glass_tail_item_from_row(
+    row: Mapping[str, Any],
+    *,
+    conversation_id: str | None = None,
+    label_users: Mapping[str, str] | None = None,
+) -> MealItem:
+    """Build one glass-tail MealItem with true role + wake_message_id stamp.
+
+    Labels applied via :func:`_glass_tail_labeled_content` so floor token
+    accounting matches packed content (KD6).
+    """
     role = str(row.get("role") or "user")
     if role not in ("user", "assistant"):
         role = "user"
-    content = _glass_row_content(row)
+    content = _glass_tail_labeled_content(
+        row,
+        conversation_id=conversation_id,
+        label_users=label_users,
+    )
     mid = row.get("id")
     mid_s = str(mid) if mid is not None else None
     atts = row.get("attachments")
@@ -1898,6 +1987,11 @@ def _glass_tail_item_from_row(row: Mapping[str, Any]) -> MealItem:
         meta["attachments"] = list(atts)
     if media_ids:
         meta["media_ids"] = media_ids
+    uid_raw = row.get("user_id")
+    if uid_raw is not None and str(uid_raw).strip():
+        meta["user_id"] = str(uid_raw).strip()
+    if conversation_id:
+        meta["conversation_id"] = conversation_id
     # Explicit role — never host default user for glass-tail (KD-ROLE).
     return _item_from_parts(
         atom_id=None,
@@ -1910,30 +2004,58 @@ def _glass_tail_item_from_row(row: Mapping[str, Any]) -> MealItem:
     )
 
 
+def _eligible_glass_rows(
+    glass_rows: Sequence[Mapping[str, Any]],
+    *,
+    conversation_id: str | None = None,
+    exclude_message_ids: set[str] | None = None,
+) -> list[Mapping[str, Any]]:
+    """Role/content eligible rows, optionally strict-conversation filtered (KD4)."""
+    exclude = {str(x) for x in (exclude_message_ids or ()) if x is not None}
+    cid = conversation_id.strip() if isinstance(conversation_id, str) else None
+    if cid == "":
+        cid = None
+    out: list[Mapping[str, Any]] = []
+    for r in glass_rows:
+        if not _glass_row_eligible(r):
+            continue
+        if r.get("id") is not None and str(r.get("id")) in exclude:
+            continue
+        if cid is not None and not _glass_row_matches_conversation(r, cid):
+            continue
+        out.append(r)
+    return out
+
+
 def estimate_glass_tail_floor_tokens(
     glass_rows: Sequence[Mapping[str, Any]],
     *,
     floor_messages: int = 6,
     max_messages: int = 20,
     exclude_message_ids: set[str] | None = None,
+    conversation_id: str | None = None,
+    label_users: Mapping[str, str] | None = None,
 ) -> int:
-    """Token cost of packing the floor message set (newest eligible rows)."""
-    exclude = {str(x) for x in (exclude_message_ids or ()) if x is not None}
-    eligible = [
-        r
-        for r in glass_rows
-        if _glass_row_eligible(r)
-        and (
-            r.get("id") is None
-            or str(r.get("id")) not in exclude
-        )
-    ]
+    """Token cost of packing the floor message set (newest eligible rows).
+
+    Uses the same labeled content as :func:`select_glass_tail` (KD6).
+    """
+    eligible = _eligible_glass_rows(
+        glass_rows,
+        conversation_id=conversation_id,
+        exclude_message_ids=exclude_message_ids,
+    )
     if not eligible or floor_messages <= 0:
         return 0
     window = eligible[-max_messages:] if max_messages > 0 else list(eligible)
     floor_n = min(int(floor_messages), len(window))
     floor_rows = window[-floor_n:]
-    return sum(_glass_tail_item_from_row(r).token_estimate for r in floor_rows)
+    return sum(
+        _glass_tail_item_from_row(
+            r, conversation_id=conversation_id, label_users=label_users
+        ).token_estimate
+        for r in floor_rows
+    )
 
 
 def select_glass_tail(
@@ -1943,32 +2065,58 @@ def select_glass_tail(
     floor_messages: int = 6,
     max_messages: int = 20,
     social_wake: bool = False,
+    conversation_id: str | None = None,
     exclude_message_ids: set[str] | None = None,
+    label_users: Mapping[str, str] | None = None,
 ) -> tuple[list[MealItem], dict[str, Any]]:
     """Select + pack last-K glass messages into glass_tail MealItems.
 
     - Filter to role in {user, assistant}; keep non-empty content OR attachments
       (KD19 media-only rule).
+    - When ``conversation_id`` is set: **strict** conversation scope (KD4) —
+      matching rows + legacy DM fill only; never soft-fill other chats.
+    - When ``conversation_id`` is null and ``social_wake`` is false: return empty
+      items (KD5 pure-work / continuous — no fake social tip). Callers that
+      pre-filter rows for social wakes may omit conversation_id and still pack.
     - Take newest-first window up to ``max_messages``, reverse to chronological
       (oldest → newest) so newest sits just before orient when placed before temporal.
     - Pack under ``cap_tokens``, preferring newest under pressure. When
       ``social_wake`` and rows exist, never drop below ``floor_messages`` when
       the cap allows (Prince Rupert floor). If still short, pack best-effort and
       set ``floor_shortfall=true``.
+    - Speaker labels via shared helper (KD6). Semantic seed uses raw user text.
     - Each item uses original role and stamps ``meta.wake_message_id`` when id
       is present (hybrid skip / OQ6 prerequisite).
     """
-    exclude = {str(x) for x in (exclude_message_ids or ()) if x is not None}
     cap = max(0, int(cap_tokens))
     max_n = max(0, int(max_messages))
     floor_n = max(0, int(floor_messages)) if social_wake else 0
+    cid = conversation_id.strip() if isinstance(conversation_id, str) else None
+    if cid == "":
+        cid = None
 
-    eligible = [
-        r
-        for r in glass_rows
-        if _glass_row_eligible(r)
-        and (r.get("id") is None or str(r.get("id")) not in exclude)
-    ]
+    # KD5: non-social + no conversation scope → empty tip (honest, no bleed).
+    if cid is None and not social_wake:
+        meta_empty: dict[str, Any] = {
+            "packed": 0,
+            "available": 0,
+            "window": 0,
+            "cap_tokens": cap,
+            "tokens_used": 0,
+            "floor_messages": 0,
+            "floor_applied": False,
+            "floor_shortfall": False,
+            "social_wake": False,
+            "last_user_text": None,
+            "conversation_id": None,
+        }
+        return [], meta_empty
+
+    eligible = _eligible_glass_rows(
+        glass_rows,
+        conversation_id=cid,
+        exclude_message_ids=exclude_message_ids,
+    )
     window = eligible[-max_n:] if max_n > 0 else []
     # Pack newest-first so tip is preferred under token pressure.
     packed_newest_first: list[MealItem] = []
@@ -1977,7 +2125,9 @@ def select_glass_tail(
     target_floor = min(floor_n, len(window)) if floor_n > 0 else 0
 
     for row in reversed(window):
-        item = _glass_tail_item_from_row(row)
+        item = _glass_tail_item_from_row(
+            row, conversation_id=cid, label_users=label_users
+        )
         under_floor = len(packed_newest_first) < target_floor
         if used + item.token_estimate > cap:
             if under_floor:
@@ -2000,6 +2150,7 @@ def select_glass_tail(
         and len(items) >= min(target_floor, len(window))
         and not floor_shortfall
     )
+    # Seed hygiene: raw user text (no speaker-label prefix) for semantic quality.
     last_user = _last_glass_user_text(window if window else eligible)
     meta: dict[str, Any] = {
         "packed": len(items),
@@ -2013,6 +2164,7 @@ def select_glass_tail(
         "social_wake": bool(social_wake),
         # S5: tip user text for semantic seed (not logged at INFO; meta only).
         "last_user_text": last_user,
+        "conversation_id": cid,
     }
     return items, meta
 
@@ -2090,6 +2242,8 @@ def compose_meal(
     glass_rows: Sequence[Mapping[str, Any]] | None = None,
     social_wake: bool = False,
     glass_tail_active: bool | None = None,
+    conversation_id: str | None = None,
+    label_users: Mapping[str, str] | None = None,
 ) -> MealPackage:
     """Compose labeled temporal + episodic [+ semantic] [+ directed_keep] [+ glass_tail] package.
 
@@ -2101,6 +2255,8 @@ def compose_meal(
     ``directed_keep_active`` requires effective keep flag **and** non-empty
     ``directed_keep_ids`` (KD-A7). Glass-tail is active whenever ``glass_rows``
     is non-empty (unless ``glass_tail_active`` overrides).
+    ``conversation_id`` scopes glass_tail strictly (KD4); ``label_users`` drives
+    speaker prefixes on user tip lines (KD6).
     Message order (KD-ORD): episodic → semantic → directed_keep → glass_tail
     → temporal.
     """
@@ -2119,9 +2275,18 @@ def compose_meal(
     dk_flag = is_directed_keep_enabled(cfg)
     directed_keep_active = dk_flag and bool(keep_ids_list)
 
+    conv_id = conversation_id.strip() if isinstance(conversation_id, str) else None
+    if conv_id == "":
+        conv_id = None
+
     glass_list = list(glass_rows) if glass_rows else []
     if glass_tail_active is None:
-        gt_active = bool(glass_list)
+        # KD5: non-social with no conversation → glass_tail inactive even if
+        # a caller passed leftover rows (never pack a foreign tip on pure work).
+        if not social_wake and conv_id is None:
+            gt_active = False
+        else:
+            gt_active = bool(glass_list)
     else:
         gt_active = bool(glass_tail_active) and bool(glass_list)
 
@@ -2163,6 +2328,8 @@ def compose_meal(
             glass_list,
             floor_messages=floor_messages,
             max_messages=max_messages,
+            conversation_id=conv_id,
+            label_users=label_users,
         )
         (
             glass_tail_cap,
@@ -2189,6 +2356,8 @@ def compose_meal(
             floor_messages=floor_messages,
             max_messages=max_messages,
             social_wake=bool(social_wake),
+            conversation_id=conv_id,
+            label_users=label_users,
         )
         if glass_tail_meta is not None and floor_stolen:
             glass_tail_meta = dict(glass_tail_meta)
@@ -2382,6 +2551,8 @@ def compose_outer_messages(
     glass_rows: Sequence[Mapping[str, Any]] | None = None,
     social_wake: bool = False,
     glass_tail_active: bool | None = None,
+    conversation_id: str | None = None,
+    label_users: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build outer message list: system → epi → sem → dk → glass_tail → temp → orient.
 
@@ -2405,6 +2576,8 @@ def compose_outer_messages(
             glass_rows=glass_rows,
             social_wake=social_wake,
             glass_tail_active=glass_tail_active,
+            conversation_id=conversation_id,
+            label_users=label_users,
         )
 
     messages: list[dict[str, Any]] = []

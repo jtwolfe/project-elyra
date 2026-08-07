@@ -3614,7 +3614,44 @@ class PresenceWorker:
             glass_list_limit = int(
                 getattr(self.settings.memory, "glass_tail_list_limit", 80) or 80
             )
-            glass = list_messages(limit=glass_list_limit, paths=self.paths)
+            # glass_tail conversation scope (KD4/KD5/KD19 #127):
+            # - social + conversation_id → filter-then-last-N for that chat
+            # - social without stamp → legacy DM from speaker only (not group)
+            # - non-social / wait_timeout / continuous / timer → empty tip;
+            #   never inject any client session conversation_id
+            # SOCIAL_WAKE_KINDS from continuous_policy (not meal.py's broader set).
+            conv_id = _conversation_id_from_wake(wake)
+            social = wake.kind in SOCIAL_WAKE_KINDS
+            if social and conv_id:
+                glass = list_messages(
+                    limit=glass_list_limit,
+                    conversation_id=conv_id,
+                    paths=self.paths,
+                )
+            elif social and not conv_id:
+                uid = _user_id_from_wake(wake)
+                if isinstance(uid, str) and uid.strip():
+                    conv_id = f"dm:{uid.strip()}"
+                    glass = list_messages(
+                        limit=glass_list_limit,
+                        conversation_id=conv_id,
+                        paths=self.paths,
+                    )
+                else:
+                    glass = []
+            else:
+                glass = []
+                conv_id = None
+            # Speaker labels (KD6) from UsersStore when available.
+            label_users: dict[str, str] | None = None
+            try:
+                uids = self._users.list_user_ids()
+                if uids:
+                    label_users = {
+                        u: self._users.display_label(u) for u in uids
+                    }
+            except Exception:  # noqa: BLE001 — soft labels
+                label_users = None
             self_digest = self._identity.self_digest()
             _orient_uid, user_digest = resolve_orient_user(
                 wake,
@@ -3660,7 +3697,6 @@ class PresenceWorker:
                 try:
                     from elyra.loop.context import fill_orient, format_now
                     from elyra.memory.meal import (
-                        SOCIAL_WAKE_KINDS,
                         compose_meal,
                         compose_outer_messages,
                         expand_memory_meal_for_provider,
@@ -3694,7 +3730,6 @@ class PresenceWorker:
                     dk_ids, dk_summary = self._last_confirmed_keep_for_meal(
                         moment_id
                     )
-                    social = wake.kind in SOCIAL_WAKE_KINDS
                     package = compose_meal(
                         self._memory,
                         open_moment_id=moment_id,
@@ -3708,6 +3743,8 @@ class PresenceWorker:
                         directed_keep_summary=dk_summary,
                         glass_rows=glass,
                         social_wake=social,
+                        conversation_id=conv_id,
+                        label_users=label_users,
                     )
                     self._record_last_meal_snapshot(
                         package,
@@ -3730,6 +3767,8 @@ class PresenceWorker:
                         directed_keep_summary=dk_summary,
                         glass_rows=glass,
                         social_wake=social,
+                        conversation_id=conv_id,
+                        label_users=label_users,
                     )
                     viewing_ids = self._snapshot_viewing_att_ids()
                     viewing_entries = self._snapshot_viewing_entries()

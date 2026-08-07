@@ -711,3 +711,461 @@ def test_inspect_surfaces_glass_tail_meta(store):
     )
     assert snap.get("glass_tail_meta") is not None
     assert snap["glass_tail_meta"].get("packed", 0) >= 1
+
+
+# ---------------------------------------------------------------------------
+# PR4 / #127 — conversation-scoped glass_tail + speaker labels (KD4/KD5/KD6)
+# ---------------------------------------------------------------------------
+
+
+def _glass_conv(
+    *,
+    mid: str,
+    role: str,
+    content: str,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
+    created_at: str | None = None,
+) -> dict:
+    row = _glass(mid=mid, role=role, content=content, created_at=created_at)
+    if user_id is not None:
+        row["user_id"] = user_id
+    if conversation_id is not None:
+        row["conversation_id"] = conversation_id
+    return row
+
+
+def test_glass_tail_multi_dm_isolation():
+    """Two interleaved DMs → select for dm:jim never includes sam rows."""
+    glass = [
+        _glass_conv(
+            mid="j1",
+            role="user",
+            content="jim hello",
+            user_id="jim",
+            conversation_id="dm:jim",
+            created_at="2026-07-30T08:00:00Z",
+        ),
+        _glass_conv(
+            mid="s1",
+            role="user",
+            content="sam hello",
+            user_id="sam",
+            conversation_id="dm:sam",
+            created_at="2026-07-30T08:01:00Z",
+        ),
+        _glass_conv(
+            mid="j2",
+            role="assistant",
+            content="hi jim",
+            user_id="jim",
+            conversation_id="dm:jim",
+            created_at="2026-07-30T08:02:00Z",
+        ),
+        _glass_conv(
+            mid="s2",
+            role="assistant",
+            content="hi sam",
+            user_id="sam",
+            conversation_id="dm:sam",
+            created_at="2026-07-30T08:03:00Z",
+        ),
+        _glass_conv(
+            mid="j3",
+            role="user",
+            content="jim again",
+            user_id="jim",
+            conversation_id="dm:jim",
+            created_at="2026-07-30T08:04:00Z",
+        ),
+    ]
+    items, meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        floor_messages=2,
+        max_messages=20,
+        social_wake=True,
+        conversation_id="dm:jim",
+    )
+    assert items, "expected jim glass_tail items"
+    bodies = [i.content for i in items]
+    assert not any("sam hello" in b or "hi sam" in b for b in bodies)
+    assert any("jim hello" in b for b in bodies)
+    assert any("jim again" in b for b in bodies)
+    assert any("hi jim" in b for b in bodies)
+    assert meta["conversation_id"] == "dm:jim"
+    assert meta["available"] == 3  # j1, j2, j3
+    assert meta["packed"] == 3
+
+
+def test_glass_tail_group_excludes_dm_and_no_legacy_fill():
+    """Group select only group rows; legacy null-cid user_id rows NOT included."""
+    glass = [
+        _glass_conv(
+            mid="dm1",
+            role="user",
+            content="private jim",
+            user_id="jim",
+            conversation_id="dm:jim",
+        ),
+        _glass_conv(
+            mid="g1",
+            role="user",
+            content="group jim says",
+            user_id="jim",
+            conversation_id="group:room1",
+        ),
+        _glass_conv(
+            mid="g2",
+            role="user",
+            content="group sam says",
+            user_id="sam",
+            conversation_id="group:room1",
+        ),
+        # Legacy pre-cutover: null conversation_id + user_id jim — DM fill only
+        {
+            "id": "leg1",
+            "role": "user",
+            "content": "legacy jim no cid",
+            "user_id": "jim",
+            "created_at": "2026-07-30T08:00:00Z",
+        },
+    ]
+    items, meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="group:room1",
+        floor_messages=2,
+        max_messages=20,
+    )
+    bodies = [i.content for i in items]
+    assert any("group jim says" in b for b in bodies)
+    assert any("group sam says" in b for b in bodies)
+    assert not any("private jim" in b for b in bodies)
+    assert not any("legacy jim" in b for b in bodies)
+    assert meta["available"] == 2
+    assert meta["conversation_id"] == "group:room1"
+
+
+def test_glass_tail_legacy_dm_fill_only():
+    """Legacy null conversation_id + user_id jim → included in dm:jim; not groups."""
+    glass = [
+        {
+            "id": "leg-u",
+            "role": "user",
+            "content": "legacy user jim",
+            "user_id": "jim",
+            "created_at": "2026-07-30T08:00:00Z",
+        },
+        {
+            "id": "leg-a",
+            "role": "assistant",
+            "content": "legacy asst to jim",
+            "user_id": "jim",
+            "created_at": "2026-07-30T08:01:00Z",
+        },
+        {
+            "id": "leg-sam",
+            "role": "user",
+            "content": "legacy sam",
+            "user_id": "sam",
+            "created_at": "2026-07-30T08:02:00Z",
+        },
+        _glass_conv(
+            mid="g1",
+            role="user",
+            content="in group",
+            user_id="jim",
+            conversation_id="group:x",
+        ),
+    ]
+    jim_items, jim_meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        floor_messages=1,
+        max_messages=20,
+    )
+    bodies = [i.content for i in jim_items]
+    assert any("legacy user jim" in b for b in bodies)
+    assert any("legacy asst to jim" in b for b in bodies)
+    assert not any("legacy sam" in b for b in bodies)
+    assert not any("in group" in b for b in bodies)
+    assert jim_meta["available"] == 2
+
+    grp_items, grp_meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="group:x",
+        floor_messages=1,
+        max_messages=20,
+    )
+    grp_bodies = [i.content for i in grp_items]
+    assert any("in group" in b for b in grp_bodies)
+    assert not any("legacy" in b for b in grp_bodies)
+    assert grp_meta["available"] == 1
+
+
+def test_glass_tail_null_conversation_non_social_empty():
+    """KD5: null conversation + social_wake false → empty glass_tail."""
+    glass = [
+        _glass_conv(
+            mid="j1",
+            role="user",
+            content="should not pack",
+            user_id="jim",
+            conversation_id="dm:jim",
+        ),
+    ]
+    items, meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=False,
+        conversation_id=None,
+        floor_messages=6,
+        max_messages=20,
+    )
+    assert items == []
+    assert meta["packed"] == 0
+    assert meta["floor_applied"] is False
+    assert meta["last_user_text"] is None
+    assert meta["available"] == 0
+
+
+def test_glass_tail_null_conversation_non_social_compose_empty(store):
+    """compose_meal: non-social + null conversation_id → no glass_tail pack."""
+    glass = [
+        _glass_conv(
+            mid="j1",
+            role="user",
+            content="foreign tip",
+            user_id="jim",
+            conversation_id="dm:jim",
+        ),
+        _glass(mid="a1", role="assistant", content="reply"),
+    ]
+    pkg = compose_meal(
+        store,
+        open_moment_id=None,
+        budget_tokens=20_000,
+        glass_rows=glass,
+        social_wake=False,
+        conversation_id=None,
+    )
+    tail = [i for i in pkg.items if i.channel == GLASS_TAIL_CHANNEL]
+    assert tail == []
+    # Zero-state: no soft fill from leftover rows
+    assert pkg.glass_tail_meta is None or pkg.glass_tail_meta.get("packed", 0) == 0
+
+
+def test_glass_tail_speaker_labels_group_and_floor():
+    """Group user lines labeled [GoesBy (user_id)]; floor estimate uses labels."""
+    glass = [
+        _glass_conv(
+            mid="g1",
+            role="user",
+            content="hello room",
+            user_id="jim",
+            conversation_id="group:room1",
+            created_at="2026-07-30T08:00:00Z",
+        ),
+        _glass_conv(
+            mid="g2",
+            role="assistant",
+            content="hi all",
+            user_id=None,
+            conversation_id="group:room1",
+            created_at="2026-07-30T08:01:00Z",
+        ),
+        _glass_conv(
+            mid="g3",
+            role="user",
+            content="sam here",
+            user_id="sam",
+            conversation_id="group:room1",
+            created_at="2026-07-30T08:02:00Z",
+        ),
+    ]
+    labels = {"jim": "Jim", "sam": "Sam"}
+    items, meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="group:room1",
+        label_users=labels,
+        floor_messages=3,
+        max_messages=20,
+    )
+    assert len(items) == 3
+    user_items = [i for i in items if i.role == "user"]
+    assert any(i.content.startswith("[Jim (jim)] ") for i in user_items)
+    assert any(i.content.startswith("[Sam (sam)] ") for i in user_items)
+    # Assistant has no user-style prefix
+    asst = [i for i in items if i.role == "assistant"]
+    assert asst
+    assert not asst[0].content.startswith("[")
+    # Seed hygiene: last_user_text is raw (no label prefix)
+    assert meta["last_user_text"] == "sam here"
+    assert not str(meta["last_user_text"]).startswith("[")
+
+    # Floor estimate uses labeled content (tokens ≥ raw)
+    from elyra.memory.meal import estimate_glass_tail_floor_tokens
+
+    labeled_cost = estimate_glass_tail_floor_tokens(
+        glass,
+        floor_messages=3,
+        max_messages=20,
+        conversation_id="group:room1",
+        label_users=labels,
+    )
+    raw_cost = estimate_glass_tail_floor_tokens(
+        glass,
+        floor_messages=3,
+        max_messages=20,
+        conversation_id="group:room1",
+        label_users=None,
+    )
+    assert labeled_cost >= raw_cost
+    assert labeled_cost == meta["tokens_used"]
+
+
+def test_glass_tail_dm_short_label_when_map_provided():
+    """DM: short [GoesBy] form when label_users provided; raw when absent."""
+    glass = [
+        _glass_conv(
+            mid="d1",
+            role="user",
+            content="hey",
+            user_id="jim",
+            conversation_id="dm:jim",
+        ),
+    ]
+    items_labeled, _ = select_glass_tail(
+        glass,
+        cap_tokens=10_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        label_users={"jim": "Jim"},
+        floor_messages=1,
+    )
+    assert items_labeled[0].content == "[Jim] hey"
+
+    items_raw, _ = select_glass_tail(
+        glass,
+        cap_tokens=10_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        label_users=None,
+        floor_messages=1,
+    )
+    assert items_raw[0].content == "hey"
+
+
+def test_list_messages_plus_select_glass_tail_integration(paths):
+    """Integration: list_messages filter-then-last-N + select_glass_tail isolation."""
+    from elyra.messages import append_message, list_messages
+
+    # Interleave more than limit: jim/sam DM rows; limit must not starve jim.
+    limit = 10
+    for i in range(limit + 10):
+        append_message(
+            "user",
+            f"jim-{i}",
+            user_id="jim",
+            conversation_id="dm:jim",
+            paths=paths,
+        )
+        append_message(
+            "user",
+            f"sam-{i}",
+            user_id="sam",
+            conversation_id="dm:sam",
+            paths=paths,
+        )
+    # Also a group row that must not bleed into DM select
+    append_message(
+        "user",
+        "group-noise",
+        user_id="jim",
+        conversation_id="group:noise",
+        paths=paths,
+    )
+
+    jim_rows = list_messages(limit=limit, conversation_id="dm:jim", paths=paths)
+    assert len(jim_rows) == limit
+    assert all(
+        r.get("conversation_id") == "dm:jim" or r.get("user_id") == "jim"
+        for r in jim_rows
+    )
+    assert not any("sam-" in (r.get("content") or "") for r in jim_rows)
+    assert not any("group-noise" in (r.get("content") or "") for r in jim_rows)
+
+    items, meta = select_glass_tail(
+        jim_rows,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        floor_messages=4,
+        max_messages=20,
+    )
+    assert items
+    assert meta["conversation_id"] == "dm:jim"
+    bodies = [i.content for i in items]
+    assert not any("sam-" in b for b in bodies)
+    assert not any("group-noise" in b for b in bodies)
+    assert all("jim-" in b for b in bodies)
+
+    # Zero-state / empty tip: empty disk → empty select
+    empty_items, empty_meta = select_glass_tail(
+        [],
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        floor_messages=4,
+    )
+    assert empty_items == []
+    assert empty_meta["packed"] == 0
+    assert empty_meta["available"] == 0
+
+
+def test_glass_tail_no_soft_global_fill():
+    """Strict scope: thin tip is honest; other-conversation rows never fill floor."""
+    glass = [
+        # Only 1 jim row — sam rows must not soft-fill floor of 6
+        _glass_conv(
+            mid="j1",
+            role="user",
+            content="only jim",
+            user_id="jim",
+            conversation_id="dm:jim",
+        ),
+    ] + [
+        _glass_conv(
+            mid=f"s{i}",
+            role="user",
+            content=f"sam fill {i}",
+            user_id="sam",
+            conversation_id="dm:sam",
+        )
+        for i in range(10)
+    ]
+    items, meta = select_glass_tail(
+        glass,
+        cap_tokens=100_000,
+        social_wake=True,
+        conversation_id="dm:jim",
+        floor_messages=6,
+        max_messages=20,
+    )
+    assert len(items) == 1
+    assert "only jim" in items[0].content
+    assert meta["available"] == 1
+    assert meta["packed"] == 1
+    # Honest thin tip: never soft-fill from other conversations to meet floor
+    assert not any("sam fill" in i.content for i in items)
+    # Floor target clamped to available (1), so shortfall may be false — still
+    # must not invent foreign rows.
+    assert meta["window"] == 1
