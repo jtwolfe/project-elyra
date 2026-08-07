@@ -486,10 +486,26 @@ def test_post_rejects_invalid_members_and_missing_fields(paths):
         assert code == 400
         assert body["ok"] is False
 
-        # Invalid type
+        # Invalid type string
         code, body = h.post(
             "/api/conversations",
             {"type": "channel", "name": "X", "members": ["jim"]},
+        )
+        assert code == 400
+        assert body["ok"] is False
+
+        # Non-string type must 400 (not fall through to group create).
+        code, body = h.post(
+            "/api/conversations",
+            {"type": 1, "name": "Z", "members": ["jim"]},
+        )
+        assert code == 400
+        assert body["ok"] is False
+        assert h.conversations.list() == []
+
+        code, body = h.post(
+            "/api/conversations",
+            {"type": True, "name": "Z", "members": ["jim"]},
         )
         assert code == 400
         assert body["ok"] is False
@@ -551,5 +567,173 @@ def test_member_labels_use_display_label(paths):
         code, detail = h.get(_cid_path("group:lbl"))
         assert code == 200
         assert detail["conversation"]["member_labels"]["jim"] == "Jimmy"
+    finally:
+        h.close()
+
+
+# ── review fixes: type case, 503, path jail create, member strip ─────────────
+
+
+def test_list_type_filter_case_insensitive(paths):
+    h = _ApiHarness(paths)
+    try:
+        h.post("/api/conversations", {"type": "dm", "user_id": "jim"})
+        h.post(
+            "/api/conversations",
+            {"name": "G", "members": ["jim"], "conversation_id": "group:g1"},
+        )
+        # Uppercase type token matches POST body normalization.
+        code, body = h.get("/api/conversations?type=DM")
+        assert code == 200, body
+        assert {c["id"] for c in body["conversations"]} == {"dm:jim"}
+
+        code, body = h.get("/api/conversations?type=Group")
+        assert code == 200, body
+        assert {c["id"] for c in body["conversations"]} == {"group:g1"}
+    finally:
+        h.close()
+
+
+def test_list_invalid_type_400(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.get("/api/conversations?type=channel")
+        assert code == 400
+        assert body["ok"] is False
+    finally:
+        h.close()
+
+
+def test_post_type_dm_case_insensitive(paths):
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.post(
+            "/api/conversations",
+            {"type": "DM", "user_id": "sam"},
+        )
+        assert code == 200, body
+        assert body["conversation"]["id"] == "dm:sam"
+    finally:
+        h.close()
+
+
+def test_post_conversation_id_path_jail(paths):
+    h = _ApiHarness(paths)
+    try:
+        # Traversal group id → 400, no write.
+        code, body = h.post(
+            "/api/conversations",
+            {
+                "name": "X",
+                "members": ["jim"],
+                "conversation_id": "group:../x",
+            },
+        )
+        assert code == 400
+        assert body["ok"] is False
+        assert h.conversations.list() == []
+
+        # dm:… is not a valid create_group id.
+        code, body = h.post(
+            "/api/conversations",
+            {
+                "name": "X",
+                "members": ["jim"],
+                "conversation_id": "dm:jim",
+            },
+        )
+        assert code == 400
+        assert body["ok"] is False
+        assert h.conversations.list() == []
+    finally:
+        h.close()
+
+
+def test_post_to_conversation_detail_404(paths):
+    """Detail path is PATCH/GET only — POST falls through to 404."""
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.post(
+            _cid_path("group:g1"),
+            {"name": "Nope", "members": ["jim"]},
+        )
+        assert code == 404
+    finally:
+        h.close()
+
+
+def test_conversations_503_while_resetting(paths):
+    h = _ApiHarness(paths)
+    try:
+        with h.worker._lock:  # noqa: SLF001
+            h.worker._continuous.resetting = True  # noqa: SLF001
+        code, body = h.post(
+            "/api/conversations",
+            {"name": "X", "members": ["jim"]},
+        )
+        assert code == 503, body
+        assert body.get("error") == "resetting"
+
+        code, body = h.patch(
+            _cid_path("group:g1"),
+            {"name": "Y"},
+        )
+        assert code == 503, body
+        assert body.get("error") == "resetting"
+        # GET list remains available (catalog-style).
+        code, body = h.get("/api/conversations")
+        assert code == 200
+    finally:
+        with h.worker._lock:  # noqa: SLF001
+            h.worker._continuous.resetting = False  # noqa: SLF001
+        h.close()
+
+
+def test_patch_unknown_id_bad_members_is_400_not_404(paths):
+    """Member validation runs before existence — bad members always 400."""
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.patch(
+            _cid_path("group:missing"),
+            {"members": ["../x"]},
+        )
+        assert code == 400, body
+        assert body["ok"] is False
+
+        # Empty members also 400 (not 404) for unknown id.
+        code, body = h.patch(
+            _cid_path("group:missing"),
+            {"members": []},
+        )
+        assert code == 400, body
+    finally:
+        h.close()
+
+
+def test_members_strip_whitespace_consistent(paths):
+    """Body members strip like ?member= (same policy)."""
+    h = _ApiHarness(paths)
+    try:
+        code, body = h.post(
+            "/api/conversations",
+            {
+                "name": "Spaced",
+                "members": ["  jim  ", "sam"],
+                "conversation_id": "group:sp",
+            },
+        )
+        assert code == 201, body
+        assert body["conversation"]["members"] == ["jim", "sam"]
+
+        code, body = h.patch(
+            _cid_path("group:sp"),
+            {"members": ["  jim  ", "  operator  "]},
+        )
+        assert code == 200, body
+        assert body["conversation"]["members"] == ["jim", "operator"]
+
+        code, listed = h.get("/api/conversations?member=%20jim%20")
+        assert code == 200, listed
+        assert any(c["id"] == "group:sp" for c in listed["conversations"])
     finally:
         h.close()

@@ -3193,6 +3193,44 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             labels[uid] = self.users.display_label(uid)
         return labels
 
+    def _clean_members_list(self, members: Any) -> list[str] | None:
+        """Validate + strip + dedupe member user_ids; send 400 and return None on error.
+
+        Same strip policy as ``?member=`` query (whitespace-tolerant, jail-strict).
+        Validates each id *before* store lookup so bad members always 400 (even
+        when the conversation id is unknown — consistent vs existence 404).
+        """
+        if not isinstance(members, list) or not members:
+            self._json(
+                400,
+                {"ok": False, "error": "members must be a non-empty list"},
+            )
+            return None
+        clean: list[str] = []
+        seen: set[str] = set()
+        for m in members:
+            if not isinstance(m, str):
+                self._json(
+                    400,
+                    {"ok": False, "error": "members must be user_id strings"},
+                )
+                return None
+            try:
+                uid = validate_user_id(m.strip())
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc)})
+                return None
+            if uid not in seen:
+                seen.add(uid)
+                clean.append(uid)
+        if not clean:
+            self._json(
+                400,
+                {"ok": False, "error": "members must be a non-empty list"},
+            )
+            return None
+        return clean
+
     def _conversation_payload(self, rec: dict[str, Any]) -> dict[str, Any]:
         """Full conversation record + member display labels."""
         out = dict(rec)
@@ -3212,7 +3250,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         if member_raw is not None and str(member_raw).strip():
             member = str(member_raw).strip()
         if type_raw is not None and str(type_raw).strip():
-            conv_type = str(type_raw).strip()
+            # Case-normalize like POST body type (DM/Group → dm/group).
+            conv_type = str(type_raw).strip().lower()
         try:
             rows = self.conversations.list(
                 member_user_id=member,
@@ -3239,12 +3278,21 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
         Group: ``{ name, members[], description? }`` (optional ``type:"group"``).
         DM: ``{ type:"dm", user_id }`` (idempotent ensure).
+        Default group only when ``type`` is omitted or null — non-string type → 400.
         """
         if self._reject_if_resetting():
             return
-        conv_type = body.get("type")
-        if isinstance(conv_type, str):
-            conv_type = conv_type.strip().lower()
+
+        # Resolve type: omitted/null → group path; non-str → 400; str → lower.
+        if "type" in body:
+            raw_type = body.get("type")
+            if raw_type is None:
+                conv_type: str | None = None
+            elif not isinstance(raw_type, str):
+                self._json(400, {"ok": False, "error": "invalid conversation type"})
+                return
+            else:
+                conv_type = raw_type.strip().lower() or None
         else:
             conv_type = None
 
@@ -3262,7 +3310,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "conversation": self._conversation_payload(rec)})
             return
 
-        # Create group (default when type omitted or type=group).
+        # Create group (default when type omitted/null or type=group).
         if conv_type is not None and conv_type != "group":
             self._json(400, {"ok": False, "error": "invalid conversation type"})
             return
@@ -3273,12 +3321,8 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         if not isinstance(name, str) or not name.strip():
             self._json(400, {"ok": False, "error": "name required"})
             return
-        if not isinstance(members, list) or not members:
-            self._json(400, {"ok": False, "error": "members must be a non-empty list"})
-            return
-        # Reject non-string members early (store also validates each id).
-        if not all(isinstance(m, str) for m in members):
-            self._json(400, {"ok": False, "error": "members must be user_id strings"})
+        clean_members = self._clean_members_list(members)
+        if clean_members is None:
             return
         if description is not None and not isinstance(description, str):
             self._json(400, {"ok": False, "error": "description must be str or null"})
@@ -3289,7 +3333,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         try:
             rec = self.conversations.create_group(
                 name=name,
-                members=members,
+                members=clean_members,
                 description=description if isinstance(description, str) else None,
                 conversation_id=conversation_id.strip()
                 if isinstance(conversation_id, str) and conversation_id.strip()
@@ -3313,20 +3357,12 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         if "description" in body:
             kwargs["description"] = body.get("description")
         if "members" in body:
-            members = body.get("members")
-            if not isinstance(members, list) or not members:
-                self._json(
-                    400,
-                    {"ok": False, "error": "members must be a non-empty list"},
-                )
+            # Validate members before store.update so bad ids → 400 even if
+            # conversation is missing (existence check would otherwise 404).
+            clean_members = self._clean_members_list(body.get("members"))
+            if clean_members is None:
                 return
-            if not all(isinstance(m, str) for m in members):
-                self._json(
-                    400,
-                    {"ok": False, "error": "members must be user_id strings"},
-                )
-                return
-            kwargs["members"] = members
+            kwargs["members"] = clean_members
         if not kwargs:
             self._json(400, {"ok": False, "error": "no update fields"})
             return
