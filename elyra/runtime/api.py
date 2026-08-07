@@ -106,7 +106,6 @@ _SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 # Local dogfood session (not auth) — per-client registry under data/runtime/.
 # Legacy glass_session.json is one-shot migrated (KD22); never product SoT after.
-_GLASS_SESSION_REL = Path("runtime") / "glass_session.json"
 _DEFAULT_SESSION_USER = "operator"
 
 # In-process concurrent upload cap (KD15); shared across handler instances.
@@ -165,10 +164,6 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
     client_sessions: ClientSessionsRegistry
     # Conversations store for ensure_dm on session normalize (PR2 / KD18).
     conversations: ConversationsStore
-    # Legacy process-global session (compat for tests that still set these;
-    # product reads go through client_sessions).
-    glass_session: dict[str, Any]
-    glass_session_lock: threading.RLock
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -3004,9 +2999,6 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
     # ── Glass session + identity panel helpers ───────────────────────────
 
-    def _session_path(self) -> Path:
-        return self.paths.data_dir / _GLASS_SESSION_REL
-
     def _client_sessions(self) -> ClientSessionsRegistry | None:
         return getattr(self, "client_sessions", None)
 
@@ -3138,6 +3130,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
 
     def _get_session(self) -> None:
         """GET /api/session — bind/create per client (KD25 session-bind)."""
+        # Fail closed during full reset: do not mint/create map entries.
+        if self._reject_if_resetting():
+            return
         client_id, sess, minted, err = self._resolve_client_session(allow_create=True)
         if err:
             self._json(400, {"ok": False, "error": err})
@@ -5159,6 +5154,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         - waiting (+ matching wait) → wait_reply
         - idle → user_message (cancel stale wait for user when present)
         """
+        # Fail closed during full reset before any registry create (Issue 1).
+        if self._reject_if_resetting():
+            return
         content = str(body.get("content") or "").strip()
         # KD23: speaker from durable client session (mint/create on social mutate).
         client_id, sess, minted, cerr = self._resolve_client_session(allow_create=True)
@@ -5293,6 +5291,9 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         Message append is reset-gated (same as ``/api/messages``).
         KD23: speaker from durable client session (body user_id ignored on mismatch).
         """
+        # Fail closed during full reset before any registry create (Issue 1).
+        if self._reject_if_resetting():
+            return
         content_raw = body.get("content")
         content = str(content_raw).strip() if content_raw is not None else ""
         choice_raw = body.get("choice")
@@ -5447,9 +5448,6 @@ def start_api_server(
 
     client_sessions = ClientSessionsRegistry(paths, ensure_dm=_ensure_dm)
 
-    # Compat default for any legacy glass_session attribute readers.
-    default_uid = _DEFAULT_SESSION_USER
-
     handler = type(
         "BoundHandler",
         (ElyraApiHandler,),
@@ -5469,8 +5467,6 @@ def start_api_server(
             "skills": skills,
             "conversations": conversations_store,
             "client_sessions": client_sessions,
-            "glass_session": {"user_id": default_uid},
-            "glass_session_lock": threading.RLock(),
         },
     )
     server = ThreadingHTTPServer((config.api_host, config.api_port), handler)

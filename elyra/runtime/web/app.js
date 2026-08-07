@@ -9177,32 +9177,9 @@ if (identityPromoteUserBtn) {
 
 autosizeComposer();
 updateBrandChrome();
-// Boot order (KD21): mint client_id → GET /api/session → optional ?as= PUT → polls.
-(function bootClientSession() {
-  getClientId(); // mint/load sessionStorage elyra.clientId
-  const params =
-    typeof URLSearchParams !== "undefined"
-      ? new URLSearchParams(window.location.search || "")
-      : null;
-  const asUser = params && params.get("as");
-  refreshLabelCache()
-    .then(() => {
-      updateBrandChrome();
-      if (asUser && asUser.trim() && asUser.trim() !== sessionUserId) {
-        return fetchJson("/api/session", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: asUser.trim() }),
-        })
-          .then((data) => {
-            applySessionPayload(data);
-          })
-          .catch(() => null);
-      }
-      return null;
-    })
-    .catch(() => {});
-})();
+
+/** True after mint → GET session → optional ?as= PUT (KD21 §7A.8). Gates tick. */
+let sessionBooted = false;
 
 function panelLoadError(panelName, err) {
   showNotice(`${panelName}: ${err && err.message ? err.message : err}`);
@@ -9250,6 +9227,8 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
 });
 
 async function tick() {
+  // Gate on session boot so first paints use bound client identity (KD21 §7A.8).
+  if (!sessionBooted) return;
   // Single-flight: skip if previous tick still running (avoids list/detail races).
   if (tickInFlight) return;
   tickInFlight = true;
@@ -9274,5 +9253,35 @@ async function tick() {
   }
 }
 
-tick().then(() => maybeResumeOauthDeviceSession().catch(() => {}));
-setInterval(tick, 1500);
+// Boot order (KD21 §7A.8): mint client_id → GET /api/session → optional ?as= PUT
+// → then first tick + interval (do not poll before bind).
+(function bootClientSession() {
+  getClientId(); // mint/load sessionStorage elyra.clientId
+  const params =
+    typeof URLSearchParams !== "undefined"
+      ? new URLSearchParams(window.location.search || "")
+      : null;
+  const asUser = params && params.get("as");
+  refreshLabelCache()
+    .then(() => {
+      updateBrandChrome();
+      if (asUser && asUser.trim() && asUser.trim() !== sessionUserId) {
+        return fetchJson("/api/session", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: asUser.trim() }),
+        })
+          .then((data) => {
+            applySessionPayload(data);
+          })
+          .catch(() => null);
+      }
+      return null;
+    })
+    .catch(() => {})
+    .finally(() => {
+      sessionBooted = true;
+      tick().then(() => maybeResumeOauthDeviceSession().catch(() => {}));
+      setInterval(tick, 1500);
+    });
+})();

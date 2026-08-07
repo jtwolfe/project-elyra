@@ -198,6 +198,105 @@ def test_t16b_post_speaker_from_session(paths) -> None:
         h.close()
 
 
+def test_t16b_wait_reply_speaker_from_session(paths) -> None:
+    """T16b wait/reply: speaker from session despite body user_id mismatch (KD23)."""
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        users = UsersStore(paths)
+        users.create_user("Jim", user_id="jim", provisional=True)
+        users.create_user("Sam", user_id="sam", provisional=True)
+
+        h.put("/api/session", {"user_id": "jim"}, client_id="c-jim")
+        h.put("/api/session", {"user_id": "sam"}, client_id="c-sam")
+
+        # Thin path: wait/reply appends even without a durable pending wait
+        # (may route idle); assert glass row speaker is session user.
+        code, r1 = h.post(
+            "/api/wait/reply",
+            {"content": "wait answer jim", "user_id": "sam"},
+            client_id="c-jim",
+        )
+        assert code in (200, 400), r1  # ok or no-wait client error — row may still append
+        # Prefer successful append when worker allows
+        if r1.get("ok") is True or r1.get("message"):
+            msgs = list_messages(paths=paths, limit=50)
+            row = next(
+                (m for m in msgs if m.get("content") == "wait answer jim"), None
+            )
+            assert row is not None, msgs
+            assert row.get("user_id") == "jim"
+
+        code, r2 = h.post(
+            "/api/wait/reply",
+            {"content": "wait answer sam", "user_id": "jim"},
+            client_id="c-sam",
+        )
+        if r2.get("ok") is True or r2.get("message"):
+            msgs = list_messages(paths=paths, limit=50)
+            row = next(
+                (m for m in msgs if m.get("content") == "wait answer sam"), None
+            )
+            assert row is not None, msgs
+            assert row.get("user_id") == "sam"
+        else:
+            # If append is gated, still require 400 not stamping wrong user silently
+            # when no message; ensure no wrong-speaker row exists.
+            msgs = list_messages(paths=paths, limit=50)
+            wrong = [
+                m
+                for m in msgs
+                if m.get("content") == "wait answer sam" and m.get("user_id") == "jim"
+            ]
+            assert wrong == []
+    finally:
+        h.close()
+
+
+def test_session_and_messages_reject_while_resetting(paths) -> None:
+    """Issue 1: GET session / POST messages fail closed during reset (no map growth)."""
+    h = _ApiHarness(paths, client_id=None)
+    try:
+        reg_path = paths.data_dir / CLIENT_SESSIONS_REL
+
+        def client_count() -> int:
+            if not reg_path.is_file():
+                return 0
+            data = json.loads(reg_path.read_text(encoding="utf-8"))
+            clients = data.get("clients") or {}
+            return len(clients) if isinstance(clients, dict) else 0
+
+        # Flip worker resetting flag (same gate as full reset).
+        h.worker._continuous.resetting = True  # noqa: SLF001
+        try:
+            before = client_count()
+            code, sess = h.get("/api/session", client_id="during-reset-c1")
+            assert code == 503
+            assert sess.get("error") == "resetting"
+            assert client_count() == before
+
+            code, msg = h.post(
+                "/api/messages",
+                {"content": "should not bind", "user_id": "operator"},
+                client_id="during-reset-c2",
+            )
+            assert code == 503
+            assert msg.get("error") == "resetting"
+            assert client_count() == before
+
+            code, wr = h.post(
+                "/api/wait/reply",
+                {"content": "nope", "user_id": "operator"},
+                client_id="during-reset-c3",
+            )
+            assert code == 503
+            assert wr.get("error") == "resetting"
+            assert client_count() == before
+        finally:
+            h.worker._continuous.resetting = False  # noqa: SLF001
+    finally:
+        h.close()
+
+
 def test_t18_status_does_not_create_map(paths) -> None:
     """T18: status missing/unknown does not grow map; GET session creates; invalid 400."""
     h = _ApiHarness(paths, client_id=None)

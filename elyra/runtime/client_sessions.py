@@ -43,6 +43,26 @@ CLIENT_SESSION_TTL_DAYS = 7
 _CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CLIENT_ID_MAX_LEN = 80
 
+# Process-wide locks keyed by resolved registry path so reset clear
+# (new ClientSessionsRegistry instance) cannot interleave mid-RMW on the
+# live handler registry (review Issue 1).
+_PATH_LOCKS: dict[str, threading.RLock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for_registry_path(path: Path) -> threading.RLock:
+    """Return a shared RLock for ``path`` (resolved string key)."""
+    try:
+        key = str(path.resolve())
+    except OSError:
+        key = str(path)
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PATH_LOCKS[key] = lock
+        return lock
+
 
 class InvalidClientId(ValueError):
     """Header present but not a valid client_id (→ HTTP 400)."""
@@ -123,7 +143,9 @@ class ClientSessionsRegistry:
         ttl_days: int = CLIENT_SESSION_TTL_DAYS,
     ) -> None:
         self._paths = paths
-        self._lock = threading.RLock()
+        # Shared by path so clear_client_sessions(paths) and the API handler
+        # registry serialize on the same RLock (not per-instance only).
+        self._lock = _lock_for_registry_path(self.path)
         self._ensure_dm = ensure_dm
         self._max_clients = max(1, int(max_clients))
         self._ttl_days = max(0, int(ttl_days))
@@ -357,44 +379,6 @@ class ClientSessionsRegistry:
         with self._lock:
             self._load_unlocked()
             return list(self._clients.keys())
-
-    def get_raw(self, client_id: str) -> dict[str, Any] | None:
-        """Return stored entry or None (no create). Normalizes if present."""
-        try:
-            cid = validate_client_id(client_id)
-        except InvalidClientId:
-            return None
-        with self._lock:
-            self._load_unlocked()
-            ent = self._clients.get(cid)
-            if ent is None:
-                return None
-            # Normalize missing fields for known client (may persist).
-            normalized = self._normalize_entry(ent, touch=False)
-            # Persist if fields were healed.
-            if normalized != {
-                "user_id": ent.get("user_id"),
-                "conversation_id": ent.get("conversation_id"),
-                "view_mode": ent.get("view_mode"),
-                "updated_at": ent.get("updated_at"),
-            }:
-                # Keep updated_at if only field heal without semantic change of time
-                # unless conversation/user/view actually changed.
-                changed = any(
-                    normalized[k] != ent.get(k)
-                    for k in ("user_id", "conversation_id", "view_mode")
-                )
-                if changed:
-                    normalized = self._normalize_entry(ent, touch=True)
-                    self._clients[cid] = normalized
-                    self._persist_unlocked()
-                    return dict(normalized)
-                # Soft fill without touch if only defaults filled identically
-                self._clients[cid] = {
-                    **normalized,
-                    "updated_at": ent.get("updated_at") or normalized["updated_at"],
-                }
-            return dict(self._clients[cid])
 
     def resolve(
         self,

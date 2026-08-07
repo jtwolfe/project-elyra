@@ -30,7 +30,12 @@ from elyra.runtime.api import start_api_server
 from elyra.runtime.config import RuntimeConfig
 from elyra.media import MediaStore
 from elyra.conversations import ConversationsStore
+from elyra.runtime.client_sessions import (
+    CLIENT_SESSIONS_REL,
+    ClientSessionsRegistry,
+)
 from elyra.runtime.reset import (
+    clear_client_sessions,
     clear_conversations,
     clear_goals,
     clear_media,
@@ -290,10 +295,17 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
     projected = host_primary_root(paths) / "media" / att.id / "secret.bin"
     assert projected.is_file()
 
+    # KD21: client session registry cleared with messages/conversations.
+    cs_reg = ClientSessionsRegistry(paths, ensure_dm=convs.ensure_dm)
+    cs_reg.resolve("preserve-suite-client", allow_create=True)
+    assert cs_reg.client_count() == 1
+    assert (paths.data_dir / CLIENT_SESSIONS_REL).is_file()
+
     clear_wakes_disk(paths)
     clear_moments(paths)
     clear_messages(paths)
     clear_conversations(paths)
+    clear_client_sessions(paths)
     clear_media(paths)
     clear_goals(paths)
     clear_sandbox(paths)
@@ -305,6 +317,13 @@ def test_clear_helpers_preserve_identity_users_skills_local(paths):
         paths.data_dir / "conversations" / "by_id" / "dm_jim.json"
     ).is_file()
     assert (paths.data_dir / "conversations" / "index.json").is_file()
+    # Client sessions map empty (schema-only); identity/users still survive below.
+    cs_after = ClientSessionsRegistry(paths)
+    assert cs_after.client_count() == 0
+    cs_disk = json.loads(
+        (paths.data_dir / CLIENT_SESSIONS_REL).read_text(encoding="utf-8")
+    )
+    assert cs_disk.get("clients") == {}
     assert GoalsStore(paths).list_goals() == []
     assert MomentStore(paths).list_moments() == []
     assert not sandbox.exists()
