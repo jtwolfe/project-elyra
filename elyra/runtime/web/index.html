@@ -12,6 +12,20 @@
     />
     <link rel="stylesheet" href="/style.css" />
     <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
+    <!-- FOUC guard (PR7 §8): set product-chat before body paints so operator nav
+         is hidden on first paint. Full applyProductShell() in app.js is authoritative. -->
+    <script>
+      (function () {
+        try {
+          var p = location.pathname || "";
+          if (p === "/chat" || p.indexOf("/chat/") === 0) {
+            document.documentElement.classList.add("product-chat");
+          }
+        } catch (e) {
+          /* ignore */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div class="app">
@@ -56,7 +70,7 @@
           </p>
           <!-- Product /chat honesty footer (design §8 / §7A.11); shown only in product mode. -->
           <p id="product-dogfood-footer" class="product-dogfood-footer muted" hidden>
-            local dogfood — not authenticated
+            local dogfood — not authenticated.
           </p>
         </div>
         <div class="rail-effort" role="group" aria-label="Reasoning effort">

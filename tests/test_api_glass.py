@@ -2286,7 +2286,13 @@ def test_static_pr7_product_chat_shell(paths):
             assert 'id="session-new-group-btn"' in html
             # Product honesty footer markup (shown via JS/CSS on /chat)
             assert 'id="product-dogfood-footer"' in html
-            assert "local dogfood — not authenticated" in html
+            # Exact Gate C / §7A.11 phrase (trailing period)
+            assert "local dogfood — not authenticated." in html
+            # FOUC guard: early head script sets html.product-chat before body paint
+            assert 'classList.add("product-chat")' in html or (
+                "classList.add('product-chat')" in html
+            )
+            assert '=== "/chat"' in html or "=== '/chat'" in html
             # Operator chrome markers still in HTML (hidden by product-chat CSS)
             assert 'data-panel="goals"' in html
             assert "operator-only" in html
@@ -2344,10 +2350,16 @@ def test_static_pr7_product_chat_shell(paths):
         with urllib.request.urlopen(req_css, timeout=5) as resp:
             assert resp.status == 200
             css = resp.read().decode("utf-8")
-        # Product mode CSS hide rules
-        assert "body.product-chat" in css
+        # Product mode CSS hide rules (html + body for FOUC early class)
+        assert "product-chat" in css
         assert ".product-dogfood-footer" in css
         assert "operator-only" in css or "#panel-goals" in css
+        # FOUC: :is(html, body).product-chat or both html/body selectors
+        assert (
+            ":is(html, body).product-chat" in css
+            or "html.product-chat" in css
+            or "body.product-chat" in css
+        )
         # Hides operator panels
         assert "#panel-goals" in css
         assert "#panel-memory" in css
