@@ -19,8 +19,10 @@ from elyra.settings import LoopSettings, Settings, default_settings
 _EMPTY_PLACEHOLDER = ""
 
 # Single-pass orient fill — substituted values are never re-scanned.
+# PARTICIPANTS / RECENTLY_ACTIVE / ACTIVE_CHATS: multi-user social map (C12 PR5).
 _ORIENT_PLACEHOLDER_RE = re.compile(
-    r"\{\{(NOW|SELF|USER|WHY_NOW|GOALS|SKILL_CATALOG|SKILL_BIAS)\}\}"
+    r"\{\{(NOW|SELF|USER|PARTICIPANTS|RECENTLY_ACTIVE|ACTIVE_CHATS|"
+    r"WHY_NOW|GOALS|SKILL_CATALOG|SKILL_BIAS)\}\}"
 )
 
 
@@ -104,15 +106,24 @@ def fill_orient(
     goals: str = "",
     skill_catalog: str = "",
     skill_bias: str = "",
+    participants: str = "",
+    recently_active: str = "",
+    active_chats: str = "",
 ) -> str:
     """Fill ``prompts/orient.md`` placeholders in a single pass.
 
     Values may contain ``{{…}}``-looking text without being re-substituted.
+    New social-map kwargs default to ``""`` so legacy call sites stay green.
     """
     values = {
         "NOW": now,
         "SELF": self_digest if self_digest else _EMPTY_PLACEHOLDER,
         "USER": user_digest if user_digest else _EMPTY_PLACEHOLDER,
+        "PARTICIPANTS": participants if participants else _EMPTY_PLACEHOLDER,
+        "RECENTLY_ACTIVE": (
+            recently_active if recently_active else _EMPTY_PLACEHOLDER
+        ),
+        "ACTIVE_CHATS": active_chats if active_chats else _EMPTY_PLACEHOLDER,
         "WHY_NOW": why_now if why_now else _EMPTY_PLACEHOLDER,
         "GOALS": goals if goals else _EMPTY_PLACEHOLDER,
         "SKILL_CATALOG": skill_catalog if skill_catalog else _EMPTY_PLACEHOLDER,
@@ -264,6 +275,9 @@ def assemble_outer_meal(
     goals: str = "",
     skill_catalog: str = "",
     skill_bias: str = "",
+    participants: str = "",
+    recently_active: str = "",
+    active_chats: str = "",
     wake_content: str | None = None,
     wake_message_id: str | None = None,
     system_text: str | None = None,
@@ -328,6 +342,9 @@ def assemble_outer_meal(
         goals=goals,
         skill_catalog=skill_catalog,
         skill_bias=skill_bias,
+        participants=participants,
+        recently_active=recently_active,
+        active_chats=active_chats,
     )
     orient_msg: dict[str, Any] = {"role": "user", "content": orient_body}
 

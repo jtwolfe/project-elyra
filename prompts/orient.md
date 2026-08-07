@@ -9,6 +9,15 @@
 ## USER
 {{USER}}
 
+## Participants
+{{PARTICIPANTS}}
+
+## Recently active users
+{{RECENTLY_ACTIVE}}
+
+## Active chats
+{{ACTIVE_CHATS}}
+
 ## Why now
 {{WHY_NOW}}
 
