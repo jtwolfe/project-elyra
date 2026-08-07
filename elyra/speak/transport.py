@@ -223,12 +223,14 @@ def _normalize_conversation_id(conversation_id: str | None) -> str | None:
     return stripped or None
 
 
-def _normalize_user_id(
+def normalize_speak_user_id(
     user_id: str | None,
     *,
     conversation_id: str | None = None,
 ) -> str | None:
     """Conversation-aware user_id for assistant glass rows (KD20).
+
+    Public helper for transport + social error payloads.
 
     | conversation_id | incoming user_id | stored |
     | group:…         | any              | None   |
@@ -263,6 +265,10 @@ def _normalize_user_id(
     if stripped is not None:
         return stripped
     return "operator"
+
+
+# Private alias kept for in-module call sites (same object as public API).
+_normalize_user_id = normalize_speak_user_id
 
 
 def _touch_conversation_activity(

@@ -5485,6 +5485,49 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         headers = self._session_response_headers(client_id, minted=minted)
         self._json(self._status_for_route(result), payload, extra_headers=headers)
 
+    def _wait_reply_match_gate(
+        self,
+        *,
+        user_id: str,
+        session_conversation_id: str | None,
+    ) -> dict[str, Any] | None:
+        """Return error payload when wait_reply must fail closed (no glass write).
+
+        ``None`` means the pending wait is answerable by this session (proceed).
+        Reasons: ``no_matching_wait`` (no pending) / ``wait_not_matched``
+        (pending but KD12 membership/session bind fails).
+        """
+        from elyra.presence.user_input import wait_matches
+
+        pending = self.worker.pending_wait
+        if not isinstance(pending, dict):
+            return {
+                "ok": False,
+                "error": "no_matching_wait",
+                "reason": "no_matching_wait",
+            }
+        conv_store = None
+        wait_cid = pending.get("conversation_id")
+        if isinstance(wait_cid, str) and wait_cid.startswith("group:"):
+            try:
+                conv_store = ConversationsStore(self.paths)
+            except Exception:  # noqa: BLE001 — fail closed on group match
+                conv_store = None
+        if wait_matches(
+            user_id,
+            pending,
+            conv_store,
+            session_conversation_id=session_conversation_id,
+        ):
+            return None
+        return {
+            "ok": False,
+            "error": "wait_not_matched",
+            "reason": "wait_not_matched",
+            "wait_id": pending.get("id") or pending.get("wait_id"),
+            "conversation_id": wait_cid,
+        }
+
     def _post_wait_reply(self, body: dict[str, Any]) -> None:
         """POST /api/wait/reply — explicit wait answer (choice and/or free text).
 
@@ -5492,6 +5535,7 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
         routes to wait_reply even if phase briefly reads as idle.
         Message append is reset-gated (same as ``/api/messages``).
         KD23: speaker from durable client session (body user_id ignored on mismatch).
+        Fail closed (409) when wait_matches is false — no glass write (KD12).
         """
         # Fail closed during full reset before any registry create (Issue 1).
         if self._reject_if_resetting():
@@ -5554,6 +5598,19 @@ class ElyraApiHandler(BaseHTTPRequestHandler):
                     "reason": "empty_content",
                 },
             )
+            return
+
+        # Fail closed before glass write when this client cannot answer the
+        # current pending wait (KD12 / review Issue 1). Wrong-thread wait_reply
+        # must not pollute Private Chat or enqueue free-text while a group wait
+        # stays pending. POST /api/messages keeps demote-to-user_message behavior.
+        match_err = self._wait_reply_match_gate(
+            user_id=user_id,
+            session_conversation_id=conversation_id,
+        )
+        if match_err is not None:
+            headers = self._session_response_headers(client_id, minted=minted)
+            self._json(409, match_err, extra_headers=headers)
             return
 
         display = content or (choice or "")

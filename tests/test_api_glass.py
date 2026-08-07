@@ -1945,8 +1945,9 @@ def test_t9_status_matches_session_group_wait(paths):
 
 
 def test_t9_wait_reply_member_on_dm_self_does_not_match(paths):
-    """Group wait: member on dm:self does not route wait_reply (same gate as status)."""
+    """Group wait: member on dm:self → 409 fail closed, no glass write (KD12)."""
     from elyra.conversations import ConversationsStore
+    from elyra.messages import list_messages
 
     users = UsersStore(paths)
     users.create_user("Jim", user_id="jim", provisional=True)
@@ -1979,13 +1980,20 @@ def test_t9_wait_reply_member_on_dm_self_does_not_match(paths):
             client_id="c-jim",
         )
         assert code == 200, sess
+        before = list_messages(paths=paths, limit=50)
         code, body = h.post(
             "/api/wait/reply",
             {"content": "y", "choice": "y"},
             client_id="c-jim",
         )
-        # Does not answer the group wait while on Private Chat
-        assert body.get("routed") != "wait_reply", body
+        # Fail closed before glass write (review Issue 1)
+        assert code == 409, body
+        assert body.get("ok") is False
+        assert body.get("reason") == "wait_not_matched"
+        assert body.get("error") == "wait_not_matched"
+        # No new glass row
+        after = list_messages(paths=paths, limit=50)
+        assert len(after) == len(before)
         # Wait still pending
         still = h.worker._timers.get_wait("g-wait-2")  # noqa: SLF001
         assert still is not None
@@ -2010,6 +2018,27 @@ def test_t9_wait_reply_member_on_dm_self_does_not_match(paths):
         answered = h.worker._timers.get_wait("g-wait-2")  # noqa: SLF001
         assert answered is not None
         assert answered.status == "answered"
+    finally:
+        h.close()
+
+
+def test_wait_reply_no_pending_wait_fail_closed(paths):
+    """POST /api/wait/reply with no pending wait → 409, no glass write."""
+    from elyra.messages import list_messages
+
+    h = _ApiHarness(paths, client_id="c-op")
+    try:
+        before = list_messages(paths=paths, limit=50)
+        code, body = h.post(
+            "/api/wait/reply",
+            {"content": "hello?", "choice": "y"},
+            client_id="c-op",
+        )
+        assert code == 409, body
+        assert body.get("reason") == "no_matching_wait"
+        assert body.get("ok") is False
+        after = list_messages(paths=paths, limit=50)
+        assert len(after) == len(before)
     finally:
         h.close()
 

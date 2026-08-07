@@ -335,10 +335,10 @@ def _text_error(
     Payload user_id uses conversation-aware rules when conversation_id is
     known (group → null); otherwise diagnostic speaker/operator stamp.
     """
-    from elyra.speak.transport import _normalize_user_id
+    from elyra.speak import normalize_speak_user_id
 
     speaker = _resolve_speaker_user_id(args, ctx)
-    uid = _normalize_user_id(speaker, conversation_id=conversation_id)
+    uid = normalize_speak_user_id(speaker, conversation_id=conversation_id)
     payload: dict[str, Any] = {
         "transport_ok": False,
         "reason": reason,
