@@ -1113,6 +1113,43 @@ def test_finalize_enqueues_moment_continue_with_progress(paths):
     assert snap["pending_moment_continues"] == 1
 
 
+def test_finalize_honest_exit_when_ledger_audited(paths):
+    """Option A: continuous ON + open work + tools_ran + ledger_audited + no_tools → no MC."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+    assert worker._continuous.last_enqueue_at is None  # noqa: SLF001
+
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t1", "goal_id": "g1"},
+        result=_progress_result(tools_ran=True, ledger_audited=True),
+    )
+    assert worker._queue.pending_of_kind("moment_continue") == []  # noqa: SLF001
+    assert worker._continuous.last_skip_reason == "honest_exit"  # noqa: SLF001
+    assert worker._continuous.last_enqueue_at is None  # noqa: SLF001
+    snap = worker.status_snapshot()["continuous"]
+    assert snap["last_skip_reason"] == "honest_exit"
+    assert snap["pending_moment_continues"] == 0
+
+
+def test_finalize_still_enqueues_when_not_ledger_audited(paths):
+    """ledger_audited=False + progress + open work → still enqueues moment_continue."""
+    worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())
+    worker.set_continuous_enabled(True)
+    _open_goal(worker)
+
+    _finalize_direct(
+        worker,
+        wake_kind="task_ready",
+        payload={"task_id": "t1", "goal_id": "g1"},
+        result=_progress_result(tools_ran=True, ledger_audited=False),
+    )
+    assert len(worker._queue.pending_of_kind("moment_continue")) == 1  # noqa: SLF001
+    assert worker._continuous.last_skip_reason is None  # noqa: SLF001
+
+
 def test_finalize_speak_only_no_enqueue(paths):
     """K15: spoke-only (tools_ran False) never outer-continues."""
     worker, _ = _make_worker(paths, run_do_loop_fn=_stub_loop())

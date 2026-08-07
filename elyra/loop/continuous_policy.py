@@ -3,8 +3,9 @@
 Scope: gates for in-moment work-continue HOST nudge and outer moment_continue
 re-wake; HOST string builders; decision dataclasses; runtime state shape.
 In scope: ContinuousSettings knobs, flood thrash formula, progress definitions
-(tools_ran = non-speak only; spoke alone never qualifies); ContinuousRuntimeState
-load/save helpers used by PresenceWorker finalize and toggle.
+(tools_ran = non-speak only; spoke alone never qualifies); Option A honest_exit
+(ledger_audited + no_tools → no outer continue); LEDGER_AUDIT_TOOLS single source;
+ContinuousRuntimeState load/save helpers used by PresenceWorker finalize and toggle.
 Out of scope: wake enqueue I/O, do-loop scheduling, time-idle continue_policy
 (see continue_policy.py — different concept). Finalize I/O lives in presence.worker.
 
@@ -25,11 +26,18 @@ from elyra.settings import ContinuousSettings, default_settings
 logger = logging.getLogger(__name__)
 
 # In-moment work-continue HOST (chain-only; never SpeakTransport).
+# Teaches Option A: audit-then-idle vs bare stop re-wake; wait pauses chain.
 WORK_CONTINUE_HOST = (
-    "HOST: work still open — call tools to continue "
-    "(load_skill / ledger / sandbox), speak if the user needs an update, "
-    "or stop if truly done."
+    "HOST: continue open work is ON — call tools if useful "
+    "(load_skill / ledger / sandbox); speak if the user needs an update. "
+    "To halt honestly: inspect ledger (list_goals / get_goal / get_task) "
+    "then stop with no tools. wait_user also pauses the chain. "
+    "Bare stop after tools without a ledger check may re-wake."
 )
+
+# Successful model tool-batch reads that prove ledger audit (Option A honest_exit).
+# Single source of truth — doloop imports this; do not redefine elsewhere.
+LEDGER_AUDIT_TOOLS = frozenset({"list_goals", "get_goal", "get_task"})
 
 # Outer stop_reason allowlist (v1 closed). Deny wait/error/wall_clock/blocked/…
 MOMENT_CONTINUE_STOP_ALLOWLIST = frozenset(
@@ -219,11 +227,18 @@ def should_enqueue_moment_continue(
     require_progress: bool = True,
     skip_pure_social: bool = True,
     max_pending_continues: int = 1,
+    ledger_audited: bool = False,
 ) -> MomentContinueDecision:
     """Gates for outer ``moment_continue`` enqueue (pure; no I/O).
 
-    Normative order (design C gates 1–11). Never synthesizes task_ready (K4/K16).
-    ``tools_ran`` must mean ≥1 successful non-speak tool (counts_as_speak False).
+    Normative order (design C gates 1–11 + Option A gate 7b). Never synthesizes
+    task_ready (K4/K16). ``tools_ran`` must mean ≥1 successful non-speak tool
+    (counts_as_speak False).
+
+    ``ledger_audited``: ≥1 successful model tool-batch call this moment to a
+    tool in ``LEDGER_AUDIT_TOOLS`` (sticky on DoLoopResult). Gate 7b: when
+    ``stop_reason == no_tools`` and audited → deny ``honest_exit`` (after
+    progress, before pure_social).
 
     Open work is **always** required (K18) — no empty-ledger outer continue and
     no ``require_open_work`` opt-out parameter. Product settings reject False.
@@ -259,6 +274,10 @@ def should_enqueue_moment_continue(
     # 7. Non-speak progress (tools_ran OR ledger_mutated); speak alone fails
     if require_progress and not (tools_ran or ledger_mutated):
         return _moment_continue_decision(False, "no_progress")
+
+    # 7b. Option A honest exit: audited ledger + free-text no_tools → no re-wake
+    if stop_reason == "no_tools" and ledger_audited:
+        return _moment_continue_decision(False, "honest_exit")
 
     # 8. Pure social (social wake + no tools/ledger) — even if require_progress off
     if (

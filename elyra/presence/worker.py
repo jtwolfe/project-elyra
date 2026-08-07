@@ -3797,6 +3797,8 @@ class PresenceWorker:
 
         tools_ran = bool(result.tools_ran) if result else False
         ledger_mutated = bool(result.ledger_mutated) if result else False
+        # Option A: only from DoLoopResult (model tool-batch audit) — never host I/O.
+        ledger_audited = bool(result.ledger_audited) if result else False
         model_beats = int(result.model_beats) if result else 0
         flood_beats = int(result.channel_flood_beats) if result else 0
         last_flood = bool(result.last_stop_hop_was_flood) if result else False
@@ -3807,6 +3809,7 @@ class PresenceWorker:
             self._timers.list_waits(status=STATUS_PENDING)
         )
         # Re-read ledger at finalize so mid-moment closes are respected (K18).
+        # This host re-read does NOT set ledger_audited (KD21).
         has_open = self._has_open_work()
 
         seconds_since: float | None = None
@@ -3838,6 +3841,7 @@ class PresenceWorker:
             require_progress=bool(cfg.require_progress),
             skip_pure_social=bool(cfg.skip_pure_social),
             max_pending_continues=int(cfg.max_pending_continues),
+            ledger_audited=ledger_audited,
         )
 
         now = datetime.now(UTC)
@@ -3852,12 +3856,13 @@ class PresenceWorker:
                 _LOG.info(
                     "moment_continue skip reason=%s moment_id=%s "
                     "wake_kind=%s tools_ran=%s ledger_mutated=%s "
-                    "pending_task_ready=%d",
+                    "ledger_audited=%s pending_task_ready=%d",
                     decision.reason,
                     moment_id,
                     wake.kind,
                     tools_ran,
                     ledger_mutated,
+                    ledger_audited,
                     pending_task_ready,
                 )
             return

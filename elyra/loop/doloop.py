@@ -8,7 +8,7 @@ skill-commit HOST (skill_commit_policy), post-batch tool thrash HOST
 optional post-load tool_choice pin (default OFF).
 In scope: ToolContext wiring hooks, beat appends, continue inject prechecks,
           completion-ingress channel hygiene (sanitize before beat/chain),
-          tools_ran / ledger_mutated / flood / thrash counters on DoLoopResult.
+          tools_ran / ledger_mutated / ledger_audited / flood / thrash on DoLoopResult.
 Out of scope: registry discovery, sandbox FS, presence phase machine, glass
 writes, outer moment_continue enqueue (PR6).
 
@@ -44,6 +44,7 @@ from elyra.loop.continue_policy import (
     should_stop_wall_clock,
 )
 from elyra.loop.continuous_policy import (
+    LEDGER_AUDIT_TOOLS,
     in_moment_work_context,
     should_in_moment_work_nudge,
     work_continue_host_message,
@@ -143,6 +144,8 @@ class DoLoopResult:
     # K15: ≥1 successful non-speak tool (ok and not counts_as_speak); speak alone False
     tools_ran: bool = False
     ledger_mutated: bool = False  # mark_task_changed fired this moment
+    # Option A: ≥1 successful list_goals/get_goal/get_task this moment (sticky)
+    ledger_audited: bool = False
     model_beats: int = 0  # type=model beats appended
     channel_flood_beats: int = 0  # model beats with hygiene.any_flood
     last_stop_hop_was_flood: bool = False  # free-text stop hop was channel flood
@@ -170,6 +173,8 @@ class _LoopState:
     # Used by answer-speak: free-text after tools without a post-tool speak is a hole.
     spoke_since_non_speak_tool: bool = True
     ledger_mutated: bool = False
+    # Sticky: successful model tool-batch audit read (LEDGER_AUDIT_TOOLS).
+    ledger_audited: bool = False
     model_beats: int = 0
     channel_flood_beats: int = 0
     last_stop_hop_was_flood: bool = False
@@ -895,6 +900,7 @@ def run_do_loop(
             thrash_skips=state.thrash_skip_count,
             tools_ran=state.tools_ran,
             ledger_mutated=state.ledger_mutated,
+            ledger_audited=state.ledger_audited,
             model_beats=state.model_beats,
             channel_flood_beats=state.channel_flood_beats,
             last_stop_hop_was_flood=state.last_stop_hop_was_flood,
@@ -942,6 +948,7 @@ def run_do_loop(
                 thrash_skips=state.thrash_skip_count,
                 tools_ran=state.tools_ran,
                 ledger_mutated=state.ledger_mutated,
+                ledger_audited=state.ledger_audited,
                 model_beats=state.model_beats,
                 channel_flood_beats=state.channel_flood_beats,
                 last_stop_hop_was_flood=state.last_stop_hop_was_flood,
@@ -990,6 +997,7 @@ def run_do_loop(
             thrash_skips=state.thrash_skip_count,
             tools_ran=state.tools_ran,
             ledger_mutated=state.ledger_mutated,
+            ledger_audited=state.ledger_audited,
             model_beats=state.model_beats,
             channel_flood_beats=state.channel_flood_beats,
             last_stop_hop_was_flood=state.last_stop_hop_was_flood,
@@ -1025,6 +1033,7 @@ def run_do_loop(
             thrash_skips=state.thrash_skip_count,
             tools_ran=state.tools_ran,
             ledger_mutated=state.ledger_mutated,
+            ledger_audited=state.ledger_audited,
             model_beats=state.model_beats,
             channel_flood_beats=state.channel_flood_beats,
             last_stop_hop_was_flood=state.last_stop_hop_was_flood,
@@ -1665,6 +1674,11 @@ def _handle_tool_batch(
             # Answer-speak: glass is stale until a later speak carries the result.
             state.spoke_since_non_speak_tool = False
 
+        # Option A: successful ledger audit read → sticky honest-exit eligibility.
+        # Failed inspects / thrash skip-identical (ok=False) / mutations alone do not set.
+        if tr.ok and tc.name in LEDGER_AUDIT_TOOLS:
+            state.ledger_audited = True
+
         if tr.counts_as_speak and tr.ok:
             # Wired wrapper updates state.last_activity/spoke then host hook.
             state.spoke_since_non_speak_tool = True
@@ -1949,6 +1963,7 @@ def _finish(
             "spoke": state.spoke,
             "tools_ran": state.tools_ran,
             "ledger_mutated": state.ledger_mutated,
+            "ledger_audited": state.ledger_audited,
             "work_continue_injects": state.work_continue_injects,
             "skill_commit_injects": state.skill_commit_injects,
             "thrash_host_injects": state.thrash_host_sent,
@@ -1978,6 +1993,7 @@ def _finish(
         thrash_skips=state.thrash_skip_count,
         tools_ran=state.tools_ran,
         ledger_mutated=state.ledger_mutated,
+        ledger_audited=state.ledger_audited,
         model_beats=state.model_beats,
         channel_flood_beats=state.channel_flood_beats,
         last_stop_hop_was_flood=state.last_stop_hop_was_flood,

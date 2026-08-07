@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from elyra.loop.continuous_policy import (
+    LEDGER_AUDIT_TOOLS,
     MOMENT_CONTINUE_STOP_ALLOWLIST,
     WORK_CONTINUE_HOST,
     ContinuousRuntimeState,
@@ -72,9 +73,19 @@ def test_work_continue_host_starts_with_host():
     assert text.startswith("HOST:")
     assert "load_skill" in text
     assert "ledger" in text
+    # Option A HOST contract: audit-then-idle + bare stop may re-wake
+    assert "list_goals" in text
+    assert "get_goal" in text or "get_task" in text
+    assert "re-wake" in text or "may re-wake" in text
+    assert "wait_user" in text
     # Do-loop host-inject classifier (design D)
     assert _is_host_inject({"role": "user", "content": WORK_CONTINUE_HOST})
     assert not _is_host_inject({"role": "assistant", "content": WORK_CONTINUE_HOST})
+
+
+def test_ledger_audit_tools_closed_set():
+    """Single source of truth for Option A audit tool names."""
+    assert LEDGER_AUDIT_TOOLS == frozenset({"list_goals", "get_goal", "get_task"})
 
 
 def test_continuous_settings_defaults():
@@ -303,6 +314,135 @@ def test_gate_order_pending_task_ready_after_progress():
     d2 = _decide(tools_ran=True, pending_task_ready_count=2)
     assert d2.reason == "pending_task_ready"
     assert d2.skip_for_pending_task_ready is True
+
+
+# ---------------------------------------------------------------------------
+# Option A: honest_exit (gate 7b after progress, before pure_social)
+# ---------------------------------------------------------------------------
+
+
+def test_honest_exit_when_ledger_audited_and_no_tools():
+    """Audit + no_tools + progress + open work → no enqueue, reason honest_exit."""
+    d = _decide(
+        tools_ran=True,
+        ledger_mutated=False,
+        ledger_audited=True,
+        stop_reason="no_tools",
+        has_open_work=True,
+    )
+    assert d.enqueue is False
+    assert d.reason == "honest_exit"
+    assert d.start_cooldown is False
+
+
+def test_no_honest_exit_when_not_audited():
+    """ledger_audited=False + progress + open work + no_tools → still enqueued."""
+    d = _decide(
+        tools_ran=True,
+        ledger_mutated=False,
+        ledger_audited=False,
+        stop_reason="no_tools",
+        has_open_work=True,
+    )
+    assert d.enqueue is True
+    assert d.reason == "enqueued"
+
+
+def test_ledger_audited_false_default_still_enqueues():
+    """Default ledger_audited=False path (kwargs omit) matches pre-Option-A."""
+    d = _decide(tools_ran=True, has_open_work=True, stop_reason="no_tools")
+    assert d.enqueue is True
+    assert d.reason == "enqueued"
+
+
+def test_audit_plus_time_continue_declined_does_not_honest_exit():
+    """Option A applies only to no_tools — allowlisted non-idle stops stay progress-gated."""
+    d = _decide(
+        tools_ran=True,
+        ledger_audited=True,
+        stop_reason="time_continue_declined",
+        has_open_work=True,
+    )
+    assert d.enqueue is True
+    assert d.reason == "enqueued"
+    d2 = _decide(
+        tools_ran=True,
+        ledger_audited=True,
+        stop_reason="max_hops",
+        has_open_work=True,
+    )
+    assert d2.enqueue is True
+    assert d2.reason == "enqueued"
+
+
+def test_honest_exit_after_progress_before_pure_social_and_open_work():
+    """Gate order: progress then 7b; audited idle is honest_exit not pure_social/no_open_work."""
+    # Would have been pure_social under require_progress=False without tools;
+    # with tools_ran + audited, 7b fires before pure_social.
+    d = _decide(
+        tools_ran=True,
+        ledger_mutated=False,
+        ledger_audited=True,
+        wake_kind="user_message",
+        stop_reason="no_tools",
+        has_open_work=True,
+    )
+    assert d.reason == "honest_exit"
+    # Open work would fail later, but honest_exit wins first when audited.
+    d2 = _decide(
+        tools_ran=True,
+        ledger_audited=True,
+        stop_reason="no_tools",
+        has_open_work=False,
+    )
+    assert d2.reason == "honest_exit"
+
+
+def test_wait_and_non_allowlist_unchanged_with_audit():
+    """wait / non-allowlist still deny via stop_reason even if audited."""
+    d = _decide(
+        stop_reason="wait",
+        ledger_audited=True,
+        tools_ran=True,
+    )
+    assert d.enqueue is False
+    assert d.reason == "stop_reason"
+    d2 = _decide(
+        stop_reason="error",
+        ledger_audited=True,
+        tools_ran=True,
+    )
+    assert d2.enqueue is False
+    assert d2.reason == "stop_reason"
+
+
+def test_no_open_work_unchanged_without_audit():
+    """K18 no_open_work still fires when not audited."""
+    d = _decide(has_open_work=False, ledger_audited=False, tools_ran=True)
+    assert d.enqueue is False
+    assert d.reason == "no_open_work"
+
+
+def test_honest_exit_masked_by_streak_cooldown_dedupe():
+    """v1 masking: gates 1–6 fire before 7b; product outcome is still no enqueue."""
+    d = _decide(streak=8, max_streak=8, ledger_audited=True, tools_ran=True)
+    assert d.enqueue is False
+    assert d.reason == "streak"
+    d2 = _decide(
+        seconds_since_last_enqueue=5.0,
+        cooldown_seconds=30,
+        ledger_audited=True,
+        tools_ran=True,
+    )
+    assert d2.enqueue is False
+    assert d2.reason == "cooldown"
+    d3 = _decide(
+        pending_moment_continues=1,
+        ledger_audited=True,
+        tools_ran=True,
+    )
+    assert d3.enqueue is False
+    assert d3.reason == "dedupe"
 
 
 # ---------------------------------------------------------------------------

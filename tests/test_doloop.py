@@ -21,7 +21,12 @@ from elyra.config import resolve_paths
 from elyra.llm.client import ChatCompletionResult, StubChatClient
 from elyra.llm.reasoning_hygiene import sanitize_completion
 from elyra.loop.context import assemble_outer_meal
-from elyra.loop.continuous_policy import WORK_CONTINUE_HOST, work_continue_host_message
+from elyra.goals import GoalsStore
+from elyra.loop.continuous_policy import (
+    LEDGER_AUDIT_TOOLS,
+    WORK_CONTINUE_HOST,
+    work_continue_host_message,
+)
 from elyra.loop.doloop import (
     ANSWER_SPEAK_HOST,
     NO_SPEAK_NUDGE,
@@ -1390,6 +1395,247 @@ def test_work_continue_disabled_when_continuous_off(
     assert result.tools_ran is True
     assert result.work_continue_injects == 0
     assert result.stop_reason == "no_tools"
+
+
+# ---------------------------------------------------------------------------
+# 5b2. Option A: ledger_audited sticky flag from audit tools (PR2)
+# ---------------------------------------------------------------------------
+
+
+def test_list_goals_ok_sets_ledger_audited(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """Successful list_goals → result.ledger_audited is True (and tools_ran)."""
+    store = GoalsStore(paths)
+    store.create_goal("open work")
+    ctx.goals = store
+    mid = moments.open_moment(why_now="audit list", moment_id="mauditlist")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_goals", {}, call_id="c1"),
+            _text("done after audit"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.tools_ran is True
+    assert result.ledger_audited is True
+    assert result.ledger_mutated is False
+    assert result.stop_reason == "no_tools"
+
+
+@pytest.mark.parametrize("tool_name", sorted(LEDGER_AUDIT_TOOLS))
+def test_each_audit_tool_sets_ledger_audited(
+    tool_name: str,
+    ctx: ToolContext,
+    registry: ToolRegistry,
+    moments: MomentStore,
+    paths,
+) -> None:
+    """Each LEDGER_AUDIT_TOOLS name sets ledger_audited on successful ok=True."""
+    store = GoalsStore(paths)
+    goal = store.create_goal("g for audit")
+    task = store.create_task(goal["id"], "t for audit")
+    ctx.goals = store
+    mid = moments.open_moment(why_now=f"audit {tool_name}", moment_id=f"maudit-{tool_name}")
+    ctx.moment_id = mid
+    if tool_name == "list_goals":
+        args: dict[str, Any] = {}
+    elif tool_name == "get_goal":
+        args = {"goal_id": goal["id"]}
+    else:
+        args = {"task_id": task["id"]}
+    client = StubChatClient.scripted(
+        [
+            _tc(tool_name, args, call_id="c1"),
+            _text("idle"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.ledger_audited is True, tool_name
+    assert result.tools_ran is True
+
+
+def test_failed_audit_tool_does_not_set_ledger_audited(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """ok=False audit (task_not_found / goals_not_configured) leaves flag False."""
+    # No goals store → list_goals fails goals_not_configured.
+    assert ctx.goals is None
+    mid = moments.open_moment(why_now="audit fail cfg", moment_id="mauditfailcfg")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_goals", {}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.ledger_audited is False
+    assert result.tools_ran is False
+
+    # goals present but get_task missing id → task_not_found
+    store = GoalsStore(paths)
+    ctx.goals = store
+    mid2 = moments.open_moment(why_now="audit fail id", moment_id="mauditfailid")
+    ctx.moment_id = mid2
+    client2 = StubChatClient.scripted(
+        [
+            _tc("get_task", {"task_id": "does-not-exist"}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    result2 = _run(
+        client2,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result2.ledger_audited is False
+    assert result2.tools_ran is False
+
+
+def test_mutating_ledger_alone_does_not_set_ledger_audited(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """create_goal / update alone set ledger_mutated + tools_ran, not ledger_audited."""
+    store = GoalsStore(paths)
+    ctx.goals = store
+    mid = moments.open_moment(why_now="mutate only", moment_id="mmutateonly")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("create_goal", {"title": "new open work"}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.tools_ran is True
+    assert result.ledger_mutated is True
+    assert result.ledger_audited is False
+
+
+def test_list_dir_alone_does_not_set_ledger_audited(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore
+) -> None:
+    """Non-audit non-speak tool: tools_ran True, ledger_audited False."""
+    mid = moments.open_moment(why_now="no audit", moment_id="mnoaudit")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_dir", {"path": "."}, call_id="c1"),
+            _text("done"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.tools_ran is True
+    assert result.ledger_audited is False
+
+
+def test_thrash_skip_identical_does_not_set_ledger_audited(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, monkeypatch
+) -> None:
+    """Synthetic skip-identical results (ok=False) never set ledger_audited."""
+    import elyra.loop.doloop as doloop_mod
+
+    monkeypatch.setattr(doloop_mod, "SKIP_IDENTICAL_ENABLED", True)
+
+    class _FailListGoals:
+        def openai_tools(self) -> list[dict[str, Any]]:
+            return registry.openai_tools()
+
+        def execute(
+            self, name: str, args: dict[str, Any] | None, c: ToolContext
+        ) -> ToolResult:
+            if name == "list_goals":
+                return ToolResult(
+                    ok=False, payload={}, error_reason="goals_not_configured"
+                )
+            return registry.execute(name, args, c)
+
+    mid = moments.open_moment(why_now="skip audit", moment_id="mskipaudit")
+    ctx.moment_id = mid
+    # 5 real fails (streak) + 1 skip-identical synthetic.
+    client = StubChatClient.scripted(
+        [_tc("list_goals", {}, call_id=f"c{i}") for i in range(1, 7)]
+        + [_text("I'll stop")]
+    )
+    result = _run(
+        client,
+        ctx,
+        _FailListGoals(),  # type: ignore[arg-type]
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.thrash_skips == 1
+    assert result.ledger_audited is False
+    assert result.tools_ran is False
+
+
+def test_ledger_audited_sticky_across_hops(
+    ctx: ToolContext, registry: ToolRegistry, moments: MomentStore, paths
+) -> None:
+    """Any-hop audit: early list_goals stays True through later tools + free-text."""
+    store = GoalsStore(paths)
+    store.create_goal("sticky")
+    ctx.goals = store
+    mid = moments.open_moment(why_now="sticky audit", moment_id="msticky")
+    ctx.moment_id = mid
+    client = StubChatClient.scripted(
+        [
+            _tc("list_goals", {}, call_id="c1"),
+            _tc("list_dir", {"path": "."}, call_id="c2"),
+            _text("done"),
+        ]
+    )
+    result = _run(
+        client,
+        ctx,
+        registry,
+        moments=moments,
+        social_wake=False,
+        settings=default_settings(),
+    )
+    assert result.ledger_audited is True
+    assert result.tools_ran is True
 
 
 # ---------------------------------------------------------------------------
