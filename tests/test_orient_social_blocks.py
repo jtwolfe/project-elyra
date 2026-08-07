@@ -18,6 +18,7 @@ from elyra.identity.orient_blocks import (
     build_active_chats_block,
     build_participants_block,
     build_recently_active_block,
+    coerce_orient_int,
 )
 from elyra.loop.context import assemble_outer_meal, fill_orient
 from elyra.prompts.loader import load_prompt
@@ -203,6 +204,20 @@ def test_participants_social_missing_conv_and_peer_empty(users, convs):
         users=users,
     )
     assert text == ""
+
+
+def test_participants_missing_group_with_peer_not_dm_fallback(users, convs):
+    """group: missing store must not mislabel speaker as peer DM (review #2)."""
+    users.create_user("Jim", user_id="jim", provisional=False)
+    text = build_participants_block(
+        social=True,
+        conversation_id="group:does-not-exist",
+        peer_user_id="jim",
+        conversations=convs,
+        users=users,
+    )
+    assert text == ""
+    assert "peer DM" not in text
 
 
 def test_participants_token_budget_drops_trailing(users, convs):
@@ -449,6 +464,69 @@ def test_recently_active_limit_and_hours_nonpositive(users):
         )
         == ""
     )
+
+
+def test_coerce_orient_int_honors_zero():
+    """Operator 0 must disable blocks (review #3); not coerced to default."""
+    assert coerce_orient_int(0, 800) == 0
+    assert coerce_orient_int(0, 24) == 0
+    assert coerce_orient_int(None, 24) == 24
+    assert coerce_orient_int(8, 24) == 8
+    assert coerce_orient_int("6", 24) == 6
+    assert coerce_orient_int("bad", 24) == 24
+
+
+def test_recently_active_includes_speaker_beyond_meal_tail(users):
+    """Primary RA uses full within-T history, not last-80 meal rows (review #1).
+
+    Hermetic: speaker with only an early-within-T message still appears when
+    the full glass list is passed (worker uses list_messages(limit=0)).
+    """
+    users.create_user("Early", user_id="early", provisional=True)
+    users.create_user("Late", user_id="late", provisional=True)
+    now = datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+    rows: list[dict] = []
+    # 90 filler assistant+user pairs after early speaker (would push early
+    # out of a last-80 meal tail if we only scanned that).
+    rows.append(
+        {
+            "role": "user",
+            "user_id": "early",
+            "content": "first",
+            "created_at": (now - timedelta(hours=3)).isoformat(),
+        }
+    )
+    for i in range(90):
+        rows.append(
+            {
+                "role": "assistant",
+                "user_id": "late",
+                "content": f"a{i}",
+                "created_at": (now - timedelta(hours=2, minutes=i)).isoformat(),
+            }
+        )
+        rows.append(
+            {
+                "role": "user",
+                "user_id": "late",
+                "content": f"u{i}",
+                "created_at": (now - timedelta(hours=1, minutes=i % 50)).isoformat(),
+            }
+        )
+    # Meal-tail simulation: last 80 rows would drop "early".
+    meal_tail = rows[-80:]
+    assert not any(r.get("user_id") == "early" for r in meal_tail)
+
+    full_text = build_recently_active_block(
+        glass_rows=rows, users=users, hours=24, limit=8, now=now
+    )
+    assert "early" in full_text
+    assert "last glass" in full_text
+
+    tail_text = build_recently_active_block(
+        glass_rows=meal_tail, users=users, hours=24, limit=8, now=now
+    )
+    assert "early" not in tail_text
 
 
 def test_recently_active_dedupes_and_caps(users):

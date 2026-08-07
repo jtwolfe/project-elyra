@@ -72,22 +72,25 @@ def build_participants_block(
             if ctype in ("dm", "group"):
                 conv_type = ctype
 
-    # Social without store hit: treat speaker as DM peer (legacy / missing conv).
-    if not members and isinstance(peer_user_id, str) and peer_user_id.strip():
-        members = [peer_user_id.strip()]
-        conv_type = conv_type or "dm"
+    cid_stripped = (
+        conversation_id.strip()
+        if isinstance(conversation_id, str) and conversation_id.strip()
+        else None
+    )
+    is_group_id = bool(cid_stripped and cid_stripped.startswith("group:"))
+
+    # Social without store hit: DM/legacy only. Never force DM peer fallback
+    # when conversation_id is group:… (missing store would mislabel as peer DM).
+    if not members and not is_group_id:
+        if isinstance(peer_user_id, str) and peer_user_id.strip():
+            members = [peer_user_id.strip()]
+            conv_type = conv_type or "dm"
 
     if not members:
         return ""
 
     if conv_type is None:
-        if (
-            isinstance(conversation_id, str)
-            and conversation_id.strip().startswith("group:")
-        ):
-            conv_type = "group"
-        else:
-            conv_type = "dm"
+        conv_type = "group" if is_group_id else "dm"
 
     lines: list[str] = []
     for uid in members:
@@ -339,8 +342,23 @@ def _relative_ago(now: datetime, then: datetime) -> str:
     return f"~{days}d ago"
 
 
+def coerce_orient_int(value: Any, default: int) -> int:
+    """Parse an orient setting int; honor intentional 0 (disable).
+
+    ``value or default`` is wrong: operator ``0`` must stay 0 so builders
+    can short-circuit (empty Participants / RA / Active chats).
+    """
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 __all__ = [
     "build_active_chats_block",
     "build_participants_block",
     "build_recently_active_block",
+    "coerce_orient_int",
 ]

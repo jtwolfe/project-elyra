@@ -30,6 +30,7 @@ from elyra.identity.orient_blocks import (
     build_active_chats_block,
     build_participants_block,
     build_recently_active_block,
+    coerce_orient_int,
 )
 from elyra.identity.orient_user import resolve_orient_user
 from elyra.llm.client import ChatClient
@@ -3654,32 +3655,42 @@ class PresenceWorker:
                 session_entries = ClientSessionsRegistry(self.paths).list_entries()
             except Exception:  # noqa: BLE001
                 session_entries = None
+
             participants_s = build_participants_block(
                 social=social_for_orient,
                 conversation_id=conv_id_orient,
                 peer_user_id=peer_for_orient,
                 conversations=conv_store,
                 users=self._users,
-                max_tokens=int(
-                    getattr(loop, "orient_participants_max_tokens", 800) or 800
+                max_tokens=coerce_orient_int(
+                    getattr(loop, "orient_participants_max_tokens", 800), 800
                 ),
             )
+            # Recently-active primary: scan full glass history for activity
+            # (limit=0), not the meal tail (glass_tail_list_limit). Design §5.3
+            # is within-T hours, not "within last N meal rows."
+            try:
+                ra_glass = list_messages(limit=0, paths=self.paths)
+            except Exception:  # noqa: BLE001 — fall back to meal glass snapshot
+                ra_glass = glass
             recently_active_s = build_recently_active_block(
-                glass_rows=glass,
+                glass_rows=ra_glass,
                 session_entries=session_entries,
                 users=self._users,
-                hours=int(
-                    getattr(loop, "orient_recently_active_hours", 24) or 24
+                hours=coerce_orient_int(
+                    getattr(loop, "orient_recently_active_hours", 24), 24
                 ),
-                limit=int(
-                    getattr(loop, "orient_recently_active_limit", 8) or 8
+                limit=coerce_orient_int(
+                    getattr(loop, "orient_recently_active_limit", 8), 8
                 ),
             )
             active_chats_s = build_active_chats_block(
                 social=social_for_orient,
                 conversations=conv_store,
                 users=self._users,
-                limit=int(getattr(loop, "orient_active_chats_limit", 6) or 6),
+                limit=coerce_orient_int(
+                    getattr(loop, "orient_active_chats_limit", 6), 6
+                ),
             )
 
             from elyra.media import MediaStore

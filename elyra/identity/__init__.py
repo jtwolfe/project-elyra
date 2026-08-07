@@ -18,6 +18,7 @@ from elyra.identity.orient_blocks import (
     build_active_chats_block,
     build_participants_block,
     build_recently_active_block,
+    coerce_orient_int,
 )
 from elyra.identity.orient_user import resolve_orient_user
 from elyra.identity.store import (
@@ -38,6 +39,7 @@ __all__ = [
     "build_active_chats_block",
     "build_participants_block",
     "build_recently_active_block",
+    "coerce_orient_int",
     "consume_grant",
     "content_sha256",
     "evaluate_promote_gate",
