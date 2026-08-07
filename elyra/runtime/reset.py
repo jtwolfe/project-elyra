@@ -1,11 +1,12 @@
 """Full-reset path clears (disk only).
 
 Scope: absolute-path-guarded helpers that wipe ephemeral runtime product under
-ElyraPaths (moments, messages, goals, wakes files, sandbox contents, tool
-drafts, optional local tools).
+ElyraPaths (moments, messages, conversations, goals, wakes files, sandbox
+contents, tool drafts, optional local tools).
 In scope: path validation under data_dir / tools_dir; recreate empty dirs;
-empty goals.json / messages; never touch skills/local, identity, users,
-continuous.json, bundled tools/skills, or model paths.
+empty goals.json / messages; clear data/conversations/ (KD9, with messages);
+never touch skills/local, identity, users, continuous.json, bundled
+tools/skills, or model paths.
 Out of scope: worker lock protocol, TimerService/WakeQueue memory, HTTP, Glass.
   Caller (PresenceWorker.reset_runtime_state) must hold exclusion.
 
@@ -87,6 +88,35 @@ def clear_messages(paths: ElyraPaths) -> dict[str, Any]:
     msg.parent.mkdir(parents=True, exist_ok=True)
     msg.write_text("", encoding="utf-8")
     return {"step": "messages", "existed": existed}
+
+
+def clear_conversations(paths: ElyraPaths) -> dict[str, Any]:
+    """Wipe ``data/conversations/`` (KD9 — social state with messages).
+
+    Removes index + by_id records; recreates empty layout so ensure_layout is
+    a no-op after reset. Identity/users are preserved (not under this tree).
+    """
+    root = _assert_under(
+        paths.data_dir / "conversations", paths.data_dir, label="conversations"
+    )
+    removed = 0
+    if root.is_dir():
+        removed = _clear_dir_contents(root)
+    # Re-scaffold empty layout (index + by_id).
+    root.mkdir(parents=True, exist_ok=True)
+    by_id = root / "by_id"
+    by_id.mkdir(parents=True, exist_ok=True)
+    index = root / "index.json"
+    index.write_text(
+        json.dumps(
+            {"schema_version": 1, "conversations": []},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return {"step": "conversations", "removed": removed}
 
 
 def clear_media(paths: ElyraPaths) -> dict[str, Any]:
@@ -212,7 +242,11 @@ def clear_local_tools(paths: ElyraPaths) -> dict[str, Any]:
 
 
 def ensure_preserved_dirs(paths: ElyraPaths) -> None:
-    """Ensure dirs that must survive reset still exist (identity, users, …)."""
+    """Ensure dirs that must survive reset still exist (identity, users, …).
+
+    Note: ``conversations/`` is **not** preserved — cleared with messages (KD9).
+    Re-scaffolded empty by ``clear_conversations`` / callers after wipe.
+    """
     for name in (
         "moments",
         "wakes",
@@ -222,6 +256,7 @@ def ensure_preserved_dirs(paths: ElyraPaths) -> None:
         "sandbox",
         "runtime",
         "media",
+        "conversations",
     ):
         (paths.data_dir / name).mkdir(parents=True, exist_ok=True)
     from elyra.media.store import ensure_media_dirs

@@ -90,6 +90,7 @@ from elyra.presence.user_input import (
     resolve_user_input as decide_user_input,
 )
 from elyra.runtime.reset import (
+    clear_conversations,
     clear_goals,
     clear_local_tools,
     clear_media,
@@ -4352,6 +4353,8 @@ class PresenceWorker:
 
         _step("moments", _moments)
         _step("messages", lambda: clear_messages(self.paths))
+        # KD9: conversations are social state — clear with messages.
+        _step("conversations", lambda: clear_conversations(self.paths))
         # KD13: full reset clears data/media with messages (no orphan blobs).
         _step("media", lambda: clear_media(self.paths))
         _step("goals", lambda: clear_goals(self.paths))
@@ -4380,6 +4383,7 @@ class PresenceWorker:
             # Final re-clear closes TOCTOU: concurrent append/create that raced
             # phase-1 clears (or bypassed API gates) cannot survive ok:true.
             _step("messages", lambda: clear_messages(self.paths))
+            _step("conversations", lambda: clear_conversations(self.paths))
             _step("media", lambda: clear_media(self.paths))
             _step("goals", lambda: clear_goals(self.paths))
 

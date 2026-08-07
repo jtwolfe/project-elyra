@@ -1,14 +1,17 @@
 """Append-only message log for chat glass.
 
 Scope: JSONL store of user/assistant messages for UI and simple loop.
-In scope: Message schema with optional attachments/meta (KD1); get_message;
-backward-compatible load of legacy rows without those fields.
-Out of scope: media blob store (elyra.media), HTTP, vision expand.
+In scope: Message schema with optional attachments/meta (KD1) and optional
+conversation_id (C12); get_message; list_messages filter-then-last-N (KD17)
+with lazy legacy DM inclusion; optional eager migrate helper.
+Out of scope: media blob store (elyra.media), HTTP, vision expand, social
+write-invariant enforcement (KD16 — callers / later PRs).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -29,6 +32,8 @@ class Message:
     created_at: str
     reasoning: str = ""
     moment_id: str | None = None
+    # C12: social address; null = solo / legacy-unscoped.
+    conversation_id: str | None = None
     # KD1: optional structured media inventory; missing/null on load → [].
     attachments: list[dict[str, Any]] | None = None
     # Optional per-message meta (stt, input_mode, …); missing/null → {}.
@@ -63,12 +68,14 @@ def _normalize_attachments(
 
 
 def _message_to_row(msg: Message) -> dict[str, Any]:
-    """Serialize Message; omit attachments/meta when unset (legacy-shaped rows)."""
+    """Serialize Message; omit optional fields when unset (legacy-shaped rows)."""
     row = asdict(msg)
     if row.get("attachments") is None:
         del row["attachments"]
     if row.get("meta") is None:
         del row["meta"]
+    if row.get("conversation_id") is None:
+        del row["conversation_id"]
     return row
 
 
@@ -79,16 +86,30 @@ def append_message(
     user_id: str | None = "operator",
     reasoning: str = "",
     moment_id: str | None = None,
+    conversation_id: str | None = None,
     attachments: list[dict[str, Any]] | None = None,
     meta: dict[str, Any] | None = None,
     paths: ElyraPaths | None = None,
 ) -> Message:
-    """Append a glass row. Empty ``content`` is allowed when attachments present
-    (enforced at API/speak layers; this store persists what it is given).
+    """Append a glass row.
+
+    Empty ``content`` is allowed when attachments present (enforced at
+    API/speak layers; this store persists what it is given).
+
+    ``user_id`` default remains ``\"operator\"`` for legacy call sites;
+    **explicit** ``user_id=None`` is persisted as null (no coerce to
+    ``\"operator\"``) — required for group assistant rows (KD20).
+
+    ``conversation_id`` is persisted when non-None; omitted when None
+    (legacy-shaped rows OK for load). Social write invariant (KD16) is
+    enforced by callers, not this store.
     """
     p = paths or resolve_paths()
     p.ensure_data_dirs()
     atts = _normalize_attachments(attachments)
+    cid = conversation_id
+    if isinstance(cid, str):
+        cid = cid.strip() or None
     msg = Message(
         id=str(uuid.uuid4()),
         role=role,
@@ -97,6 +118,7 @@ def append_message(
         created_at=_now(),
         reasoning=reasoning or "",
         moment_id=moment_id,
+        conversation_id=cid,
         attachments=atts,
         meta=dict(meta) if meta is not None else None,
     )
@@ -105,15 +127,66 @@ def append_message(
     return msg
 
 
+def _row_conversation_id(row: dict[str, Any]) -> str | None:
+    """Normalize row conversation_id: missing / null / blank → None."""
+    if "conversation_id" not in row:
+        return None
+    val = row.get("conversation_id")
+    if val is None:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        return s or None
+    return None
+
+
+def _matches_conversation(row: dict[str, Any], conversation_id: str) -> bool:
+    """Predicate for list_messages conversation filter (KD4 / §2.4).
+
+    - Always include rows with explicit matching conversation_id.
+    - Legacy DM fill only: for ``dm:<uid>``, also include rows with
+      missing/null conversation_id and ``user_id == uid``.
+    - Groups: **no** legacy fill by member user_id.
+    """
+    row_cid = _row_conversation_id(row)
+    if row_cid == conversation_id:
+        return True
+    if conversation_id.startswith("dm:") and row_cid is None:
+        peer = conversation_id[3:]
+        if row.get("user_id") == peer:
+            return True
+    return False
+
+
+def _matches_user(row: dict[str, Any], user_id: str) -> bool:
+    return row.get("user_id") == user_id
+
+
 def list_messages(
     *,
     limit: int = 200,
+    conversation_id: str | None = None,
+    user_id: str | None = None,
     paths: ElyraPaths | None = None,
 ) -> list[dict[str, Any]]:
+    """Scan all → filter → last-N (KD17). Never limit-then-filter.
+
+    When ``conversation_id`` is set, apply §2.4 legacy DM inclusion rules.
+    When both filters null: global tail (forensic view=all).
+    ``limit <= 0`` returns all matching rows (unlimited contract).
+    """
     p = paths or resolve_paths()
     file = _path(p)
     if not file.is_file():
         return []
+
+    cid_filter: str | None = None
+    if isinstance(conversation_id, str) and conversation_id.strip():
+        cid_filter = conversation_id.strip()
+    uid_filter: str | None = None
+    if isinstance(user_id, str) and user_id.strip():
+        uid_filter = user_id.strip()
+
     rows: list[dict[str, Any]] = []
     with file.open(encoding="utf-8") as handle:
         for line in handle:
@@ -121,12 +194,33 @@ def list_messages(
             if not line:
                 continue
             try:
-                rows.append(json.loads(line))
+                row = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(row, dict):
+                continue
+            if cid_filter is not None and not _matches_conversation(row, cid_filter):
+                continue
+            if uid_filter is not None and not _matches_user(row, uid_filter):
+                continue
+            rows.append(row)
     if limit > 0:
         rows = rows[-limit:]
     return rows
+
+
+def list_messages_for_conversation(
+    conversation_id: str,
+    *,
+    limit: int = 200,
+    paths: ElyraPaths | None = None,
+) -> list[dict[str, Any]]:
+    """Convenience: list_messages filtered to one conversation (KD17)."""
+    return list_messages(
+        limit=limit,
+        conversation_id=conversation_id,
+        paths=paths,
+    )
 
 
 def get_message(
@@ -156,3 +250,65 @@ def get_message(
             if isinstance(row, dict) and row.get("id") == message_id:
                 return row
     return None
+
+
+def migrate_legacy_conversation_ids(
+    *,
+    paths: ElyraPaths | None = None,
+) -> dict[str, Any]:
+    """Eager rewrite: stamp ``conversation_id=dm:<user_id>`` on legacy rows.
+
+    Rows already carrying conversation_id are left unchanged. Rows with null
+    conversation_id and non-null user_id get ``dm:{user_id}``. Atomic replace
+    of messages.jsonl. Prefer lazy list_messages fill for dogfood; this is
+    an optional helper for small logs / operators.
+    """
+    p = paths or resolve_paths()
+    file = _path(p)
+    if not file.is_file():
+        return {"ok": True, "rewritten": 0, "total": 0, "path": str(file)}
+
+    rewritten = 0
+    total = 0
+    out_lines: list[str] = []
+    with file.open(encoding="utf-8") as handle:
+        for line in handle:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError:
+                out_lines.append(raw)
+                continue
+            if not isinstance(row, dict):
+                out_lines.append(raw)
+                continue
+            total += 1
+            if _row_conversation_id(row) is None:
+                uid = row.get("user_id")
+                if isinstance(uid, str) and uid.strip():
+                    row = dict(row)
+                    row["conversation_id"] = f"dm:{uid.strip()}"
+                    rewritten += 1
+            out_lines.append(json.dumps(row, ensure_ascii=False))
+
+    text = ("\n".join(out_lines) + "\n") if out_lines else ""
+    tmp = file.with_name(
+        f"{file.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(file)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return {
+        "ok": True,
+        "rewritten": rewritten,
+        "total": total,
+        "path": str(file),
+    }
