@@ -985,6 +985,19 @@ def test_static_index_served(paths):
         assert "include_history" not in html
         assert "schedule-history" not in html
         assert "Show recent history" not in html
+        # Schedule lists: plain list-panel (not list-panel-auto)
+        timers_list = re.search(
+            r'id="schedule-timers-list"[^>]*class="([^"]*)"',
+            html,
+        )
+        waits_list = re.search(
+            r'id="schedule-waits-list"[^>]*class="([^"]*)"',
+            html,
+        )
+        assert timers_list is not None and "list-panel" in timers_list.group(1)
+        assert "list-panel-auto" not in timers_list.group(1)
+        assert waits_list is not None and "list-panel" in waits_list.group(1)
+        assert "list-panel-auto" not in waits_list.group(1)
         # #88: pure markdown helpers load before app.js
         assert 'src="/markdown.js"' in html
         assert html.index('src="/markdown.js"') < html.index('src="/app.js"')
@@ -1128,6 +1141,37 @@ def test_static_app_js_active_panel_poll(paths):
         assert "await refreshSchedule({ force })" in js or "refreshSchedule({ force })" in js
         assert "lastScheduleFp" in js
         assert "lastScheduleMinuteFp" in js
+        # Dual soft-refresh call sites (payload fp + minute-bucket relative patch)
+        assert "minuteFp !== lastScheduleMinuteFp" in js
+        assert "patchScheduleRelativeTimes(data)" in js
+        assert "schedulePayloadFingerprint(data)" in js
+        assert "serverMinuteBucket(data && data.server_time)" in js or (
+            "serverMinuteBucket(data" in js
+        )
+        # Cards stamp patch targets; patch selects them
+        assert "schedule-rel" in js
+        assert "dataset.dueIso" in js
+        assert ".schedule-rel[data-due-iso]" in js
+        # Payload fingerprint must not fold bare server_time (would thrash every poll)
+        fp_fn = re.search(
+            r"function schedulePayloadFingerprint\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert fp_fn is not None, "schedulePayloadFingerprint body not found"
+        assert "server_time" not in fp_fn.group(1)
+        # Fingerprints committed after full render (not before wipe)
+        refresh_fn = re.search(
+            r"async function refreshSchedule\s*\([^)]*\)\s*\{(.*?)\n\}",
+            js,
+            re.DOTALL,
+        )
+        assert refresh_fn is not None, "refreshSchedule body not found"
+        refresh_body = refresh_fn.group(1)
+        assert "renderSchedule(data)" in refresh_body
+        assert refresh_body.index("renderSchedule(data)") < refresh_body.rindex(
+            "lastScheduleFp"
+        )
         # Empty states for zero-collection paths
         assert "No scheduled timers." in js
         assert "No pending waits." in js

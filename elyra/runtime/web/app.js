@@ -463,8 +463,6 @@ let lastMomentsListFp = null;
 let lastScheduleFp = null;
 /** Floored server minute for Schedule relative-time patch (#126). */
 let lastScheduleMinuteFp = null;
-/** Last schedule payload used for relative-time patch without full rebuild. */
-let lastScheduleData = null;
 let lastAtomsListFp = null;
 let lastAtomDetailFp = null;
 let lastVectorsFp = null;
@@ -3454,7 +3452,7 @@ async function refreshSchedule(opts = {}) {
     (scheduleWaitsList && scheduleWaitsList.childElementCount > 0);
 
   if (!force && fp === lastScheduleFp && hasDom) {
-    lastScheduleData = data;
+    // Payload unchanged: only advance relative labels when minute bucket moves.
     if (minuteFp !== lastScheduleMinuteFp) {
       lastScheduleMinuteFp = minuteFp;
       patchScheduleRelativeTimes(data);
@@ -3462,10 +3460,10 @@ async function refreshSchedule(opts = {}) {
     return;
   }
 
+  // Commit fingerprints after successful full render (moments-style).
+  renderSchedule(data);
   lastScheduleFp = fp;
   lastScheduleMinuteFp = minuteFp;
-  lastScheduleData = data;
-  renderSchedule(data);
 }
 
 // ── Memory panel (PR9) ────────────────────────────────────────────────
